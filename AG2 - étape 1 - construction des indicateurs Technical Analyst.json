@@ -1,0 +1,2337 @@
+{
+  "name": "AG2 - étape 1 - construction des indicateurs Technical Analyst",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// AG2.01 — Normalize Input (robuste, conserve intraday+daily)\n\nconst input = $input.first()?.json ?? {};\n\nfunction nowIso() { return new Date().toISOString(); }\n\nfunction toInt(v, dflt) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : dflt;\n}\n\nfunction cleanSym(s) {\n  return String(s ?? \"\").trim();\n}\n\n// Symbols\nlet symbols = Array.isArray(input.symbols) ? input.symbols : [];\nsymbols = symbols.map(cleanSym).filter(Boolean);\n\n// Versions / ids\nconst run_id = input.run_id ?? input.runId ?? \"\";\nconst strategy_version = input.strategy_version ?? input.strategyVersion ?? \"STRAT_1.0.0\";\nconst config_version = input.config_version ?? input.configVersion ?? \"CFG_1.0.0\";\n\n// Infra\nconst timezone = input.timezone ?? input.timezone_name ?? input.timezoneName ?? \"Europe/Paris\";\n// APRÈS (Port 8000)\nconst yfinance_api_base = input.yfinance_api_base ?? input.yfinanceApiBase ?? \"http://yfinance-api:8000\";\n\n// Base (compat ancien format)\nconst baseInterval = String(input.interval ?? \"1h\");\nconst baseLookback = toInt(input.lookback_days ?? input.lookbackDays ?? 60, 60);\nconst baseMaxBars = toInt(input.max_bars ?? input.maxBars ?? 200, 200);\n\n// Timeframes (nouveau format)\nconst intradayIn = (input.intraday && typeof input.intraday === \"object\") ? input.intraday : {};\nconst dailyIn = (input.daily && typeof input.daily === \"object\") ? input.daily : {};\n\nconst intraday = {\n  interval: String(intradayIn.interval ?? baseInterval ?? \"1h\"),\n  lookback_days: toInt(intradayIn.lookback_days ?? intradayIn.lookbackDays ?? baseLookback, 60),\n  max_bars: toInt(intradayIn.max_bars ?? intradayIn.maxBars ?? baseMaxBars, 200),\n  role: String(intradayIn.role ?? \"timing\"),\n};\n\nconst daily = {\n  interval: String(dailyIn.interval ?? \"1d\"),\n  lookback_days: toInt(dailyIn.lookback_days ?? dailyIn.lookbackDays ?? 400, 400),\n  max_bars: toInt(dailyIn.max_bars ?? dailyIn.maxBars ?? 400, 400),\n  role: String(dailyIn.role ?? \"strategy\"),\n};\n\nconst out = {\n  run_id,\n  strategy_version,\n  config_version,\n  timezone,\n  yfinance_api_base,\n\n  // compat: on garde aussi le \"base\" (intraday) au top-level\n  interval: intraday.interval,\n  lookback_days: intraday.lookback_days,\n  max_bars: intraday.max_bars,\n\n  intraday,\n  daily,\n\n  symbols,\n  symbols_count: symbols.length,\n  generatedAt: nowIso(),\n};\n\nif (!symbols.length) {\n  return [{\n    json: {\n      run_id: out.run_id || `RUN_${nowIso().replace(/[-:.TZ]/g,\"\")}`,\n      ok: false,\n      error: \"NO_SYMBOLS\",\n      message: \"Input.symbols is empty. Provide at least 1 symbol (ex: TTE.PA).\",\n      received: input,\n      generatedAt: nowIso(),\n    }\n  }];\n}\n\nreturn [{ json: { ok: true, ...out } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        992,
+        -272
+      ],
+      "id": "06285b7b-6c4c-48a1-b53d-12ab385f82f4",
+      "name": "AG2.01 — Normalize Input"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.02 — Explode Symbols (Run Once for All Items)\n// Produces 1 item per symbol, carrying shared config.\n\nconst cfg = $input.first().json;\n\nif (!cfg.ok) {\n  // pass-through error item (single)\n  return [{ json: cfg }];\n}\n\nconst out = [];\nfor (let i = 0; i < cfg.symbols.length; i++) {\n  out.push({\n    json: {\n      ...cfg,\n      symbol: cfg.symbols[i],\n      _symbol_index: i,\n      // remove large arrays from per-item payload\n      symbols: undefined,\n    }\n  });\n}\nreturn out;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1376,
+        -272
+      ],
+      "id": "189ca537-5072-4d15-844f-ccd250315c0c",
+      "name": "AG2.02 — Explode Symbols"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "5cf34c85-0c6b-4aa2-890c-1bff80cd8db0",
+              "leftValue": "={{$json.ok}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1568,
+        -272
+      ],
+      "id": "de4881a7-f53e-4549-8071-a3f953eb4060",
+      "name": "AG2.02B — IF ok",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.98 — Error Pack (Run Once for All Items)\nconst it = $input.first()?.json ?? {};\nreturn [{\n  json: {\n    run_id: it.run_id || null,\n    agent_id: it.agent_id || \"AGENT_2_TECHNICAL\",\n    generatedAt: new Date().toISOString(),\n    interval: it.interval || null,\n    universeCoverage: { processed: 0, ok: 0, failed: 0, symbols_ok: [], symbols_failed: [] },\n    technicalSignals: [],\n    failures: [it],\n    ok: false,\n    error: it.error || \"UPSTREAM_ERROR\",\n    message: it.message || \"Upstream returned ok=false; no symbols processed.\"\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1584,
+        0
+      ],
+      "id": "4d1bf463-2570-4009-b5f4-d314717837f9",
+      "name": "AG2.98 — Error Pack"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1856,
+        -384
+      ],
+      "id": "7c8f6988-1807-424d-9b3d-386ccb6e3574",
+      "name": "AG2.03 — Loop Symbols",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import math\n\n# --- HELPER FUNCTIONS ---\ndef safe_float(x):\n    try:\n        if x is None: return None\n        f = float(x)\n        if math.isnan(f) or math.isinf(f): return None\n        return f\n    except: return None\n\ndef safe_int(x):\n    try:\n        if x is None: return None\n        if isinstance(x, bool): return int(x)\n        if isinstance(x, int): return int(x)\n        f = float(x)\n        if math.isnan(f) or math.isinf(f): return None\n        return int(f)\n    except: return None\n\ndef sanitize_value(v):\n    if isinstance(v, float):\n        if math.isnan(v) or math.isinf(v): return None\n        return v\n    return v\n\ndef sma(values, n):\n    if n <= 0 or len(values) < n: return None\n    return sum(values[-n:]) / n\n\ndef ema_series(values, n):\n    if n <= 0 or not values: return []\n    k = 2.0 / (n + 1.0)\n    out = [values[0]]\n    e = values[0]\n    for v in values[1:]:\n        e = v * k + e * (1.0 - k)\n        out.append(e)\n    return out\n\ndef rsi_simple(values, n=14):\n    if n <= 0 or len(values) < n + 1: return None\n    gains = 0.0\n    losses = 0.0\n    for i in range(-n, 0):\n        chg = values[i] - values[i - 1]\n        if chg >= 0: gains += chg\n        else: losses += -chg\n    if losses == 0: return 100.0\n    rs = (gains / n) / (losses / n)\n    return 100.0 - (100.0 / (1.0 + rs))\n\ndef stdev(values):\n    if len(values) < 2: return None\n    m = sum(values) / len(values)\n    var = sum((x - m) ** 2 for x in values) / (len(values) - 1)\n    return math.sqrt(var) if var >= 0 else 0\n\ndef extract_bars(js):\n    if isinstance(js.get(\"bars\"), list): return js[\"bars\"]\n    if isinstance(js.get(\"body\"), dict) and isinstance(js[\"body\"].get(\"bars\"), list): return js[\"body\"][\"bars\"]\n    if isinstance(js.get(\"data\"), dict) and isinstance(js[\"data\"].get(\"bars\"), list): return js[\"data\"][\"bars\"]\n    return []\n\n# --- ATR ---\ndef atr(highs, lows, closes, n=14):\n    if len(closes) < n + 1: return None\n    tr_list = []\n    for i in range(1, len(closes)):\n        hl = highs[i] - lows[i]\n        hc = abs(highs[i] - closes[i - 1])\n        lc = abs(lows[i] - closes[i - 1])\n        tr_list.append(max(hl, hc, lc))\n    if not tr_list: return None\n    return sum(tr_list[-n:]) / n\n\n# --- Resistance distance ---\ndef get_resistance_distance(closes, highs, current_price):\n    # Plus haut des 50 dernières bougies (ou moins si historique < 50)\n    if current_price is None: \n        return None, None\n    try:\n        cp = float(current_price)\n    except:\n        return None, None\n    if not highs or cp <= 0 or math.isnan(cp) or math.isinf(cp):\n        return None, None\n\n    window = highs[-50:] if len(highs) >= 50 else highs\n    if not window:\n        return None, None\n\n    local_high = max(window)\n    if local_high is None:\n        return None, None\n\n    dist_to_res_pct = ((local_high - cp) / cp) * 100.0\n    return local_high, dist_to_res_pct\n\ndef compute_indicators(symbol, interval, highs, lows, closes):\n    sma20 = sma(closes, 20)\n    sma50 = sma(closes, 50)\n    sma200 = sma(closes, 200)\n\n    window = closes[-300:] if len(closes) > 300 else closes\n    ema12_last, ema26_last, macd_last, signal_last, hist_last = (None,) * 5\n\n    if len(window) >= 26:\n        ema12 = ema_series(window, 12)\n        ema26 = ema_series(window, 26)\n        macd_series = [a - b for a, b in zip(ema12, ema26)]\n        signal_series = ema_series(macd_series, 9) if macd_series else []\n\n        if macd_series and signal_series:\n            macd_last = macd_series[-1]\n            signal_last = signal_series[-1]\n            hist_last = macd_last - signal_last\n            ema12_last = ema12[-1]\n            ema26_last = ema26[-1]\n\n    rsi14 = rsi_simple(closes, 14)\n\n    vol_ann = None\n    if len(closes) > 2:\n        look = min(len(closes), 200)\n        rets = []\n        for i in range(1, look):\n            p0, p1 = closes[-(i + 1)], closes[-i]\n            if p0 > 0 and p1 > 0:\n                try:\n                    rets.append(math.log(p1 / p0))\n                except:\n                    pass\n\n        vol = stdev(rets)\n        if vol is not None:\n            is_daily = str(interval).lower() in [\"1d\", \"day\", \"daily\"]\n            bars_per_day = 1.0 if is_daily else (7.0 if \"h\" in str(interval).lower() else 26.0)\n            vol_ann = vol * math.sqrt(252.0 * bars_per_day)\n\n    last = closes[-1] if closes else None\n\n    # ATR(14) + ATR%\n    atr14 = atr(highs, lows, closes, 14) if highs and lows and closes else None\n    atr_pct = ((atr14 / last) * 100.0) if (atr14 is not None and last) else (0 if last else None)\n\n    # Resistance level (50) + distance %\n    res_level_50, dist_to_res_pct_50 = get_resistance_distance(closes, highs, last)\n\n    return {\n        \"sma20\": sanitize_value(sma20),\n        \"sma50\": sanitize_value(sma50),\n        \"sma200\": sanitize_value(sma200),\n        \"ema12\": sanitize_value(ema12_last),\n        \"ema26\": sanitize_value(ema26_last),\n        \"macd\": sanitize_value(macd_last),\n        \"macd_signal\": sanitize_value(signal_last),\n        \"macd_hist\": sanitize_value(hist_last),\n        \"rsi14\": sanitize_value(rsi14),\n        \"volatility_ann\": sanitize_value(vol_ann),\n        \"last_close\": sanitize_value(last),\n\n        # ATR outputs\n        \"atr_value\": sanitize_value(atr14),\n        \"atr_pct\": sanitize_value(atr_pct),\n\n        # Resistance outputs\n        \"resistance_level_50\": sanitize_value(res_level_50),\n        \"dist_to_res_pct_50\": sanitize_value(dist_to_res_pct_50),\n    }\n\ndef compute_signal(indicators):\n    last = indicators.get(\"last_close\")\n    sma50 = indicators.get(\"sma50\")\n    sma200 = indicators.get(\"sma200\")\n    macd_hist = indicators.get(\"macd_hist\")\n    rsi14 = indicators.get(\"rsi14\")\n\n    score = 0\n    rationale = []\n\n    if last and sma50 and last > sma50:\n        score += 1\n        rationale.append(\"Close > SMA50\")\n\n    if sma50 and sma200 and sma50 > sma200:\n        score += 1\n        rationale.append(\"SMA50 > SMA200\")\n\n    if macd_hist is not None:\n        if macd_hist > 0:\n            score += 1\n            rationale.append(\"MACD > 0\")\n        else:\n            score -= 1\n            rationale.append(\"MACD < 0\")\n\n    if rsi14 is not None:\n        if rsi14 < 30:\n            score += 1\n            rationale.append(\"RSI Oversold\")\n        elif rsi14 > 70:\n            score -= 1\n            rationale.append(\"RSI Overbought\")\n\n    action = \"NEUTRAL\"\n    if score >= 2: action = \"BUY\"\n    elif score <= -1: action = \"SELL\"\n\n    confidence = max(0, min(100, int((abs(score) / 4.0) * 100)))\n\n    return {\n        \"action\": action,\n        \"confidence\": confidence,\n        \"score\": score,\n        \"rationale\": rationale,\n    }\n\n# --- MAIN EXECUTION ---\nout_items = []\n\nfor item in _items:\n    try:\n        js = item.get(\"json\", {})\n\n        bars = extract_bars(js)\n\n        # --- Extract Metadata (Source & Date) ---\n        data_source = js.get(\"source\", \"unknown\")\n        last_candle_date = js.get(\"last\", {}).get(\"t\")\n        if not last_candle_date and bars and isinstance(bars[-1], dict):\n            last_candle_date = bars[-1].get(\"t\")\n        # --------------------------------------\n\n        out = {\n            \"symbol\": js.get(\"symbol\"),\n            \"interval\": js.get(\"interval\"),\n            \"row_number\": js.get(\"row_number\"),\n        }\n\n        sample = []\n        if bars:\n            for b in bars[-60:]:\n                if isinstance(b, dict):\n                    sample.append({\n                        \"t\": b.get(\"t\"),\n                        \"o\": safe_float(b.get(\"o\")),\n                        \"h\": safe_float(b.get(\"h\")),\n                        \"l\": safe_float(b.get(\"l\")),\n                        \"c\": safe_float(b.get(\"c\")),\n                        \"v\": safe_int(b.get(\"v\")),\n                    })\n        out[\"h1_candles_sample\"] = sample\n        out[\"_h1_bars_count\"] = len(bars)\n\n        # Build aligned H/L/C series (skip bars with missing/invalid values)\n        highs, lows, closes = [], [], []\n        for b in bars:\n            if not isinstance(b, dict):\n                continue\n            h = safe_float(b.get(\"h\"))\n            l = safe_float(b.get(\"l\"))\n            c = safe_float(b.get(\"c\"))\n            if h is None or l is None or c is None:\n                continue\n            highs.append(h)\n            lows.append(l)\n            closes.append(c)\n\n        min_bars = int(js.get(\"min_bars\", 120)) if str(js.get(\"min_bars\", 120)).isdigit() else 120\n\n        analysis = {\n            \"symbol\": out[\"symbol\"],\n            \"status\": \"OK\",\n            \"warnings\": [],\n            \"indicators\": {},\n            \"signal\": {},\n            \"data_source\": data_source,\n            \"last_candle_date\": last_candle_date\n        }\n\n        if not closes:\n            analysis[\"status\"] = \"NO_DATA\"\n        elif len(closes) < min_bars:\n            analysis[\"status\"] = \"INSUFFICIENT_DATA\"\n            analysis[\"warnings\"].append(f\"Bars {len(closes)} < {min_bars}\")\n        else:\n            inds = compute_indicators(out[\"symbol\"], out[\"interval\"], highs, lows, closes)\n            sig = compute_signal(inds)\n            analysis[\"indicators\"] = inds\n            analysis[\"signal\"] = sig\n\n        out[\"technical_analysis\"] = analysis\n\n        out_items.append({\"json\": out})\n\n    except Exception as e:\n        sym = \"UNKNOWN\"\n        try:\n            sym = js.get(\"symbol\", \"UNKNOWN\")\n        except:\n            pass\n        err_out = {\"symbol\": sym, \"error\": str(e)}\n        out_items.append({\"json\": err_out})\n\nreturn out_items\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2784,
+        -384
+      ],
+      "id": "2b6e0252-ce68-4861-b9e4-934d92694d71",
+      "name": "AG2.20 — Indicators & Signal (Python)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.99 — Aggregate Pack (v3.2) — Consolidate + Full Indicators Propagation (H1/D1) + Flatten for DB\nconst rawItems = $input.all().map(i => i.json ?? {});\nconst now = new Date().toISOString();\n\n// 1) Merge by symbol\nconst bySym = {};\nlet globalRunId = \"\";\n\nfor (const it of rawItems) {\n  if (it.run_id) globalRunId = it.run_id;\n  const sym = (it.symbol ?? \"\").trim();\n  if (!sym) continue;\n\n  if (!bySym[sym]) bySym[sym] = { ...it };\n  else bySym[sym] = { ...bySym[sym], ...it };\n\n  // Keep technical blocks if present\n  if (it.technical_analysis) bySym[sym].technical_analysis = it.technical_analysis;\n  if (it.technical_analysis_1d) bySym[sym].technical_analysis_1d = it.technical_analysis_1d;\n}\n\nconst consolidated = Object.values(bySym);\n\n// 2) Indicator keys to propagate (your full set)\nconst IND_KEYS = [\n  \"sma20\",\n  \"sma50\",\n  \"sma200\",\n  \"ema12\",\n  \"ema26\",\n  \"macd\",\n  \"macd_signal\",\n  \"macd_hist\",\n  \"rsi14\",\n  \"volatility_ann\",\n  \"last_close\",\n  \"atr_value\",\n  \"atr_pct\",\n  \"resistance_level_50\",\n  \"dist_to_res_pct_50\",\n];\n\n// Helpers\nconst pickVal = (obj, key) => {\n  // returns null if missing/undefined; preserves 0\n  const v = obj?.[key];\n  return (v === undefined) ? null : v;\n};\n\nconst firstNonNull = (...vals) => {\n  for (const v of vals) {\n    if (v !== null && v !== undefined) return v;\n  }\n  return null;\n};\n\n// 3) Build “signals” array\nconst signals = consolidated.map(x => {\n  const h1 = x.technical_analysis?.signal ?? null;\n  const d1 = x.technical_analysis_1d?.signal ?? null;\n\n  // --- Recuperation Métadonnées H1 & D1 ---\n  const h1_meta = {\n    date: x.technical_analysis?.last_candle_date ?? null,\n    source: x.technical_analysis?.data_source ?? \"unknown\",\n    status: x.technical_analysis?.status ?? null,\n    warnings: x.technical_analysis?.warnings ?? [],\n  };\n  const d1_meta = {\n    date: x.technical_analysis_1d?.last_candle_date ?? null,\n    source: x.technical_analysis_1d?.data_source ?? \"unknown\",\n    status: x.technical_analysis_1d?.status ?? null,\n    warnings: x.technical_analysis_1d?.warnings ?? [],\n  };\n  // ----------------------------------------\n\n  // Pull indicator blocks\n  const indH1Raw = x.technical_analysis?.indicators ?? {};\n  const indD1Raw = x.technical_analysis_1d?.indicators ?? {};\n\n  // Build propagated indicators (H1 / D1) + canonical with fallback (D1 -> H1 -> top-level)\n  const indicators_h1 = {};\n  const indicators_d1 = {};\n  const indicators = {};\n  const flat = {};\n\n  for (const k of IND_KEYS) {\n    const vD1 = pickVal(indD1Raw, k);\n    const vH1 = pickVal(indH1Raw, k);\n\n    // Some workflows may already expose indicators at top-level (defensive)\n    const vTop = pickVal(x, k);\n\n    indicators_d1[k] = vD1;\n    indicators_h1[k] = vH1;\n\n    // Canonical: D1 first, else H1, else top-level\n    indicators[k] = firstNonNull(vD1, vH1, vTop);\n\n    // Flatten for DB (optional but very useful)\n    flat[k] = indicators[k];\n    flat[`d1_${k}`] = vD1;\n    flat[`h1_${k}`] = vH1;\n  }\n\n  // Price Fallback Logic (now uses canonical indicators)\n  const trend = {\n    last_close: indicators.last_close,\n    sma200: indicators.sma200,\n  };\n\n  const aiRaw = x.ai_raw ?? null;\n\n  return {\n    symbol: x.symbol ?? null,\n\n    // H1 / D1 + METADATA\n    h1,\n    d1,\n    h1_meta,\n    d1_meta,\n\n    // Backward compatible\n    trend,\n\n    // NEW: full indicators propagation\n    indicators,      // canonical (D1 -> H1 -> top-level)\n    indicators_h1,   // raw H1\n    indicators_d1,   // raw D1\n\n    // Flattened fields for DB updates (k, h1_k, d1_k)\n    ...flat,\n\n    // Filter + routing\n    pass_to_ai: x.pass_to_ai ?? false,\n    pass_to_pm: x.pass_to_pm ?? false,\n    reason: x.reason ?? null,\n\n    // Signature / dedup\n    sig_hash: x.sig_hash ?? null,\n    sig_json: x.sig_json ?? null,\n    call_ai: x.call_ai ?? false,\n    dedup_reason: x.dedup_reason ?? null,\n    ttl_minutes: x.ttl_minutes ?? null,\n    cache_hit: x.cache_hit ?? false,\n\n    // AI normalized fields\n    ai_decision: x.ai_decision ?? (aiRaw?.decision ?? null),\n    ai_validated: x.ai_validated ?? (aiRaw?.validated ?? null),\n    ai_quality_score: x.ai_quality_score ?? (aiRaw?.quality_score ?? null),\n    ai_reasoning: x.ai_reasoning ?? (aiRaw?.reasoning ?? null),\n    ai_chart_pattern: x.ai_chart_pattern ?? (aiRaw?.chart_pattern ?? null),\n    ai_stop_loss_suggestion: x.ai_stop_loss_suggestion ?? (aiRaw?.stop_loss_suggestion ?? null),\n    ai_stop_loss_basis: x.ai_stop_loss_basis ?? (aiRaw?.stop_loss_basis ?? null),\n\n    ai_bias_sma200: x.ai_bias_sma200 ?? (aiRaw?.bias_sma200 ?? null),\n    ai_regime_d1: x.ai_regime_d1 ?? (aiRaw?.regime_d1 ?? null),\n    ai_h1_d1_alignment: x.ai_h1_d1_alignment ?? (aiRaw?.h1_d1_alignment ?? null),\n\n    // Keep json strings stable for DB\n    ai_missing_fields_json: x.ai_missing_fields_json ?? JSON.stringify(aiRaw?.missing_fields ?? x.ai_missing_fields ?? []),\n    ai_anomalies_json: x.ai_anomalies_json ?? JSON.stringify(aiRaw?.anomalies ?? []),\n\n    // Raw AI (audit)\n    ai_raw: aiRaw,\n  };\n});\n\nconst counts = {\n  total_in_batch: rawItems.length,\n  consolidated: consolidated.length,\n  pass_to_ai: signals.filter(s => s.pass_to_ai).length,\n  pass_to_pm: signals.filter(s => s.pass_to_pm).length,\n  ai_called: signals.filter(s => s.call_ai).length,\n  ai_returned: signals.filter(s => !!s.ai_raw || !!s.ai_reasoning).length,\n};\n\nreturn [{\n  json: {\n    ok: true,\n    run_id: globalRunId,\n    source: \"AG2_TECHNICAL_ANALYST\",\n    counts,\n    signals,\n    generatedAt: now,\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        -560
+      ],
+      "id": "33be0b94-9934-4977-9b14-17494a38d07e",
+      "name": "AG2.99 — Aggregate Pack"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "=Tu es l’Agent n°2 : “Technical Validator horaires - jours (H1 ↔ D1)”.\n\nTu es un Analyste Technique Senior ET Gestionnaire de Risque. Ta mission : valider, mettre en WATCH, ou rejeter un signal intraday (H1) en le confrontant au contexte daily (D1), en appliquant STRICTEMENT les règles ci-dessous, sans hallucination.\n\nPRINCIPES NON-NÉGOCIABLES\n1) Priorité absolue à la SMA200 (D1)\n\nbias_sma200 = BULLISH si Prix_D1 > SMA200_D1\n\nbias_sma200 = BEARISH si Prix_D1 < SMA200_D1\nTu ne déduis jamais le biais à partir de MACD/RSI si cela contredit Prix_D1 vs SMA200_D1.\n\n2) Définition du régime de tendance D1 (regime_d1)\n\nBULLISH si : Prix_D1 > SMA200_D1 ET SMA50_D1 > SMA200_D1\n\nBEARISH si : Prix_D1 < SMA200_D1 ET SMA50_D1 < SMA200_D1\n\nTRANSITION si : (Prix_D1 > SMA200_D1 ET SMA50_D1 < SMA200_D1) OU (Prix_D1 < SMA200_D1 ET SMA50_D1 > SMA200_D1)\n\nNEUTRAL_RANGE sinon\nSi SMA50_D1 est manquant : tu utilises TRANSITION + missing_fields.\n\nZÉRO HALLUCINATION (règle d’or)\n\nTu n’inventes jamais de niveaux, patterns, valeurs, ni indicateurs absents.\nSi une donnée nécessaire manque, tu l’ajoutes dans missing_fields et tu dégrades la décision par prudence.\n\nCOHÉRENCE DÉCISIONNELLE (validated / decision / stop)\n\nSi validated=true alors :\n\ndecision DOIT être \"APPROVE\"\n\nstop_loss_suggestion DOIT être un nombre (non null)\n\nstop_loss_basis DOIT être \"SWING_H1\" ou \"BAR_ANCHOR\" (jamais \"NONE\")\n\nSi stop_loss_suggestion=null alors :\n\nvalidated DOIT être false\n\ndecision DOIT être \"REJECT\" ou \"WATCH\"\nTu n’as pas le droit de valider sans stop-loss.\n\nDONNÉES MINIMALES REQUISES\n\nSMA200_D1 et Prix_D1 sont obligatoires. Si l’un manque :\n\nvalidated=false, decision=\"REJECT\", quality_score ≤ 3\n\nmissing_fields doit mentionner le(s) champ(s) manquant(s)\n\nBars H1 (pour stop-loss)\n\nSi bars est vide ou < 20 bougies :\n\nstop_loss_suggestion=null, validated=false\n\ndecision=\"WATCH\" uniquement si setup WITH_BIAS a du sens, sinon \"REJECT\"\n\nmissing_fields doit inclure \"BARS_H1\"\n\nALIGNEMENT H1 ↔ D1 (h1_d1_alignment)\n\nWITH_BIAS si : (signal H1 BUY et bias_sma200=BULLISH) OU (signal H1 SELL et bias_sma200=BEARISH)\n\nAGAINST_BIAS si : (signal H1 BUY et bias_sma200=BEARISH) OU (signal H1 SELL et bias_sma200=BULLISH)\n\nMIXED si contradictions explicites (signal ok mais contexte D1 faible/transition + anomalies bars)\n\nUNKNOWN si signal H1 manquant/inexploitable\n\nRègle bars insuffisantes :\n\nvalidated=false, stop_loss_suggestion=null, stop_loss_basis=\"NONE\"\n\ndecision=\"WATCH\" si WITH_BIAS sinon \"REJECT\"\n\nquality_score : WATCH ∈ [4..6], REJECT ∈ [1..3]\n\nNOUVEAU : RISK GATE PAR R/R THÉORIQUE (RR_Theoretical)\n\nLe champ RR_Theoretical peut être fourni dans l’input (calculé en amont : TP=prochaine résistance, SL≈2×ATR ou sous creux).\n\nRègles d’utilisation (sans inventer) :\n\nTu n’ajoutes aucune nouvelle clé en sortie. RR sert uniquement à décider et justifier (2e phrase reasoning).\n\nUniquement pour BUY (si RR est null et action=BUY, tu considères RR comme indisponible).\n\nSi action=BUY et RR_Theoretical est présent :\n\nRR < 1.2 ⇒ decision=\"REJECT\" (risk/reward défavorable)\n\n1.2 ≤ RR < 1.5 ⇒ decision=\"WATCH\" (setup trop “serré”)\n\nRR ≥ 1.5 ⇒ eligible au flux normal de validation (si autres règles ok)\n\nSi action=BUY et RR_Theoretical est null :\n\nmissing_fields inclut \"RR_THEORETICAL\" (ou cause si indiquée)\n\ndecision=\"WATCH\" (si WITH_BIAS) sinon \"REJECT\"\n\nSi RR_Theoretical est présent mais ≤0 ou >10 ⇒ anomalies inclut \"RR_OUTLIER\", dégrader à WATCH/REJECT.\n\nMATRICE DE DÉCISION (VALIDATION)\n\nA) TREND FOLLOWING — setup idéal\n\nWITH_BIAS est candidat à validation.\n\nPour BUY : RR_Theoretical doit être ≥ 1.5 et bars ≥ 20 et stop-loss identifiable.\n\nquality_score attendu :\n\n9–10 si regime_d1 confirme (BULLISH pour BUY, BEARISH pour SELL) et pas d’anomalie\n\n7–8 si regime_d1 est TRANSITION ou NEUTRAL_RANGE\n\nB) CONTRE-TENDANCE — setup dangereux\n\nAGAINST_BIAS ⇒ REJECT par défaut.\n\nException ultra stricte (WATCH seulement, jamais APPROVE) :\n\nBUY contre bias BEARISH : WATCH uniquement si RSI_H1 ≤ 25 ET bars montrent rebond cohérent\n\nSELL contre bias BULLISH : WATCH uniquement si RSI_H1 ≥ 75 ET bars montrent rejet cohérent\n\nquality_score ≤ 6 et stop_loss_suggestion doit rester null.\n\nC) ANOMALIES MAJEURES (veto)\nMême en Trend Following, dégrader à WATCH/REJECT si anomalies majeures visibles dans les bars (cassure contre setup, retournement extrême, gap/volatilité défavorable).\nTu décris l’anomalie dans anomalies (liste de strings).\n\nGESTION DU RISQUE — STOP LOSS (uniquement si APPROVE)\n\nBUY : stop_loss_suggestion sous le dernier creux significatif H1 (swing low) visible dans bars\n\nSELL : stop_loss_suggestion au-dessus du dernier sommet significatif H1 (swing high)\nBuffer léger (0.1% à 0.3%) uniquement si justifiable par les bars ; sinon pas de buffer.\nSi swing non identifiable : stop_loss_suggestion=null, validated=false, decision=\"WATCH\" (si WITH_BIAS) sinon \"REJECT\".\n\nstop_loss_basis :\n\n\"SWING_H1\" si basé swing high/low\n\n\"BAR_ANCHOR\" si basé sur niveau évident récent\n\n\"NONE\" uniquement si stop_loss_suggestion=null\n\nINSTRUCTION CRITIQUE SUR reasoning (format)\n\nreasoning DOIT commencer exactement par :\n\n\"Tendance de fond Haussière car Prix > SMA200.\"\nou\n\n\"Tendance de fond Baissière car Prix < SMA200.\"\n\nreasoning = 2 phrases maximum.\nLa 2e phrase mentionne explicitement decision + raison principale (alignement, RR gate, manque bars, anomalie, contre-tendance).\n\nSi aucun pattern identifié : chart_pattern=\"None\" (jamais vide).\n\nFORMAT DE SORTIE (STRICT)\n\nTu réponds UNIQUEMENT avec un objet JSON valide conforme au schéma imposé (aucun texte hors JSON).\nTous les nombres sont des nombres JSON (pas des strings), sauf null.\nadditionalProperties interdit : n’ajoute aucune clé non prévue par le schéma."
+            },
+            {
+              "content": "=Tu vas recevoir un objet JSON pour un symbole contenant :\n\nsignal_tactical_H1 : signal + indicateurs H1\n\nprimary_context_D1 : indicateurs D1 (Prix_D1/last_close, SMA200_D1, SMA50_D1 si dispo, etc.)\n\nbars : dernières bougies H1 (OHLCV + timestamp)\n\nrr_theoretical : ratio R/R théorique (si fourni, calculé en amont)\n\nrr_meta : champs d’audit éventuels (méthode, distances, raisons)\n\nTa mission : appliquer STRICTEMENT les règles H1↔D1 et retourner UNIQUEMENT le JSON de décision conforme au schéma.\n\nRÈGLES D’ACCÈS AUX DONNÉES (ANTI-ERREURS)\n\nSMA200_D1, SMA50_D1, Prix_D1 / last_close : dans primary_context_D1.indicators\n\nRSI_H1 (si présent) : dans signal_tactical_H1.indicators (ou signal_tactical_H1 si déjà exposé)\n\nBougies H1 : dans bars\n\nRR : rr_theoretical (ne pas réinventer TP/SL si RR est fourni)\n\nSi bars < 20 : tu NE PEUX PAS proposer de stop ⇒ validated=false.\n\nDONNÉES (à utiliser telles quelles, sans invention)\n\n{{ JSON.stringify({\nsymbol: $json.symbol,\nsignal_tactical_H1: $json.SIGNAL_TACTICAL_H1,\nprimary_context_D1: $json.PRIMARY_CONTEXT_D1,\nbars: $json.RECENT_CANDLES,\n\nrr_theoretical: $json.RR_Theoretical,\nrr_meta: {\nreason: $json.RR_Theoretical_Reason,\nmethod: $json.RR_Theoretical_Method,\nentry: $json.RR_Theoretical_Entry,\ntp: $json.RR_Theoretical_TP,\ntpDistance: $json.RR_Theoretical_TPDistance,\nslDistance: $json.RR_Theoretical_SLDistance,\nslPrice: $json.RR_Theoretical_SLPrice,\natr: $json.RR_Theoretical_ATR,\ntrough: $json.RR_Theoretical_Trough\n},\n\nrun_context: { run_id: $json.run_id, asof: $now.toISO() }\n}, null, 2) }}\n\nRAPPEL — CONTRAINTES RÉCAP (à respecter)\n\nreasoning commence exactement par : \"Tendance de fond Haussière car Prix > SMA200.\" ou \"Tendance de fond Baissière car Prix < SMA200.\"\n\n2 phrases maximum dans reasoning.\n\nvalidated=true ⇒ decision=\"APPROVE\" ET stop_loss_suggestion non null.\n\nstop_loss_suggestion null ⇒ validated=false et decision=\"REJECT\" ou \"WATCH\".\n\nAGAINST_BIAS ⇒ REJECT par défaut (WATCH seulement si RSI extrême démontrable + bars cohérentes).\n\nBUY : si rr_theoretical < 1.2 ⇒ REJECT ; 1.2–1.5 ⇒ WATCH ; ≥1.5 ⇒ eligible.\n\nPas d’invention : si tu ne peux pas justifier, rejette ou watch.\n\nRetourne UNIQUEMENT le JSON final.\n\nNote importante (pratique)\n\nComme ton pipeline calcule RR uniquement sur BUY aujourd’hui, ne pénalise pas un SELL parce que rr_theoretical est null. RR gate s’applique seulement si action=BUY."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "schema": "={\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"validated\": {\n      \"type\": \"boolean\"\n    },\n    \"decision\": {\n      \"type\": \"string\",\n      \"enum\": [\"APPROVE\", \"REJECT\", \"WATCH\"]\n    },\n    \"quality_score\": {\n      \"type\": \"integer\",\n      \"minimum\": 1,\n      \"maximum\": 10\n    },\n    \"bias_sma200\": {\n      \"type\": \"string\",\n      \"enum\": [\"BULLISH\", \"BEARISH\"]\n    },\n    \"regime_d1\": {\n      \"type\": \"string\",\n      \"enum\": [\"BULLISH\", \"BEARISH\", \"NEUTRAL_RANGE\", \"TRANSITION\"]\n    },\n    \"h1_d1_alignment\": {\n      \"type\": \"string\",\n      \"enum\": [\"WITH_BIAS\", \"AGAINST_BIAS\", \"MIXED\", \"UNKNOWN\"]\n    },\n    \"reasoning\": {\n      \"type\": \"string\"\n    },\n    \"chart_pattern\": {\n      \"type\": \"string\"\n    },\n    \"stop_loss_suggestion\": {\n      \"type\": [\"number\", \"null\"]\n    },\n    \"stop_loss_basis\": {\n      \"type\": [\"string\", \"null\"],\n      \"enum\": [\"SWING_H1\", \"BAR_ANCHOR\", \"NONE\", null]\n    },\n    \"missing_fields\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    },\n    \"anomalies\": {\n      \"type\": \"array\",\n      \"items\": { \"type\": \"string\" }\n    }\n  },\n  \"required\": [\n    \"validated\",\n    \"decision\",\n    \"quality_score\",\n    \"bias_sma200\",\n    \"regime_d1\",\n    \"h1_d1_alignment\",\n    \"reasoning\",\n    \"chart_pattern\",\n    \"stop_loss_suggestion\",\n    \"stop_loss_basis\",\n    \"missing_fields\",\n    \"anomalies\"\n  ]\n}\n",
+              "description": "=",
+              "strict": true
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        3120,
+        256
+      ],
+      "id": "e47eaec1-b05f-4886-9588-9c89b5574991",
+      "name": "AG2.41 — AI Validation (Context Check)",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "737a575e-b9e9-4fdd-b030-64f4fff617a5",
+              "name": "timeframe",
+              "value": "daily",
+              "type": "string"
+            },
+            {
+              "id": "35dae4ae-f0fa-494c-ae81-436c90c1ee4c",
+              "name": "lookback_days",
+              "value": "={{$json.daily.lookback_days}}",
+              "type": "number"
+            },
+            {
+              "id": "908d3d08-80ec-4d18-9212-49aea341e610",
+              "name": "interval",
+              "value": "={{$json.daily.interval}}",
+              "type": "string"
+            },
+            {
+              "id": "43e64065-c06a-4e42-aff0-6b1420fe3b40",
+              "name": "max_bars",
+              "value": "={{$json.daily.max_bars}}",
+              "type": "number"
+            },
+            {
+              "id": "7086811e-5f56-4700-a5ad-7c6e99808c21",
+              "name": "min_bars",
+              "value": 200,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1920,
+        -128
+      ],
+      "id": "54d8f387-8259-4778-811f-ea42ad3cd4b8",
+      "name": "AG2.14 — Set — Apply Daily Params (1D Strategy)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2368,
+        -128
+      ],
+      "id": "f93a4a31-6903-4b8a-a0bd-a2bb8293ac29",
+      "name": "AG2.16 — Merge — Daily (input + HTTP)"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import math\n\n# --- HELPER FUNCTIONS ---\ndef safe_float(x):\n    try:\n        if x is None: return None\n        f = float(x)\n        if math.isnan(f) or math.isinf(f): return None\n        return f\n    except: return None\n\ndef sanitize_value(v):\n    if isinstance(v, float):\n        if math.isnan(v) or math.isinf(v): return None\n        return v\n    return v\n\ndef sma(values, n):\n    if n <= 0 or len(values) < n: return None\n    return sum(values[-n:]) / n\n\ndef ema_series(values, n):\n    if n <= 0 or not values: return []\n    k = 2.0 / (n + 1.0)\n    out = [values[0]]\n    e = values[0]\n    for v in values[1:]:\n        e = v * k + e * (1.0 - k)\n        out.append(e)\n    return out\n\ndef rsi_simple(values, n=14):\n    if n <= 0 or len(values) < n + 1: return None\n    gains = 0.0\n    losses = 0.0\n    for i in range(-n, 0):\n        chg = values[i] - values[i - 1]\n        if chg >= 0: gains += chg\n        else: losses += -chg\n    if losses == 0: return 100.0\n    rs = (gains / n) / (losses / n)\n    return 100.0 - (100.0 / (1.0 + rs))\n\ndef stdev(values):\n    if len(values) < 2: return None\n    m = sum(values) / len(values)\n    var = sum((x - m) ** 2 for x in values) / (len(values) - 1)\n    return math.sqrt(var) if var >= 0 else 0\n\ndef extract_bars(js):\n    if isinstance(js.get(\"bars\"), list): return js[\"bars\"]\n    if isinstance(js.get(\"body\"), dict) and isinstance(js[\"body\"].get(\"bars\"), list): return js[\"body\"][\"bars\"]\n    if isinstance(js.get(\"data\"), dict) and isinstance(js[\"data\"].get(\"bars\"), list): return js[\"data\"][\"bars\"]\n    return []\n\n# --- NEW: ATR ---\ndef atr(highs, lows, closes, n=14):\n    if len(closes) < n + 1: return None\n    tr_list = []\n    for i in range(1, len(closes)):\n        hl = highs[i] - lows[i]\n        hc = abs(highs[i] - closes[i-1])\n        lc = abs(lows[i] - closes[i-1])\n        tr_list.append(max(hl, hc, lc))\n    if not tr_list: return None\n    return sum(tr_list[-n:]) / n\n\n# --- NEW: Resistance distance ---\ndef get_resistance_distance(closes, highs, current_price):\n    # Plus haut des 50 dernières bougies (ou moins si historique < 50)\n    if current_price is None:\n        return None, None\n    try:\n        cp = float(current_price)\n    except:\n        return None, None\n    if not highs or cp <= 0 or math.isnan(cp) or math.isinf(cp):\n        return None, None\n\n    window = highs[-50:] if len(highs) >= 50 else highs\n    if not window:\n        return None, None\n\n    local_high = max(window)\n    dist_to_res_pct = ((local_high - cp) / cp) * 100.0\n    return local_high, dist_to_res_pct\n\ndef compute_indicators(symbol, interval, highs, lows, closes):\n    sma20 = sma(closes, 20)\n    sma50 = sma(closes, 50)\n    sma200 = sma(closes, 200)\n\n    window = closes[-300:] if len(closes) > 300 else closes\n    ema12_last, ema26_last, macd_last, signal_last, hist_last = (None,) * 5\n\n    if len(window) >= 26:\n        ema12 = ema_series(window, 12)\n        ema26 = ema_series(window, 26)\n        macd_series = [a - b for a, b in zip(ema12, ema26)]\n        signal_series = ema_series(macd_series, 9) if macd_series else []\n\n        if macd_series and signal_series:\n            macd_last = macd_series[-1]\n            signal_last = signal_series[-1]\n            hist_last = macd_last - signal_last\n            ema12_last = ema12[-1]\n            ema26_last = ema26[-1]\n\n    rsi14 = rsi_simple(closes, 14)\n\n    vol_ann = None\n    if len(closes) > 2:\n        look = min(len(closes), 200)\n        rets = []\n        for i in range(1, look):\n            p0, p1 = closes[-(i + 1)], closes[-i]\n            if p0 > 0 and p1 > 0:\n                try:\n                    rets.append(math.log(p1 / p0))\n                except:\n                    pass\n\n        vol = stdev(rets)\n        if vol is not None:\n            vol_ann = vol * math.sqrt(252.0)\n\n    last = closes[-1] if closes else None\n\n    # --- NEW: ATR(14) + ATR% ---\n    atr14 = atr(highs, lows, closes, 14) if highs and lows and closes else None\n    atr_pct = ((atr14 / last) * 100.0) if (atr14 is not None and last) else (0 if last else None)\n\n    # --- NEW: Resistance (50) + distance % ---\n    res_level_50, dist_to_res_pct_50 = get_resistance_distance(closes, highs, last)\n\n    return {\n        \"sma20\": sanitize_value(sma20),\n        \"sma50\": sanitize_value(sma50),\n        \"sma200\": sanitize_value(sma200),\n        \"ema12\": sanitize_value(ema12_last),\n        \"ema26\": sanitize_value(ema26_last),\n        \"macd\": sanitize_value(macd_last),\n        \"macd_signal\": sanitize_value(signal_last),\n        \"macd_hist\": sanitize_value(hist_last),\n        \"rsi14\": sanitize_value(rsi14),\n        \"volatility_ann\": sanitize_value(vol_ann),\n        \"last_close\": sanitize_value(last),\n\n        # NEW outputs\n        \"atr_value\": sanitize_value(atr14),\n        \"atr_pct\": sanitize_value(atr_pct),\n        \"resistance_level_50\": sanitize_value(res_level_50),\n        \"dist_to_res_pct_50\": sanitize_value(dist_to_res_pct_50),\n    }\n\ndef compute_signal(indicators):\n    last = indicators.get(\"last_close\")\n    sma50 = indicators.get(\"sma50\")\n    sma200 = indicators.get(\"sma200\")\n    macd_hist = indicators.get(\"macd_hist\")\n    rsi14 = indicators.get(\"rsi14\")\n\n    score = 0\n    rationale = []\n\n    if last and sma50 and last > sma50:\n        score += 1\n        rationale.append(\"Close > SMA50\")\n\n    if sma50 and sma200 and sma50 > sma200:\n        score += 1\n        rationale.append(\"SMA50 > SMA200\")\n\n    if macd_hist is not None:\n        if macd_hist > 0:\n            score += 1\n            rationale.append(\"MACD > 0\")\n        else:\n            score -= 1\n            rationale.append(\"MACD < 0\")\n\n    if rsi14 is not None:\n        if rsi14 < 30:\n            score += 1\n            rationale.append(\"RSI Oversold\")\n        elif rsi14 > 70:\n            score -= 1\n            rationale.append(\"RSI Overbought\")\n\n    action = \"NEUTRAL\"\n    if score >= 2: action = \"BUY\"\n    elif score <= -1: action = \"SELL\"\n\n    confidence = max(0, min(100, int((abs(score) / 4.0) * 100)))\n\n    return {\n        \"action\": action,\n        \"confidence\": confidence,\n        \"score\": score,\n        \"rationale\": rationale,\n    }\n\n# --- MAIN EXECUTION ---\nout_items = []\n\nfor item in _items:\n    try:\n        js = item.get(\"json\", {})\n\n        bars = extract_bars(js)\n\n        out = {\n            \"symbol\": js.get(\"symbol\"),\n            \"interval\": js.get(\"interval\"),\n            \"row_number\": js.get(\"row_number\"),\n        }\n\n        # --- Extract Metadata (Source & Date) ---\n        data_source = js.get(\"source\", \"unknown\")\n        last_candle_date = js.get(\"last\", {}).get(\"t\")\n        if not last_candle_date and bars and isinstance(bars[-1], dict):\n            last_candle_date = bars[-1].get(\"t\")\n        # --------------------------------------\n\n        # Build aligned H/L/C series (skip bars with missing/invalid values)\n        highs, lows, closes = [], [], []\n        for b in bars:\n            if not isinstance(b, dict):\n                continue\n            h = safe_float(b.get(\"h\"))\n            l = safe_float(b.get(\"l\"))\n            c = safe_float(b.get(\"c\"))\n            if h is None or l is None or c is None:\n                continue\n            highs.append(h)\n            lows.append(l)\n            closes.append(c)\n\n        min_bars = int(js.get(\"min_bars\", 120)) if str(js.get(\"min_bars\", 120)).isdigit() else 120\n\n        analysis = {\n            \"symbol\": out[\"symbol\"],\n            \"status\": \"OK\",\n            \"warnings\": [],\n            \"indicators\": {},\n            \"signal\": {},\n            \"data_source\": data_source,\n            \"last_candle_date\": last_candle_date\n        }\n\n        if not closes:\n            analysis[\"status\"] = \"NO_DATA\"\n        elif len(closes) < min_bars:\n            analysis[\"status\"] = \"INSUFFICIENT_DATA\"\n            analysis[\"warnings\"].append(f\"Bars {len(closes)} < {min_bars}\")\n        else:\n            inds = compute_indicators(out[\"symbol\"], out[\"interval\"], highs, lows, closes)\n            sig = compute_signal(inds)\n            analysis[\"indicators\"] = inds\n            analysis[\"signal\"] = sig\n\n        out[\"technical_analysis\"] = analysis\n\n        out_items.append({\"json\": out})\n\n    except Exception as e:\n        sym = \"UNKNOWN\"\n        try:\n            sym = js.get(\"symbol\", \"UNKNOWN\")\n        except:\n            pass\n        out_items.append({\"json\": {\"symbol\": sym, \"error\": str(e)}})\n\nreturn out_items\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2576,
+        -128
+      ],
+      "id": "2b398d6b-28da-4de2-9677-0b9adf6e6d33",
+      "name": "AG2.17 — Indicators & Signal (Python) — Daily (1D)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2576,
+        -384
+      ],
+      "id": "c1c801c5-9e37-4958-8742-d4bf1f4497c8",
+      "name": "AG2.11 — Merge (input + HTTP response)"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "737a575e-b9e9-4fdd-b030-64f4fff617a5",
+              "name": "timeframe",
+              "value": "intraday",
+              "type": "string"
+            },
+            {
+              "id": "35dae4ae-f0fa-494c-ae81-436c90c1ee4c",
+              "name": "lookback_days",
+              "value": "={{$json.intraday.lookback_days}}",
+              "type": "number"
+            },
+            {
+              "id": "908d3d08-80ec-4d18-9212-49aea341e610",
+              "name": "interval",
+              "value": "={{$json.intraday.interval}}",
+              "type": "string"
+            },
+            {
+              "id": "43e64065-c06a-4e42-aff0-6b1420fe3b40",
+              "name": "max_bars",
+              "value": "={{$json.intraday.max_bars}}",
+              "type": "number"
+            },
+            {
+              "id": "83255b89-7645-4d45-b689-b07ed0274048",
+              "name": "min_bars",
+              "value": 60,
+              "type": "number"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2128,
+        -384
+      ],
+      "id": "89694f56-bd1c-4b1e-bdf8-3233be576216",
+      "name": "AG2.09 — Set — Apply Intraday Params (1H Timing)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.39 — Pre-Filter Logic (Smart Filter H1+D1) - BLINDÉ\n// - SELL passe toujours\n// - BUY requiert tendance haussière OU signal fort OU historique insuffisant (bénéfice du doute)\n\nconst items = $input.all();\n\nreturn items.map((it) => {\n  const j = it.json ?? {};\n  const h1 = j.technical_analysis;\n  const d1 = j.technical_analysis_1d;\n\n  // 1. Pas de signal H1 => Poubelle\n  if (!h1 || !h1.signal || !h1.signal.action) {\n    return { json: { ...j, pass_to_ai: false, reason: \"NO_H1_SIGNAL\" } };\n  }\n\n  // 2. SELL => Priorité Absolue (Sécurité Portefeuille)\n  if (h1.signal.action === \"SELL\") {\n    return { json: { ...j, pass_to_ai: true, reason: \"SELL_SIGNAL_SAFETY\" } };\n  }\n\n  // 3. NEUTRAL => Poubelle (Bruit)\n  if (h1.signal.action === \"NEUTRAL\") {\n    return { json: { ...j, pass_to_ai: false, reason: \"NEUTRAL\" } };\n  }\n\n  // 4. Analyse du Contexte Daily pour les BUY\n  // Si pas de D1 du tout => Rejet (trop dangereux de trader à l'aveugle)\n  if (!d1 || !d1.indicators) {\n    return { json: { ...j, pass_to_ai: false, reason: \"NO_DAILY_CONTEXT\" } };\n  }\n\n  const price = d1.indicators.last_close;\n  const sma200 = d1.indicators.sma200;\n  \n  // Est-ce qu'on est en tendance haussière ?\n  // Si SMA200 existe : Prix > SMA200\n  // Si SMA200 n'existe pas (IPO récente) : On considère que c'est neutre/haussier par défaut pour ne pas bloquer\n  let isTrendBullish = false;\n  if (typeof sma200 === \"number\" && typeof price === \"number\") {\n      isTrendBullish = (price > sma200);\n  } else if (sma200 === null) {\n      // Cas IPO récente : on laisse sa chance au signal H1\n      isTrendBullish = true; \n  }\n\n  // RÈGLE 2 : BUY classique (avec la tendance)\n  if (h1.signal.action === \"BUY\" && isTrendBullish) {\n    return { json: { ...j, pass_to_ai: true, reason: \"BUY_IN_UPTREND\" } };\n  }\n\n  // RÈGLE 3 : BUY contre tendance (Rebond technique violent)\n  // On exige un signal technique H1 impeccable (Score >= 3) OU un RSI en survente extrême (< 30)\n  const rsi = h1.indicators?.rsi14;\n  const score = h1.signal?.score;\n  const isStrongSignal = (typeof score === \"number\" && score >= 3) || (typeof rsi === \"number\" && rsi < 30);\n\n  if (h1.signal.action === \"BUY\" && !isTrendBullish && isStrongSignal) {\n    return { json: { ...j, pass_to_ai: true, reason: \"STRONG_REVERSAL_BUY\" } };\n  }\n\n  // RÈGLE 4 : Tout le reste (Achat faible sous MM200) => Poubelle\n  return { json: { ...j, pass_to_ai: false, reason: \"WEAK_BUY_AGAINST_TREND\" } };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3280,
+        -48
+      ],
+      "id": "a3f19761-19fc-45b0-b67f-8af7faf904bf",
+      "name": "AG2.39 — Pre-Filter Logic (Smart Filter H1+D1)"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.yfinance_api_base}}/history",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{$json.symbol}}"
+            },
+            {
+              "name": "interval",
+              "value": "={{$json.interval}}"
+            },
+            {
+              "name": "lookback_days",
+              "value": "={{$json.lookback_days}}"
+            },
+            {
+              "name": "max_bars",
+              "value": "={{$json.max_bars}}"
+            },
+            {
+              "name": "allow_stale",
+              "value": "true"
+            },
+            {
+              "name": "min_bars",
+              "value": "={{ $json.min_bars }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2352,
+        -320
+      ],
+      "id": "876138d2-b79f-49b9-a191-f68efc2cfd47",
+      "name": "AG2.10 — HTTP — Fetch Yahoo OHLCV (1H Timing)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.yfinance_api_base}}/history",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{$json.symbol}}"
+            },
+            {
+              "name": "interval",
+              "value": "={{$json.interval}}"
+            },
+            {
+              "name": "lookback_days",
+              "value": "={{$json.lookback_days}}"
+            },
+            {
+              "name": "max_bars",
+              "value": "={{$json.max_bars}}"
+            },
+            {
+              "name": "allow_stale",
+              "value": "true"
+            },
+            {
+              "name": "min_bars",
+              "value": "={{ $json.min_bars }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [
+        2144,
+        -48
+      ],
+      "id": "42ca94d4-c80e-4c49-a236-1b7d99f380f7",
+      "name": "AG2.15 — HTTP — Fetch Yahoo OHLCV (1D Strategy)",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "symbol",
+        "joinMode": "enrichInput1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3024,
+        -320
+      ],
+      "id": "83d78490-e285-4f4c-bd65-9f884b94847b",
+      "name": "AG2.18 — Merge — Enrich Intraday with Daily by Symbol"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.17B — Normalize Daily Output\n// But: renommer technical_analysis -> technical_analysis_1d\n\nconst items = $input.all();\n\nreturn items.map((it) => {\n  const j = it.json ?? {};\n  if (j.technical_analysis && !j.technical_analysis_1d) {\n    j.technical_analysis_1d = j.technical_analysis;\n    delete j.technical_analysis;\n  }\n  return { json: j };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2800,
+        -128
+      ],
+      "id": "24b70156-aa42-4daf-a7d1-e46e3de09fe1",
+      "name": "AG2.17B — Normalize Daily Output (code)"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "ef9b409b-c5ae-4175-b68d-aa011246d356",
+              "leftValue": "={{$json.call_ai}}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2656,
+        400
+      ],
+      "id": "ee362e5c-6747-4955-9532-289180facdc7",
+      "name": "AG2.45 — IF — Call AI?"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 263220522,
+          "mode": "list",
+          "cachedResultName": "ag2_ai_cache",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=263220522"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "symbol": "={{$json.symbol}}",
+            "sig_hash": "={{$json.sig_hash}}",
+            "sig_json": "={{$json.sig_json}}",
+            "last_ai_at": "={{new Date().toISOString()}}",
+            "last_ai_run_id": "={{$json.run_id}}",
+            "last_ai_reason": "={{$json.reason}}",
+            "last_ai_output_ref": "={{$json.output_ref}}",
+            "updatedAt": "={{new Date().toISOString()}}",
+            "ttl_buy_min": "={{$json.ttl_buy_min}}",
+            "ttl_sell_min": "={{$json.ttl_sell_min}}",
+            "ttl_minutes_used": "={{$json.ttl_minutes}}"
+          },
+          "matchingColumns": [
+            "symbol"
+          ],
+          "schema": [
+            {
+              "id": "symbol",
+              "displayName": "symbol",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "sig_hash",
+              "displayName": "sig_hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "sig_json",
+              "displayName": "sig_json",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_ai_at",
+              "displayName": "last_ai_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_ai_run_id",
+              "displayName": "last_ai_run_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_ai_reason",
+              "displayName": "last_ai_reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "last_ai_output_ref",
+              "displayName": "last_ai_output_ref",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "updatedAt",
+              "displayName": "updatedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ttl_buy_min",
+              "displayName": "ttl_buy_min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ttl_sell_min",
+              "displayName": "ttl_sell_min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ttl_minutes_used",
+              "displayName": "ttl_minutes_used",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3888,
+        528
+      ],
+      "id": "34185bc3-c334-441e-a77d-3170264fcf85",
+      "name": "AG2.46 — Sheets — Upsert Cache (symbol)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.41B — Extract AI Result (Normalized) + output_ref\n// Entrée typique OpenAI(n8n): { output: [ { content: [ { text: {...} | \"{...json...}\" } ] } ] }\n// Objectif :\n// 1) extraire tous les champs du validator\n// 2) normaliser les cas limites (bars manquantes => WATCH si WITH_BIAS, etc.)\n// 3) produire un output_ref stable pour cache / stockage\n\nconst root = $json ?? {};\nconst msg = root.output?.[0] ?? null;\nconst c0 = msg?.content?.[0] ?? null;\n\nlet payload = c0?.text ?? null;\n\n// Certains setups renvoient une string JSON\nif (typeof payload === \"string\") {\n  try { payload = JSON.parse(payload); } catch (e) { /* ignore */ }\n}\n\n// Helpers\nfunction isNil(v) { return v === null || v === undefined; }\nfunction toNumberOrNull(v) {\n  if (typeof v === \"number\") return v;\n  if (typeof v === \"string\" && v.trim() !== \"\") {\n    const n = Number(v);\n    return Number.isFinite(n) ? n : null;\n  }\n  return null;\n}\nfunction toIntOrNull(v) {\n  const n = toNumberOrNull(v);\n  return Number.isFinite(n) ? Math.trunc(n) : null;\n}\nfunction toStringOrNull(v) {\n  if (typeof v === \"string\") return v;\n  if (isNil(v)) return null;\n  return String(v);\n}\nfunction toArrayOrEmpty(v) {\n  return Array.isArray(v) ? v : [];\n}\nfunction clampInt(n, min, max) {\n  if (!Number.isFinite(n)) return null;\n  return Math.max(min, Math.min(max, Math.trunc(n)));\n}\n\n// --- Extraction champs (version \"validator v2\") ---\nconst symbol = root.symbol ?? null;\nconst sig_hash = root.sig_hash ?? null;\n\n// Champs core\nlet validated = payload?.validated;\nvalidated = (validated === true || validated === false) ? validated : null;\n\nlet decision = toStringOrNull(payload?.decision);               // \"APPROVE\" | \"WATCH\" | \"REJECT\" (si tu l'as)\nlet quality_score = clampInt(toIntOrNull(payload?.quality_score), 1, 10);\nlet reasoning = toStringOrNull(payload?.reasoning);\nlet chart_pattern = toStringOrNull(payload?.chart_pattern);\nlet stop_loss_suggestion = toNumberOrNull(payload?.stop_loss_suggestion);\n\n// Champs de contexte/diagnostic\nlet bias_sma200 = toStringOrNull(payload?.bias_sma200);         // \"BULLISH\" | \"BEARISH\" | \"NEUTRAL\"\nlet regime_d1 = toStringOrNull(payload?.regime_d1);             // \"BULLISH\" | \"BEARISH\" | \"NEUTRAL\"\nlet h1_d1_alignment = toStringOrNull(payload?.h1_d1_alignment); // \"WITH_BIAS\" | \"AGAINST_BIAS\" | \"MIXED\"\nlet stop_loss_basis = toStringOrNull(payload?.stop_loss_basis); // \"SWING_H1\" | \"BAR_ANCHOR\" | \"NONE\"\nlet missing_fields = toArrayOrEmpty(payload?.missing_fields);\nlet anomalies = toArrayOrEmpty(payload?.anomalies);\n\n// --- Normalisations / garde-fous ---\n// 1) chart_pattern jamais vide\nif (!chart_pattern || chart_pattern.trim() === \"\") chart_pattern = \"None\";\n\n// 2) stop_loss_basis jamais null\nif (isNil(stop_loss_basis) || stop_loss_basis.trim?.() === \"\") {\n  stop_loss_basis = isNil(stop_loss_suggestion) ? \"NONE\" : \"SWING_H1\";\n}\n\n// 3) Si stop_loss_suggestion null => basis NONE\nif (isNil(stop_loss_suggestion)) stop_loss_basis = \"NONE\";\n\n// 4) Gestion bars manquantes => WATCH si WITH_BIAS\nconst hasBarsMissing = missing_fields.includes(\"BARS_H1\") || missing_fields.includes(\"bars\") || missing_fields.includes(\"RECENT_CANDLES\");\nif (hasBarsMissing && h1_d1_alignment === \"WITH_BIAS\") {\n  decision = \"WATCH\";\n  validated = false;\n  // Ajustement de score si incohérent\n  if (quality_score !== null && quality_score < 4) quality_score = 5;\n}\n\n// 5) Cohérence validated <-> decision (si decision existe)\nif (decision) {\n  if (decision === \"APPROVE\") validated = true;\n  if (decision === \"REJECT\" || decision === \"WATCH\") validated = false;\n  // Stop obligatoire si APPROVE : si absent => rétrograder WATCH\n  if (decision === \"APPROVE\" && isNil(stop_loss_suggestion)) {\n    decision = \"WATCH\";\n    validated = false;\n    stop_loss_basis = \"NONE\";\n    if (quality_score !== null && quality_score > 6) quality_score = 6;\n    if (Array.isArray(missing_fields) && !missing_fields.includes(\"BARS_H1\")) missing_fields.push(\"BARS_H1\");\n  }\n}\n\n// 6) Si reasoning absent => mettre un placeholder traçable\nif (!reasoning || reasoning.trim() === \"\") {\n  reasoning = \"(no reasoning returned by model)\";\n}\n\n// --- output_ref ---\n// Option A (stable/déterministe) : pas de timestamp => cache facile\nconst output_ref = `AG2AI|${symbol ?? \"NA\"}|${sig_hash ?? \"NA\"}`;\n// Option B (unique) : si tu veux conserver l'historique strictement, décommente:\n// const ts = new Date().toISOString();\n// const output_ref = `AG2AI|${symbol ?? \"NA\"}|${sig_hash ?? \"NA\"}|${ts}`;\n\nconst ts = new Date().toISOString();\n\nreturn {\n  // Champs normalisés “v2”\n  ai_validated: validated,\n  ai_decision: decision,\n  ai_quality_score: quality_score,\n  ai_reasoning: reasoning,\n  ai_chart_pattern: chart_pattern,\n  ai_stop_loss_suggestion: stop_loss_suggestion,\n  ai_stop_loss_basis: stop_loss_basis,\n\n  ai_bias_sma200: bias_sma200,\n  ai_regime_d1: regime_d1,\n  ai_h1_d1_alignment: h1_d1_alignment,\n  ai_missing_fields: missing_fields,\n  ai_anomalies: anomalies,\n\n  // brut (utile debug / audit)\n  ai_raw: payload ?? null,\n\n  // ref cache / audit\n  output_ref,\n  output_ref_ts: ts,\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3424,
+        256
+      ],
+      "id": "b9c00d0b-d3be-4d76-af59-5004177ddc94",
+      "name": "AG2.41B — Code — Extract AI Result (Normalized)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3424,
+        544
+      ],
+      "id": "4604f7ef-1622-4ed2-bb75-a378be8ee276",
+      "name": "AG2.41C — Merge — Combine Context + AI Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.41D — Finalize: output_ref + alignment fallback + pass_to_pm gating\n\nconst j = $json ?? {};\nconst symbol = j.symbol ?? \"NA\";\nconst sig = j.sig_hash ?? \"NA\";\n\n// stable key\nconst output_ref = `AG2AI|${symbol}|${sig}`;\n\n// helpers\nconst arr = (v) => Array.isArray(v) ? v : [];\nconst has = (a, x) => arr(a).includes(x);\n\n// get AI fields\nlet decision = j.ai_decision ?? j.ai_raw?.decision ?? null;\nlet validated = (j.ai_validated ?? j.ai_raw?.validated);\nlet qs = j.ai_quality_score ?? j.ai_raw?.quality_score ?? null;\n\nconst bias = j.ai_bias_sma200 ?? j.ai_raw?.bias_sma200 ?? null;\nconst h1Action =\n  j.SIGNAL_TACTICAL_H1?.action ??\n  j.technical_analysis?.signal?.action ??\n  null;\n\n// alignment fallback\nlet alignment = j.ai_h1_d1_alignment ?? j.ai_raw?.h1_d1_alignment ?? null;\nif ((!alignment || alignment === \"UNKNOWN\") && bias && h1Action && (h1Action === \"BUY\" || h1Action === \"SELL\")) {\n  if ((h1Action === \"BUY\" && bias === \"BULLISH\") || (h1Action === \"SELL\" && bias === \"BEARISH\")) alignment = \"WITH_BIAS\";\n  else alignment = \"AGAINST_BIAS\";\n}\n\n// bars missing rule (garde-fou)\nconst missing = arr(j.ai_missing_fields ?? j.ai_raw?.missing_fields);\nconst barsMissing = has(missing, \"BARS_H1\");\n\n// Si bars manquantes, on n’autorise jamais APPROVE\nif (barsMissing) {\n  validated = false;\n  if (alignment === \"WITH_BIAS\") {\n    decision = \"WATCH\";\n    if (typeof qs !== \"number\" || qs < 4) qs = 5;\n  } else {\n    decision = \"REJECT\";\n    if (typeof qs !== \"number\" || qs > 3) qs = 3;\n  }\n}\n\n// cohérence decision/validated\nif (decision === \"APPROVE\") validated = true;\nif (decision === \"WATCH\" || decision === \"REJECT\") validated = false;\n\n// pass_to_pm FINAL (écrase l’amont)\nconst pass_to_pm =\n  (decision === \"APPROVE\") ||\n  (decision === \"WATCH\" && alignment === \"WITH_BIAS\" && typeof qs === \"number\" && qs >= 5);\n\n// JSON strings pour Sheets\nconst ai_missing_fields_json = JSON.stringify(missing);\nconst ai_anomalies_json = JSON.stringify(arr(j.ai_anomalies ?? j.ai_raw?.anomalies));\n\nreturn {\n  ...j,\n  output_ref,\n\n  ai_decision: decision,\n  ai_validated: validated,\n  ai_quality_score: qs,\n  ai_h1_d1_alignment: alignment,\n\n  pass_to_pm,\n\n  ai_missing_fields_json,\n  ai_anomalies_json,\n};\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3664,
+        544
+      ],
+      "id": "57d75f9b-2901-4f2b-b1c2-532b5470f6dd",
+      "name": "AG2.41D — Code — Ensure output_ref (post-merge)"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        368,
+        -192
+      ],
+      "id": "a5a71abd-807e-4b6b-bac1-ab2a6b374deb",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 3F — Build AG2 Input (intraday + daily, robuste)\n// Mode: Run once for all items\n// Sortie: objet de config + symbols[] + 2 blocs {intraday} et {daily}\n\nconst first = $input.first()?.json ?? {};\nconst all = $input.all().map(i => i.json ?? {});\n\nfunction uniq(arr) {\n  return [...new Set(arr)];\n}\nfunction cleanSym(s) {\n  return String(s ?? \"\").trim();\n}\nfunction toInt(v, dflt) {\n  const n = Number(v);\n  return Number.isFinite(n) ? Math.floor(n) : dflt;\n}\n\n// 1) Priorité: symbols fournis explicitement (via une variable 'symbols' dans le premier item)\nlet symbols = Array.isArray(first.symbols) ? first.symbols : [];\n\n// 2) Sinon: marketDataPack.items[].symbol (structure issue de 3E - legacy)\nif (!symbols.length && first.marketDataPack && Array.isArray(first.marketDataPack.items)) {\n  symbols = first.marketDataPack.items.map(x => x?.symbol);\n}\n\n// 3) Sinon: symbolDirectory[].symbol (aussi produit par 3E - legacy)\nif (!symbols.length && Array.isArray(first.symbolDirectory)) {\n  symbols = first.symbolDirectory.map(x => x?.symbol);\n}\n\n// 4) Sinon: cas où chaque item entrant est déjà une ligne avec .Symbol (Votre nouveau format)\n// On map sur 'Symbol' (votre clé) ou 'symbol' (standard n8n parfois)\nif (!symbols.length) {\n  symbols = all.map(x => x.Symbol || x.symbol);\n}\n\n// Nettoyage et déduplication\nsymbols = uniq(symbols.map(cleanSym).filter(s => s !== \"\"));\n\n// ----- INTRADAY (par défaut inchangé) -----\n// Récupère les configs depuis le premier item ou utilise des défauts\nconst intraday_interval = String(first.interval ?? \"1h\");\nconst intraday_lookback_days = toInt(first.lookback_days ?? first.lookbackDays, 60);\nconst intraday_max_bars = toInt(first.max_bars ?? first.maxBars, 200);\n\n// ----- DAILY (nouveau bloc) -----\nconst daily_interval = String(first.daily_interval ?? first.dailyInterval ?? \"1d\");\nconst daily_lookback_days = toInt(first.daily_lookback_days ?? first.dailyLookbackDays, 400);\nconst daily_max_bars = toInt(first.daily_max_bars ?? first.dailyMaxBars, 400);\n\nconst out = {\n  run_id: first.run_id ?? first.runId ?? \"\",\n  strategy_version: first.strategy_version ?? first.strategyVersion ?? \"STRAT_1.0.0\",\n  config_version: first.config_version ?? first.configVersion ?? \"CFG_1.0.0\",\n\n  timezone: first.timezone ?? first.timezone_name ?? first.timezoneName ?? \"Europe/Paris\",\n  yfinance_api_base: first.yfinance_api_base ?? first.yfinanceApiBase ?? \"http://yfinance-api:8080\",\n\n  // Backward compatible (intraday = défaut)\n  interval: intraday_interval,\n  lookback_days: intraday_lookback_days,\n  max_bars: intraday_max_bars,\n\n  // Nouveau: 2 blocs explicites pour les traitements suivants\n  intraday: {\n    interval: intraday_interval,\n    lookback_days: intraday_lookback_days,\n    max_bars: intraday_max_bars,\n    role: \"timing\"\n  },\n  daily: {\n    interval: daily_interval,\n    lookback_days: daily_lookback_days,\n    max_bars: daily_max_bars,\n    role: \"strategy\"\n  },\n\n  symbols,\n  symbols_count: symbols.length,\n  source_count_in: all.length,\n\n  generatedAt: new Date().toISOString(),\n};\n\nreturn [{ json: out }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -272
+      ],
+      "id": "9c25133c-864b-455b-9271-1065f87ec7ab",
+      "name": "3F — Build AG2 Input (intraday+daily) + Pass-through Directory"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.99B — Flatten signals for Google Sheets (v3.1 - Full Indicators H1/D1 + Meta Status/Warn + Run_ID)\nconst pack = $input.first().json ?? {};\nconst signals = Array.isArray(pack.signals) ? pack.signals : [];\nconst runDate = pack.generatedAt ?? new Date().toISOString();\nconst runId = pack.run_id ?? \"\";\n\nfunction joinRationale(r) {\n  return Array.isArray(r) ? r.join(\", \") : \"\";\n}\n\nfunction joinWarnings(w) {\n  if (Array.isArray(w)) return w.join(\" | \");\n  if (typeof w === \"string\") return w;\n  return \"\";\n}\n\nfunction safeNum(x) {\n  const n = Number(x);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction safeStr(x) {\n  if (x === null || x === undefined) return null;\n  return String(x);\n}\n\n// Indicateurs à exporter (canon + H1 + D1)\n// IMPORTANT: correspond aux champs produits par ton agrégateur (sma20, h1_sma20, d1_sma20, etc.)\nconst IND_MAP = [\n  [\"SMA20\", \"sma20\"],\n  [\"SMA50\", \"sma50\"],\n  [\"SMA200\", \"sma200\"], // (tu as déjà SMA_200 via trend, on garde aussi SMA200 \"indicators\" pour cohérence)\n  [\"EMA12\", \"ema12\"],\n  [\"EMA26\", \"ema26\"],\n  [\"MACD\", \"macd\"],\n  [\"MACD_Signal\", \"macd_signal\"],\n  [\"MACD_Hist\", \"macd_hist\"],\n  [\"RSI14\", \"rsi14\"],\n  [\"Volatility_Ann\", \"volatility_ann\"],\n  [\"Last_Close_Ind\", \"last_close\"], // last_close issu indicators (canon). (trend.Last_Close reste ton champ principal)\n  [\"ATR_Value\", \"atr_value\"],\n  [\"ATR_Pct\", \"atr_pct\"],\n  [\"Resistance_50\", \"resistance_level_50\"],\n  [\"Dist_To_Res_Pct_50\", \"dist_to_res_pct_50\"],\n];\n\nreturn signals.map(s => {\n  // --- AI output (audit) ---\n  let aiOutputStr;\n  if (s.ai_raw) aiOutputStr = JSON.stringify(s.ai_raw);\n  else if (s.ai_reasoning || s.ai_decision || s.ai_quality_score != null) {\n    aiOutputStr = JSON.stringify({\n      decision: s.ai_decision ?? null,\n      validated: s.ai_validated ?? null,\n      quality_score: s.ai_quality_score ?? null,\n      reasoning: s.ai_reasoning ?? null,\n      stop_loss: s.ai_stop_loss_suggestion ?? null,\n    });\n  }\n\n  const sigJsonStr = s.sig_json\n    ? (typeof s.sig_json === \"object\" ? JSON.stringify(s.sig_json) : String(s.sig_json))\n    : undefined;\n\n  // --- Indicators flatten (canon + H1 + D1) ---\n  const indCols = {};\n  for (const [colBase, keyBase] of IND_MAP) {\n    // canon (déjà fallback D1->H1 dans l’agrégateur)\n    indCols[colBase] = safeNum(s[keyBase]);\n\n    // timeframe-specific\n    indCols[`H1_${colBase}`] = safeNum(s[`h1_${keyBase}`]);\n    indCols[`D1_${colBase}`] = safeNum(s[`d1_${keyBase}`]);\n  }\n\n  return {\n    json: {\n      // --- RUN META ---\n      Workflow_Date: runDate,\n      Run_ID: runId,\n\n      // --- DATES & SOURCES ---\n      H1_Date: s.h1_meta?.date ?? null,\n      D1_Date: s.d1_meta?.date ?? null,\n      H1_Source: s.h1_meta?.source ?? \"unknown\",\n      D1_Source: s.d1_meta?.source ?? \"unknown\",\n      H1_Status: s.h1_meta?.status ?? null,\n      D1_Status: s.d1_meta?.status ?? null,\n      H1_Warnings: joinWarnings(s.h1_meta?.warnings),\n      D1_Warnings: joinWarnings(s.d1_meta?.warnings),\n\n      // --- IDENTIFIERS ---\n      Symbol: s.symbol ?? \"\",\n\n      // --- H1 ---\n      H1_Action: s.h1?.action ?? \"N/A\",\n      H1_Score: safeNum(s.h1?.score),\n      H1_Confidence: safeNum(s.h1?.confidence),\n      H1_Rationale: joinRationale(s.h1?.rationale),\n\n      // --- D1 ---\n      D1_Action: s.d1?.action ?? \"N/A\",\n      D1_Score: safeNum(s.d1?.score),\n      D1_Confidence: safeNum(s.d1?.confidence),\n      D1_Rationale: joinRationale(s.d1?.rationale),\n\n      // --- Trend (backward compatible) ---\n      Last_Close: safeNum(s.trend?.last_close),\n      SMA_200: safeNum(s.trend?.sma200),\n\n      // --- INDICATORS (NEW) ---\n      ...indCols,\n\n      // --- Routing ---\n      Reason: s.reason ?? \"N/A\",\n      Pass_AI: s.pass_to_ai ? \"OUI\" : \"NON\",\n      Pass_PM: s.pass_to_pm ? \"OUI\" : \"NON\",\n\n      // --- Dedup/TTL ---\n      Sig_Hash: s.sig_hash ?? null,\n      Sig_JSON: sigJsonStr,\n      Call_AI: s.call_ai ? \"OUI\" : \"NON\",\n      Dedup_Reason: s.dedup_reason ?? null,\n      TTL_Minutes: safeNum(s.ttl_minutes),\n      Cache_Hit: s.cache_hit ? \"OUI\" : \"NON\",\n\n      // --- AI normalized ---\n      AI_Decision: s.ai_decision ?? null,\n      AI_Validated: s.ai_validated ?? null,\n      AI_QualityScore: safeNum(s.ai_quality_score),\n      AI_Reasoning: s.ai_reasoning ?? null,\n      AI_StopLoss: s.ai_stop_loss_suggestion ?? null,\n      AI_StopLossBasis: s.ai_stop_loss_basis ?? null,\n      AI_BiasSMA200: s.ai_bias_sma200 ?? null,\n      AI_RegimeD1: s.ai_regime_d1 ?? null,\n      AI_Alignment: s.ai_h1_d1_alignment ?? null,\n      AI_MissingFields: safeStr(s.ai_missing_fields_json) ?? \"[]\",\n      AI_Anomalies: safeStr(s.ai_anomalies_json) ?? \"[]\",\n\n      // --- Audit ---\n      AI_Output: aiOutputStr || undefined,\n\n      // --- Placeholders ---\n      vector_status: \"\",\n      vectorizedAt: \"\",\n      row_hash: \"\",\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2560,
+        -560
+      ],
+      "id": "0710455d-b3a0-4468-8baf-654c910b4a31",
+      "name": "AG2.99B - Aplatissement pour stockage"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 10 9-17 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        368,
+        -336
+      ],
+      "id": "4c7f001b-6497-46da-9a68-5ddb07f70153",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.01B - Batch Rotation (Round Robin)\n// Placez ce code dans un noeud \"Code\" entre AG2.01 et AG2.02\n\n// --- CONFIGURATION ---\nconst BATCH_SIZE = 25; // Nombre de références à traiter par exécution\n\n// 1. Récupérer la mémoire du workflow\nconst staticData = $getWorkflowStaticData('global');\n\n// 2. Récupérer l'objet d'entrée (venant de AG2.01)\n// On s'attend à un objet contenant un tableau \"symbols\"\nconst inputData = $input.first().json;\nconst fullList = inputData.symbols || [];\n\n// Sécurité : si la liste est vide, on laisse passer tel quel ou on arrête\nif (!Array.isArray(fullList) || fullList.length === 0) {\n  return [{ json: inputData }];\n}\n\n// 3. Récupérer l'index actuel (ou 0 si c'est le premier lancement)\nlet currentIndex = staticData.lastIndex;\nif (typeof currentIndex !== 'number') {\n  currentIndex = 0;\n}\n\n// 4. Créer le lot (Batch)\n// On découpe la liste complète pour ne garder que le segment actuel\nconst batchSymbols = fullList.slice(currentIndex, currentIndex + BATCH_SIZE);\n\n// 5. Calculer le prochain index pour la future exécution\nlet nextIndex = currentIndex + BATCH_SIZE;\n\n// Si on a atteint ou dépassé la fin de la liste, on remet le compteur à 0 pour la prochaine fois\nif (nextIndex >= fullList.length) {\n  nextIndex = 0;\n}\n\n// 6. Sauvegarder la position en mémoire\nstaticData.lastIndex = nextIndex;\n\n// --- DEBUG (visible dans la console du noeud) ---\nconsole.log(`--- EXECUTION BATCH ---`);\nconsole.log(`Total symboles disponibles : ${fullList.length}`);\nconsole.log(`Index de démarrage : ${currentIndex}`);\nconsole.log(`Symboles retenus pour ce run : ${batchSymbols.length}`);\nconsole.log(`Prochain démarrage prévu à : ${nextIndex}`);\n\n// 7. Reconstruire la sortie\n// On clone les données d'entrée pour ne pas perdre les configs (run_id, versions, etc.)\n// Mais on remplace la liste complète par notre lot réduit.\nconst outputData = {\n  ...inputData,\n  symbols: batchSymbols, // On écrase avec la liste courte\n  batch_info: {          // On ajoute des infos utiles pour le debug\n    start_index: currentIndex,\n    batch_size: batchSymbols.length,\n    total_pool: fullList.length\n  }\n};\n\n// On renvoie l'objet modifié vers AG2.02\nreturn [{ json: outputData }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1184,
+        -272
+      ],
+      "id": "a631aaf8-54f7-411f-93af-19660325f747",
+      "name": "AG2.01B - découpage en batch de mise à jour"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "474378f9-00c1-4f7f-8473-f6bda1647f4f",
+              "name": "force_full_run",
+              "value": false,
+              "type": "boolean"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2304,
+        224
+      ],
+      "id": "e612a2e9-a308-4fce-bf82-5dc2037252ad",
+      "name": "Force full passage IA"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "698a5b05-14da-406c-8c18-fae27486bbc7",
+              "leftValue": "={{ $json.force_full_run }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2656,
+        192
+      ],
+      "id": "e48a3fd2-f21b-4ed4-892d-b08925718dc6",
+      "name": "Aiguillage"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.41PRE — Build AI Payload (D1 + H1 signal + candles H1 sample) — SAFE JSON (no NaN)\n// + RR_Theoretical injection (TP=Next Resistance, SL=2*ATR or under last trough)\n\nfunction roundSmart(n) {\n  if (typeof n !== \"number\" || !Number.isFinite(n)) return null;\n  if (Math.abs(n) < 0.1 && n !== 0) return Number(n.toFixed(4));\n  return Number(n.toFixed(2));\n}\n\nfunction cleanNumbers(obj) {\n  if (!obj || typeof obj !== \"object\") return {};\n  const out = {};\n  for (const [k, v] of Object.entries(obj)) {\n    out[k] = (typeof v === \"number\") ? roundSmart(v) : v;\n  }\n  return out;\n}\n\nfunction pickCandles(j) {\n  const candidates = [\n    j.h1_candles_sample,          // <-- AG2.20\n    j.H1_CANDLES_SAMPLE,\n    j.intraday_candles_sample,\n    j.intraday_bars_sample,\n    j.RECENT_CANDLES,\n    j.bars_h1,\n    j.candles_1h,\n    j.bars_1h,\n  ];\n  for (const c of candidates) if (Array.isArray(c) && c.length) return c;\n  return [];\n}\n\nfunction toNumOrNull(x) {\n  const n = Number(x);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction normalizeCandles(raw) {\n  return raw.map(b => {\n    const t = b?.t ?? b?.timestamp ?? null;\n    const o = roundSmart(toNumOrNull(b?.o ?? b?.open));\n    const h = roundSmart(toNumOrNull(b?.h ?? b?.high));\n    const l = roundSmart(toNumOrNull(b?.l ?? b?.low));\n    const c = roundSmart(toNumOrNull(b?.c ?? b?.close));\n    const vRaw = b?.v ?? b?.volume ?? null;\n    const v = (vRaw === null || vRaw === undefined) ? null : (Number.isFinite(Number(vRaw)) ? Number(vRaw) : null);\n\n    return { t, o, h, l, c, v };\n  }).filter(b => b.t !== null && b.c !== null);\n}\n\nfunction pickFirstNumber(...vals) {\n  for (const v of vals) {\n    const n = toNumOrNull(v);\n    if (n !== null) return n;\n  }\n  return null;\n}\n\nfunction pickFromObjects(keys, ...objs) {\n  for (const o of objs) {\n    if (!o || typeof o !== \"object\") continue;\n    for (const k of keys) {\n      const n = toNumOrNull(o?.[k]);\n      if (n !== null) return n;\n    }\n  }\n  return null;\n}\n\n// Compute RR for LONG setups (TP=resistance above entry, SL=2*ATR or trough)\nfunction computeRRTheoretical({ entry, tpPrice, atr, trough }) {\n  if (!Number.isFinite(entry) || !Number.isFinite(tpPrice)) {\n    return { rr: null, reason: \"MISSING_ENTRY_OR_TP\" };\n  }\n\n  const tpDistance = tpPrice - entry;\n  if (!(tpDistance > 0)) {\n    return { rr: null, reason: \"TP_NOT_ABOVE_ENTRY\", tpDistance: roundSmart(tpDistance) };\n  }\n\n  const atrNum = Number.isFinite(atr) ? atr : null;\n  const slDistanceAtr = (atrNum !== null) ? 2 * atrNum : null;\n\n  // \"Sous le dernier creux\" (buffer optionnel)\n  let slDistanceTrough = null;\n  let slPriceTrough = null;\n  if (Number.isFinite(trough) && trough < entry) {\n    const buffer = (atrNum !== null) ? 0.1 * atrNum : 0; // ajustable\n    slPriceTrough = trough - buffer;\n    slDistanceTrough = entry - slPriceTrough;\n  }\n\n  let slDistance = null;\n  let slMethod = null;\n\n  if (slDistanceTrough !== null && slDistanceTrough > 0) {\n    slDistance = slDistanceTrough;\n    slMethod = \"TROUGH\";\n  } else if (slDistanceAtr !== null && slDistanceAtr > 0) {\n    slDistance = slDistanceAtr;\n    slMethod = \"ATR_2X\";\n  } else {\n    return { rr: null, reason: \"MISSING_SL\" };\n  }\n\n  const rrRaw = tpDistance / slDistance;\n  const rr = Number.isFinite(rrRaw) ? Number(rrRaw.toFixed(2)) : null;\n\n  return {\n    rr,\n    reason: \"OK\",\n    slMethod,\n    entry: roundSmart(entry),\n    tpPrice: roundSmart(tpPrice),\n    tpDistance: roundSmart(tpDistance),\n    slDistance: roundSmart(slDistance),\n    slPrice: (slMethod === \"TROUGH\" && slPriceTrough !== null) ? roundSmart(slPriceTrough) : null,\n    atr: (atrNum !== null) ? roundSmart(atrNum) : null,\n    trough: Number.isFinite(trough) ? roundSmart(trough) : null,\n  };\n}\n\nreturn $input.all().map(item => {\n  const j = item.json ?? {};\n\n  const h1 = j.technical_analysis ?? {};\n  const d1 = j.technical_analysis_1d ?? {};\n\n  const h1Ind = cleanNumbers(h1.indicators);\n  const d1Ind = cleanNumbers(d1.indicators);\n\n  const px = pickFirstNumber(d1Ind.last_close, h1Ind.last_close, j.last_close, j.d1_last_close, j.h1_last_close);\n  const sma200 = pickFirstNumber(d1Ind.sma200, d1Ind.SMA_200, j.SMA_200);\n\n  let trendStatus = \"NEUTRAL\";\n  let trendReason = \"Données insuffisantes\";\n  if (typeof px === \"number\" && typeof sma200 === \"number\" && Number.isFinite(px) && Number.isFinite(sma200) && sma200 > 0) {\n    if (px > sma200) {\n      trendStatus = \"BULLISH (Haussier)\";\n      trendReason = `Prix (${roundSmart(px)}) > SMA200 (${roundSmart(sma200)}).`;\n    } else {\n      trendStatus = \"BEARISH (Baissier)\";\n      trendReason = `Prix (${roundSmart(px)}) < SMA200 (${roundSmart(sma200)}).`;\n    }\n  }\n\n  const rawCandles = pickCandles(j);\n  const recentCandles = normalizeCandles(rawCandles).slice(-60);\n\n  const h1Action = h1.signal?.action ?? \"NONE\";\n\n  // --- RR inputs ---\n  // TP = prochaine résistance (priorité D1, fallback H1, fallback champs \"globaux\")\n  const tpPrice = pickFromObjects(\n    [\n      \"next_resistance\",\n      \"Next_Resistance\",\n      \"resistance_level\",\n      \"resistance_level_50\",\n      \"resistance\",\n      \"R1\",\n    ],\n    d1Ind, h1Ind, j\n  );\n\n  // ATR = D1 prioritaire\n  const atr = pickFromObjects(\n    [\"atr_value\", \"ATR\", \"atr\", \"d1_atr_value\"],\n    d1Ind, h1Ind, j\n  );\n\n  // Dernier creux (AG2.20) : adapte ici si tu as un nom exact\n  const trough = pickFromObjects(\n    [\"last_trough\", \"last_swing_low\", \"swing_low\", \"last_low\", \"support_level\", \"support_last\"],\n    j, d1Ind, h1Ind\n  );\n\n  // Compute RR (LONG only). Si tu veux le calculer “quoi qu’il arrive”, enlève la condition BUY.\n  const rrObj = (h1Action === \"BUY\")\n    ? computeRRTheoretical({ entry: px, tpPrice, atr, trough })\n    : { rr: null, reason: \"NOT_A_BUY_SETUP\" };\n\n  return {\n    json: {\n      symbol: j.symbol,\n      run_id: j.run_id ?? \"\",\n      sig_hash: j.sig_hash ?? \"\",\n\n      PRIMARY_CONTEXT_D1: {\n        trend_verdict: trendStatus,\n        trend_reason: trendReason,\n        indicators: d1Ind,\n      },\n\n      SIGNAL_TACTICAL_H1: {\n        action: h1Action,\n        score: h1.signal?.score ?? 0,\n        confidence: roundSmart(Number(h1.signal?.confidence ?? 0)) ?? 0,\n        rationale: h1.signal?.rationale ?? [],\n        indicators: h1Ind,\n      },\n\n      // --- NEW: RR Theoretical injected for AG2.41 AI ---\n      RR_Theoretical: rrObj.rr,\n      // audit RR (optionnel mais recommandé)\n      RR_Theoretical_Reason: rrObj.reason,\n      RR_Theoretical_Method: rrObj.slMethod ?? null,\n      RR_Theoretical_Entry: rrObj.entry ?? roundSmart(px),\n      RR_Theoretical_TP: rrObj.tpPrice ?? (tpPrice !== null ? roundSmart(tpPrice) : null),\n      RR_Theoretical_TPDistance: rrObj.tpDistance ?? null,\n      RR_Theoretical_SLDistance: rrObj.slDistance ?? null,\n      RR_Theoretical_SLPrice: rrObj.slPrice ?? null,\n      RR_Theoretical_ATR: rrObj.atr ?? null,\n      RR_Theoretical_Trough: rrObj.trough ?? null,\n      // -----------------------------------------------\n\n      RECENT_CANDLES: recentCandles,\n\n      // audit utile\n      _candles_h1_count: recentCandles.length,\n    }\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2944,
+        256
+      ],
+      "id": "fb5f2134-85cc-4956-a05d-addcfa5c707e",
+      "name": "AG2.41B — Code — Snapshot Context (Before AI)"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1444959091,
+          "mode": "list",
+          "cachedResultName": "AG2 - étape 1 - sortie",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1444959091"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "H1_Confidence": "={{ $json.H1_Confidence }}",
+            "H1_Score": "={{ $json.H1_Score }}",
+            "H1_Action": "={{ $json.H1_Action }}",
+            "Symbol": "={{ $json.Symbol }}",
+            "H1_Rationale": "={{ $json.H1_Rationale }}",
+            "D1_Action": "={{ $json.D1_Action }}",
+            "D1_Score": "={{ $json.D1_Score }}",
+            "D1_Confidence": "={{ $json.D1_Confidence }}",
+            "D1_Rationale": "={{ $json.D1_Rationale }}",
+            "Last_Close": "={{ $json.Last_Close }}",
+            "SMA_200": "={{ $json.SMA_200 }}",
+            "Reason": "={{ $json.Reason }}",
+            "Pass_AI": "={{ $json.Pass_AI }}",
+            "Sig_JSON": "={{ $json.Sig_JSON }}",
+            "AI_Output": "={{ $json.AI_Output }}",
+            "vector_status": "={{ $json.vector_status }}",
+            "vectorizedAt": "={{ $json.vectorizedAt }}",
+            "row_hash": "={{ $json.row_hash }}",
+            "AI_Anomalies": "={{ $json.AI_Anomalies }}",
+            "AI_MissingFields": "={{ $json.AI_MissingFields }}",
+            "AI_StopLoss_Basis": "={{ $json.AI_StopLossBasis }}",
+            "AI_StopLoss": "={{ $json.AI_StopLoss }}",
+            "AI_Bias_SMA200": "={{ $json.AI_BiasSMA200 }}",
+            "AI_Regime_D1": "={{ $json.AI_RegimeD1 }}",
+            "Pass_PM": "={{ $json.Pass_PM }}",
+            "AI_QualityScore": "={{ $json.AI_QualityScore }}",
+            "AI_Validated": "={{ $json.AI_Validated }}",
+            "AI_Decision": "={{ $json.AI_Decision }}",
+            "AI_Reasoning": "={{ $json.AI_Reasoning }}",
+            "AI_Alignment": "={{ $json.AI_Alignment }}",
+            "Workflow_Date": "={{ $json.Workflow_Date }}",
+            "H1_Source": "={{ $json.H1_Source }}",
+            "H1_Date": "={{ $json.H1_Date }}",
+            "D1_Source": "={{ $json.D1_Source }}",
+            "D1_Date": "={{ $json.D1_Date }}",
+            "Run_ID": "={{ $json.Run_ID }}",
+            "H1_Resistance_50": "={{ $json.H1_Resistance_50 }}",
+            "D1_Resistance_50": "={{ $json.D1_Resistance_50 }}",
+            "Dist_To_Res_Pct_50": "={{ $json.Dist_To_Res_Pct_50 }}",
+            "H1_Dist_To_Res_Pct_50": "={{ $json.H1_Dist_To_Res_Pct_50 }}",
+            "D1_Dist_To_Res_Pct_50": "={{ $json.D1_Dist_To_Res_Pct_50 }}",
+            "Resistance_50": "={{ $json.Resistance_50 }}",
+            "D1_ATR_Pct": "={{ $json.D1_ATR_Pct }}",
+            "H1_ATR_Pct": "={{ $json.H1_ATR_Pct }}",
+            "ATR_Pct": "={{ $json.ATR_Pct }}",
+            "D1_ATR_Value": "={{ $json.D1_ATR_Value }}",
+            "H1_ATR_Value": "={{ $json.H1_ATR_Value }}",
+            "ATR_Value": "={{ $json.ATR_Value }}",
+            "D1_Last_Close_Ind": "={{ $json.D1_Last_Close_Ind }}",
+            "H1_Last_Close_Ind": "={{ $json.H1_Last_Close_Ind }}",
+            "Last_Close_Ind": "={{ $json.Last_Close_Ind }}",
+            "D1_Volatility_Ann": "={{ $json.D1_Volatility_Ann }}",
+            "H1_Volatility_Ann": "={{ $json.H1_Volatility_Ann }}",
+            "Volatility_Ann": "={{ $json.Volatility_Ann }}",
+            "D1_RSI14": "={{ $json.D1_RSI14 }}",
+            "H1_RSI14": "={{ $json.H1_RSI14 }}",
+            "RSI14": "={{ $json.RSI14 }}",
+            "D1_MACD_Hist": "={{ $json.D1_MACD_Hist }}",
+            "H1_MACD_Hist": "={{ $json.H1_MACD_Hist }}",
+            "MACD_Hist": "={{ $json.MACD_Hist }}",
+            "D1_MACD_Signal": "={{ $json.D1_MACD_Signal }}",
+            "H1_MACD_Signal": "={{ $json.H1_MACD_Signal }}",
+            "MACD_Signal": "={{ $json.MACD_Signal }}",
+            "D1_MACD": "={{ $json.D1_MACD }}",
+            "H1_MACD": "={{ $json.H1_MACD }}",
+            "MACD": "={{ $json.MACD }}",
+            "D1_EMA26": "={{ $json.D1_EMA26 }}",
+            "H1_EMA26": "={{ $json.H1_EMA26 }}",
+            "EMA26": "={{ $json.EMA26 }}",
+            "D1_EMA12": "={{ $json.D1_EMA12 }}",
+            "H1_EMA12": "={{ $json.H1_EMA12 }}",
+            "EMA12": "={{ $json.EMA12 }}",
+            "D1_SMA200": "={{ $json.D1_SMA200 }}",
+            "H1_SMA200": "={{ $json.H1_SMA200 }}",
+            "D1_SMA50": "={{ $json.D1_SMA50 }}",
+            "H1_SMA50": "={{ $json.H1_SMA50 }}",
+            "SMA50": "={{ $json.SMA50 }}",
+            "D1_SMA20": "={{ $json.D1_SMA20 }}",
+            "H1_SMA20": "={{ $json.H1_SMA20 }}",
+            "SMA20": "={{ $json.SMA20 }}",
+            "H1_Status": "={{ $json.H1_Status }}",
+            "D1_Status": "={{ $json.D1_Status }}",
+            "H1_Warnings": "={{ $json.H1_Warnings }}",
+            "D1_Warnings": "={{ $json.D1_Warnings }}",
+            "TTL_Minutes": "={{ $json.TTL_Minutes }}"
+          },
+          "matchingColumns": [
+            "Symbol"
+          ],
+          "schema": [
+            {
+              "id": "Symbol",
+              "displayName": "Symbol",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Date",
+              "displayName": "H1_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Source",
+              "displayName": "H1_Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Action",
+              "displayName": "H1_Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Score",
+              "displayName": "H1_Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Confidence",
+              "displayName": "H1_Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Rationale",
+              "displayName": "H1_Rationale",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Date",
+              "displayName": "D1_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Source",
+              "displayName": "D1_Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Action",
+              "displayName": "D1_Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Score",
+              "displayName": "D1_Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Confidence",
+              "displayName": "D1_Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Rationale",
+              "displayName": "D1_Rationale",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last_Close",
+              "displayName": "Last_Close",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SMA_200",
+              "displayName": "SMA_200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reason",
+              "displayName": "Reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pass_AI",
+              "displayName": "Pass_AI",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Workflow_Date",
+              "displayName": "Workflow_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Sig_JSON",
+              "displayName": "Sig_JSON",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Output",
+              "displayName": "AI_Output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "vector_status",
+              "displayName": "vector_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "vectorizedAt",
+              "displayName": "vectorizedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "row_hash",
+              "displayName": "row_hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Validated",
+              "displayName": "AI_Validated",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Decision",
+              "displayName": "AI_Decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Reasoning",
+              "displayName": "AI_Reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_QualityScore",
+              "displayName": "AI_QualityScore",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Bias_SMA200",
+              "displayName": "AI_Bias_SMA200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Regime_D1",
+              "displayName": "AI_Regime_D1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Alignment",
+              "displayName": "AI_Alignment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_StopLoss_Basis",
+              "displayName": "AI_StopLoss_Basis",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_StopLoss",
+              "displayName": "AI_StopLoss",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_MissingFields",
+              "displayName": "AI_MissingFields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "AI_Anomalies",
+              "displayName": "AI_Anomalies",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Pass_PM",
+              "displayName": "Pass_PM",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Run_ID",
+              "displayName": "Run_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Status",
+              "displayName": "H1_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Status",
+              "displayName": "D1_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Warnings",
+              "displayName": "H1_Warnings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Warnings",
+              "displayName": "D1_Warnings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "SMA20",
+              "displayName": "SMA20",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_SMA20",
+              "displayName": "H1_SMA20",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_SMA20",
+              "displayName": "D1_SMA20",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "SMA50",
+              "displayName": "SMA50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_SMA50",
+              "displayName": "H1_SMA50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_SMA50",
+              "displayName": "D1_SMA50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_SMA200",
+              "displayName": "H1_SMA200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_SMA200",
+              "displayName": "D1_SMA200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "EMA12",
+              "displayName": "EMA12",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_EMA12",
+              "displayName": "H1_EMA12",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_EMA12",
+              "displayName": "D1_EMA12",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "EMA26",
+              "displayName": "EMA26",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_EMA26",
+              "displayName": "H1_EMA26",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_EMA26",
+              "displayName": "D1_EMA26",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "MACD",
+              "displayName": "MACD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_MACD",
+              "displayName": "H1_MACD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_MACD",
+              "displayName": "D1_MACD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "MACD_Signal",
+              "displayName": "MACD_Signal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_MACD_Signal",
+              "displayName": "H1_MACD_Signal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_MACD_Signal",
+              "displayName": "D1_MACD_Signal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "MACD_Hist",
+              "displayName": "MACD_Hist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_MACD_Hist",
+              "displayName": "H1_MACD_Hist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_MACD_Hist",
+              "displayName": "D1_MACD_Hist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "RSI14",
+              "displayName": "RSI14",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_RSI14",
+              "displayName": "H1_RSI14",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_RSI14",
+              "displayName": "D1_RSI14",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Volatility_Ann",
+              "displayName": "Volatility_Ann",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Volatility_Ann",
+              "displayName": "H1_Volatility_Ann",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Volatility_Ann",
+              "displayName": "D1_Volatility_Ann",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Last_Close_Ind",
+              "displayName": "Last_Close_Ind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Last_Close_Ind",
+              "displayName": "H1_Last_Close_Ind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Last_Close_Ind",
+              "displayName": "D1_Last_Close_Ind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ATR_Value",
+              "displayName": "ATR_Value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_ATR_Value",
+              "displayName": "H1_ATR_Value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_ATR_Value",
+              "displayName": "D1_ATR_Value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "ATR_Pct",
+              "displayName": "ATR_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_ATR_Pct",
+              "displayName": "H1_ATR_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_ATR_Pct",
+              "displayName": "D1_ATR_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Resistance_50",
+              "displayName": "Resistance_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Resistance_50",
+              "displayName": "H1_Resistance_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Resistance_50",
+              "displayName": "D1_Resistance_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Dist_To_Res_Pct_50",
+              "displayName": "Dist_To_Res_Pct_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "H1_Dist_To_Res_Pct_50",
+              "displayName": "H1_Dist_To_Res_Pct_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "D1_Dist_To_Res_Pct_50",
+              "displayName": "D1_Dist_To_Res_Pct_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "TTL_Minutes",
+              "displayName": "TTL_Minutes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2912,
+        -560
+      ],
+      "id": "6fecaeaf-4008-475c-88c0-ffcd9d0bd001",
+      "name": "AG2 - étape 1 - sortie",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.PRE — Build Cache Index (Bulk Read Optimization)\n// Input: Toute la feuille 'ag2_ai_cache' (via un noeud Google Sheets 'Read All')\n// Output: Un objet dictionnaire { \"SYMBOL\": {row_data} }\n\nconst allRows = $input.all();\nconst cacheIndex = {};\n\nfor (const item of allRows) {\n  const row = item.json;\n  // On utilise le symbole comme clé (en majuscule pour être sûr)\n  if (row.symbol) {\n    const key = String(row.symbol).trim().toUpperCase();\n    cacheIndex[key] = row;\n  }\n}\n\n// On renvoie l'index dans un item unique pour qu'il soit accessible globalement\nreturn [{\n  json: {\n    cacheIndex: cacheIndex,\n    loadedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        -720
+      ],
+      "id": "d950c503-e34d-42fe-a94f-cb1f6a9e2d65",
+      "name": "AG2.PRE — Build Cache Index"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 263220522,
+          "mode": "list",
+          "cachedResultName": "ag2_ai_cache",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=263220522"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "symbol",
+              "lookupValue": "={{$json.symbol}}"
+            }
+          ]
+        },
+        "options": {
+          "returnFirstMatch": true
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1856,
+        -592
+      ],
+      "id": "02859cb2-406a-4b59-8830-eea03fa56a9c",
+      "name": "AG2.2C — Sheets — Lookup Cache (by symbol)",
+      "alwaysOutputData": true,
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1078848687,
+          "mode": "list",
+          "cachedResultName": "Universe",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Enabled",
+              "lookupValue": "true"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        592,
+        -272
+      ],
+      "id": "6fdb46ab-c321-48df-b217-52437adc3efe",
+      "name": "Get row(s) in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2.42 — Smart Dedup & AI Trigger (Consolidated)\n// Merges Signature + Cache Lookup + TTL Decision\n// Objective: Efficiently determine if we need to call the expensive AI Agent.\n\n// --- CONFIGURATION ---\n// The name of the node where you built the cache index (Step 1 of this workflow)\nconst CACHE_NODE_NAME = \"AG2.PRE — Build Cache Index\"; \n\n// TTL Settings (Minutes)\nconst TTL_BUY_MIN = 240;   // 4h: Standard for BUY signals (don't spam)\nconst TTL_SELL_MIN = 60;   // 1h: Faster for SELL signals (safety first)\n\n// --- HELPERS ---\nfunction bucket(v, step) {\n  if (typeof v !== 'number' || !Number.isFinite(v)) return null;\n  return Math.round(v / step) * step;\n}\n\nfunction sign(v, eps = 1e-9) {\n  if (typeof v !== 'number' || !Number.isFinite(v)) return null;\n  if (v > eps) return 1;\n  if (v < -eps) return -1;\n  return 0;\n}\n\n// FNV-1a Hash (Lightweight, no crypto library needed)\nfunction fnv1a(str) {\n  let h = 0x811c9dc5;\n  for (let i = 0; i < str.length; i++) {\n    h ^= str.charCodeAt(i);\n    h = (h * 0x01000193) >>> 0;\n  }\n  return ('00000000' + h.toString(16)).slice(-8);\n}\n\n// --- 1. LOAD CACHE INDEX (Once) ---\nlet cacheIndex = {};\ntry {\n    const indexData = $items(CACHE_NODE_NAME);\n    if (indexData && indexData[0]) {\n        cacheIndex = indexData[0].json.cacheIndex || {};\n    }\n} catch (e) {\n    // If cache node didn't run or failed, we proceed (safely assuming no cache)\n}\n\nconst now = new Date();\nconst results = [];\n\n// --- 2. PROCESS ITEMS ---\nfor (const item of $input.all()) {\n    const j = item.json;\n    const h1 = j.technical_analysis;\n    const d1 = j.technical_analysis_1d;\n    const symbol = (j.symbol || \"\").trim().toUpperCase();\n\n    // A. CALCULATE SIGNATURE (Discrete Features)\n    // We bucket values (RSI by 2, etc) so small noise doesn't trigger a change.\n    const sigObj = {\n        symbol: symbol,\n        reason: j.reason ?? null,\n        h1: {\n            action: h1?.signal?.action ?? null,\n            score: h1?.signal?.score ?? null,\n            rsi: bucket(h1?.indicators?.rsi14, 2),\n            macd: sign(h1?.indicators?.macd_hist),\n            sma20_vs_sma50: (typeof h1?.indicators?.sma20 === 'number' && typeof h1?.indicators?.sma50 === 'number')\n                ? (h1.indicators.sma20 > h1.indicators.sma50 ? 1 : 0) : null,\n            close_vs_sma50: (typeof h1?.indicators?.last_close === 'number' && typeof h1?.indicators?.sma50 === 'number')\n                ? (h1.indicators.last_close > h1.indicators.sma50 ? 1 : 0) : null,\n        },\n        d1: {\n            trend_close_vs_sma200: (typeof d1?.indicators?.last_close === 'number' && typeof d1?.indicators?.sma200 === 'number')\n                ? (d1.indicators.last_close > d1.indicators.sma200 ? 1 : 0) : null,\n            sma50_vs_sma200: (typeof d1?.indicators?.sma50 === 'number' && typeof d1?.indicators?.sma200 === 'number')\n                ? (d1.indicators.sma50 > d1.indicators.sma200 ? 1 : 0) : null,\n            rsi: bucket(d1?.indicators?.rsi14, 2),\n            macd: sign(d1?.indicators?.macd_hist),\n        },\n    };\n\n    const sig_json = JSON.stringify(sigObj);\n    const sig_hash = fnv1a(sig_json);\n\n    // B. LOOKUP CACHE\n    const cachedRow = cacheIndex[symbol] || null;\n    const lastHash = cachedRow?.sig_hash ?? null;\n    const lastAtRaw = cachedRow?.last_ai_at ?? null;\n    const lastAt = lastAtRaw ? new Date(lastAtRaw) : null;\n\n    // C. DECIDE EXECUTION\n    const pass_to_pm = (j.pass_to_ai === true);\n    // Safety: SELL signals or \"Safety\" reasons always get shorter TTL (or immediate)\n    const isSell = (j.reason === \"SELL_SIGNAL_SAFETY\") || (h1?.signal?.action === \"SELL\");\n    const ttlMin = isSell ? TTL_SELL_MIN : TTL_BUY_MIN;\n\n    let call_ai = true;\n    let dedup_reason = \"NO_CACHE\";\n\n    if (!pass_to_pm) {\n        // If technical filter said NO, we stop here.\n        call_ai = false;\n        dedup_reason = \"FILTERED_OUT_BY_STRATEGY\";\n    } else if (lastHash && lastHash === sig_hash) {\n        // Signature matches cache -> Check TTL\n        if (lastAt && Number.isFinite(lastAt.getTime())) {\n            const ageMin = (now - lastAt) / 60000;\n            if (ageMin < ttlMin) {\n                call_ai = false;\n                dedup_reason = `UNCHANGED_WITHIN_TTL (${Math.round(ageMin)}m < ${ttlMin}m)`;\n            } else {\n                call_ai = true;\n                dedup_reason = \"UNCHANGED_BUT_TTL_EXPIRED\";\n            }\n        } else {\n            // Cache exists but no timestamp -> Safety run\n            call_ai = true; \n            dedup_reason = \"UNCHANGED_NO_TIMESTAMP\"; \n        }\n    } else if (lastHash) {\n        // Signature is different -> Something changed -> Run\n        call_ai = true;\n        dedup_reason = \"SIGNATURE_CHANGED\";\n    }\n\n    // D. OUTPUT\n    results.push({\n        json: {\n            ...j,\n            // Signature info\n            sig_hash,\n            sig_json,\n            signatureAt: now.toISOString(),\n            \n            // Decision info\n            call_ai,\n            dedup_reason,\n            ttl_minutes: ttlMin,\n            \n            // Carry over useful flags\n            pass_to_pm,\n            is_sell_mode: isSell,\n            \n            // Optional: attach cache row for debugging if needed\n            // cache_row: cachedRow \n        }\n    });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2080,
+        224
+      ],
+      "id": "4e147e13-f02e-4246-bc66-4c19390fdf6c",
+      "name": "AG2.42 — Smart Dedup & AI Trigger"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "AG2.01 — Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "AG2.01B - découpage en batch de mise à jour",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.02 — Explode Symbols": {
+      "main": [
+        [
+          {
+            "node": "AG2.02B — IF ok",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.02B — IF ok": {
+      "main": [
+        [
+          {
+            "node": "AG2.03 — Loop Symbols",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG2.2C — Sheets — Lookup Cache (by symbol)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AG2.98 — Error Pack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.03 — Loop Symbols": {
+      "main": [
+        [
+          {
+            "node": "AG2.99 — Aggregate Pack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AG2.09 — Set — Apply Intraday Params (1H Timing)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG2.14 — Set — Apply Daily Params (1D Strategy)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.20 — Indicators & Signal (Python)": {
+      "main": [
+        [
+          {
+            "node": "AG2.18 — Merge — Enrich Intraday with Daily by Symbol",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.41 — AI Validation (Context Check)": {
+      "main": [
+        [
+          {
+            "node": "AG2.41B — Code — Extract AI Result (Normalized)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.14 — Set — Apply Daily Params (1D Strategy)": {
+      "main": [
+        [
+          {
+            "node": "AG2.15 — HTTP — Fetch Yahoo OHLCV (1D Strategy)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG2.16 — Merge — Daily (input + HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.16 — Merge — Daily (input + HTTP)": {
+      "main": [
+        [
+          {
+            "node": "AG2.17 — Indicators & Signal (Python) — Daily (1D)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.17 — Indicators & Signal (Python) — Daily (1D)": {
+      "main": [
+        [
+          {
+            "node": "AG2.17B — Normalize Daily Output (code)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.11 — Merge (input + HTTP response)": {
+      "main": [
+        [
+          {
+            "node": "AG2.20 — Indicators & Signal (Python)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.09 — Set — Apply Intraday Params (1H Timing)": {
+      "main": [
+        [
+          {
+            "node": "AG2.10 — HTTP — Fetch Yahoo OHLCV (1H Timing)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG2.11 — Merge (input + HTTP response)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.39 — Pre-Filter Logic (Smart Filter H1+D1)": {
+      "main": [
+        [
+          {
+            "node": "AG2.42 — Smart Dedup & AI Trigger",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.10 — HTTP — Fetch Yahoo OHLCV (1H Timing)": {
+      "main": [
+        [
+          {
+            "node": "AG2.11 — Merge (input + HTTP response)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AG2.15 — HTTP — Fetch Yahoo OHLCV (1D Strategy)": {
+      "main": [
+        [
+          {
+            "node": "AG2.16 — Merge — Daily (input + HTTP)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AG2.18 — Merge — Enrich Intraday with Daily by Symbol": {
+      "main": [
+        [
+          {
+            "node": "AG2.39 — Pre-Filter Logic (Smart Filter H1+D1)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.17B — Normalize Daily Output (code)": {
+      "main": [
+        [
+          {
+            "node": "AG2.18 — Merge — Enrich Intraday with Daily by Symbol",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AG2.45 — IF — Call AI?": {
+      "main": [
+        [
+          {
+            "node": "AG2.41B — Code — Snapshot Context (Before AI)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AG2.03 — Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.46 — Sheets — Upsert Cache (symbol)": {
+      "main": [
+        []
+      ]
+    },
+    "AG2.41B — Code — Extract AI Result (Normalized)": {
+      "main": [
+        [
+          {
+            "node": "AG2.41C — Merge — Combine Context + AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.41C — Merge — Combine Context + AI Output": {
+      "main": [
+        [
+          {
+            "node": "AG2.41D — Code — Ensure output_ref (post-merge)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.41D — Code — Ensure output_ref (post-merge)": {
+      "main": [
+        [
+          {
+            "node": "AG2.46 — Sheets — Upsert Cache (symbol)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG2.03 — Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "3F — Build AG2 Input (intraday+daily) + Pass-through Directory": {
+      "main": [
+        [
+          {
+            "node": "AG2.01 — Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.99 — Aggregate Pack": {
+      "main": [
+        [
+          {
+            "node": "AG2.99B - Aplatissement pour stockage",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.99B - Aplatissement pour stockage": {
+      "main": [
+        [
+          {
+            "node": "AG2 - étape 1 - sortie",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get row(s) in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.01B - découpage en batch de mise à jour": {
+      "main": [
+        [
+          {
+            "node": "AG2.02 — Explode Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Force full passage IA": {
+      "main": [
+        [
+          {
+            "node": "Aiguillage",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG2.41C — Merge — Combine Context + AI Output",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Aiguillage": {
+      "main": [
+        [
+          {
+            "node": "AG2.41B — Code — Snapshot Context (Before AI)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AG2.45 — IF — Call AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.41B — Code — Snapshot Context (Before AI)": {
+      "main": [
+        [
+          {
+            "node": "AG2.41 — AI Validation (Context Check)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.2C — Sheets — Lookup Cache (by symbol)": {
+      "main": [
+        [
+          {
+            "node": "AG2.PRE — Build Cache Index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get row(s) in sheet": {
+      "main": [
+        [
+          {
+            "node": "3F — Build AG2 Input (intraday+daily) + Pass-through Directory",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG2.42 — Smart Dedup & AI Trigger": {
+      "main": [
+        [
+          {
+            "node": "Force full passage IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": true
+  },
+  "versionId": "696ce99f-0697-409f-9ed8-de9115c82fa2",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"
+  },
+  "id": "ukt49bzw0fE5y0Rr",
+  "tags": []
+}
