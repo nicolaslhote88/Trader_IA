@@ -1,0 +1,764 @@
+# yfinance-api - FastAPI endpoint with on-disk cache + incremental fetch + smart cooldown
+# VERSION: 2.0.0 (Reliable cache + per-symbol cooldown + staleness detection)
+
+from fastapi import FastAPI, Query
+from fastapi.responses import JSONResponse
+
+import os
+import json
+import time
+import random
+from datetime import datetime, timedelta, timezone
+from typing import Optional, Tuple, Dict
+
+import pandas as pd
+import yfinance as yf
+
+# =========================
+# Config (ENV)
+# =========================
+APP_VERSION = "2.0.0"
+
+TZ = os.getenv("TZ", "UTC")
+
+DATA_DIR = os.getenv("YF_DATA_DIR", "/data")
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
+STATE_DIR = os.path.join(DATA_DIR, "state")
+
+# History depth kept on disk
+YF_INIT_LOOKBACK_DAYS = int(os.getenv("YF_INIT_LOOKBACK_DAYS", "400"))
+YF_OVERLAP_BARS = int(os.getenv("YF_OVERLAP_BARS", "3"))
+
+# Per-symbol cooldown parameters (much less aggressive than v1)
+COOLDOWN_BASE_SEC = int(os.getenv("YF_COOLDOWN_BASE_SEC", "300"))       # 5 min default
+COOLDOWN_MAX_SEC = int(os.getenv("YF_COOLDOWN_MAX_SEC", "3600"))        # 1h max default
+COOLDOWN_RATELIMIT_SEC = int(os.getenv("YF_COOLDOWN_RATELIMIT_SEC", "1800"))  # 30 min for actual 429
+
+# Minimum seconds between any two Yahoo calls (global rate limit)
+MIN_SECONDS_BETWEEN_CALLS = float(os.getenv("YF_MIN_SECONDS_BETWEEN_CALLS", "5"))
+
+# Cache staleness thresholds (seconds) - per interval
+# If the newest bar in cache is older than this, we consider the cache stale
+# and attempt a refresh. These account for market close hours/weekends.
+CACHE_TTL_OVERRIDES = json.loads(os.getenv("YF_CACHE_TTL_JSON", "{}"))
+
+DEFAULT_CACHE_TTL = {
+    "1m":  900,       # 15 min
+    "2m":  1800,      # 30 min
+    "5m":  1800,      # 30 min
+    "15m": 3600,      # 1h
+    "30m": 7200,      # 2h
+    "60m": 7200,      # 2h
+    "1h":  7200,      # 2h
+    "90m": 7200,      # 2h
+    "1d":  14400,     # 4h  (covers market close + some buffer)
+    "5d":  86400,     # 24h
+    "1wk": 172800,    # 48h
+    "1mo": 604800,    # 7d
+    "3mo": 604800,    # 7d
+}
+
+# yfinance lookback caps
+INTERVAL_MAX_LOOKBACK = {
+    "1m": 7, "2m": 60, "5m": 60, "15m": 60, "30m": 60,
+    "60m": 730, "1h": 730, "90m": 60,
+    "1d": 5000, "5d": 5000, "1wk": 5000, "1mo": 5000, "3mo": 5000,
+}
+
+app = FastAPI(title="yfinance-api", version=APP_VERSION)
+
+
+# =========================
+# Helpers: FS + Time
+# =========================
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _safe_mkdir(p: str) -> None:
+    os.makedirs(p, exist_ok=True)
+
+
+def _atomic_write(path: str, data: str) -> None:
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+# =========================
+# Per-symbol state management
+# =========================
+def _state_path(symbol: str, interval: str) -> str:
+    safe = f"{symbol}__{interval}".replace("/", "_").replace(":", "_")
+    return os.path.join(STATE_DIR, f"{safe}.state.json")
+
+
+def _global_state_path() -> str:
+    return os.path.join(STATE_DIR, "_global.json")
+
+
+def _load_symbol_state(symbol: str, interval: str) -> dict:
+    _safe_mkdir(STATE_DIR)
+    path = _state_path(symbol, interval)
+    if not os.path.exists(path):
+        return {
+            "cooldown_until_ts": 0,
+            "cooldown_sec": 0,
+            "cooldown_reason": None,
+            "consecutive_errors": 0,
+            "last_success_ts": 0,
+        }
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            st = json.load(f)
+        st.setdefault("cooldown_until_ts", 0)
+        st.setdefault("cooldown_sec", 0)
+        st.setdefault("cooldown_reason", None)
+        st.setdefault("consecutive_errors", 0)
+        st.setdefault("last_success_ts", 0)
+        return st
+    except Exception:
+        return {
+            "cooldown_until_ts": 0,
+            "cooldown_sec": 0,
+            "cooldown_reason": None,
+            "consecutive_errors": 0,
+            "last_success_ts": 0,
+        }
+
+
+def _save_symbol_state(symbol: str, interval: str, st: dict) -> None:
+    _safe_mkdir(STATE_DIR)
+    _atomic_write(_state_path(symbol, interval), json.dumps(st, ensure_ascii=False))
+
+
+def _load_global_state() -> dict:
+    _safe_mkdir(STATE_DIR)
+    path = _global_state_path()
+    if not os.path.exists(path):
+        return {"last_call_ts": 0}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"last_call_ts": 0}
+
+
+def _save_global_state(st: dict) -> None:
+    _safe_mkdir(STATE_DIR)
+    _atomic_write(_global_state_path(), json.dumps(st, ensure_ascii=False))
+
+
+def _is_in_cooldown(st: dict) -> bool:
+    until_ts = int(st.get("cooldown_until_ts", 0) or 0)
+    return until_ts > int(time.time())
+
+
+def _set_cooldown(st: dict, symbol: str, interval: str, reason: str, is_ratelimit: bool = False) -> None:
+    """Set cooldown with backoff. Rate-limit errors get longer cooldowns."""
+    consecutive = int(st.get("consecutive_errors", 0) or 0) + 1
+    st["consecutive_errors"] = consecutive
+
+    if is_ratelimit:
+        # Rate limit: start high, escalate slowly
+        base = COOLDOWN_RATELIMIT_SEC
+        cooldown = min(COOLDOWN_MAX_SEC, int(base * (1.2 ** min(consecutive - 1, 5))))
+    else:
+        # Other errors: start low, escalate
+        base = COOLDOWN_BASE_SEC
+        cooldown = min(COOLDOWN_MAX_SEC, int(base * (1.3 ** min(consecutive - 1, 5))))
+
+    jitter = random.randint(0, max(10, cooldown // 10))
+    cooldown = min(COOLDOWN_MAX_SEC, cooldown + jitter)
+
+    st["cooldown_sec"] = cooldown
+    st["cooldown_until_ts"] = int(time.time()) + cooldown
+    st["cooldown_reason"] = reason[:240]
+    _save_symbol_state(symbol, interval, st)
+    print(f"[COOLDOWN] {symbol}/{interval}: {cooldown}s (reason: {reason[:80]}, consecutive: {consecutive})", flush=True)
+
+
+def _clear_cooldown(st: dict, symbol: str, interval: str) -> None:
+    st["cooldown_until_ts"] = 0
+    st["cooldown_sec"] = 0
+    st["cooldown_reason"] = None
+    st["consecutive_errors"] = 0
+    st["last_success_ts"] = int(time.time())
+    _save_symbol_state(symbol, interval, st)
+
+
+def _global_rate_limit_sleep() -> None:
+    """Global rate limit: ensure minimum delay between ANY two Yahoo calls."""
+    gst = _load_global_state()
+    last = float(gst.get("last_call_ts", 0) or 0)
+    now = time.time()
+    delta = now - last
+    if delta < MIN_SECONDS_BETWEEN_CALLS:
+        wait = MIN_SECONDS_BETWEEN_CALLS - delta
+        print(f"[RATE_LIMIT] Sleeping {wait:.1f}s (global)", flush=True)
+        time.sleep(wait)
+    gst["last_call_ts"] = time.time()
+    _save_global_state(gst)
+
+
+# =========================
+# Cache staleness detection
+# =========================
+def _get_cache_ttl(interval: str) -> int:
+    """Return cache TTL in seconds for a given interval."""
+    if interval in CACHE_TTL_OVERRIDES:
+        return int(CACHE_TTL_OVERRIDES[interval])
+    return DEFAULT_CACHE_TTL.get(interval, 14400)
+
+
+def _is_cache_stale(df: Optional[pd.DataFrame], interval: str) -> bool:
+    """
+    Check if cached data is stale based on the age of the most recent bar.
+    Returns True if cache should be refreshed.
+    """
+    if df is None or df.empty:
+        return True
+
+    if "Datetime" not in df.columns:
+        return True
+
+    try:
+        last_bar_dt = df["Datetime"].max()
+        if pd.isna(last_bar_dt):
+            return True
+
+        # Make sure it's timezone-aware
+        if last_bar_dt.tzinfo is None:
+            last_bar_dt = last_bar_dt.replace(tzinfo=timezone.utc)
+
+        age_seconds = (_utcnow() - last_bar_dt).total_seconds()
+        ttl = _get_cache_ttl(interval)
+
+        # For daily+ intervals, account for weekends:
+        # If today is Monday and last bar is Friday, that's ~63h which is normal.
+        # We add weekend buffer for daily intervals.
+        if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
+            now = _utcnow()
+            weekday = now.weekday()  # 0=Monday, 6=Sunday
+            if weekday == 0:  # Monday
+                ttl += 2 * 86400  # Add 2 days for weekend
+            elif weekday == 6:  # Sunday
+                ttl += 1 * 86400  # Add 1 day
+            elif weekday == 5:  # Saturday
+                ttl += 0.5 * 86400
+
+        is_stale = age_seconds > ttl
+        if is_stale:
+            print(f"[CACHE] Stale: last bar age={age_seconds:.0f}s > ttl={ttl}s", flush=True)
+        else:
+            print(f"[CACHE] Fresh: last bar age={age_seconds:.0f}s <= ttl={ttl}s", flush=True)
+        return is_stale
+
+    except Exception as e:
+        print(f"[CACHE] Error checking staleness: {e}", flush=True)
+        return True
+
+
+# =========================
+# Cache I/O
+# =========================
+def _cache_key(symbol: str, interval: str) -> str:
+    safe_symbol = symbol.replace("/", "_").replace(":", "_")
+    safe_interval = interval.replace("/", "_")
+    return f"{safe_symbol}__{safe_interval}"
+
+
+def _cache_paths(symbol: str, interval: str) -> Tuple[str, str]:
+    key = _cache_key(symbol, interval)
+    csv_path = os.path.join(CACHE_DIR, f"{key}.csv.gz")
+    meta_path = os.path.join(CACHE_DIR, f"{key}.meta.json")
+    return csv_path, meta_path
+
+
+def _read_cache(symbol: str, interval: str) -> Tuple[Optional[pd.DataFrame], Optional[dict]]:
+    csv_path, meta_path = _cache_paths(symbol, interval)
+    if not os.path.exists(csv_path):
+        return None, None
+    try:
+        df = pd.read_csv(csv_path, compression="gzip")
+        if "Datetime" in df.columns:
+            df["Datetime"] = pd.to_datetime(df["Datetime"], utc=True, errors="coerce")
+            df = df.dropna(subset=["Datetime"])
+            df = df.sort_values("Datetime").drop_duplicates(subset=["Datetime"], keep="last")
+        meta = None
+        if os.path.exists(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        return df, meta
+    except Exception as e:
+        print(f"[CACHE] Error reading cache for {symbol}/{interval}: {e}", flush=True)
+        return None, None
+
+
+def _write_cache(symbol: str, interval: str, df: pd.DataFrame, meta: dict) -> None:
+    csv_path, meta_path = _cache_paths(symbol, interval)
+    df2 = df.copy()
+    df2 = df2.sort_values("Datetime").drop_duplicates(subset=["Datetime"], keep="last")
+    _safe_mkdir(CACHE_DIR)
+    df2.to_csv(csv_path, index=False, compression="gzip")
+    _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False))
+
+
+# =========================
+# yfinance normalization
+# =========================
+def _normalize_download_df(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Takes raw output of yf.download() and returns normalized columns:
+    Datetime, Open, High, Low, Close, Volume (UTC), sorted + deduped.
+    Handles MultiIndex gracefully.
+    """
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+
+    # Fix MultiIndex columns (yfinance returns ('Price', 'Ticker') tuples)
+    if isinstance(df.columns, pd.MultiIndex):
+        level_0_vals = set(df.columns.get_level_values(0))
+        if "Close" in level_0_vals or "Open" in level_0_vals:
+            df.columns = df.columns.get_level_values(0)
+        else:
+            df.columns = [c[-1] for c in df.columns]
+
+    # Bring index into column
+    df = df.reset_index()
+
+    # Identify time column
+    if "Datetime" not in df.columns:
+        if "Date" in df.columns:
+            df = df.rename(columns={"Date": "Datetime"})
+        elif "index" in df.columns:
+            df = df.rename(columns={"index": "Datetime"})
+        else:
+            first = df.columns[0]
+            df = df.rename(columns={first: "Datetime"})
+
+    if "Datetime" not in df.columns:
+        raise ValueError(f"Cannot find time column. cols={list(df.columns)}")
+
+    # Ensure OHLCV columns exist
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        if c not in df.columns:
+            if c == "Close" and "Adj Close" in df.columns:
+                df["Close"] = df["Adj Close"]
+            else:
+                df[c] = pd.NA
+
+    out = df[["Datetime", "Open", "High", "Low", "Close", "Volume"]].copy()
+
+    out["Datetime"] = pd.to_datetime(out["Datetime"], utc=True, errors="coerce")
+    out = out.dropna(subset=["Datetime"])
+
+    for c in ["Open", "High", "Low", "Close", "Volume"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
+
+    out = out.sort_values("Datetime").drop_duplicates(subset=["Datetime"], keep="last")
+    out = out.dropna(subset=["Open", "High", "Low", "Close"], how="all")
+
+    return out
+
+
+def _download_incremental(symbol: str, interval: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
+    """Download data from yfinance with proper error handling."""
+    print(f"[FETCH] {symbol} {interval} from {start_dt.isoformat()} to {end_dt.isoformat()}", flush=True)
+
+    raw = yf.download(
+        symbol,
+        start=start_dt,
+        end=end_dt,
+        interval=interval,
+        progress=False,
+        threads=False,
+        auto_adjust=False,
+    )
+    return _normalize_download_df(raw)
+
+
+def _df_to_bars(df: pd.DataFrame, max_bars: int):
+    if df is None or df.empty:
+        return []
+    df = df.sort_values("Datetime")
+    if max_bars and max_bars > 0:
+        df = df.tail(int(max_bars))
+    bars = []
+    for row in df.itertuples(index=False):
+        bars.append({
+            "t": row.Datetime.isoformat().replace("+00:00", "Z"),
+            "o": float(row.Open) if pd.notna(row.Open) else None,
+            "h": float(row.High) if pd.notna(row.High) else None,
+            "l": float(row.Low) if pd.notna(row.Low) else None,
+            "c": float(row.Close) if pd.notna(row.Close) else None,
+            "v": float(row.Volume) if pd.notna(row.Volume) else None,
+        })
+    return bars
+
+
+# =========================
+# Error classification
+# =========================
+RATELIMIT_MARKERS = [
+    "429", "Too Many Requests", "RateLimit", "rate limit",
+]
+
+NETWORK_MARKERS = [
+    "Failed to perform", "Could not connect", "Could not resolve host",
+    "ConnectionError", "TimeoutError", "ReadTimeout", "ConnectTimeout",
+]
+
+
+def _classify_error(msg: str) -> str:
+    """Classify error as 'ratelimit', 'network', 'empty', or 'other'."""
+    if any(m.lower() in msg.lower() for m in RATELIMIT_MARKERS):
+        return "ratelimit"
+    if any(m.lower() in msg.lower() for m in NETWORK_MARKERS):
+        return "network"
+    if "EMPTY" in msg.upper() or "No data" in msg:
+        return "empty"
+    return "other"
+
+
+# =========================
+# Endpoints
+# =========================
+@app.get("/health")
+def health():
+    _safe_mkdir(DATA_DIR)
+    _safe_mkdir(CACHE_DIR)
+    _safe_mkdir(STATE_DIR)
+    return {
+        "ok": True,
+        "ts": _utcnow().isoformat(),
+        "version": APP_VERSION,
+        "dataDir": DATA_DIR,
+        "cacheDir": CACHE_DIR,
+        "config": {
+            "YF_INIT_LOOKBACK_DAYS": YF_INIT_LOOKBACK_DAYS,
+            "YF_OVERLAP_BARS": YF_OVERLAP_BARS,
+            "COOLDOWN_BASE_SEC": COOLDOWN_BASE_SEC,
+            "COOLDOWN_MAX_SEC": COOLDOWN_MAX_SEC,
+            "COOLDOWN_RATELIMIT_SEC": COOLDOWN_RATELIMIT_SEC,
+            "MIN_SECONDS_BETWEEN_CALLS": MIN_SECONDS_BETWEEN_CALLS,
+        },
+        "cache_ttl": {**DEFAULT_CACHE_TTL, **CACHE_TTL_OVERRIDES},
+    }
+
+
+@app.get("/cache/status")
+def cache_status(symbol: str = Query(...), interval: str = Query("1d")):
+    """Check the status of cache for a given symbol/interval without fetching."""
+    _safe_mkdir(CACHE_DIR)
+    cached_df, cached_meta = _read_cache(symbol, interval)
+    sym_state = _load_symbol_state(symbol, interval)
+    cached_ok = cached_df is not None and not cached_df.empty
+
+    result = {
+        "symbol": symbol,
+        "interval": interval,
+        "cached": cached_ok,
+        "stale": _is_cache_stale(cached_df, interval) if cached_ok else None,
+        "rows": len(cached_df) if cached_ok else 0,
+        "meta": cached_meta,
+        "cooldown": {
+            "active": _is_in_cooldown(sym_state),
+            "until_ts": sym_state.get("cooldown_until_ts"),
+            "reason": sym_state.get("cooldown_reason"),
+            "consecutive_errors": sym_state.get("consecutive_errors"),
+        },
+    }
+    if cached_ok:
+        last_dt = cached_df["Datetime"].max()
+        age = (_utcnow() - last_dt).total_seconds() if pd.notna(last_dt) else None
+        result["last_bar"] = last_dt.isoformat() if pd.notna(last_dt) else None
+        result["age_seconds"] = age
+        result["ttl_seconds"] = _get_cache_ttl(interval)
+    return result
+
+
+@app.get("/cooldown/reset")
+def reset_cooldown(symbol: str = Query(None), interval: str = Query(None)):
+    """Reset cooldown for a symbol/interval or all if not specified."""
+    _safe_mkdir(STATE_DIR)
+    if symbol and interval:
+        st = _load_symbol_state(symbol, interval)
+        _clear_cooldown(st, symbol, interval)
+        return {"ok": True, "reset": f"{symbol}/{interval}"}
+    elif symbol:
+        # Reset all intervals for this symbol
+        import glob
+        safe = symbol.replace("/", "_").replace(":", "_")
+        pattern = os.path.join(STATE_DIR, f"{safe}__*.state.json")
+        files = glob.glob(pattern)
+        for f in files:
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+        return {"ok": True, "reset": f"{symbol}/*", "files_cleared": len(files)}
+    else:
+        # Reset all
+        import glob
+        files = glob.glob(os.path.join(STATE_DIR, "*.state.json"))
+        for f in files:
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+        return {"ok": True, "reset": "ALL", "files_cleared": len(files)}
+
+
+@app.get("/history")
+def history(
+    symbol: str = Query(...),
+    interval: str = Query("1d"),
+    lookback_days: int = Query(60),
+    max_bars: int = Query(400),
+    min_bars: int = Query(0),
+    allow_stale: bool = Query(True),
+    force_refresh: bool = Query(False),
+):
+    _safe_mkdir(DATA_DIR)
+    _safe_mkdir(CACHE_DIR)
+    _safe_mkdir(STATE_DIR)
+
+    fetched_at = _utcnow().isoformat()
+    sym_state = _load_symbol_state(symbol, interval)
+
+    # Clamp lookback by interval capability
+    cap = INTERVAL_MAX_LOOKBACK.get(interval, lookback_days)
+    effective_lookback = min(int(lookback_days), int(cap))
+
+    end_dt = _utcnow()
+    start_dt = end_dt - timedelta(days=effective_lookback)
+
+    cached_df, cached_meta = _read_cache(symbol, interval)
+    cached_ok = cached_df is not None and not cached_df.empty
+    cache_stale = _is_cache_stale(cached_df, interval) if cached_ok else True
+
+    def _respond_from_df(df: pd.DataFrame, stale_flag: bool, err: Optional[str], source_override: str):
+        if df is None or df.empty:
+            dfw = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
+        else:
+            try:
+                dfw = df[(df["Datetime"] >= start_dt) & (df["Datetime"] <= end_dt)]
+            except Exception:
+                dfw = df
+
+        bars = _df_to_bars(dfw, max_bars)
+        last = bars[-1] if bars else None
+        return {
+            "ok": True,
+            "stale": bool(stale_flag),
+            "symbol": symbol,
+            "interval": interval,
+            "lookback_days": effective_lookback,
+            "source": source_override,
+            "fetchedAt": fetched_at,
+            "error": err,
+            "count": len(bars),
+            "dataAsOf": (last["t"] if last else None),
+            "last": last,
+            "bars": bars,
+        }
+
+    # === DECISION: Should we fetch fresh data? ===
+    need_fetch = force_refresh or not cached_ok or cache_stale
+
+    # If cache is fresh and we don't force refresh, return cache immediately
+    if not need_fetch:
+        print(f"[CACHE HIT] {symbol}/{interval}: fresh cache, serving directly", flush=True)
+        return _respond_from_df(cached_df, False, None, "cache")
+
+    # We need fresh data. Check per-symbol cooldown.
+    if _is_in_cooldown(sym_state):
+        until_ts = int(sym_state.get("cooldown_until_ts", 0) or 0)
+        remaining = until_ts - int(time.time())
+        print(f"[COOLDOWN] {symbol}/{interval}: in cooldown for {remaining}s more", flush=True)
+
+        if cached_ok:
+            return _respond_from_df(
+                cached_df, True,
+                f"COOLDOWN_SERVING_CACHE until_ts={until_ts} remaining={remaining}s",
+                "cache_stale"
+            )
+        return {
+            "ok": False,
+            "stale": None,
+            "symbol": symbol,
+            "interval": interval,
+            "lookback_days": effective_lookback,
+            "source": "cooldown",
+            "fetchedAt": fetched_at,
+            "error": f"COOLDOWN_ACTIVE until_ts={until_ts} remaining={remaining}s reason={sym_state.get('cooldown_reason', '')}",
+            "count": 0,
+            "dataAsOf": None,
+            "last": None,
+            "bars": [],
+        }
+
+    # === FETCH from Yahoo Finance ===
+    try:
+        _global_rate_limit_sleep()
+
+        # Incremental window: if we have cache, only fetch from last bar
+        if cached_ok:
+            last_dt = cached_df["Datetime"].max()
+            overlap = max(0, int(YF_OVERLAP_BARS or 0))
+            if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
+                start_fetch = max(start_dt, last_dt - timedelta(days=max(1, overlap)))
+            else:
+                start_fetch = max(start_dt, last_dt - timedelta(days=2))
+        else:
+            start_fetch = start_dt
+
+        df_new = _download_incremental(symbol, interval, start_fetch, end_dt)
+
+        # Merge with cache
+        if cached_ok and df_new is not None and not df_new.empty:
+            df_all = pd.concat([cached_df, df_new], ignore_index=True)
+        elif df_new is not None and not df_new.empty:
+            df_all = df_new
+        elif cached_ok:
+            # Fetch returned empty but we have cache - this is normal outside market hours
+            # Don't trigger cooldown for empty responses
+            print(f"[FETCH] {symbol}/{interval}: empty response, keeping cache", flush=True)
+            # Update cache metadata to avoid re-fetching too soon
+            meta = cached_meta or {}
+            meta["lastCheckAt"] = _utcnow().isoformat()
+            _, meta_path = _cache_paths(symbol, interval)
+            _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False))
+            # Mark success (empty is not an error outside market hours)
+            _clear_cooldown(sym_state, symbol, interval)
+            return _respond_from_df(cached_df, True, "UPSTREAM_EMPTY_CACHE_OK", "cache_checked")
+        else:
+            raise RuntimeError("UPSTREAM_EMPTY_NO_CACHE")
+
+        # Normalize final merged DataFrame
+        if "Datetime" not in df_all.columns:
+            raise RuntimeError(f"MISSING_DATETIME_COLUMN cols={list(df_all.columns)}")
+
+        df_all["Datetime"] = pd.to_datetime(df_all["Datetime"], utc=True, errors="coerce")
+        df_all = df_all.dropna(subset=["Datetime"])
+        df_all = df_all.sort_values("Datetime").drop_duplicates(subset=["Datetime"], keep="last")
+
+        for c in ["Open", "High", "Low", "Close", "Volume"]:
+            if c not in df_all.columns:
+                df_all[c] = pd.NA
+            df_all[c] = pd.to_numeric(df_all[c], errors="coerce")
+
+        df_all = df_all.dropna(subset=["Open", "High", "Low", "Close"], how="all")
+
+        if df_all.empty:
+            if cached_ok:
+                print(f"[FETCH] {symbol}/{interval}: all bars NaN after merge, keeping cache", flush=True)
+                _clear_cooldown(sym_state, symbol, interval)
+                return _respond_from_df(cached_df, True, "UPSTREAM_EMPTY_AFTER_CLEAN_CACHE_OK", "cache_checked")
+            raise RuntimeError("UPSTREAM_EMPTY_AFTER_CLEAN")
+
+        # Trim to keep only configured history depth
+        keep_days = max(int(YF_INIT_LOOKBACK_DAYS or 400), int(effective_lookback))
+        df_all = df_all[df_all["Datetime"] >= (end_dt - timedelta(days=keep_days + 5))]
+
+        # Write updated cache
+        last_ts = df_all["Datetime"].max()
+        meta = {
+            "symbol": symbol,
+            "interval": interval,
+            "updatedAt": _utcnow().isoformat(),
+            "lookbackDaysStored": int(keep_days + 5),
+            "rows": int(len(df_all)),
+            "lastTs": (last_ts.isoformat().replace("+00:00", "Z") if pd.notna(last_ts) else None),
+            "source": "yahoo_finance_yfinance",
+        }
+        _write_cache(symbol, interval, df_all, meta)
+
+        # Build response
+        resp = _respond_from_df(df_all, False, None, "yahoo_finance_yfinance")
+
+        # min_bars check
+        if min_bars and resp["count"] < int(min_bars):
+            if allow_stale and cached_ok:
+                return _respond_from_df(
+                    cached_df, True,
+                    f"NOT_ENOUGH_BARS_UPSTREAM count={resp['count']} min={min_bars}",
+                    "cache"
+                )
+            return {
+                "ok": False, "stale": None, "symbol": symbol, "interval": interval,
+                "lookback_days": effective_lookback, "source": "yahoo_finance_yfinance",
+                "fetchedAt": fetched_at,
+                "error": f"NOT_ENOUGH_BARS count={resp['count']} min={min_bars}",
+                "count": resp["count"], "dataAsOf": resp["dataAsOf"],
+                "last": resp["last"], "bars": resp["bars"],
+            }
+
+        # Success: clear cooldown
+        _clear_cooldown(sym_state, symbol, interval)
+        print(f"[SUCCESS] {symbol}/{interval}: {resp['count']} bars, last={resp['dataAsOf']}", flush=True)
+        return resp
+
+    except Exception as e:
+        msg = str(e)
+        print(f"[ERROR] {symbol}/{interval}: {msg}", flush=True)
+
+        error_type = _classify_error(msg)
+
+        if error_type == "ratelimit":
+            _set_cooldown(sym_state, symbol, interval, f"RATE_LIMIT: {msg}", is_ratelimit=True)
+        elif error_type == "network":
+            _set_cooldown(sym_state, symbol, interval, f"NETWORK: {msg}", is_ratelimit=False)
+        elif error_type == "empty":
+            # Empty data is not really an error - don't punish hard
+            if not cached_ok:
+                _set_cooldown(sym_state, symbol, interval, f"EMPTY_NO_CACHE: {msg}", is_ratelimit=False)
+            # If we have cache, just return it without setting cooldown
+        else:
+            _set_cooldown(sym_state, symbol, interval, f"ERROR: {msg}", is_ratelimit=False)
+
+        if cached_ok:
+            return _respond_from_df(
+                cached_df, True,
+                f"{error_type.upper()}: {msg[:160]}",
+                "cache_stale"
+            )
+
+        return {
+            "ok": False, "stale": None, "symbol": symbol, "interval": interval,
+            "lookback_days": effective_lookback, "source": "yahoo_finance_yfinance",
+            "fetchedAt": fetched_at, "error": f"{error_type.upper()}: {msg}",
+            "count": 0, "dataAsOf": None, "last": None, "bars": [],
+        }
+
+
+# --- Metadata endpoint ---
+@app.get("/info")
+def get_info(symbol: str = Query(...)):
+    try:
+        tick = yf.Ticker(symbol)
+        isin = tick.isin
+        i = tick.info
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "sector": i.get("sector", ""),
+            "industry": i.get("industry", ""),
+            "isin": isin if isin and isin != "-" else i.get("isin", ""),
+            "shortName": i.get("shortName", ""),
+            "country": i.get("country", ""),
+            "quoteType": i.get("quoteType", ""),
+        }
+    except Exception as e:
+        print(f"[ERROR INFO] {symbol}: {str(e)}")
+        return {
+            "ok": False, "symbol": symbol, "error": str(e),
+            "sector": "", "industry": "", "isin": "", "quoteType": "",
+        }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)
