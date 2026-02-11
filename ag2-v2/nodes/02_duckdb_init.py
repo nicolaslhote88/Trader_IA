@@ -1,7 +1,30 @@
-import duckdb
-import json
+import duckdb, time, gc
+from contextlib import contextmanager
 
 DB_PATH = "/files/duckdb/ag2_v2.duckdb"
+
+@contextmanager
+def db_con(path=DB_PATH, retries=5, delay=0.3):
+    """Open DuckDB with retry on lock, auto-close + gc on exit."""
+    con = None
+    for attempt in range(retries):
+        try:
+            con = duckdb.connect(path)
+            break
+        except Exception as e:
+            if "lock" in str(e).lower() and attempt < retries - 1:
+                time.sleep(delay * (2 ** attempt))
+            else:
+                raise
+    try:
+        yield con
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        gc.collect()
 
 SCHEMA_STMTS = [
     "CREATE TABLE IF NOT EXISTS universe (symbol VARCHAR PRIMARY KEY, name VARCHAR, asset_class VARCHAR DEFAULT 'Equity', exchange VARCHAR DEFAULT 'Euronext Paris', currency VARCHAR DEFAULT 'EUR', country VARCHAR, sector VARCHAR, industry VARCHAR, isin VARCHAR, enabled BOOLEAN DEFAULT TRUE, boursorama_ref VARCHAR, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)",
@@ -10,37 +33,34 @@ SCHEMA_STMTS = [
     "CREATE TABLE IF NOT EXISTS run_log (run_id VARCHAR PRIMARY KEY, started_at TIMESTAMP NOT NULL, finished_at TIMESTAMP, status VARCHAR DEFAULT 'RUNNING', batch_start INTEGER, batch_size INTEGER, total_pool INTEGER, symbols_ok INTEGER DEFAULT 0, symbols_error INTEGER DEFAULT 0, ai_calls INTEGER DEFAULT 0, vectors_written INTEGER DEFAULT 0, error_detail VARCHAR, version VARCHAR DEFAULT '2.0.0')",
 ]
 
-items = _input.all()
-first = items[0].json if items else {}
+items = _items
+first_json = items[0].get("json", {}) if items else {}
 
-con = duckdb.connect(DB_PATH)
-for stmt in SCHEMA_STMTS:
-    con.execute(stmt)
+with db_con() as con:
+    for stmt in SCHEMA_STMTS:
+        con.execute(stmt)
 
-# Sync universe if provided
-universe = first.get("_universe", [])
-for r in universe:
-    sym = r.get("Symbol", r.get("symbol", "")).strip()
-    if not sym:
-        continue
+    universe = first_json.get("_universe", []) or []
+    for r in universe:
+        sym = str(r.get("Symbol", r.get("symbol", "")) or "").strip()
+        if not sym:
+            continue
+        con.execute(
+            "INSERT OR REPLACE INTO universe (symbol, name, asset_class, exchange, currency, country, sector, industry, isin, enabled, boursorama_ref, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+            [sym, r.get("Name", ""), r.get("AssetClass", "Equity"), r.get("Exchange", "Euronext Paris"), r.get("Currency", "EUR"), r.get("Country", ""), r.get("Sector", ""), r.get("Industry", ""), r.get("ISIN", ""), str(r.get("Enabled", "true")).lower() == "true", r.get("BoursoramaRef", "")],
+        )
+
+    run_id = str(first_json.get("run_id", "UNKNOWN"))
+    batch_info = first_json.get("batch_info", {}) or {}
     con.execute(
-        "INSERT OR REPLACE INTO universe (symbol, name, asset_class, exchange, currency, country, sector, industry, isin, enabled, boursorama_ref, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
-        [sym, r.get("Name", ""), r.get("AssetClass", "Equity"), r.get("Exchange", "Euronext Paris"), r.get("Currency", "EUR"), r.get("Country", ""), r.get("Sector", ""), r.get("Industry", ""), r.get("ISIN", ""), str(r.get("Enabled", "true")).lower() == "true", r.get("BoursoramaRef", "")]
+        "INSERT OR REPLACE INTO run_log (run_id, started_at, batch_start, batch_size, total_pool) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?)",
+        [run_id, int(batch_info.get("start", 0) or 0), int(batch_info.get("size", 0) or 0), int(batch_info.get("total", 0) or 0)],
     )
 
-# Create run log
-run_id = first.get("run_id", "UNKNOWN")
-batch_info = first.get("batch_info", {})
-con.execute(
-    "INSERT OR REPLACE INTO run_log (run_id, started_at, batch_start, batch_size, total_pool) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?)",
-    [run_id, batch_info.get("start", 0), batch_info.get("size", 0), batch_info.get("total", 0)]
-)
-con.close()
-
-# Pass through all items, strip _universe to save memory
-output = []
-for item in items:
-    d = dict(item.json)
+out = []
+for it in items:
+    d = dict(it.get("json", {}))
     d.pop("_universe", None)
-    output.append({"json": d})
-return output
+    out.append({"json": d})
+
+return out

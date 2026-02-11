@@ -1,0 +1,12 @@
+// AG2.16 — Wrap D1 response, preserving context from Loop
+const resp = JSON.parse(JSON.stringify($json || {}));
+const ctx = $('Loop Symbols').item.json;
+
+return [{
+  json: {
+    symbol: resp.symbol || ctx.symbol || '',
+    run_id: ctx.run_id || '',
+    batch_info: ctx.batch_info || {},
+    d1_response: resp,
+  }
+}];

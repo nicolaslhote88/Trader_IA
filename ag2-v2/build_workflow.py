@@ -2,6 +2,12 @@
 """
 AG2-V2 Workflow Builder — Generates importable n8n workflow JSON.
 Run: cd ag2-v2 && python3 build_workflow.py > AG2-V2-workflow.json
+
+Architecture: Cron/Manual → Read Universe → Init Config → DuckDB Init → Loop Symbols
+  Loop (each) → HTTP H1 + HTTP D1 (parallel) → Wrap H1 + Wrap D1 → Merge → Compute
+  → IF Call AI? → Snapshot → AI GPT → Extract AI → IF Vectorize?
+  → Prep Vector → Qdrant Upsert → Mark Vectorized → Loop
+  Loop (done) → Finalize Run
 """
 import json, uuid, os
 
@@ -17,12 +23,13 @@ GS_CRED = "aX5iAQEN9HK4UGjr"
 OAI_CRED = "rILpYjTayqc4jXXZ"
 QD_CRED = "q1CRmg2N6AmW6pC1"
 SHEET_ID = "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I"
-UNI_GID = "1078848687"
+UNI_GID = 1078848687
 
 nid = lambda: str(uuid.uuid4())
 IDS = {k: nid() for k in [
     "cron","manual","read_universe","init_config","duckdb_init","loop",
-    "fetch_data","compute","if_ai","snapshot","ai_validate","extract_ai",
+    "http_h1","http_d1","wrap_h1","wrap_d1","merge",
+    "compute","if_ai","snapshot","ai_validate","extract_ai",
     "if_vector","prep_vector","embed_openai","data_loader","text_splitter",
     "qdrant","mark_vector","finalize"]}
 
@@ -98,88 +105,157 @@ def conn(fr, to, fo=0, ti=0, ct="main"):
     while len(connections[fr][ct]) <= fo: connections[fr][ct].append([])
     connections[fr][ct][fo].append({"node": to, "type": ct, "index": ti})
 
-# ─── NODES ───
-add(IDS["cron"], "Cron Trigger", "n8n-nodes-base.scheduleTrigger", 1.2, [200,0],
+# ─── TRIGGERS ───
+add(IDS["cron"], "Cron Trigger", "n8n-nodes-base.scheduleTrigger", 1.2, [-1248, 112],
     {"rule": {"interval": [{"field": "cronExpression", "expression": "10 9-17 * * 1-5"}]}})
 
-add(IDS["manual"], "Manual Trigger", "n8n-nodes-base.manualTrigger", 1, [200,200], {})
+add(IDS["manual"], "Manual Trigger", "n8n-nodes-base.manualTrigger", 1, [-1248, 304], {})
 
-add(IDS["read_universe"], "Read Universe", "n8n-nodes-base.googleSheets", 4.5, [450,100],
-    {"operation": "read",
-     "documentId": {"__rl": True, "mode": "id", "value": SHEET_ID},
-     "sheetName": {"__rl": True, "mode": "gid", "value": UNI_GID},
-     "filtersUI": {"values": [{"lookupColumn": "Enabled", "lookupValue": "TRUE"}]}, "options": {}},
+# ─── READ UNIVERSE ───
+add(IDS["read_universe"], "Read Universe", "n8n-nodes-base.googleSheets", 4.5, [-1008, 208],
+    {"documentId": {"__rl": True, "mode": "list", "value": SHEET_ID,
+                     "cachedResultName": "TradingSim_GoogleSheet_Template",
+                     "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?usp=drivesdk"},
+     "sheetName": {"__rl": True, "mode": "list", "value": UNI_GID,
+                    "cachedResultName": "Universe",
+                    "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={UNI_GID}"},
+     "filtersUI": {"values": [{"lookupColumn": "Enabled", "lookupValue": "true"}]},
+     "options": {}},
     creds={"googleSheetsOAuth2Api": {"id": GS_CRED, "name": "Google Sheets account"}})
 
-add(IDS["init_config"], "Init Config + Batch", "n8n-nodes-base.code", 2, [700,100],
-    {"jsCode": load("01_init_config.js"), "mode": "runOnceForAllItems"})
+# ─── INIT CONFIG ───
+add(IDS["init_config"], "Init Config + Batch", "n8n-nodes-base.code", 2, [-752, 208],
+    {"jsCode": load("01_init_config.js")})
 
-add(IDS["duckdb_init"], "DuckDB Init Schema", "n8n-nodes-base.code", 2, [950,100],
-    {"language": "python", "pythonCode": load("02_duckdb_init.py"), "mode": "runOnceForAllItems"})
+# ─── DUCKDB INIT ───
+add(IDS["duckdb_init"], "DuckDB Init Schema", "n8n-nodes-base.code", 2, [-496, 208],
+    {"language": "pythonNative", "pythonCode": load("02_duckdb_init.py")})
 
-add(IDS["loop"], "Loop Symbols", "n8n-nodes-base.splitInBatches", 3, [1200,100],
-    {"batchSize": 1, "options": {}}, extra={"onError": "continueRegularOutput"})
+# ─── LOOP ───
+add(IDS["loop"], "Loop Symbols", "n8n-nodes-base.splitInBatches", 3, [-272, 208],
+    {"options": {}}, extra={"onError": "continueRegularOutput"})
 
-add(IDS["fetch_data"], "Fetch H1 + D1", "n8n-nodes-base.code", 2, [1450,200],
-    {"jsCode": load("03_fetch_data.js"), "mode": "runOnceForEachItem"})
+# ─── FINALIZE ───
+add(IDS["finalize"], "Finalize Run", "n8n-nodes-base.code", 2, [-16, 0],
+    {"language": "pythonNative", "pythonCode": load("10_finalize.py")})
 
-add(IDS["compute"], "Compute + Filter + Write", "n8n-nodes-base.code", 2, [1700,200],
-    {"language": "python", "pythonCode": load("04_compute.py"), "mode": "runOnceForAllItems"},
+# ─── HTTP FETCH (parallel H1 + D1) ───
+http_h1_params = {
+    "url": "={{$json.yfinance_api_base}}/history",
+    "sendQuery": True,
+    "queryParameters": {"parameters": [
+        {"name": "symbol", "value": "={{$json.symbol}}"},
+        {"name": "interval", "value": "={{ $json.intraday.interval }}"},
+        {"name": "lookback_days", "value": "={{ $json.intraday.lookback_days }}"},
+        {"name": "max_bars", "value": "={{ $json.intraday.max_bars }}"},
+        {"name": "min_bars", "value": "={{ $json.intraday.min_bars }}"},
+        {"name": "allow_stale", "value": "true"},
+    ]},
+    "options": {"response": {"response": {"responseFormat": "json"}}, "timeout": 60000}
+}
+add(IDS["http_h1"], "AG2.10 \u2014 HTTP \u2014 Fetch Yahoo OHLCV (1H Timing)",
+    "n8n-nodes-base.httpRequest", 4.1, [80, 160], http_h1_params,
     extra={"onError": "continueRegularOutput"})
 
-add(IDS["if_ai"], "IF Call AI?", "n8n-nodes-base.if", 2.2, [1950,200],
+http_d1_params = {
+    "url": "={{$json.yfinance_api_base}}/history",
+    "sendQuery": True,
+    "queryParameters": {"parameters": [
+        {"name": "symbol", "value": "={{$json.symbol}}"},
+        {"name": "interval", "value": "={{ $json.daily.interval }}"},
+        {"name": "lookback_days", "value": "={{ $json.daily.lookback_days }}"},
+        {"name": "max_bars", "value": "={{ $json.daily.max_bars }}"},
+        {"name": "min_bars", "value": "={{ $json.daily.min_bars }}"},
+        {"name": "allow_stale", "value": "true"},
+    ]},
+    "options": {"response": {"response": {"responseFormat": "json"}}, "timeout": 60000}
+}
+add(IDS["http_d1"], "AG2.15 \u2014 HTTP \u2014 Fetch Yahoo OHLCV (1D Strategy)",
+    "n8n-nodes-base.httpRequest", 4.1, [80, 336], http_d1_params,
+    extra={"onError": "continueRegularOutput"})
+
+# ─── WRAP H1 / D1 ───
+add(IDS["wrap_h1"], "AG2.11 \u2014 Code \u2014 Wrap H1", "n8n-nodes-base.code", 2, [304, 160],
+    {"jsCode": load("03a_wrap_h1.js")})
+
+add(IDS["wrap_d1"], "AG2.16 \u2014 Code \u2014 Wrap D1", "n8n-nodes-base.code", 2, [304, 336],
+    {"jsCode": load("03b_wrap_d1.js")})
+
+# ─── MERGE ───
+add(IDS["merge"], "Merge", "n8n-nodes-base.merge", 3.2, [544, 240],
+    {"mode": "combine", "combineBy": "combineByPosition", "options": {}})
+
+# ─── COMPUTE + FILTER + WRITE ───
+add(IDS["compute"], "Compute + Filter + Write", "n8n-nodes-base.code", 2, [736, 240],
+    {"language": "pythonNative", "pythonCode": load("04_compute.py")},
+    extra={"onError": "continueRegularOutput"})
+
+# ─── IF CALL AI? ───
+add(IDS["if_ai"], "IF Call AI?", "n8n-nodes-base.if", 2.2, [960, 320],
     {"conditions": {"options": {"version": 2, "caseSensitive": True, "leftValue": ""},
                     "combinator": "and",
                     "conditions": [{"id": "1", "operator": {"type": "boolean", "operation": "true"},
-                                    "leftValue": "={{ $json.call_ai }}", "rightValue": ""}]}},
+                                    "leftValue": "={{ $json.call_ai }}", "rightValue": ""}]},
+     "options": {}},
     extra={"alwaysOutputData": True})
 
-add(IDS["snapshot"], "Snapshot Context", "n8n-nodes-base.code", 2, [2200,100],
-    {"jsCode": load("05_snapshot.js"), "mode": "runOnceForEachItem"})
+# ─── SNAPSHOT CONTEXT ───
+add(IDS["snapshot"], "Snapshot Context", "n8n-nodes-base.code", 2, [1168, 208],
+    {"jsCode": load("05_snapshot.js")})
 
-add(IDS["ai_validate"], "AI Validation GPT", "@n8n/n8n-nodes-langchain.openAi", 2.1, [2450,100],
+# ─── AI VALIDATION GPT ───
+add(IDS["ai_validate"], "AI Validation GPT", "@n8n/n8n-nodes-langchain.openAi", 2.1, [1376, 208],
     {"modelId": {"__rl": True, "mode": "list", "value": "gpt-4o-mini"},
      "responses": {"values": [
-         {"role": "system", "content": "=" + AI_SYSTEM},
+         {"role": "system", "content": AI_SYSTEM},
          {"content": AI_USER},
      ]},
-     "options": {"textFormat": {"textOptions": {"type": "json_schema", "schema": "=" + AI_SCHEMA}}}},
+     "builtInTools": {},
+     "options": {"maxTokens": 512,
+                 "textFormat": {"textOptions": {"type": "json_schema", "schema": "=" + AI_SCHEMA}},
+                 "temperature": 0.1}},
     creds={"openAiApi": {"id": OAI_CRED, "name": "OpenAi account"}})
 
-add(IDS["extract_ai"], "Extract AI + Write", "n8n-nodes-base.code", 2, [2700,100],
-    {"language": "python", "pythonCode": load("06_extract_ai.py"), "mode": "runOnceForAllItems"},
+# ─── EXTRACT AI + WRITE ───
+add(IDS["extract_ai"], "Extract AI + Write", "n8n-nodes-base.code", 2, [1680, 208],
+    {"language": "pythonNative", "pythonCode": load("06_extract_ai.py")},
     extra={"onError": "continueRegularOutput"})
 
-add(IDS["if_vector"], "IF Vectorize?", "n8n-nodes-base.if", 2.2, [2950,100],
+# ─── IF VECTORIZE? ───
+add(IDS["if_vector"], "IF Vectorize?", "n8n-nodes-base.if", 2.2, [1968, 464],
     {"conditions": {"options": {"version": 2, "caseSensitive": True, "leftValue": ""},
                     "combinator": "and",
                     "conditions": [{"id": "2", "operator": {"type": "boolean", "operation": "true"},
-                                    "leftValue": "={{ $json.should_vectorize }}", "rightValue": ""}]}},
+                                    "leftValue": "={{ $json.should_vectorize }}", "rightValue": ""}]},
+     "options": {}},
     extra={"alwaysOutputData": True})
 
-add(IDS["prep_vector"], "Prep Vector Text", "n8n-nodes-base.code", 2, [3200,0],
-    {"jsCode": load("08_prep_vector.js"), "mode": "runOnceForEachItem"})
+# ─── PREP VECTOR TEXT ───
+add(IDS["prep_vector"], "Prep Vector Text", "n8n-nodes-base.code", 2, [2176, 112],
+    {"jsCode": load("08_prep_vector.js")})
 
-add(IDS["embed_openai"], "Embeddings OpenAI", "@n8n/n8n-nodes-langchain.embeddingsOpenAi", 1.2, [3550,200],
-    {"model": "text-embedding-3-small", "options": {}},
+# ─── EMBEDDINGS ───
+add(IDS["embed_openai"], "Embeddings OpenAI", "@n8n/n8n-nodes-langchain.embeddingsOpenAi", 1.2, [2336, 288],
+    {"options": {}},
     creds={"openAiApi": {"id": OAI_CRED, "name": "OpenAi account"}})
 
-add(IDS["data_loader"], "Default Data Loader", "@n8n/n8n-nodes-langchain.documentDefaultDataLoader", 1, [3550,350],
-    {"dataType": "json", "jsonData": "={{ $json.text }}", "options": {"metadata": "={{ JSON.stringify($json.metadata) }}"}})
+# ─── DATA LOADER ───
+add(IDS["data_loader"], "Default Data Loader", "@n8n/n8n-nodes-langchain.documentDefaultDataLoader", 1, [2384, 416],
+    {"options": {}})
 
-add(IDS["text_splitter"], "Text Splitter", "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter", 1, [3550,500],
-    {"chunkSize": 2000, "chunkOverlap": 200})
+# ─── TEXT SPLITTER ───
+add(IDS["text_splitter"], "Text Splitter", "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter", 1, [2384, 608],
+    {"chunkSize": 10000, "chunkOverlap": 200, "options": {}})
 
-add(IDS["qdrant"], "Qdrant Upsert", "@n8n/n8n-nodes-langchain.vectorStoreQdrant", 1.1, [3450,0],
+# ─── QDRANT ───
+add(IDS["qdrant"], "Qdrant Upsert", "@n8n/n8n-nodes-langchain.vectorStoreQdrant", 1.1, [2416, 112],
     {"mode": "insert", "qdrantCollection": {"__rl": True, "mode": "list", "value": "financial_tech_v1"},
      "options": {"collectionConfig": {"similarity": "Cosine"}}},
     creds={"qdrantApi": {"id": QD_CRED, "name": "QdrantApi account"}})
 
-add(IDS["mark_vector"], "Mark Vectorized", "n8n-nodes-base.code", 2, [3700,0],
-    {"language": "python", "pythonCode": load("09_mark_vector.py"), "mode": "runOnceForAllItems"})
-
-add(IDS["finalize"], "Finalize Run", "n8n-nodes-base.code", 2, [1450,-100],
-    {"language": "python", "pythonCode": load("10_finalize.py"), "mode": "runOnceForAllItems"})
+# ─── MARK VECTORIZED ───
+add(IDS["mark_vector"], "Mark Vectorized", "n8n-nodes-base.code", 2, [2848, 576],
+    {"language": "pythonNative", "pythonCode": load("09_mark_vector.py")})
 
 # ─── CONNECTIONS ───
 conn("Cron Trigger", "Read Universe")
@@ -187,32 +263,52 @@ conn("Manual Trigger", "Read Universe")
 conn("Read Universe", "Init Config + Batch")
 conn("Init Config + Batch", "DuckDB Init Schema")
 conn("DuckDB Init Schema", "Loop Symbols")
-conn("Loop Symbols", "Fetch H1 + D1", fo=1)
+
+# Loop output 0 = done → Finalize, output 1 = each → both HTTP nodes
 conn("Loop Symbols", "Finalize Run", fo=0)
-conn("Fetch H1 + D1", "Compute + Filter + Write")
+conn("Loop Symbols", "AG2.15 \u2014 HTTP \u2014 Fetch Yahoo OHLCV (1D Strategy)", fo=1)
+conn("Loop Symbols", "AG2.10 \u2014 HTTP \u2014 Fetch Yahoo OHLCV (1H Timing)", fo=1)
+
+# HTTP → Wrap
+conn("AG2.10 \u2014 HTTP \u2014 Fetch Yahoo OHLCV (1H Timing)", "AG2.11 \u2014 Code \u2014 Wrap H1")
+conn("AG2.15 \u2014 HTTP \u2014 Fetch Yahoo OHLCV (1D Strategy)", "AG2.16 \u2014 Code \u2014 Wrap D1")
+
+# Wrap → Merge (H1 to input 0, D1 to input 1)
+conn("AG2.11 \u2014 Code \u2014 Wrap H1", "Merge", ti=0)
+conn("AG2.16 \u2014 Code \u2014 Wrap D1", "Merge", ti=1)
+
+# Merge → Compute → IF
+conn("Merge", "Compute + Filter + Write")
 conn("Compute + Filter + Write", "IF Call AI?")
+
+# IF Call AI → true: Snapshot, false: Loop
 conn("IF Call AI?", "Snapshot Context", fo=0)
 conn("IF Call AI?", "Loop Symbols", fo=1)
+
+# AI pipeline
 conn("Snapshot Context", "AI Validation GPT")
 conn("AI Validation GPT", "Extract AI + Write")
 conn("Extract AI + Write", "IF Vectorize?")
+
+# IF Vectorize → true: Prep, false: Loop
 conn("IF Vectorize?", "Prep Vector Text", fo=0)
 conn("IF Vectorize?", "Loop Symbols", fo=1)
+
+# Vectorization pipeline
 conn("Prep Vector Text", "Qdrant Upsert")
 conn("Qdrant Upsert", "Mark Vectorized")
 conn("Mark Vectorized", "Loop Symbols")
+
+# LangChain sub-connections
 conn("Embeddings OpenAI", "Qdrant Upsert", ct="ai_embedding")
 conn("Default Data Loader", "Qdrant Upsert", ct="ai_document")
 conn("Text Splitter", "Default Data Loader", ct="ai_textSplitter")
 
 wf = {
-    "meta": {"instanceId": "ag2-v2-generated", "templateCredsSetupCompleted": True},
-    "nodes": nodes, "connections": connections,
-    "active": False,
-    "settings": {"executionOrder": "v1", "saveManualExecutions": True, "callerPolicy": "workflowsFromSameOwner"},
-    "versionId": "ag2-v2-1.0",
-    "name": "AG2-V2 - Technical Analyst (unified)",
-    "tags": [{"name": "AG2"}, {"name": "V2"}, {"name": "Technical Analysis"}],
+    "nodes": nodes,
+    "connections": connections,
+    "pinData": {},
+    "meta": {"instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"},
 }
 
 print(json.dumps(wf, indent=2, ensure_ascii=False))
