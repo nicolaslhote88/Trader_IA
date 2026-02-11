@@ -17,7 +17,7 @@
         -1248,
         112
       ],
-      "id": "906ad0d9-cc37-44bb-94d4-cb41df158422",
+      "id": "056bc6be-c7e2-49a7-8b39-36dec7f81523",
       "name": "Cron Trigger"
     },
     {
@@ -28,7 +28,7 @@
         -1248,
         304
       ],
-      "id": "332adb5b-4116-48a0-b628-9db36aee7ee9",
+      "id": "505a7f6e-1cdf-43ef-ac9f-1828d9f11d47",
       "name": "Manual Trigger"
     },
     {
@@ -63,7 +63,7 @@
         -1008,
         208
       ],
-      "id": "61663e31-65cb-4409-96e0-314fee2c5dee",
+      "id": "bd1c34f1-bd13-4ff3-8bf5-77712728f2d7",
       "name": "Read Universe",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -82,7 +82,7 @@
         -752,
         208
       ],
-      "id": "aaf89bd5-04e8-4b74-86b7-f1958984952d",
+      "id": "4a2e0786-280c-4380-8d60-e08b5cab863a",
       "name": "Init Config + Batch"
     },
     {
@@ -96,7 +96,7 @@
         -496,
         208
       ],
-      "id": "56baaf93-73ed-479b-8912-b8b1abc0f2a9",
+      "id": "230c581b-e4d5-4b0f-891f-6535b08c5425",
       "name": "DuckDB Init Schema"
     },
     {
@@ -109,7 +109,7 @@
         -272,
         208
       ],
-      "id": "e5c7216b-b0a9-48a6-8288-50fb36418c10",
+      "id": "8c7453de-5135-457f-a268-ee5d33d84edd",
       "name": "Loop Symbols",
       "onError": "continueRegularOutput"
     },
@@ -124,7 +124,7 @@
         -16,
         0
       ],
-      "id": "5368e687-ec97-4c3f-92c0-59a55d08ff42",
+      "id": "605c9665-b4db-44cd-ba76-00e83647cbe1",
       "name": "Finalize Run"
     },
     {
@@ -138,7 +138,7 @@
         224,
         0
       ],
-      "id": "11047c09-c162-49c2-9eda-c0114f8f527f",
+      "id": "0044cbc9-0469-4d38-9268-6d3fa8cb17dc",
       "name": "Sync DuckDB → Sheets",
       "onError": "continueRegularOutput"
     },
@@ -1227,7 +1227,7 @@
         480,
         0
       ],
-      "id": "c0c9fdaf-6906-4bf6-bc09-213a0aeb087d",
+      "id": "988ed39d-6bc0-4ad9-b70a-f9889ae9178a",
       "name": "Write AG2 Sortie",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -1284,7 +1284,7 @@
         80,
         160
       ],
-      "id": "10a2f7df-8c7f-4c44-825d-0e8fb111fa5a",
+      "id": "bf7b0f1f-cddd-4e3b-b031-bb3f4456b368",
       "name": "AG2.10 — HTTP — Fetch Yahoo OHLCV (1H Timing)",
       "onError": "continueRegularOutput"
     },
@@ -1335,7 +1335,7 @@
         80,
         336
       ],
-      "id": "92c1a484-864f-4c30-9e00-4e1a12881855",
+      "id": "196d2162-a0c6-4df7-b83a-70264247cc12",
       "name": "AG2.15 — HTTP — Fetch Yahoo OHLCV (1D Strategy)",
       "onError": "continueRegularOutput"
     },
@@ -1349,7 +1349,7 @@
         304,
         160
       ],
-      "id": "a2f77460-712c-45a6-9998-ff9d3349817d",
+      "id": "b8ac7579-8316-4e73-9dcb-5fa293fcb5dc",
       "name": "AG2.11 — Code — Wrap H1"
     },
     {
@@ -1362,7 +1362,7 @@
         304,
         336
       ],
-      "id": "ab0ee283-15f9-49c1-89af-1681bdae9fc6",
+      "id": "0a823311-0a2f-4ed7-b2cd-a784e939704c",
       "name": "AG2.16 — Code — Wrap D1"
     },
     {
@@ -1377,7 +1377,7 @@
         544,
         240
       ],
-      "id": "03b451b9-e4fb-42d2-9c9b-8721a38b4baf",
+      "id": "92cb0300-d7f7-41e9-9fab-fce2910efa5e",
       "name": "Merge"
     },
     {
@@ -1391,7 +1391,7 @@
         736,
         240
       ],
-      "id": "c44e4d58-f644-4983-8309-79bef8bb09d6",
+      "id": "8e48c78c-789c-4e0a-8696-55aff85006d5",
       "name": "Compute + Filter + Write",
       "onError": "continueRegularOutput"
     },
@@ -1424,7 +1424,7 @@
         960,
         320
       ],
-      "id": "1b6ea8dd-0c35-4f27-bd25-dccee805ee39",
+      "id": "6f74c755-4a5e-4bc5-9385-b21fc2aacfb1",
       "name": "IF Call AI?",
       "alwaysOutputData": true
     },
@@ -1438,7 +1438,7 @@
         1168,
         208
       ],
-      "id": "ae267c4f-b420-4437-941a-538c00fdbd73",
+      "id": "830e80c3-81c5-49a8-b94f-f047757192d2",
       "name": "Snapshot Context"
     },
     {
@@ -1477,7 +1477,7 @@
         1376,
         208
       ],
-      "id": "0de5db69-4953-42f2-a975-f3e28213be9e",
+      "id": "188727d3-6345-43d5-bcba-17945a855783",
       "name": "AI Validation GPT",
       "credentials": {
         "openAiApi": {
@@ -1488,16 +1488,29 @@
     },
     {
       "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import json\nimport duckdb, time, gc\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\nitems = _items\nresults = []\n\nfor it in items:\n    d = it.get(\"json\", {}) or {}\n    symbol = d.get(\"symbol\", \"\")\n    run_id = d.get(\"run_id\", \"\")\n    signal_id = run_id + \"|\" + symbol\n    sig_hash = d.get(\"sig_hash\", \"\")\n\n    try:\n        ai_raw = d.get(\"message\", {}).get(\"content\", d.get(\"text\", \"{}\"))\n        ai = json.loads(ai_raw) if isinstance(ai_raw, str) else ai_raw\n\n        decision = ai.get(\"decision\", \"WATCH\")\n        validated = ai.get(\"validated\", False)\n        quality = ai.get(\"quality_score\", 5)\n        reasoning = ai.get(\"reasoning\", \"\")\n        chart_pattern = ai.get(\"chart_pattern\", \"None\")\n        stop_loss = ai.get(\"stop_loss_suggestion\")\n        stop_basis = ai.get(\"stop_loss_basis\", \"NONE\")\n        bias = ai.get(\"bias_sma200\", \"\")\n        regime = ai.get(\"regime_d1\", \"\")\n        alignment = ai.get(\"h1_d1_alignment\", \"UNKNOWN\")\n        missing = json.dumps(ai.get(\"missing_fields\", []))\n        anomalies = json.dumps(ai.get(\"anomalies\", []))\n\n        # Coherence guards\n        if validated and decision != \"APPROVE\":\n            validated = False\n        if decision == \"APPROVE\" and stop_loss is None:\n            decision = \"WATCH\"\n            validated = False\n        if not reasoning:\n            reasoning = \"(no reasoning returned)\"\n\n        pass_pm = decision == \"APPROVE\" or (decision == \"WATCH\" and alignment == \"WITH_BIAS\" and quality >= 5)\n        output_ref = \"AG2AI|\" + symbol + \"|\" + sig_hash\n\n        ai_data = {\n            \"ai_decision\": decision, \"ai_validated\": validated, \"ai_quality\": quality,\n            \"ai_reasoning\": reasoning, \"ai_chart_pattern\": chart_pattern,\n            \"ai_stop_loss\": stop_loss, \"ai_stop_basis\": stop_basis,\n            \"ai_bias_sma200\": bias, \"ai_regime_d1\": regime, \"ai_alignment\": alignment,\n            \"ai_missing\": missing, \"ai_anomalies\": anomalies,\n            \"ai_output_ref\": output_ref, \"pass_pm\": pass_pm\n        }\n\n        with db_con() as con:\n            sets = \", \".join(k + \" = ?\" for k in ai_data.keys())\n            con.execute(\n                \"UPDATE technical_signals SET \" + sets + \", updated_at = CURRENT_TIMESTAMP WHERE id = ?\",\n                list(ai_data.values()) + [signal_id]\n            )\n\n            h1_action = d.get(\"h1_action\", \"NEUTRAL\")\n            ttl = 60 if h1_action == \"SELL\" else 240\n            sig_json = json.dumps({\"action\": h1_action, \"score\": d.get(\"h1_score\"), \"decision\": decision, \"quality\": quality})\n            con.execute(\n                \"INSERT OR REPLACE INTO ai_dedup_cache (symbol, interval_key, sig_hash, sig_json, last_ai_at, last_ai_run_id, last_ai_reason, last_ai_output_ref, ttl_minutes, updated_at) VALUES (?, 'combined', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)\",\n                [symbol, sig_hash, sig_json, run_id, d.get(\"filter_reason\", \"\"), output_ref, ttl]\n            )\n\n        out = dict(d)\n        out.update(ai_data)\n        out[\"should_vectorize\"] = pass_pm or decision in (\"APPROVE\", \"WATCH\")\n        results.append({\"json\": out})\n\n    except Exception as e:\n        out = dict(d)\n        out[\"ai_decision\"] = \"ERROR\"\n        out[\"ai_reasoning\"] = str(e)\n        out[\"should_vectorize\"] = False\n        results.append({\"json\": out})\n\nreturn results\n"
+        "jsCode": "// AG2-V2 — Merge AI output with original Snapshot context\n// The OpenAI node may replace input data with only its response.\n// This node re-attaches the original context for Extract AI.\nconst snapshot = $('Snapshot Context').item.json;\nconst aiOutput = $json;\n\nreturn [{\n  json: {\n    ...snapshot,\n    ai_raw: aiOutput,\n  }\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1680,
+        1536,
         208
       ],
-      "id": "897879e6-d8b9-4802-b11f-d80b7e7184b6",
+      "id": "0a41b6b3-a1e1-40c5-8b00-fc9f400b7f0d",
+      "name": "Merge AI + Context"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport duckdb, time, gc\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\nitems = _items\nresults = []\n\nfor it in items:\n    d = it.get(\"json\", {}) or {}\n    symbol = d.get(\"symbol\", \"\")\n    run_id = d.get(\"run_id\", \"\")\n    signal_id = run_id + \"|\" + symbol\n    sig_hash = d.get(\"sig_hash\", \"\")\n\n    try:\n        # ── Parse AI response ──\n        # After 06a_merge_ai.js, the AI response is in d.ai_raw\n        # which contains the OpenAI node output (output[].content[].text)\n        # Fallback: also check d directly for legacy/direct formats\n        ai = None\n\n        # Source: ai_raw from merge node, or d itself\n        sources = [d.get(\"ai_raw\", {}), d]\n\n        for src in sources:\n            if ai is not None:\n                break\n            if not isinstance(src, dict):\n                continue\n\n            # Path 1: responses API (output[].content[].text)\n            output_list = src.get(\"output\")\n            if isinstance(output_list, list) and output_list:\n                msg = output_list[0]\n                content_list = msg.get(\"content\") if isinstance(msg, dict) else None\n                if isinstance(content_list, list) and content_list:\n                    text_val = content_list[0].get(\"text\") if isinstance(content_list[0], dict) else None\n                    if isinstance(text_val, dict):\n                        ai = text_val\n                    elif isinstance(text_val, str) and text_val.strip():\n                        ai = json.loads(text_val)\n\n            # Path 2: chat completions (message.content)\n            if ai is None:\n                msg_obj = src.get(\"message\")\n                if isinstance(msg_obj, dict):\n                    msg_content = msg_obj.get(\"content\")\n                    if isinstance(msg_content, dict):\n                        ai = msg_content\n                    elif isinstance(msg_content, str) and msg_content.strip():\n                        ai = json.loads(msg_content)\n\n            # Path 3: direct text field\n            if ai is None:\n                text_field = src.get(\"text\")\n                if isinstance(text_field, dict):\n                    ai = text_field\n                elif isinstance(text_field, str) and text_field.strip():\n                    ai = json.loads(text_field)\n\n        if ai is None:\n            ai = {}\n\n        decision = ai.get(\"decision\", \"WATCH\")\n        validated = ai.get(\"validated\", False)\n        quality = ai.get(\"quality_score\", 5)\n        reasoning = ai.get(\"reasoning\", \"\")\n        chart_pattern = ai.get(\"chart_pattern\", \"None\")\n        stop_loss = ai.get(\"stop_loss_suggestion\")\n        stop_basis = ai.get(\"stop_loss_basis\", \"NONE\")\n        bias = ai.get(\"bias_sma200\", \"\")\n        regime = ai.get(\"regime_d1\", \"\")\n        alignment = ai.get(\"h1_d1_alignment\", \"UNKNOWN\")\n        missing = json.dumps(ai.get(\"missing_fields\", []))\n        anomalies = json.dumps(ai.get(\"anomalies\", []))\n\n        # Coherence guards\n        if validated and decision != \"APPROVE\":\n            validated = False\n        if decision == \"APPROVE\" and stop_loss is None:\n            decision = \"WATCH\"\n            validated = False\n        if not reasoning:\n            reasoning = \"(no reasoning returned)\"\n\n        pass_pm = decision == \"APPROVE\" or (decision == \"WATCH\" and alignment == \"WITH_BIAS\" and quality >= 5)\n        output_ref = \"AG2AI|\" + symbol + \"|\" + sig_hash\n\n        ai_data = {\n            \"ai_decision\": decision, \"ai_validated\": validated, \"ai_quality\": quality,\n            \"ai_reasoning\": reasoning, \"ai_chart_pattern\": chart_pattern,\n            \"ai_stop_loss\": stop_loss, \"ai_stop_basis\": stop_basis,\n            \"ai_bias_sma200\": bias, \"ai_regime_d1\": regime, \"ai_alignment\": alignment,\n            \"ai_missing\": missing, \"ai_anomalies\": anomalies,\n            \"ai_output_ref\": output_ref, \"pass_pm\": pass_pm\n        }\n\n        with db_con() as con:\n            sets = \", \".join(k + \" = ?\" for k in ai_data.keys())\n            con.execute(\n                \"UPDATE technical_signals SET \" + sets + \", updated_at = CURRENT_TIMESTAMP WHERE id = ?\",\n                list(ai_data.values()) + [signal_id]\n            )\n\n            h1_action = d.get(\"h1_action\", \"NEUTRAL\")\n            ttl = 60 if h1_action == \"SELL\" else 240\n            sig_json = json.dumps({\"action\": h1_action, \"score\": d.get(\"h1_score\"), \"decision\": decision, \"quality\": quality})\n            con.execute(\n                \"INSERT OR REPLACE INTO ai_dedup_cache (symbol, interval_key, sig_hash, sig_json, last_ai_at, last_ai_run_id, last_ai_reason, last_ai_output_ref, ttl_minutes, updated_at) VALUES (?, 'combined', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)\",\n                [symbol, sig_hash, sig_json, run_id, d.get(\"filter_reason\", \"\"), output_ref, ttl]\n            )\n\n        out = dict(d)\n        out.update(ai_data)\n        out[\"should_vectorize\"] = pass_pm or decision in (\"APPROVE\", \"WATCH\")\n        results.append({\"json\": out})\n\n    except Exception as e:\n        out = dict(d)\n        out[\"ai_decision\"] = \"ERROR\"\n        out[\"ai_reasoning\"] = str(e)\n        out[\"should_vectorize\"] = False\n        results.append({\"json\": out})\n\nreturn results\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1744,
+        208
+      ],
+      "id": "32943b39-86bd-404c-bee7-090703af3904",
       "name": "Extract AI + Write",
       "onError": "continueRegularOutput"
     },
@@ -1530,7 +1543,7 @@
         1968,
         464
       ],
-      "id": "2940a70f-b932-460c-9263-63fd035b2846",
+      "id": "5be3d1cc-94a0-4984-b197-f9e2e9ced0d1",
       "name": "IF Vectorize?",
       "alwaysOutputData": true
     },
@@ -1544,7 +1557,7 @@
         2176,
         112
       ],
-      "id": "af144ade-5718-4c66-8d77-f3e26c215d11",
+      "id": "bc59af0d-dfe2-4383-a83e-2ce1cc2c3915",
       "name": "Prep Vector Text"
     },
     {
@@ -1557,7 +1570,7 @@
         2336,
         288
       ],
-      "id": "7077b93a-689c-4087-875d-abba0578c9a3",
+      "id": "0049b95e-68d3-454a-bad3-e97b1b99ac9f",
       "name": "Embeddings OpenAI",
       "credentials": {
         "openAiApi": {
@@ -1576,7 +1589,7 @@
         2384,
         416
       ],
-      "id": "d3542e86-5aff-40cd-84d1-5e4e3add86b2",
+      "id": "9c486904-7e32-4f98-b1de-19a196d0657b",
       "name": "Default Data Loader"
     },
     {
@@ -1591,7 +1604,7 @@
         2384,
         608
       ],
-      "id": "42754e42-b3a3-4a11-bc63-43becfbb14a1",
+      "id": "9d20d2b3-2375-4f9f-badf-a3287d1478d5",
       "name": "Text Splitter"
     },
     {
@@ -1614,7 +1627,7 @@
         2416,
         112
       ],
-      "id": "4b744a63-c764-4d4f-b102-e971660f09b9",
+      "id": "6c13e994-9e2d-45c9-ac2d-6dac2a2da691",
       "name": "Qdrant Upsert",
       "credentials": {
         "qdrantApi": {
@@ -1634,7 +1647,7 @@
         2848,
         576
       ],
-      "id": "14b89722-3963-4727-af55-a640a1f66d9b",
+      "id": "c7f77a6a-5c9b-469d-88af-760e09873dfe",
       "name": "Mark Vectorized"
     }
   ],
@@ -1813,6 +1826,17 @@
       ]
     },
     "AI Validation GPT": {
+      "main": [
+        [
+          {
+            "node": "Merge AI + Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge AI + Context": {
       "main": [
         [
           {

@@ -29,7 +29,7 @@ nid = lambda: str(uuid.uuid4())
 IDS = {k: nid() for k in [
     "cron","manual","read_universe","init_config","duckdb_init","loop",
     "http_h1","http_d1","wrap_h1","wrap_d1","merge",
-    "compute","if_ai","snapshot","ai_validate","extract_ai",
+    "compute","if_ai","snapshot","ai_validate","merge_ai","extract_ai",
     "if_vector","prep_vector","embed_openai","data_loader","text_splitter",
     "qdrant","mark_vector","finalize","sync_sheets","write_sheets"]}
 
@@ -271,8 +271,12 @@ add(IDS["ai_validate"], "AI Validation GPT", "@n8n/n8n-nodes-langchain.openAi", 
                  "temperature": 0.1}},
     creds={"openAiApi": {"id": OAI_CRED, "name": "OpenAi account"}})
 
+# ─── MERGE AI OUTPUT WITH CONTEXT ───
+add(IDS["merge_ai"], "Merge AI + Context", "n8n-nodes-base.code", 2, [1536, 208],
+    {"jsCode": load("06a_merge_ai.js")})
+
 # ─── EXTRACT AI + WRITE ───
-add(IDS["extract_ai"], "Extract AI + Write", "n8n-nodes-base.code", 2, [1680, 208],
+add(IDS["extract_ai"], "Extract AI + Write", "n8n-nodes-base.code", 2, [1744, 208],
     {"language": "pythonNative", "pythonCode": load("06_extract_ai.py")},
     extra={"onError": "continueRegularOutput"})
 
@@ -342,7 +346,8 @@ conn("IF Call AI?", "Loop Symbols", fo=1)
 
 # AI pipeline
 conn("Snapshot Context", "AI Validation GPT")
-conn("AI Validation GPT", "Extract AI + Write")
+conn("AI Validation GPT", "Merge AI + Context")
+conn("Merge AI + Context", "Extract AI + Write")
 conn("Extract AI + Write", "IF Vectorize?")
 
 # IF Vectorize → true: Prep, false: Loop

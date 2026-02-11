@@ -37,8 +37,53 @@ for it in items:
     sig_hash = d.get("sig_hash", "")
 
     try:
-        ai_raw = d.get("message", {}).get("content", d.get("text", "{}"))
-        ai = json.loads(ai_raw) if isinstance(ai_raw, str) else ai_raw
+        # ── Parse AI response ──
+        # After 06a_merge_ai.js, the AI response is in d.ai_raw
+        # which contains the OpenAI node output (output[].content[].text)
+        # Fallback: also check d directly for legacy/direct formats
+        ai = None
+
+        # Source: ai_raw from merge node, or d itself
+        sources = [d.get("ai_raw", {}), d]
+
+        for src in sources:
+            if ai is not None:
+                break
+            if not isinstance(src, dict):
+                continue
+
+            # Path 1: responses API (output[].content[].text)
+            output_list = src.get("output")
+            if isinstance(output_list, list) and output_list:
+                msg = output_list[0]
+                content_list = msg.get("content") if isinstance(msg, dict) else None
+                if isinstance(content_list, list) and content_list:
+                    text_val = content_list[0].get("text") if isinstance(content_list[0], dict) else None
+                    if isinstance(text_val, dict):
+                        ai = text_val
+                    elif isinstance(text_val, str) and text_val.strip():
+                        ai = json.loads(text_val)
+
+            # Path 2: chat completions (message.content)
+            if ai is None:
+                msg_obj = src.get("message")
+                if isinstance(msg_obj, dict):
+                    msg_content = msg_obj.get("content")
+                    if isinstance(msg_content, dict):
+                        ai = msg_content
+                    elif isinstance(msg_content, str) and msg_content.strip():
+                        ai = json.loads(msg_content)
+
+            # Path 3: direct text field
+            if ai is None:
+                text_field = src.get("text")
+                if isinstance(text_field, dict):
+                    ai = text_field
+                elif isinstance(text_field, str) and text_field.strip():
+                    ai = json.loads(text_field)
+
+        if ai is None:
+            ai = {}
 
         decision = ai.get("decision", "WATCH")
         validated = ai.get("validated", False)
