@@ -1,0 +1,659 @@
+{
+  "meta": {
+    "instanceId": "ag2-v2-generated",
+    "templateCredsSetupCompleted": true
+  },
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "10 9-17 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        200,
+        0
+      ],
+      "id": "c9b27306-9a58-44ef-bcd7-a7c2c55afb5a",
+      "name": "Cron Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        200,
+        200
+      ],
+      "id": "453ab792-ea7e-4c58-86a9-b070ccc25c6a",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "gid",
+          "value": "1078848687"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Enabled",
+              "lookupValue": "TRUE"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        450,
+        100
+      ],
+      "id": "9b1aea98-060f-4bbd-84fd-56f3997e7f7b",
+      "name": "Read Universe",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2-V2 — Init Config + Batch Rotation + Explode\nconst items = $input.all();\nconst staticData = $getWorkflowStaticData('global');\n\n// Extract symbols from Universe sheet\nconst symbols = items\n  .map(i => (i.json.Symbol || i.json.symbol || '').trim())\n  .filter(s => s.length > 0);\n\nif (symbols.length === 0) {\n  return [{ json: { ok: false, error: 'NO_SYMBOLS', symbols: [] } }];\n}\n\n// Batch rotation (round-robin, 25 per run)\nconst BATCH_SIZE = 25;\nlet idx = parseInt(staticData.lastIndex || '0', 10);\nif (idx >= symbols.length) idx = 0;\nconst batch = symbols.slice(idx, idx + BATCH_SIZE);\nconst nextIdx = (idx + BATCH_SIZE >= symbols.length) ? 0 : idx + BATCH_SIZE;\nstaticData.lastIndex = nextIdx;\n\n// Generate run ID\nconst now = new Date();\nconst ts = now.toISOString().replace(/[-:T]/g, '').slice(0, 14);\nconst run_id = `AG2V2_${ts}_${idx}`;\n\n// Explode: one item per symbol\nconst output = batch.map((symbol, i) => ({\n  json: {\n    ok: true,\n    symbol,\n    run_id,\n    yfinance_api_base: 'http://yfinance-api:8080',\n    intraday: { interval: '1h', lookback_days: 60, max_bars: 200, min_bars: 50 },\n    daily: { interval: '1d', lookback_days: 400, max_bars: 400, min_bars: 200 },\n    batch_info: { start: idx, size: batch.length, total: symbols.length },\n    _index: i,\n  }\n}));\n\n// First item also carries universe data for DuckDB sync\noutput[0].json._universe = items.map(i => i.json);\n\nreturn output;\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        100
+      ],
+      "id": "393041b5-305d-4c78-96ac-b18ced63aa7e",
+      "name": "Init Config + Batch"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import duckdb\nimport json\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\n\nSCHEMA_STMTS = [\n    \"CREATE TABLE IF NOT EXISTS universe (symbol VARCHAR PRIMARY KEY, name VARCHAR, asset_class VARCHAR DEFAULT 'Equity', exchange VARCHAR DEFAULT 'Euronext Paris', currency VARCHAR DEFAULT 'EUR', country VARCHAR, sector VARCHAR, industry VARCHAR, isin VARCHAR, enabled BOOLEAN DEFAULT TRUE, boursorama_ref VARCHAR, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)\",\n    \"CREATE TABLE IF NOT EXISTS technical_signals (id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, symbol VARCHAR NOT NULL, workflow_date TIMESTAMP NOT NULL, h1_date TIMESTAMP, h1_source VARCHAR, h1_status VARCHAR, h1_warnings VARCHAR, h1_action VARCHAR, h1_score INTEGER, h1_confidence DOUBLE, h1_rationale VARCHAR, d1_date TIMESTAMP, d1_source VARCHAR, d1_status VARCHAR, d1_warnings VARCHAR, d1_action VARCHAR, d1_score INTEGER, d1_confidence DOUBLE, d1_rationale VARCHAR, last_close DOUBLE, h1_sma20 DOUBLE, h1_sma50 DOUBLE, h1_sma200 DOUBLE, h1_ema12 DOUBLE, h1_ema26 DOUBLE, h1_macd DOUBLE, h1_macd_signal DOUBLE, h1_macd_hist DOUBLE, h1_rsi14 DOUBLE, h1_volatility DOUBLE, h1_last_close DOUBLE, h1_atr DOUBLE, h1_atr_pct DOUBLE, h1_bb_upper DOUBLE, h1_bb_lower DOUBLE, h1_bb_width DOUBLE, h1_stoch_k DOUBLE, h1_stoch_d DOUBLE, h1_adx DOUBLE, h1_obv_slope DOUBLE, h1_resistance DOUBLE, h1_support DOUBLE, h1_dist_res_pct DOUBLE, h1_dist_sup_pct DOUBLE, d1_sma20 DOUBLE, d1_sma50 DOUBLE, d1_sma200 DOUBLE, d1_ema12 DOUBLE, d1_ema26 DOUBLE, d1_macd DOUBLE, d1_macd_signal DOUBLE, d1_macd_hist DOUBLE, d1_rsi14 DOUBLE, d1_volatility DOUBLE, d1_last_close DOUBLE, d1_atr DOUBLE, d1_atr_pct DOUBLE, d1_bb_upper DOUBLE, d1_bb_lower DOUBLE, d1_bb_width DOUBLE, d1_stoch_k DOUBLE, d1_stoch_d DOUBLE, d1_adx DOUBLE, d1_obv_slope DOUBLE, d1_resistance DOUBLE, d1_support DOUBLE, d1_dist_res_pct DOUBLE, d1_dist_sup_pct DOUBLE, filter_reason VARCHAR, pass_ai BOOLEAN DEFAULT FALSE, pass_pm BOOLEAN DEFAULT FALSE, sig_hash VARCHAR, call_ai BOOLEAN DEFAULT FALSE, dedup_reason VARCHAR, ai_decision VARCHAR, ai_validated BOOLEAN, ai_quality INTEGER, ai_reasoning VARCHAR, ai_chart_pattern VARCHAR, ai_stop_loss DOUBLE, ai_stop_basis VARCHAR, ai_bias_sma200 VARCHAR, ai_regime_d1 VARCHAR, ai_alignment VARCHAR, ai_missing VARCHAR, ai_anomalies VARCHAR, ai_output_ref VARCHAR, ai_rr_theoretical DOUBLE, vector_status VARCHAR DEFAULT 'PENDING', vector_id VARCHAR, vectorized_at TIMESTAMP, row_hash VARCHAR, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)\",\n    \"CREATE TABLE IF NOT EXISTS ai_dedup_cache (symbol VARCHAR NOT NULL, interval_key VARCHAR NOT NULL, sig_hash VARCHAR NOT NULL, sig_json VARCHAR, last_ai_at TIMESTAMP, last_ai_run_id VARCHAR, last_ai_reason VARCHAR, last_ai_output_ref VARCHAR, ttl_minutes INTEGER DEFAULT 240, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY (symbol, interval_key))\",\n    \"CREATE TABLE IF NOT EXISTS run_log (run_id VARCHAR PRIMARY KEY, started_at TIMESTAMP NOT NULL, finished_at TIMESTAMP, status VARCHAR DEFAULT 'RUNNING', batch_start INTEGER, batch_size INTEGER, total_pool INTEGER, symbols_ok INTEGER DEFAULT 0, symbols_error INTEGER DEFAULT 0, ai_calls INTEGER DEFAULT 0, vectors_written INTEGER DEFAULT 0, error_detail VARCHAR, version VARCHAR DEFAULT '2.0.0')\",\n]\n\nitems = _input.all()\nfirst = items[0].json if items else {}\n\ncon = duckdb.connect(DB_PATH)\nfor stmt in SCHEMA_STMTS:\n    con.execute(stmt)\n\n# Sync universe if provided\nuniverse = first.get(\"_universe\", [])\nfor r in universe:\n    sym = r.get(\"Symbol\", r.get(\"symbol\", \"\")).strip()\n    if not sym:\n        continue\n    con.execute(\n        \"INSERT OR REPLACE INTO universe (symbol, name, asset_class, exchange, currency, country, sector, industry, isin, enabled, boursorama_ref, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\",\n        [sym, r.get(\"Name\", \"\"), r.get(\"AssetClass\", \"Equity\"), r.get(\"Exchange\", \"Euronext Paris\"), r.get(\"Currency\", \"EUR\"), r.get(\"Country\", \"\"), r.get(\"Sector\", \"\"), r.get(\"Industry\", \"\"), r.get(\"ISIN\", \"\"), str(r.get(\"Enabled\", \"true\")).lower() == \"true\", r.get(\"BoursoramaRef\", \"\")]\n    )\n\n# Create run log\nrun_id = first.get(\"run_id\", \"UNKNOWN\")\nbatch_info = first.get(\"batch_info\", {})\ncon.execute(\n    \"INSERT OR REPLACE INTO run_log (run_id, started_at, batch_start, batch_size, total_pool) VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?)\",\n    [run_id, batch_info.get(\"start\", 0), batch_info.get(\"size\", 0), batch_info.get(\"total\", 0)]\n)\ncon.close()\n\n# Pass through all items, strip _universe to save memory\noutput = []\nfor item in items:\n    d = dict(item.json)\n    d.pop(\"_universe\", None)\n    output.append({\"json\": d})\nreturn output\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        950,
+        100
+      ],
+      "id": "d7b59d12-242e-40de-8461-3201bfce3db2",
+      "name": "DuckDB Init Schema"
+    },
+    {
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1200,
+        100
+      ],
+      "id": "1df75fdd-5773-4a1d-aadc-cd2d49741052",
+      "name": "Loop Symbols",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2-V2 — Fetch H1 + D1 from yfinance-api in a single node\nconst item = $input.item.json;\nconst base = item.yfinance_api_base || 'http://yfinance-api:8080';\nconst symbol = item.symbol;\n\nasync function fetchHistory(interval, lookback, maxBars, minBars) {\n  try {\n    const resp = await $http.request({\n      method: 'GET',\n      url: `${base}/history`,\n      qs: {\n        symbol,\n        interval,\n        lookback_days: lookback,\n        max_bars: maxBars,\n        min_bars: minBars,\n        allow_stale: 'true',\n      },\n      timeout: 60000,\n      json: true,\n    });\n    return resp;\n  } catch (e) {\n    return { ok: false, error: e.message, bars: [], count: 0, source: 'error' };\n  }\n}\n\nconst [h1, d1] = await Promise.all([\n  fetchHistory(item.intraday.interval, item.intraday.lookback_days,\n               item.intraday.max_bars, item.intraday.min_bars),\n  fetchHistory(item.daily.interval, item.daily.lookback_days,\n               item.daily.max_bars, item.daily.min_bars),\n]);\n\nreturn [{\n  json: {\n    ...item,\n    h1_response: h1,\n    d1_response: d1,\n  }\n}];\n",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        200
+      ],
+      "id": "79bf3849-1d81-4e39-8a14-32e167edafec",
+      "name": "Fetch H1 + D1"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import math\nimport json\nimport duckdb\nfrom datetime import datetime, timezone\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\n\n# ═══════════════════════════════════════════════════\n# INDICATOR ENGINE V2\n# ═══════════════════════════════════════════════════\n\ndef safe_float(v):\n    if v is None: return None\n    try:\n        f = float(v)\n        return None if (math.isnan(f) or math.isinf(f)) else f\n    except: return None\n\ndef sanitize(d):\n    out = {}\n    for k, v in d.items():\n        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)): out[k] = None\n        elif isinstance(v, dict): out[k] = sanitize(v)\n        else: out[k] = v\n    return out\n\ndef sma(values, period):\n    if len(values) < period: return None\n    return sum(values[-period:]) / period\n\ndef ema_series(values, period):\n    if len(values) < period: return []\n    k = 2.0 / (period + 1)\n    init = sum(values[:period]) / period\n    result = [init]\n    for v in values[period:]:\n        result.append(v * k + result[-1] * (1 - k))\n    return result\n\ndef rsi_wilder(closes, period=14):\n    if len(closes) < period + 1: return None\n    deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]\n    ag = sum(max(0, d) for d in deltas[:period]) / period\n    al = sum(max(0, -d) for d in deltas[:period]) / period\n    for d in deltas[period:]:\n        ag = (ag * (period - 1) + max(0, d)) / period\n        al = (al * (period - 1) + max(0, -d)) / period\n    if al == 0: return 100.0\n    return 100.0 - (100.0 / (1.0 + ag / al))\n\ndef macd_calc(closes):\n    e12 = ema_series(closes, 12)\n    e26 = ema_series(closes, 26)\n    if not e12 or not e26:\n        return {\"ema12\": None, \"ema26\": None, \"macd\": None, \"macd_signal\": None, \"macd_hist\": None}\n    offset = 26 - 12\n    if len(e12) <= offset:\n        return {\"ema12\": safe_float(e12[-1]), \"ema26\": safe_float(e26[-1]), \"macd\": None, \"macd_signal\": None, \"macd_hist\": None}\n    ml = [e12[i + offset] - e26[i] for i in range(len(e26))]\n    sl = ema_series(ml, 9)\n    mv = safe_float(ml[-1])\n    sv = safe_float(sl[-1]) if sl else None\n    hv = round(mv - sv, 6) if mv is not None and sv is not None else None\n    return {\"ema12\": safe_float(e12[-1]), \"ema26\": safe_float(e26[-1]), \"macd\": mv, \"macd_signal\": sv, \"macd_hist\": hv}\n\ndef atr_calc(highs, lows, closes, period=14):\n    if len(closes) < period + 1: return None\n    trs = [max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])) for i in range(1, len(closes))]\n    if len(trs) < period: return None\n    a = sum(trs[:period]) / period\n    for tr in trs[period:]: a = (a * (period - 1) + tr) / period\n    return a\n\ndef bollinger(closes, period=20, ns=2.0):\n    if len(closes) < period: return {\"bb_upper\": None, \"bb_lower\": None, \"bb_width\": None}\n    w = closes[-period:]\n    m = sum(w) / period\n    s = math.sqrt(sum((x - m)**2 for x in w) / period)\n    u, l = m + ns * s, m - ns * s\n    bw = (u - l) / m * 100 if m != 0 else None\n    return {\"bb_upper\": round(u, 4), \"bb_lower\": round(l, 4), \"bb_width\": round(bw, 4) if bw else None}\n\ndef stochastic(highs, lows, closes, kp=14, dp=3):\n    if len(closes) < kp + dp - 1: return {\"stoch_k\": None, \"stoch_d\": None}\n    kv = []\n    for i in range(kp - 1, len(closes)):\n        hh = max(highs[i-kp+1:i+1]); ll = min(lows[i-kp+1:i+1])\n        kv.append((closes[i] - ll) / (hh - ll) * 100 if hh != ll else 50.0)\n    if len(kv) < dp: return {\"stoch_k\": round(kv[-1], 2) if kv else None, \"stoch_d\": None}\n    return {\"stoch_k\": round(kv[-1], 2), \"stoch_d\": round(sum(kv[-dp:]) / dp, 2)}\n\ndef adx_calc(highs, lows, closes, period=14):\n    if len(closes) < period * 2 + 1: return None\n    pdm, mdm, trl = [], [], []\n    for i in range(1, len(closes)):\n        up = highs[i] - highs[i-1]; dn = lows[i-1] - lows[i]\n        pdm.append(up if up > dn and up > 0 else 0)\n        mdm.append(dn if dn > up and dn > 0 else 0)\n        trl.append(max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1])))\n    if len(trl) < period: return None\n    def ws(vals, p):\n        s = sum(vals[:p]); r = [s]\n        for v in vals[p:]: s = s - s/p + v; r.append(s)\n        return r\n    st, sp, sm = ws(trl, period), ws(pdm, period), ws(mdm, period)\n    dxl = []\n    for i in range(len(st)):\n        if st[i] == 0: continue\n        dp_ = sp[i]/st[i]*100; dm_ = sm[i]/st[i]*100; ds = dp_ + dm_\n        dxl.append(abs(dp_ - dm_)/ds*100 if ds != 0 else 0)\n    if len(dxl) < period: return None\n    av = ws(dxl, period)\n    return round(av[-1] / period, 2) if av else None\n\ndef obv_slope(closes, volumes, lb=20):\n    if len(closes) < lb + 1 or len(volumes) < lb + 1: return None\n    obv = [0.0]\n    for i in range(1, len(closes)):\n        if closes[i] > closes[i-1]: obv.append(obv[-1] + volumes[i])\n        elif closes[i] < closes[i-1]: obv.append(obv[-1] - volumes[i])\n        else: obv.append(obv[-1])\n    seg = obv[-lb:]; n = len(seg); xm = (n-1)/2.0; ym = sum(seg)/n\n    num = sum((i - xm)*(seg[i] - ym) for i in range(n))\n    den = sum((i - xm)**2 for i in range(n))\n    if den == 0: return 0.0\n    av = sum(volumes[-lb:])/lb\n    return round(num / den / av, 4) if av != 0 else 0.0\n\ndef find_sr(highs, lows, closes, window=5, lb=50):\n    if len(closes) < lb:\n        return {\"resistance\": None, \"support\": None, \"dist_res_pct\": None, \"dist_sup_pct\": None}\n    p = closes[-1]; h, l = highs[-lb:], lows[-lb:]\n    shs, sls = [], []\n    for i in range(window, len(h) - window):\n        if all(h[i] >= h[i-j] for j in range(1, window+1)) and all(h[i] >= h[i+j] for j in range(1, window+1)): shs.append(h[i])\n        if all(l[i] <= l[i-j] for j in range(1, window+1)) and all(l[i] <= l[i+j] for j in range(1, window+1)): sls.append(l[i])\n    res = sorted([s for s in shs if s > p])\n    resistance = res[0] if res else max(h)\n    sups = sorted([s for s in sls if s < p], reverse=True)\n    support = sups[0] if sups else min(l)\n    dr = round((resistance - p)/p*100, 2) if resistance and p > 0 else None\n    ds = round((p - support)/p*100, 2) if support and p > 0 else None\n    return {\"resistance\": round(resistance, 4) if resistance else None, \"support\": round(support, 4) if support else None, \"dist_res_pct\": dr, \"dist_sup_pct\": ds}\n\ndef volatility_ann(closes, interval):\n    if len(closes) < 20: return None\n    lr = [math.log(closes[i]/closes[i-1]) for i in range(1, len(closes)) if closes[i-1] > 0 and closes[i] > 0]\n    if len(lr) < 10: return None\n    m = sum(lr)/len(lr); v = sum((r-m)**2 for r in lr)/len(lr); s = math.sqrt(v)\n    il = interval.lower()\n    if il in (\"1d\",\"5d\"): f = math.sqrt(252)\n    elif il in (\"1wk\",): f = math.sqrt(52)\n    elif il in (\"1mo\",\"3mo\"): f = math.sqrt(12)\n    elif \"h\" in il or il in (\"60m\",\"90m\"): f = math.sqrt(252*8)\n    else: f = math.sqrt(252)\n    return round(s * f, 4)\n\ndef compute_indicators(bars, interval):\n    opens, highs, lows, closes, volumes, times = [], [], [], [], [], []\n    for b in bars:\n        o, h, l, c = safe_float(b.get(\"o\")), safe_float(b.get(\"h\")), safe_float(b.get(\"l\")), safe_float(b.get(\"c\"))\n        vol = safe_float(b.get(\"v\")) or 0.0\n        if o is None or h is None or l is None or c is None: continue\n        opens.append(o); highs.append(h); lows.append(l); closes.append(c); volumes.append(vol); times.append(b.get(\"t\",\"\"))\n    n = len(closes)\n    if n == 0:\n        return {\"status\":\"NO_DATA\",\"bars_count\":0,\"indicators\":{},\"signal\":{\"action\":\"NEUTRAL\",\"score\":0,\"confidence\":0,\"rationale\":\"No data\"},\"warnings\":[\"No valid bars\"]}\n    min_req = 50 if (\"h\" in interval.lower() or \"m\" in interval.lower()) else 200\n    warnings = []\n    if n < min_req: warnings.append(f\"Bars {n} < {min_req}\")\n    ind = {}\n    ind[\"sma20\"] = safe_float(sma(closes, 20)); ind[\"sma50\"] = safe_float(sma(closes, 50)); ind[\"sma200\"] = safe_float(sma(closes, 200))\n    ind.update(macd_calc(closes))\n    ind[\"rsi14\"] = safe_float(rsi_wilder(closes, 14))\n    ind[\"volatility\"] = safe_float(volatility_ann(closes, interval))\n    atr_v = atr_calc(highs, lows, closes, 14)\n    ind[\"atr\"] = safe_float(atr_v)\n    ind[\"atr_pct\"] = round(atr_v / closes[-1] * 100, 4) if atr_v and closes[-1] > 0 else None\n    ind.update(bollinger(closes, 20, 2.0))\n    ind.update(stochastic(highs, lows, closes, 14, 3))\n    ind[\"adx\"] = safe_float(adx_calc(highs, lows, closes, 14))\n    ind[\"obv_slope\"] = safe_float(obv_slope(closes, volumes, 20))\n    ind.update(find_sr(highs, lows, closes, 5, 50))\n    ind[\"last_close\"] = closes[-1]\n    # Scoring — symmetric (BUY >= +2, SELL <= -2)\n    score = 0; reasons = []\n    cl = ind[\"last_close\"]; s50 = ind.get(\"sma50\"); s200 = ind.get(\"sma200\")\n    mh = ind.get(\"macd_hist\"); rsi = ind.get(\"rsi14\"); sk = ind.get(\"stoch_k\")\n    bbl = ind.get(\"bb_lower\"); bbu = ind.get(\"bb_upper\")\n    if cl and s50:\n        if cl > s50: score += 1; reasons.append(\"Prix > SMA50\")\n        else: score -= 1; reasons.append(\"Prix < SMA50\")\n    if s50 and s200:\n        if s50 > s200: score += 1; reasons.append(\"SMA50 > SMA200\")\n        else: score -= 1; reasons.append(\"SMA50 < SMA200\")\n    if mh is not None:\n        if mh > 0: score += 1; reasons.append(\"MACD Hist > 0\")\n        else: score -= 1; reasons.append(\"MACD Hist < 0\")\n    if rsi is not None:\n        if rsi < 30: score += 1; reasons.append(\"RSI survente\")\n        elif rsi > 70: score -= 1; reasons.append(\"RSI surachat\")\n    if sk is not None:\n        if sk < 20: score += 1; reasons.append(\"Stoch survente\")\n        elif sk > 80: score -= 1; reasons.append(\"Stoch surachat\")\n    if cl and bbl and bbu and (bbu - bbl) > 0:\n        pos = (cl - bbl) / (bbu - bbl)\n        if pos < 0.1: score += 1; reasons.append(\"Prix sur BB basse\")\n        elif pos > 0.9: score -= 1; reasons.append(\"Prix sur BB haute\")\n    action = \"BUY\" if score >= 2 else (\"SELL\" if score <= -2 else \"NEUTRAL\")\n    confidence = round(abs(score) / 6 * 100, 1)\n    signal = {\"action\": action, \"score\": score, \"confidence\": min(100, confidence), \"rationale\": \", \".join(reasons) if reasons else \"Aucun signal clair\"}\n    status = \"OK\" if n >= min_req else \"INSUFFICIENT_DATA\"\n    return sanitize({\"status\": status, \"bars_count\": n, \"warnings\": warnings, \"indicators\": ind, \"signal\": signal, \"last_bar_time\": times[-1] if times else None})\n\n# ═══════════════════════════════════════════════════\n# FILTER + DEDUP + WRITE\n# ═══════════════════════════════════════════════════\n\ndef pre_filter(h1_sig, d1_ind):\n    h1_action = (h1_sig.get(\"action\") or \"\").upper()\n    h1_score = h1_sig.get(\"score\", 0) or 0\n    rsi = (h1_sig or {}).get(\"rsi14\")\n    d1_sma200 = (d1_ind or {}).get(\"sma200\")\n    d1_close = (d1_ind or {}).get(\"last_close\")\n    if not h1_action: return False, \"NO_H1_SIGNAL\"\n    if h1_action == \"SELL\": return True, \"SELL_SIGNAL_SAFETY\"\n    if h1_action == \"NEUTRAL\": return False, \"NEUTRAL\"\n    if d1_sma200 is None or d1_close is None: return False, \"NO_DAILY_CONTEXT\"\n    if d1_close > d1_sma200: return True, \"BUY_IN_UPTREND\"\n    if abs(h1_score) >= 3 or (rsi is not None and rsi < 30): return True, \"STRONG_REVERSAL_BUY\"\n    return False, \"WEAK_BUY_AGAINST_TREND\"\n\ndef fnv1a(s):\n    h = 0x811c9dc5\n    for c in s.encode(): h ^= c; h = (h * 0x01000193) & 0xFFFFFFFF\n    return format(h, '08x')\n\ndef compute_sig_hash(symbol, h1_sig, d1_ind):\n    parts = [symbol, h1_sig.get(\"action\",\"\"), str(h1_sig.get(\"score\",0))]\n    rsi_val = h1_sig.get(\"rsi14\") or 50\n    parts.append(str(round(rsi_val / 2) * 2))\n    parts.append(\"POS\" if (h1_sig.get(\"macd_hist\") or 0) >= 0 else \"NEG\")\n    if d1_ind:\n        d1c = d1_ind.get(\"last_close\", 0) or 0; d1s200 = d1_ind.get(\"sma200\", 0) or 0\n        parts.append(\"ABOVE200\" if d1c > d1s200 else \"BELOW200\")\n    return fnv1a(\"|\".join(parts))\n\ndef check_dedup(symbol, sig_hash, h1_action, con):\n    TTL_BUY = 240; TTL_SELL = 60\n    row = con.execute(\"SELECT sig_hash, last_ai_at, ttl_minutes FROM ai_dedup_cache WHERE symbol = ? AND interval_key = 'combined'\", [symbol]).fetchone()\n    if row is None: return True, \"NO_CACHE\"\n    old_hash, last_ai_at, ttl = row\n    ttl = ttl or (TTL_SELL if h1_action == \"SELL\" else TTL_BUY)\n    if old_hash != sig_hash: return True, \"SIGNATURE_CHANGED\"\n    if last_ai_at:\n        age_r = con.execute(\"SELECT EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - CAST(? AS TIMESTAMP)))/60\", [str(last_ai_at)]).fetchone()\n        age_min = age_r[0] if age_r else 999\n        if age_min < ttl: return False, \"UNCHANGED_WITHIN_TTL\"\n        return True, \"TTL_EXPIRED\"\n    return True, \"NO_TIMESTAMP\"\n\n# ═══════════════════════════════════════════════════\n# MAIN\n# ═══════════════════════════════════════════════════\n\nitems = _input.all()\nresults = []\nIND_KEYS = [\"sma20\",\"sma50\",\"sma200\",\"ema12\",\"ema26\",\"macd\",\"macd_signal\",\"macd_hist\",\"rsi14\",\"volatility\",\"last_close\",\"atr\",\"atr_pct\",\"bb_upper\",\"bb_lower\",\"bb_width\",\"stoch_k\",\"stoch_d\",\"adx\",\"obv_slope\",\"resistance\",\"support\",\"dist_res_pct\",\"dist_sup_pct\"]\n\nfor item in items:\n    d = item.json\n    symbol = d.get(\"symbol\", \"\")\n    run_id = d.get(\"run_id\", \"\")\n    try:\n        h1_result = compute_indicators(d.get(\"h1_response\", {}).get(\"bars\", []), \"1h\")\n        d1_result = compute_indicators(d.get(\"d1_response\", {}).get(\"bars\", []), \"1d\")\n        h1_ind = h1_result.get(\"indicators\", {}); d1_ind = d1_result.get(\"indicators\", {})\n        h1_sig = h1_result.get(\"signal\", {}); d1_sig = d1_result.get(\"signal\", {})\n        pass_ai, filter_reason = pre_filter(h1_sig, d1_ind)\n        sig_hash = compute_sig_hash(symbol, h1_sig, d1_ind)\n        con = duckdb.connect(DB_PATH)\n        call_ai = False; dedup_reason = \"FILTERED_OUT\"\n        if pass_ai: call_ai, dedup_reason = check_dedup(symbol, sig_hash, h1_sig.get(\"action\",\"\"), con)\n        signal_id = run_id + \"|\" + symbol\n        row = {\"id\": signal_id, \"run_id\": run_id, \"symbol\": symbol, \"workflow_date\": datetime.now(timezone.utc).isoformat(),\n               \"h1_date\": h1_result.get(\"last_bar_time\"), \"h1_source\": d.get(\"h1_response\",{}).get(\"source\",\"unknown\"),\n               \"h1_status\": h1_result.get(\"status\",\"NO_DATA\"), \"h1_warnings\": json.dumps(h1_result.get(\"warnings\",[])),\n               \"h1_action\": h1_sig.get(\"action\"), \"h1_score\": h1_sig.get(\"score\"), \"h1_confidence\": h1_sig.get(\"confidence\"), \"h1_rationale\": h1_sig.get(\"rationale\"),\n               \"d1_date\": d1_result.get(\"last_bar_time\"), \"d1_source\": d.get(\"d1_response\",{}).get(\"source\",\"unknown\"),\n               \"d1_status\": d1_result.get(\"status\",\"NO_DATA\"), \"d1_warnings\": json.dumps(d1_result.get(\"warnings\",[])),\n               \"d1_action\": d1_sig.get(\"action\"), \"d1_score\": d1_sig.get(\"score\"), \"d1_confidence\": d1_sig.get(\"confidence\"), \"d1_rationale\": d1_sig.get(\"rationale\"),\n               \"last_close\": h1_ind.get(\"last_close\") or d1_ind.get(\"last_close\"),\n               \"filter_reason\": filter_reason, \"pass_ai\": pass_ai, \"pass_pm\": False,\n               \"sig_hash\": sig_hash, \"call_ai\": call_ai, \"dedup_reason\": dedup_reason, \"vector_status\": \"PENDING\"}\n        for k in IND_KEYS: row[\"h1_\" + k] = h1_ind.get(k)\n        for k in IND_KEYS: row[\"d1_\" + k] = d1_ind.get(k)\n        cols = list(row.keys()); placeholders = \", \".join([\"?\"] * len(cols))\n        con.execute(\"INSERT OR REPLACE INTO technical_signals (\" + \", \".join(cols) + \") VALUES (\" + placeholders + \")\", list(row.values()))\n        con.close()\n        out = dict(row)\n        out[\"h1_response\"] = d.get(\"h1_response\",{}); out[\"d1_response\"] = d.get(\"d1_response\",{})\n        out[\"h1_indicators\"] = h1_ind; out[\"d1_indicators\"] = d1_ind\n        out[\"h1_signal\"] = h1_sig; out[\"d1_signal\"] = d1_sig; out[\"_status\"] = \"ok\"\n        results.append({\"json\": out})\n    except Exception as e:\n        results.append({\"json\": {\"symbol\": symbol, \"run_id\": run_id, \"_status\": \"error\", \"error\": str(e), \"call_ai\": False, \"pass_ai\": False, \"pass_pm\": False}})\n\nreturn results\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        200
+      ],
+      "id": "10fda458-eef6-4eed-b1f9-7150911a4860",
+      "name": "Compute + Filter + Write",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "leftValue": "={{ $json.call_ai }}",
+              "rightValue": ""
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1950,
+        200
+      ],
+      "id": "725b3dcb-5b08-40b2-8c06-633c6e70dd3a",
+      "name": "IF Call AI?",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2-V2 — Build AI Validation Context\nconst item = $input.item.json;\n\nconst d1 = item.d1_indicators || {};\nconst h1 = item.h1_signal || {};\nconst h1Ind = item.h1_indicators || {};\n\n// D1 trend verdict\nconst price = d1.last_close || 0;\nconst sma200 = d1.sma200 || 0;\nconst trendVerdict = (price > sma200) ? 'BULLISH' : 'BEARISH';\n\n// RR Theoretical\nlet rr = null;\nlet rrMeta = {};\nif (h1.action === 'BUY' && h1Ind.resistance && h1Ind.atr) {\n  const entry = h1Ind.last_close || 0;\n  const tp = h1Ind.resistance;\n  const slDist = Math.max(h1Ind.atr * 2, entry * 0.02);\n  const sl = entry - slDist;\n  const tpDist = tp - entry;\n  rr = tpDist > 0 && slDist > 0 ? Math.round(tpDist / slDist * 100) / 100 : null;\n  rrMeta = { method: 'pivot_resistance', entry, tp, sl, tp_dist: tpDist, sl_dist: slDist, atr: h1Ind.atr };\n}\n\n// Last 60 H1 candles\nconst h1Bars = (item.h1_response || {}).bars || [];\nconst recentBars = h1Bars.slice(-60).map(b => ({\n  t: b.t, o: b.o, h: b.h, l: b.l, c: b.c, v: b.v\n}));\n\nreturn [{\n  json: {\n    ...item,\n    ai_context: {\n      symbol: item.symbol,\n      signal_tactical_H1: {\n        action: h1.action, score: h1.score,\n        confidence: h1.confidence, rationale: h1.rationale,\n        indicators: h1Ind,\n      },\n      primary_context_D1: {\n        trend_verdict: trendVerdict, indicators: d1,\n      },\n      bars: recentBars,\n      rr_theoretical: rr,\n      rr_meta: rrMeta,\n      run_context: { run_id: item.run_id, timestamp: new Date().toISOString() },\n    }\n  }\n}];\n",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        100
+      ],
+      "id": "4f41c0da-4831-4121-b206-2911af300a0f",
+      "name": "Snapshot Context"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-4o-mini"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "Analyse ce signal technique :\n\n{{ JSON.stringify($json.ai_context, null, 2) }}\n\nRéponds en JSON strict.",
+              "role": "user"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "jsonSchemaType": "manual",
+        "inputSchema": "{\"type\": \"object\", \"properties\": {\"validated\": {\"type\": \"boolean\"}, \"decision\": {\"type\": \"string\", \"enum\": [\"APPROVE\", \"WATCH\", \"REJECT\"]}, \"quality_score\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 10}, \"bias_sma200\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\"]}, \"regime_d1\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\", \"NEUTRAL_RANGE\", \"TRANSITION\"]}, \"h1_d1_alignment\": {\"type\": \"string\", \"enum\": [\"WITH_BIAS\", \"AGAINST_BIAS\", \"MIXED\", \"UNKNOWN\"]}, \"reasoning\": {\"type\": \"string\"}, \"chart_pattern\": {\"type\": \"string\"}, \"stop_loss_suggestion\": {\"type\": [\"number\", \"null\"]}, \"stop_loss_basis\": {\"type\": [\"string\", \"null\"], \"enum\": [\"SWING_H1\", \"BAR_ANCHOR\", \"NONE\", null]}, \"missing_fields\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"anomalies\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"validated\", \"decision\", \"quality_score\", \"reasoning\", \"bias_sma200\", \"regime_d1\", \"h1_d1_alignment\"], \"additionalProperties\": false}",
+        "options": {
+          "systemMessage": "Tu es l'Agent n°2 : Validateur Technique H1 ↔ D1. Senior Technical Analyst et Risk Manager.\n\nRÈGLES ABSOLUES :\n1. SMA200 PRIORITÉ ABSOLUE : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n2. RÉGIME D1 : BULLISH (prix>SMA200 ET SMA50>SMA200), BEARISH (prix<SMA200 ET SMA50<SMA200), TRANSITION, NEUTRAL_RANGE.\n3. ZÉRO HALLUCINATION : Ne jamais inventer. Manquant -> missing_fields.\n4. COHÉRENCE : validated=true exige decision=APPROVE + stop_loss non null. stop_loss=null exige validated=false.\n5. DONNÉES OBLIGATOIRES : SMA200_D1 et prix_D1. Si absents -> REJECT, quality_score<=3.\n6. Si bars H1<20 : WATCH si WITH_BIAS, sinon REJECT. Pas de stop loss.\n7. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n8. GATE RR (BUY) : RR<1.2->REJECT, 1.2-1.5->WATCH, >=1.5->APPROVE, null->WATCH si WITH_BIAS.\n9. Suivi tendance->APPROVE candidat (quality 7-10). Contre-tendance->REJECT sauf RSI extrême.\n10. STOP LOSS : swing H1, buffer 0.1-0.3%.\n11. REASONING : Débuter par 'Tendance de fond Haussiere car Prix > SMA200.' ou 'Baissiere'. Max 2 phrases.",
+          "maxTokens": 512,
+          "temperature": 0.1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2450,
+        100
+      ],
+      "id": "75a07f3d-2148-4f83-9142-60d2da4dc7ec",
+      "name": "AI Validation GPT",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import json\nimport duckdb\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\n\nitems = _input.all()\nresults = []\n\nfor item in items:\n    d = item.json\n    symbol = d.get(\"symbol\", \"\")\n    run_id = d.get(\"run_id\", \"\")\n    signal_id = run_id + \"|\" + symbol\n    sig_hash = d.get(\"sig_hash\", \"\")\n\n    try:\n        ai_raw = d.get(\"message\", {}).get(\"content\", d.get(\"text\", \"{}\"))\n        ai = json.loads(ai_raw) if isinstance(ai_raw, str) else ai_raw\n\n        decision = ai.get(\"decision\", \"WATCH\")\n        validated = ai.get(\"validated\", False)\n        quality = ai.get(\"quality_score\", 5)\n        reasoning = ai.get(\"reasoning\", \"\")\n        chart_pattern = ai.get(\"chart_pattern\", \"None\")\n        stop_loss = ai.get(\"stop_loss_suggestion\")\n        stop_basis = ai.get(\"stop_loss_basis\", \"NONE\")\n        bias = ai.get(\"bias_sma200\", \"\")\n        regime = ai.get(\"regime_d1\", \"\")\n        alignment = ai.get(\"h1_d1_alignment\", \"UNKNOWN\")\n        missing = json.dumps(ai.get(\"missing_fields\", []))\n        anomalies = json.dumps(ai.get(\"anomalies\", []))\n\n        # Coherence guards\n        if validated and decision != \"APPROVE\": validated = False\n        if decision == \"APPROVE\" and stop_loss is None: decision = \"WATCH\"; validated = False\n        if not reasoning: reasoning = \"(no reasoning returned)\"\n\n        pass_pm = decision == \"APPROVE\" or (decision == \"WATCH\" and alignment == \"WITH_BIAS\" and quality >= 5)\n        output_ref = \"AG2AI|\" + symbol + \"|\" + sig_hash\n\n        ai_data = {\"ai_decision\": decision, \"ai_validated\": validated, \"ai_quality\": quality,\n                    \"ai_reasoning\": reasoning, \"ai_chart_pattern\": chart_pattern,\n                    \"ai_stop_loss\": stop_loss, \"ai_stop_basis\": stop_basis,\n                    \"ai_bias_sma200\": bias, \"ai_regime_d1\": regime, \"ai_alignment\": alignment,\n                    \"ai_missing\": missing, \"ai_anomalies\": anomalies,\n                    \"ai_output_ref\": output_ref, \"pass_pm\": pass_pm}\n\n        con = duckdb.connect(DB_PATH)\n        sets = \", \".join(k + \" = ?\" for k in ai_data.keys())\n        con.execute(\"UPDATE technical_signals SET \" + sets + \", updated_at = CURRENT_TIMESTAMP WHERE id = ?\",\n                    list(ai_data.values()) + [signal_id])\n\n        h1_action = d.get(\"h1_action\", \"NEUTRAL\")\n        ttl = 60 if h1_action == \"SELL\" else 240\n        sig_json = json.dumps({\"action\": h1_action, \"score\": d.get(\"h1_score\"), \"decision\": decision, \"quality\": quality})\n        con.execute(\n            \"INSERT OR REPLACE INTO ai_dedup_cache (symbol, interval_key, sig_hash, sig_json, last_ai_at, last_ai_run_id, last_ai_reason, last_ai_output_ref, ttl_minutes, updated_at) VALUES (?, 'combined', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)\",\n            [symbol, sig_hash, sig_json, run_id, d.get(\"filter_reason\", \"\"), output_ref, ttl]\n        )\n        con.close()\n\n        out = dict(d)\n        out.update(ai_data)\n        out[\"should_vectorize\"] = pass_pm or decision in (\"APPROVE\", \"WATCH\")\n        results.append({\"json\": out})\n\n    except Exception as e:\n        out = dict(d)\n        out[\"ai_decision\"] = \"ERROR\"; out[\"ai_reasoning\"] = str(e); out[\"should_vectorize\"] = False\n        results.append({\"json\": out})\n\nreturn results\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2700,
+        100
+      ],
+      "id": "6a318911-e98d-4f0a-a254-0a2c6034f277",
+      "name": "Extract AI + Write",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "version": 2,
+            "caseSensitive": true,
+            "leftValue": ""
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "2",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              },
+              "leftValue": "={{ $json.should_vectorize }}",
+              "rightValue": ""
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2950,
+        100
+      ],
+      "id": "c9e9b007-62c0-4df1-bb9d-0d56e8d3e294",
+      "name": "IF Vectorize?",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG2-V2 — Prepare structured text for Qdrant vectorization\nconst d = $input.item.json;\nconst symbol = d.symbol || '';\nconst run_id = d.run_id || '';\nconst signal_id = `${run_id}|${symbol}`;\n\nconst lines = [\n  `[ENTITY] ${symbol}`,\n  `[DATE] ${d.workflow_date || new Date().toISOString()}`,\n  ``,\n  `[DAILY CONTEXT]`,\n  `Trend: ${d.ai_bias_sma200 || 'N/A'} | Regime: ${d.ai_regime_d1 || 'N/A'}`,\n  `SMA200: ${d.d1_sma200 || 'N/A'} | SMA50: ${d.d1_sma50 || 'N/A'} | Close: ${d.d1_last_close || 'N/A'}`,\n  `RSI14: ${d.d1_rsi14 || 'N/A'} | MACD_Hist: ${d.d1_macd_hist || 'N/A'} | ADX: ${d.d1_adx || 'N/A'}`,\n  `Bollinger Width: ${d.d1_bb_width || 'N/A'} | Volatility: ${d.d1_volatility || 'N/A'}`,\n  ``,\n  `[H1 SIGNAL]`,\n  `Action: ${d.h1_action || 'N/A'} | Score: ${d.h1_score || 'N/A'} | Confidence: ${d.h1_confidence || 'N/A'}`,\n  `Rationale: ${d.h1_rationale || 'N/A'}`,\n  `RSI14: ${d.h1_rsi14 || 'N/A'} | Stochastic: ${d.h1_stoch_k || 'N/A'}/${d.h1_stoch_d || 'N/A'}`,\n  `Support: ${d.h1_support || 'N/A'} | Resistance: ${d.h1_resistance || 'N/A'}`,\n  ``,\n  `[AI VALIDATION]`,\n  `Decision: ${d.ai_decision || 'N/A'} | Quality: ${d.ai_quality || 'N/A'}/10`,\n  `Alignment: ${d.ai_alignment || 'N/A'} | Stop: ${d.ai_stop_loss || 'N/A'}`,\n  `Reasoning: ${d.ai_reasoning || 'N/A'}`,\n];\n\nreturn [{\n  json: {\n    text: lines.join('\\n'),\n    metadata: {\n      symbol, run_id, signal_id,\n      h1_action: d.h1_action || '',\n      d1_action: d.d1_action || '',\n      ai_decision: d.ai_decision || '',\n      ai_quality: d.ai_quality || 0,\n      ai_alignment: d.ai_alignment || '',\n      pass_pm: d.pass_pm || false,\n      workflow_date: d.workflow_date || '',\n    },\n    id: signal_id.replace(/[^a-zA-Z0-9_-]/g, '_'),\n  }\n}];\n",
+        "mode": "runOnceForEachItem"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3200,
+        0
+      ],
+      "id": "a5c29ed9-189c-4200-8fe2-bcc824d311af",
+      "name": "Prep Vector Text"
+    },
+    {
+      "parameters": {
+        "model": "text-embedding-3-small",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3550,
+        200
+      ],
+      "id": "9edc5e3b-0452-4968-8f79-ba3e3c0ad7f3",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "dataType": "json",
+        "jsonData": "={{ $json.text }}",
+        "options": {
+          "metadata": "={{ JSON.stringify($json.metadata) }}"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+      "typeVersion": 1,
+      "position": [
+        3550,
+        350
+      ],
+      "id": "839469a9-1273-4aa8-aa34-73800994859e",
+      "name": "Default Data Loader"
+    },
+    {
+      "parameters": {
+        "chunkSize": 2000,
+        "chunkOverlap": 200
+      },
+      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+      "typeVersion": 1,
+      "position": [
+        3550,
+        500
+      ],
+      "id": "d8a1c701-9c02-4fa8-8271-46f70fabbf43",
+      "name": "Text Splitter"
+    },
+    {
+      "parameters": {
+        "mode": "insert",
+        "qdrantCollection": {
+          "__rl": true,
+          "mode": "list",
+          "value": "financial_tech_v1"
+        },
+        "options": {
+          "collectionConfig": {
+            "similarity": "Cosine"
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.1,
+      "position": [
+        3450,
+        0
+      ],
+      "id": "8c6c1735-91e7-4e1f-aa27-27931b1db8e9",
+      "name": "Qdrant Upsert",
+      "credentials": {
+        "qdrantApi": {
+          "id": "q1CRmg2N6AmW6pC1",
+          "name": "QdrantApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import duckdb\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\nitems = _input.all()\n\nfor item in items:\n    d = item.json\n    signal_id = d.get(\"metadata\", {}).get(\"signal_id\") or d.get(\"signal_id\", \"\")\n    vector_id = d.get(\"id\", \"\")\n    if signal_id:\n        con = duckdb.connect(DB_PATH)\n        con.execute(\"UPDATE technical_signals SET vector_status = 'DONE', vector_id = ?, vectorized_at = CURRENT_TIMESTAMP WHERE id = ?\", [vector_id, signal_id])\n        con.close()\n\nreturn items\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3700,
+        0
+      ],
+      "id": "3e52cf80-98f5-470a-8b9c-4b12dd28d373",
+      "name": "Mark Vectorized"
+    },
+    {
+      "parameters": {
+        "language": "python",
+        "pythonCode": "import duckdb\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\nitems = _input.all()\n\nrun_id = \"\"\nsymbols_ok = 0\nsymbols_error = 0\nai_calls = 0\nvectors_written = 0\nerrors = []\n\nfor item in items:\n    d = item.json\n    if not run_id: run_id = d.get(\"run_id\", \"\")\n    if d.get(\"_status\") == \"error\":\n        symbols_error += 1\n        errors.append(d.get(\"symbol\",\"?\") + \": \" + d.get(\"error\",\"?\"))\n    else:\n        symbols_ok += 1\n    if d.get(\"call_ai\"): ai_calls += 1\n    if d.get(\"vector_status\") == \"DONE\": vectors_written += 1\n\nif run_id:\n    status = \"SUCCESS\" if symbols_error == 0 else (\"PARTIAL\" if symbols_ok > 0 else \"FAILED\")\n    con = duckdb.connect(DB_PATH)\n    con.execute(\n        \"UPDATE run_log SET finished_at = CURRENT_TIMESTAMP, status = ?, symbols_ok = ?, symbols_error = ?, ai_calls = ?, vectors_written = ?, error_detail = ? WHERE run_id = ?\",\n        [status, symbols_ok, symbols_error, ai_calls, vectors_written, \"; \".join(errors)[:500] if errors else None, run_id]\n    )\n    con.close()\n\nreturn [{\"json\": {\"run_id\": run_id, \"status\": status if run_id else \"NO_RUN\", \"symbols_ok\": symbols_ok, \"symbols_error\": symbols_error, \"ai_calls\": ai_calls, \"vectors_written\": vectors_written}}]\n",
+        "mode": "runOnceForAllItems"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        -100
+      ],
+      "id": "7a2a6860-6f2a-459b-9a24-24ad89db072e",
+      "name": "Finalize Run"
+    }
+  ],
+  "connections": {
+    "Cron Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Universe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Universe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Universe": {
+      "main": [
+        [
+          {
+            "node": "Init Config + Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Init Config + Batch": {
+      "main": [
+        [
+          {
+            "node": "DuckDB Init Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "DuckDB Init Schema": {
+      "main": [
+        [
+          {
+            "node": "Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Symbols": {
+      "main": [
+        [
+          {
+            "node": "Finalize Run",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fetch H1 + D1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch H1 + D1": {
+      "main": [
+        [
+          {
+            "node": "Compute + Filter + Write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute + Filter + Write": {
+      "main": [
+        [
+          {
+            "node": "IF Call AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Call AI?": {
+      "main": [
+        [
+          {
+            "node": "Snapshot Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Snapshot Context": {
+      "main": [
+        [
+          {
+            "node": "AI Validation GPT",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Validation GPT": {
+      "main": [
+        [
+          {
+            "node": "Extract AI + Write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract AI + Write": {
+      "main": [
+        [
+          {
+            "node": "IF Vectorize?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Vectorize?": {
+      "main": [
+        [
+          {
+            "node": "Prep Vector Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prep Vector Text": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Upsert": {
+      "main": [
+        [
+          {
+            "node": "Mark Vectorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mark Vectorized": {
+      "main": [
+        [
+          {
+            "node": "Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Upsert",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Default Data Loader": {
+      "ai_document": [
+        [
+          {
+            "node": "Qdrant Upsert",
+            "type": "ai_document",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Text Splitter": {
+      "ai_textSplitter": [
+        [
+          {
+            "node": "Default Data Loader",
+            "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "versionId": "ag2-v2-1.0",
+  "name": "AG2-V2 - Technical Analyst (unified)",
+  "tags": [
+    {
+      "name": "AG2"
+    },
+    {
+      "name": "V2"
+    },
+    {
+      "name": "Technical Analysis"
+    }
+  ]
+}
