@@ -21,7 +21,7 @@
         200,
         0
       ],
-      "id": "c9b27306-9a58-44ef-bcd7-a7c2c55afb5a",
+      "id": "905edab7-eaea-4d7d-a512-150164e04ac5",
       "name": "Cron Trigger"
     },
     {
@@ -32,7 +32,7 @@
         200,
         200
       ],
-      "id": "453ab792-ea7e-4c58-86a9-b070ccc25c6a",
+      "id": "282a0d63-0064-4512-b649-b5fa4b1ae082",
       "name": "Manual Trigger"
     },
     {
@@ -64,7 +64,7 @@
         450,
         100
       ],
-      "id": "9b1aea98-060f-4bbd-84fd-56f3997e7f7b",
+      "id": "cef4de6f-5eef-43c9-bd1b-864a72b35088",
       "name": "Read Universe",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -84,7 +84,7 @@
         700,
         100
       ],
-      "id": "393041b5-305d-4c78-96ac-b18ced63aa7e",
+      "id": "aadc8da4-ef98-4b7d-93bd-5ee3604e2bd8",
       "name": "Init Config + Batch"
     },
     {
@@ -99,7 +99,7 @@
         950,
         100
       ],
-      "id": "d7b59d12-242e-40de-8461-3201bfce3db2",
+      "id": "c4cfa33f-ee3f-4384-b528-d7efefce0863",
       "name": "DuckDB Init Schema"
     },
     {
@@ -113,7 +113,7 @@
         1200,
         100
       ],
-      "id": "1df75fdd-5773-4a1d-aadc-cd2d49741052",
+      "id": "dcecaf72-421b-49ad-b170-ffcde8b9a558",
       "name": "Loop Symbols",
       "onError": "continueRegularOutput"
     },
@@ -128,7 +128,7 @@
         1450,
         200
       ],
-      "id": "79bf3849-1d81-4e39-8a14-32e167edafec",
+      "id": "c14a60f5-c22b-4e11-9b76-c0fa258742e2",
       "name": "Fetch H1 + D1"
     },
     {
@@ -143,7 +143,7 @@
         1700,
         200
       ],
-      "id": "10fda458-eef6-4eed-b1f9-7150911a4860",
+      "id": "068618b1-1dfe-44c2-9638-9a50e4c9015d",
       "name": "Compute + Filter + Write",
       "onError": "continueRegularOutput"
     },
@@ -175,7 +175,7 @@
         1950,
         200
       ],
-      "id": "725b3dcb-5b08-40b2-8c06-633c6e70dd3a",
+      "id": "3f599769-090a-4387-9044-2adbea582bf0",
       "name": "IF Call AI?",
       "alwaysOutputData": true
     },
@@ -190,7 +190,7 @@
         2200,
         100
       ],
-      "id": "4f41c0da-4831-4121-b206-2911af300a0f",
+      "id": "f5fa24ef-1838-4d63-b92e-0d25d1c40d89",
       "name": "Snapshot Context"
     },
     {
@@ -200,21 +200,24 @@
           "mode": "list",
           "value": "gpt-4o-mini"
         },
-        "messages": {
+        "responses": {
           "values": [
             {
-              "content": "Analyse ce signal technique :\n\n{{ JSON.stringify($json.ai_context, null, 2) }}\n\nRéponds en JSON strict.",
-              "role": "user"
+              "role": "system",
+              "content": "=Tu es l'Agent n°2 : Validateur Technique H1 ↔ D1. Senior Technical Analyst et Risk Manager.\n\nRÈGLES ABSOLUES :\n1. SMA200 PRIORITÉ ABSOLUE : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n2. RÉGIME D1 : BULLISH (prix>SMA200 ET SMA50>SMA200), BEARISH (prix<SMA200 ET SMA50<SMA200), TRANSITION, NEUTRAL_RANGE.\n3. ZÉRO HALLUCINATION : Ne jamais inventer. Manquant -> missing_fields.\n4. COHÉRENCE : validated=true exige decision=APPROVE + stop_loss non null. stop_loss=null exige validated=false.\n5. DONNÉES OBLIGATOIRES : SMA200_D1 et prix_D1. Si absents -> REJECT, quality_score<=3.\n6. Si bars H1<20 : WATCH si WITH_BIAS, sinon REJECT. Pas de stop loss.\n7. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n8. GATE RR (BUY) : RR<1.2->REJECT, 1.2-1.5->WATCH, >=1.5->APPROVE, null->WATCH si WITH_BIAS.\n9. Suivi tendance->APPROVE candidat (quality 7-10). Contre-tendance->REJECT sauf RSI extrême.\n10. STOP LOSS : swing H1, buffer 0.1-0.3%.\n11. REASONING : Débuter par 'Tendance de fond Haussiere car Prix > SMA200.' ou 'Baissiere'. Max 2 phrases."
+            },
+            {
+              "content": "=Tu vas recevoir un objet JSON pour un symbole contenant :\n- signal_tactical_H1 : signal + indicateurs H1\n- primary_context_D1 : indicateurs D1 (Prix_D1/last_close, SMA200_D1, SMA50_D1, etc.)\n- bars : dernières bougies H1 (OHLCV)\n- rr_theoretical : ratio R/R théorique\n- rr_meta : champs d'audit (méthode, distances)\n\nTa mission : appliquer STRICTEMENT les règles H1↔D1 et retourner UNIQUEMENT le JSON de décision conforme au schéma.\n\nRÈGLES D'ACCÈS AUX DONNÉES :\n- SMA200_D1, SMA50_D1, Prix_D1 : dans primary_context_D1.indicators\n- RSI_H1 : dans signal_tactical_H1.indicators\n- Bougies H1 : dans bars\n- RR : rr_theoretical (ne pas réinventer TP/SL si fourni)\n- Si bars < 20 : tu NE PEUX PAS proposer de stop ⇒ validated=false\n\nDONNÉES :\n{{ JSON.stringify($json.ai_context, null, 2) }}"
             }
           ]
         },
-        "jsonOutput": true,
-        "jsonSchemaType": "manual",
-        "inputSchema": "{\"type\": \"object\", \"properties\": {\"validated\": {\"type\": \"boolean\"}, \"decision\": {\"type\": \"string\", \"enum\": [\"APPROVE\", \"WATCH\", \"REJECT\"]}, \"quality_score\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 10}, \"bias_sma200\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\"]}, \"regime_d1\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\", \"NEUTRAL_RANGE\", \"TRANSITION\"]}, \"h1_d1_alignment\": {\"type\": \"string\", \"enum\": [\"WITH_BIAS\", \"AGAINST_BIAS\", \"MIXED\", \"UNKNOWN\"]}, \"reasoning\": {\"type\": \"string\"}, \"chart_pattern\": {\"type\": \"string\"}, \"stop_loss_suggestion\": {\"type\": [\"number\", \"null\"]}, \"stop_loss_basis\": {\"type\": [\"string\", \"null\"], \"enum\": [\"SWING_H1\", \"BAR_ANCHOR\", \"NONE\", null]}, \"missing_fields\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"anomalies\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"validated\", \"decision\", \"quality_score\", \"reasoning\", \"bias_sma200\", \"regime_d1\", \"h1_d1_alignment\"], \"additionalProperties\": false}",
         "options": {
-          "systemMessage": "Tu es l'Agent n°2 : Validateur Technique H1 ↔ D1. Senior Technical Analyst et Risk Manager.\n\nRÈGLES ABSOLUES :\n1. SMA200 PRIORITÉ ABSOLUE : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n2. RÉGIME D1 : BULLISH (prix>SMA200 ET SMA50>SMA200), BEARISH (prix<SMA200 ET SMA50<SMA200), TRANSITION, NEUTRAL_RANGE.\n3. ZÉRO HALLUCINATION : Ne jamais inventer. Manquant -> missing_fields.\n4. COHÉRENCE : validated=true exige decision=APPROVE + stop_loss non null. stop_loss=null exige validated=false.\n5. DONNÉES OBLIGATOIRES : SMA200_D1 et prix_D1. Si absents -> REJECT, quality_score<=3.\n6. Si bars H1<20 : WATCH si WITH_BIAS, sinon REJECT. Pas de stop loss.\n7. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n8. GATE RR (BUY) : RR<1.2->REJECT, 1.2-1.5->WATCH, >=1.5->APPROVE, null->WATCH si WITH_BIAS.\n9. Suivi tendance->APPROVE candidat (quality 7-10). Contre-tendance->REJECT sauf RSI extrême.\n10. STOP LOSS : swing H1, buffer 0.1-0.3%.\n11. REASONING : Débuter par 'Tendance de fond Haussiere car Prix > SMA200.' ou 'Baissiere'. Max 2 phrases.",
-          "maxTokens": 512,
-          "temperature": 0.1
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "schema": "={\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"validated\": {\"type\": \"boolean\"}, \"decision\": {\"type\": \"string\", \"enum\": [\"APPROVE\", \"REJECT\", \"WATCH\"]}, \"quality_score\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 10}, \"bias_sma200\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\"]}, \"regime_d1\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\", \"NEUTRAL_RANGE\", \"TRANSITION\"]}, \"h1_d1_alignment\": {\"type\": \"string\", \"enum\": [\"WITH_BIAS\", \"AGAINST_BIAS\", \"MIXED\", \"UNKNOWN\"]}, \"reasoning\": {\"type\": \"string\"}, \"chart_pattern\": {\"type\": \"string\"}, \"stop_loss_suggestion\": {\"type\": [\"number\", \"null\"]}, \"stop_loss_basis\": {\"type\": \"string\", \"enum\": [\"SWING_H1\", \"BAR_ANCHOR\", \"NONE\"]}, \"missing_fields\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"anomalies\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"validated\", \"decision\", \"quality_score\", \"reasoning\", \"bias_sma200\", \"regime_d1\", \"h1_d1_alignment\", \"chart_pattern\", \"stop_loss_suggestion\", \"stop_loss_basis\", \"missing_fields\", \"anomalies\"]}"
+            }
+          }
         }
       },
       "type": "@n8n/n8n-nodes-langchain.openAi",
@@ -223,7 +226,7 @@
         2450,
         100
       ],
-      "id": "75a07f3d-2148-4f83-9142-60d2da4dc7ec",
+      "id": "21850130-a95c-4077-b2d3-5ffea70e54ea",
       "name": "AI Validation GPT",
       "credentials": {
         "openAiApi": {
@@ -244,7 +247,7 @@
         2700,
         100
       ],
-      "id": "6a318911-e98d-4f0a-a254-0a2c6034f277",
+      "id": "79bf4bef-3a60-4553-bd0e-ddfd1dc3b927",
       "name": "Extract AI + Write",
       "onError": "continueRegularOutput"
     },
@@ -276,7 +279,7 @@
         2950,
         100
       ],
-      "id": "c9e9b007-62c0-4df1-bb9d-0d56e8d3e294",
+      "id": "1f62a498-f345-40cd-a91c-c01d5d8c9ecf",
       "name": "IF Vectorize?",
       "alwaysOutputData": true
     },
@@ -291,7 +294,7 @@
         3200,
         0
       ],
-      "id": "a5c29ed9-189c-4200-8fe2-bcc824d311af",
+      "id": "5fbbcb4f-f038-4f5f-83c7-67060e3c369b",
       "name": "Prep Vector Text"
     },
     {
@@ -305,7 +308,7 @@
         3550,
         200
       ],
-      "id": "9edc5e3b-0452-4968-8f79-ba3e3c0ad7f3",
+      "id": "70dd130b-de3a-41b4-866b-c8de587d0bb5",
       "name": "Embeddings OpenAI",
       "credentials": {
         "openAiApi": {
@@ -328,7 +331,7 @@
         3550,
         350
       ],
-      "id": "839469a9-1273-4aa8-aa34-73800994859e",
+      "id": "c11b664a-380a-4c65-b496-32f83e58575e",
       "name": "Default Data Loader"
     },
     {
@@ -342,7 +345,7 @@
         3550,
         500
       ],
-      "id": "d8a1c701-9c02-4fa8-8271-46f70fabbf43",
+      "id": "4161d0fa-d8b0-42e6-8495-9b3b6dfa3b9a",
       "name": "Text Splitter"
     },
     {
@@ -365,7 +368,7 @@
         3450,
         0
       ],
-      "id": "8c6c1735-91e7-4e1f-aa27-27931b1db8e9",
+      "id": "4e9871be-6f3d-4161-82e5-d27401b22e0a",
       "name": "Qdrant Upsert",
       "credentials": {
         "qdrantApi": {
@@ -386,7 +389,7 @@
         3700,
         0
       ],
-      "id": "3e52cf80-98f5-470a-8b9c-4b12dd28d373",
+      "id": "7913ed1d-af6b-4b8c-ae5c-83d634329ced",
       "name": "Mark Vectorized"
     },
     {
@@ -401,7 +404,7 @@
         1450,
         -100
       ],
-      "id": "7a2a6860-6f2a-459b-9a24-24ad89db072e",
+      "id": "3922d818-5540-41f3-abd7-f7f269a628be",
       "name": "Finalize Run"
     }
   ],

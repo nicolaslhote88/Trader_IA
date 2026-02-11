@@ -42,26 +42,45 @@ AI_SYSTEM = (
     "11. REASONING : D\u00e9buter par 'Tendance de fond Haussiere car Prix > SMA200.' ou 'Baissiere'. Max 2 phrases."
 )
 
-AI_USER = "Analyse ce signal technique :\n\n{{ JSON.stringify($json.ai_context, null, 2) }}\n\nR\u00e9ponds en JSON strict."
+AI_USER = (
+    "=Tu vas recevoir un objet JSON pour un symbole contenant :\n"
+    "- signal_tactical_H1 : signal + indicateurs H1\n"
+    "- primary_context_D1 : indicateurs D1 (Prix_D1/last_close, SMA200_D1, SMA50_D1, etc.)\n"
+    "- bars : derni\u00e8res bougies H1 (OHLCV)\n"
+    "- rr_theoretical : ratio R/R th\u00e9orique\n"
+    "- rr_meta : champs d'audit (m\u00e9thode, distances)\n\n"
+    "Ta mission : appliquer STRICTEMENT les r\u00e8gles H1\u2194D1 et retourner UNIQUEMENT le JSON de d\u00e9cision conforme au sch\u00e9ma.\n\n"
+    "R\u00c8GLES D'ACC\u00c8S AUX DONN\u00c9ES :\n"
+    "- SMA200_D1, SMA50_D1, Prix_D1 : dans primary_context_D1.indicators\n"
+    "- RSI_H1 : dans signal_tactical_H1.indicators\n"
+    "- Bougies H1 : dans bars\n"
+    "- RR : rr_theoretical (ne pas r\u00e9inventer TP/SL si fourni)\n"
+    "- Si bars < 20 : tu NE PEUX PAS proposer de stop \u21d2 validated=false\n\n"
+    "DONN\u00c9ES :\n"
+    "{{ JSON.stringify($json.ai_context, null, 2) }}"
+)
 
 AI_SCHEMA = json.dumps({
     "type": "object",
+    "additionalProperties": False,
     "properties": {
         "validated": {"type": "boolean"},
-        "decision": {"type": "string", "enum": ["APPROVE","WATCH","REJECT"]},
+        "decision": {"type": "string", "enum": ["APPROVE", "REJECT", "WATCH"]},
         "quality_score": {"type": "integer", "minimum": 1, "maximum": 10},
-        "bias_sma200": {"type": "string", "enum": ["BULLISH","BEARISH"]},
-        "regime_d1": {"type": "string", "enum": ["BULLISH","BEARISH","NEUTRAL_RANGE","TRANSITION"]},
-        "h1_d1_alignment": {"type": "string", "enum": ["WITH_BIAS","AGAINST_BIAS","MIXED","UNKNOWN"]},
+        "bias_sma200": {"type": "string", "enum": ["BULLISH", "BEARISH"]},
+        "regime_d1": {"type": "string", "enum": ["BULLISH", "BEARISH", "NEUTRAL_RANGE", "TRANSITION"]},
+        "h1_d1_alignment": {"type": "string", "enum": ["WITH_BIAS", "AGAINST_BIAS", "MIXED", "UNKNOWN"]},
         "reasoning": {"type": "string"},
         "chart_pattern": {"type": "string"},
-        "stop_loss_suggestion": {"type": ["number","null"]},
-        "stop_loss_basis": {"type": ["string","null"], "enum": ["SWING_H1","BAR_ANCHOR","NONE",None]},
+        "stop_loss_suggestion": {"type": ["number", "null"]},
+        "stop_loss_basis": {"type": "string", "enum": ["SWING_H1", "BAR_ANCHOR", "NONE"]},
         "missing_fields": {"type": "array", "items": {"type": "string"}},
         "anomalies": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["validated","decision","quality_score","reasoning","bias_sma200","regime_d1","h1_d1_alignment"],
-    "additionalProperties": False,
+    "required": ["validated", "decision", "quality_score", "reasoning",
+                  "bias_sma200", "regime_d1", "h1_d1_alignment",
+                  "chart_pattern", "stop_loss_suggestion", "stop_loss_basis",
+                  "missing_fields", "anomalies"],
 })
 
 nodes = []
@@ -120,9 +139,11 @@ add(IDS["snapshot"], "Snapshot Context", "n8n-nodes-base.code", 2, [2200,100],
 
 add(IDS["ai_validate"], "AI Validation GPT", "@n8n/n8n-nodes-langchain.openAi", 2.1, [2450,100],
     {"modelId": {"__rl": True, "mode": "list", "value": "gpt-4o-mini"},
-     "messages": {"values": [{"content": AI_USER, "role": "user"}]},
-     "jsonOutput": True, "jsonSchemaType": "manual", "inputSchema": AI_SCHEMA,
-     "options": {"systemMessage": AI_SYSTEM, "maxTokens": 512, "temperature": 0.1}},
+     "responses": {"values": [
+         {"role": "system", "content": "=" + AI_SYSTEM},
+         {"content": AI_USER},
+     ]},
+     "options": {"textFormat": {"textOptions": {"type": "json_schema", "schema": "=" + AI_SCHEMA}}}},
     creds={"openAiApi": {"id": OAI_CRED, "name": "OpenAi account"}})
 
 add(IDS["extract_ai"], "Extract AI + Write", "n8n-nodes-base.code", 2, [2700,100],
