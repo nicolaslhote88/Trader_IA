@@ -9,6 +9,7 @@ import gspread
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 from oauth2client.service_account import ServiceAccountCredentials
 
@@ -21,6 +22,7 @@ st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="�
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
 DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
+YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
 # ============================================================
 # CSS PERSONNALISE
@@ -679,6 +681,202 @@ def _sma_alignment_text(price: float, sma20: float, sma50: float, sma200: float)
         alignment += " → MIXTE"
 
     return alignment
+
+
+# ============================================================
+# INDICATEUR INTERPRETATION - contexte visuel pour non-experts
+# ============================================================
+
+# Chaque indicateur : (label, min, max, zones, description)
+# zones: liste de (borne_basse, borne_haute, couleur, label_zone)
+INDICATOR_META = {
+    "rsi14": {
+        "label": "RSI (14)",
+        "min": 0, "max": 100,
+        "zones": [(0, 30, "#28a745", "Survendu"), (30, 70, "#6c757d", "Neutre"), (70, 100, "#dc3545", "Suracheté")],
+        "desc": "Mesure la vitesse des variations de prix. <30 = survendu (opportunité achat), >70 = suracheté (risque correction).",
+    },
+    "macd_hist": {
+        "label": "MACD Histogramme",
+        "min": -2, "max": 2,
+        "zones": [(-2, -0.1, "#dc3545", "Baissier"), (-0.1, 0.1, "#6c757d", "Neutre"), (0.1, 2, "#28a745", "Haussier")],
+        "desc": "Différence entre signal MACD et sa moyenne. Positif = momentum haussier, négatif = momentum baissier.",
+    },
+    "stoch_k": {
+        "label": "Stochastique %K",
+        "min": 0, "max": 100,
+        "zones": [(0, 20, "#28a745", "Survendu"), (20, 80, "#6c757d", "Neutre"), (80, 100, "#dc3545", "Suracheté")],
+        "desc": "Position du prix dans son range récent. <20 = bas du range, >80 = haut du range.",
+    },
+    "stoch_d": {
+        "label": "Stochastique %D",
+        "min": 0, "max": 100,
+        "zones": [(0, 20, "#28a745", "Survendu"), (20, 80, "#6c757d", "Neutre"), (80, 100, "#dc3545", "Suracheté")],
+        "desc": "Moyenne lissée de %K. Croisement %K/%D génère des signaux.",
+    },
+    "adx": {
+        "label": "ADX (Force tendance)",
+        "min": 0, "max": 100,
+        "zones": [(0, 20, "#6c757d", "Pas de tendance"), (20, 40, "#ffc107", "Tendance modérée"), (40, 100, "#28a745", "Tendance forte")],
+        "desc": "Force de la tendance (pas sa direction). >25 = tendance significative, <20 = marché sans direction.",
+    },
+    "atr_pct": {
+        "label": "ATR %",
+        "min": 0, "max": 10,
+        "zones": [(0, 1, "#28a745", "Faible volatilité"), (1, 3, "#ffc107", "Volatilité normale"), (3, 10, "#dc3545", "Haute volatilité")],
+        "desc": "Average True Range en % du prix. Mesure la volatilité quotidienne moyenne.",
+    },
+    "bb_width": {
+        "label": "Bollinger Width",
+        "min": 0, "max": 0.2,
+        "zones": [(0, 0.03, "#0d6efd", "Compression (squeeze)"), (0.03, 0.08, "#6c757d", "Normal"), (0.08, 0.2, "#dc3545", "Expansion")],
+        "desc": "Largeur des bandes de Bollinger. Compression = explosion imminente, expansion = mouvement en cours.",
+    },
+    "volatility": {
+        "label": "Volatilité RSI",
+        "min": 0, "max": 2,
+        "zones": [(0, 0.3, "#28a745", "Calme"), (0.3, 0.8, "#ffc107", "Modérée"), (0.8, 2, "#dc3545", "Élevée")],
+        "desc": "Volatilité normalisée. Plus elle est basse, plus le prix est stable.",
+    },
+    "obv_slope": {
+        "label": "OBV Slope",
+        "min": -5, "max": 5,
+        "zones": [(-5, -0.5, "#dc3545", "Volume sortant"), (-0.5, 0.5, "#6c757d", "Neutre"), (0.5, 5, "#28a745", "Volume entrant")],
+        "desc": "Pente du On-Balance Volume. Positif = accumulation (acheteurs), négatif = distribution (vendeurs).",
+    },
+}
+
+
+def _indicator_bar(key: str, value: float, tf_label: str = "") -> str:
+    """Génère une barre de progression HTML colorée avec contexte pour un indicateur."""
+    meta = INDICATOR_META.get(key)
+    if not meta:
+        return f"<span>{value:.4f}</span>"
+
+    vmin, vmax = meta["min"], meta["max"]
+    # Clamp value pour le positionnement
+    clamped = max(vmin, min(vmax, value))
+    pct = ((clamped - vmin) / (vmax - vmin)) * 100 if vmax != vmin else 50
+
+    # Trouver la zone active
+    zone_color = "#6c757d"
+    zone_label = ""
+    for z_lo, z_hi, z_col, z_lbl in meta["zones"]:
+        if z_lo <= value <= z_hi:
+            zone_color = z_col
+            zone_label = z_lbl
+            break
+    else:
+        # Hors bornes
+        if value < vmin:
+            zone_color = meta["zones"][0][2]
+            zone_label = meta["zones"][0][3]
+        else:
+            zone_color = meta["zones"][-1][2]
+            zone_label = meta["zones"][-1][3]
+
+    # Formater la valeur
+    if abs(value) >= 10:
+        val_str = f"{value:.1f}"
+    elif abs(value) >= 1:
+        val_str = f"{value:.2f}"
+    else:
+        val_str = f"{value:.4f}"
+
+    # Construire les segments de la barre
+    bar_segments = ""
+    for z_lo, z_hi, z_col, z_lbl in meta["zones"]:
+        seg_start = max(0, ((z_lo - vmin) / (vmax - vmin)) * 100) if vmax != vmin else 0
+        seg_end = min(100, ((z_hi - vmin) / (vmax - vmin)) * 100) if vmax != vmin else 100
+        seg_width = seg_end - seg_start
+        bar_segments += f'<div style="position:absolute;left:{seg_start}%;width:{seg_width}%;height:100%;background:{z_col};opacity:0.25;"></div>'
+
+    uid = f"ind_{key}_{tf_label}"
+    html = f"""
+    <div style="margin-bottom:12px;" title="{meta['desc']}">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
+        <span style="color:#ccc;font-size:0.85em;font-weight:600;">{meta['label']}</span>
+        <span style="color:{zone_color};font-size:0.85em;font-weight:bold;">{val_str} — {zone_label}</span>
+      </div>
+      <div style="position:relative;height:10px;background:#222;border-radius:5px;overflow:hidden;">
+        {bar_segments}
+        <div style="position:absolute;left:{pct}%;top:0;width:3px;height:100%;background:#fff;border-radius:1px;transform:translateX(-1px);z-index:2;"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;margin-top:1px;">
+        <span style="color:#666;font-size:0.7em;">{vmin}</span>
+        <span style="color:#666;font-size:0.7em;">{vmax}</span>
+      </div>
+    </div>"""
+    return html
+
+
+# ============================================================
+# FETCH PRICE DATA FROM YFINANCE-API
+# ============================================================
+
+
+@st.cache_data(ttl=120)
+def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int = 90) -> pd.DataFrame:
+    """Récupère l'historique OHLCV depuis yfinance-api. Retourne un DataFrame vide si indisponible."""
+    try:
+        resp = requests.get(
+            f"{YFINANCE_API_URL}/history",
+            params={"symbol": symbol, "interval": interval, "lookback_days": lookback_days, "allow_stale": "true"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return pd.DataFrame()
+        data = resp.json()
+        if not data.get("ok") or not data.get("bars"):
+            return pd.DataFrame()
+
+        df = pd.DataFrame(data["bars"])
+        df.rename(columns={"t": "time", "o": "open", "h": "high", "l": "low", "c": "close", "v": "volume"}, inplace=True)
+        df["time"] = pd.to_datetime(df["time"], errors="coerce", utc=True)
+        df = df.dropna(subset=["time"]).sort_values("time")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+def _make_candlestick_chart(df: pd.DataFrame, title: str, sma20: float = 0, sma50: float = 0, sma200: float = 0, support: float = 0, resistance: float = 0) -> go.Figure:
+    """Crée un graphique chandelier avec SMA et niveaux S/R optionnels."""
+    fig = go.Figure()
+
+    fig.add_trace(go.Candlestick(
+        x=df["time"], open=df["open"], high=df["high"], low=df["low"], close=df["close"],
+        name="OHLC",
+        increasing_line_color="#28a745", decreasing_line_color="#dc3545",
+    ))
+
+    # Volume en barres secondaires
+    if "volume" in df.columns and df["volume"].notna().any():
+        vol_colors = ["#28a74566" if c >= o else "#dc354566" for c, o in zip(df["close"], df["open"])]
+        fig.add_trace(go.Bar(
+            x=df["time"], y=df["volume"], name="Volume",
+            marker_color=vol_colors, opacity=0.4, yaxis="y2",
+        ))
+
+    # SMA lines (valeur unique = ligne horizontale, pour simplifier ici on ne les ajoute que si > 0)
+    if support > 0:
+        fig.add_hline(y=support, line_dash="dash", line_color="#28a745", annotation_text=f"S: {support:.2f}", annotation_position="bottom left")
+    if resistance > 0:
+        fig.add_hline(y=resistance, line_dash="dash", line_color="#dc3545", annotation_text=f"R: {resistance:.2f}", annotation_position="top left")
+
+    fig.update_layout(
+        title=title,
+        height=400,
+        xaxis_rangeslider_visible=False,
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+        margin=dict(t=40, b=30, l=50, r=20),
+        yaxis=dict(title="Prix", side="left", gridcolor="#333"),
+        yaxis2=dict(title="Volume", side="right", overlaying="y", showgrid=False, range=[0, df["volume"].max() * 4] if "volume" in df.columns and df["volume"].notna().any() else None),
+        xaxis=dict(gridcolor="#333"),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    return fig
 
 
 # ============================================================
@@ -1682,11 +1880,22 @@ elif page == "📈 Analyse Technique V2":
         if not symbol_list:
             st.warning("Aucun symbole disponible.")
         else:
-            selected_symbol = st.selectbox(
-                "Sélectionner un symbole :",
-                symbol_list,
+            # Build "SYMBOL — NAME" labels for search by company name
+            _name_map = {}
+            _label_list = []
+            for sym in symbol_list:
+                sym_rows = df_signals[df_signals["symbol"] == sym]
+                name = str(sym_rows.iloc[0].get("name", "")).strip() if not sym_rows.empty else ""
+                label = f"{sym} — {name}" if name and name.lower() not in ("", "nan", "none") else sym
+                _name_map[label] = sym
+                _label_list.append(label)
+
+            selected_label = st.selectbox(
+                "Sélectionner un symbole (recherche par nom ou ticker) :",
+                _label_list,
                 key="v2_symbol_select",
             )
+            selected_symbol = _name_map.get(selected_label, selected_label)
 
             if selected_symbol:
                 row_mask = df_signals["symbol"] == selected_symbol
@@ -1722,7 +1931,7 @@ elif page == "📈 Analyse Technique V2":
 
                     st.divider()
 
-                    # ---- Row 2: Indicators H1 | D1 ----
+                    # ---- Row 2: Indicators H1 | D1 with visual bars ----
                     col_h1, col_d1 = st.columns(2)
 
                     for tf_col, tf_label in [(col_h1, "H1"), (col_d1, "D1")]:
@@ -1730,39 +1939,30 @@ elif page == "📈 Analyse Technique V2":
                         with tf_col:
                             st.markdown(f"#### Indicateurs {tf_label}")
 
-                            # RSI Gauge
+                            # RSI Gauge (keep the gauge — it's the most important)
                             rsi_val = safe_float(row.get(f"{prefix}rsi14", 0))
                             if rsi_val > 0:
                                 fig_rsi = _make_rsi_gauge(rsi_val, f"RSI 14 ({tf_label})")
                                 st.plotly_chart(fig_rsi, use_container_width=True, key=f"rsi_{tf_label}_{selected_symbol}")
 
-                            # Key metrics
-                            m1, m2 = st.columns(2)
-                            with m1:
-                                macd_hist = safe_float(row.get(f"{prefix}macd_hist", 0))
-                                st.metric("MACD Hist", f"{macd_hist:.4f}" if macd_hist != 0 else "—")
+                            # All other indicators as visual bars
+                            indicators_to_show = [
+                                ("macd_hist", f"{prefix}macd_hist"),
+                                ("stoch_k", f"{prefix}stoch_k"),
+                                ("stoch_d", f"{prefix}stoch_d"),
+                                ("adx", f"{prefix}adx"),
+                                ("atr_pct", f"{prefix}atr_pct"),
+                                ("bb_width", f"{prefix}bb_width"),
+                                ("volatility", f"{prefix}volatility"),
+                                ("obv_slope", f"{prefix}obv_slope"),
+                            ]
 
-                                stoch_k = safe_float(row.get(f"{prefix}stoch_k", 0))
-                                st.metric("Stochastic K", f"{stoch_k:.1f}" if stoch_k > 0 else "—")
+                            bars_html = ""
+                            for ind_key, col_key in indicators_to_show:
+                                val = safe_float(row.get(col_key, 0))
+                                bars_html += _indicator_bar(ind_key, val, tf_label)
 
-                                adx_val = safe_float(row.get(f"{prefix}adx", 0))
-                                st.metric("ADX", f"{adx_val:.1f}" if adx_val > 0 else "—")
-
-                                bb_width = safe_float(row.get(f"{prefix}bb_width", 0))
-                                st.metric("BB Width", f"{bb_width:.4f}" if bb_width > 0 else "—")
-
-                            with m2:
-                                vol = safe_float(row.get(f"{prefix}volatility", 0))
-                                st.metric("Volatilité", f"{vol:.4f}" if vol > 0 else "—")
-
-                                stoch_d = safe_float(row.get(f"{prefix}stoch_d", 0))
-                                st.metric("Stochastic D", f"{stoch_d:.1f}" if stoch_d > 0 else "—")
-
-                                atr_pct = safe_float(row.get(f"{prefix}atr_pct", 0))
-                                st.metric("ATR %", f"{atr_pct:.2f}%" if atr_pct > 0 else "—")
-
-                                obv_slope = safe_float(row.get(f"{prefix}obv_slope", 0))
-                                st.metric("OBV Slope", f"{obv_slope:.2f}" if obv_slope != 0 else "—")
+                            st.markdown(bars_html, unsafe_allow_html=True)
 
                     st.divider()
 
@@ -1789,81 +1989,31 @@ elif page == "📈 Analyse Technique V2":
 
                     st.divider()
 
-                    # ---- Row 4: Support / Resistance ----
-                    st.markdown("#### Support / Résistance")
+                    # ---- Row 4: Graphiques Chandelier (via yfinance-api) ----
+                    st.markdown("#### Graphiques de Prix")
 
-                    sr_col1, sr_col2 = st.columns(2)
+                    chart_col1, chart_col2 = st.columns(2)
 
-                    for sr_col, tf_label in [(sr_col1, "H1"), (sr_col2, "D1")]:
+                    for chart_col, tf_label, interval, lookback in [
+                        (chart_col1, "H1", "1h", 60),
+                        (chart_col2, "D1", "1d", 120),
+                    ]:
                         prefix = tf_label.lower() + "_"
-                        with sr_col:
-                            support = safe_float(row.get(f"{prefix}support", 0))
-                            resistance = safe_float(row.get(f"{prefix}resistance", 0))
-                            price = safe_float(row.get(f"{prefix}last_close", row.get("last_close", 0)))
-                            dist_sup = safe_float(row.get(f"{prefix}dist_sup_pct", 0))
-                            dist_res = safe_float(row.get(f"{prefix}dist_res_pct", 0))
+                        support = safe_float(row.get(f"{prefix}support", 0))
+                        resistance = safe_float(row.get(f"{prefix}resistance", 0))
 
-                            if support > 0 or resistance > 0:
-                                fig_sr = go.Figure()
-
-                                # Determine range
-                                all_vals = [v for v in [support, price, resistance] if v > 0]
-                                if not all_vals:
-                                    st.caption(f"Pas de niveaux S/R pour {tf_label}")
-                                    continue
-
-                                y_min = min(all_vals) * 0.98
-                                y_max = max(all_vals) * 1.02
-
-                                # Support line
-                                if support > 0:
-                                    fig_sr.add_trace(go.Scatter(
-                                        x=[0, 1], y=[support, support],
-                                        mode="lines+text",
-                                        name="Support",
-                                        line=dict(color="#28a745", width=2, dash="dash"),
-                                        text=[f"Support: {support:.2f} ({dist_sup:+.1f}%)", ""],
-                                        textposition="top left",
-                                        textfont=dict(color="#28a745"),
-                                    ))
-
-                                # Resistance line
-                                if resistance > 0:
-                                    fig_sr.add_trace(go.Scatter(
-                                        x=[0, 1], y=[resistance, resistance],
-                                        mode="lines+text",
-                                        name="Résistance",
-                                        line=dict(color="#dc3545", width=2, dash="dash"),
-                                        text=[f"Résistance: {resistance:.2f} ({dist_res:+.1f}%)", ""],
-                                        textposition="bottom left",
-                                        textfont=dict(color="#dc3545"),
-                                    ))
-
-                                # Current price marker
-                                if price > 0:
-                                    fig_sr.add_trace(go.Scatter(
-                                        x=[0.5], y=[price],
-                                        mode="markers+text",
-                                        name="Prix actuel",
-                                        marker=dict(color="#ffc107", size=14, symbol="diamond"),
-                                        text=[f"Prix: {price:.2f}"],
-                                        textposition="top center",
-                                        textfont=dict(color="#ffc107"),
-                                    ))
-
-                                fig_sr.update_layout(
-                                    title=f"S/R {tf_label}",
-                                    height=250,
-                                    showlegend=False,
-                                    xaxis=dict(showticklabels=False, showgrid=False, range=[-0.1, 1.1]),
-                                    yaxis=dict(range=[y_min, y_max]),
-                                    margin=dict(t=30, b=10, l=50, r=20),
-                                    paper_bgcolor="rgba(0,0,0,0)",
-                                    plot_bgcolor="rgba(0,0,0,0)",
+                        with chart_col:
+                            df_chart = fetch_yfinance_history(selected_symbol, interval=interval, lookback_days=lookback)
+                            if not df_chart.empty:
+                                fig_candle = _make_candlestick_chart(
+                                    df_chart,
+                                    title=f"{selected_symbol} — {tf_label} ({interval})",
+                                    support=support,
+                                    resistance=resistance,
                                 )
-                                st.plotly_chart(fig_sr, use_container_width=True, key=f"sr_{tf_label}_{selected_symbol}")
+                                st.plotly_chart(fig_candle, use_container_width=True, key=f"chart_{tf_label}_{selected_symbol}")
                             else:
-                                st.caption(f"Pas de niveaux S/R pour {tf_label}")
+                                st.caption(f"Données {tf_label} indisponibles (yfinance-api).")
 
                     st.divider()
 
