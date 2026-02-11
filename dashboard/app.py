@@ -851,7 +851,7 @@ def _make_candlestick_chart(df: pd.DataFrame, title: str, sma20: float = 0, sma5
 
     # Volume en barres secondaires
     if "volume" in df.columns and df["volume"].notna().any():
-        vol_colors = ["#28a74566" if c >= o else "#dc354566" for c, o in zip(df["close"], df["open"])]
+        vol_colors = ["rgba(40,167,69,0.4)" if c >= o else "rgba(220,53,69,0.4)" for c, o in zip(df["close"], df["open"])]
         fig.add_trace(go.Bar(
             x=df["time"], y=df["volume"], name="Volume",
             marker_color=vol_colors, opacity=0.4, yaxis="y2",
