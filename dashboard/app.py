@@ -1,8 +1,10 @@
 import json
 import os
 import re
+import time
 from datetime import datetime, timedelta
 
+import duckdb
 import gspread
 import pandas as pd
 import plotly.express as px
@@ -18,6 +20,7 @@ st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="�
 
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
+DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
 
 # ============================================================
 # CSS PERSONNALISE
@@ -49,6 +52,24 @@ st.markdown(
     .badge-risk-off { background-color: #dc3545; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
     .badge-risk-on { background-color: #28a745; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
     .badge-neutral { background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
+    .badge-buy { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-sell { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-neutral-v2 { background-color: #6c757d; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-approve { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-reject { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-watch { background-color: #fd7e14; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-running { background-color: #0d6efd; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-success { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-partial { background-color: #fd7e14; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .badge-failed { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+    .v2-card {
+        background-color: #1e1e2e;
+        border: 1px solid #333;
+        border-radius: 8px;
+        padding: 16px;
+        margin-bottom: 12px;
+    }
+    .v2-card h4 { margin-top: 0; color: #ccc; }
 </style>
 """,
     unsafe_allow_html=True,
@@ -367,7 +388,7 @@ def display_wrapped_table(
 
 
 # ============================================================
-# LOAD DATA
+# LOAD DATA - Google Sheets
 # ============================================================
 
 
@@ -471,25 +492,221 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 
 # ============================================================
+# LOAD DATA - DuckDB (AG2-V2)
+# ============================================================
+
+
+@st.cache_data(ttl=30)
+def load_duckdb_data() -> dict[str, pd.DataFrame]:
+    """Charge les donnees depuis la base DuckDB AG2-V2.
+
+    Retourne un dict avec les cles: df_signals, df_runs, df_signals_all.
+    En cas d'indisponibilite, retourne un dict vide sans crash.
+    """
+    result = {}
+
+    if not os.path.exists(DUCKDB_PATH):
+        return result
+
+    max_retries = 3
+    delay = 0.5
+    conn = None
+
+    for attempt in range(max_retries):
+        try:
+            conn = duckdb.connect(DUCKDB_PATH, read_only=True)
+            break
+        except duckdb.IOException:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+            else:
+                return result
+        except Exception:
+            return result
+
+    if conn is None:
+        return result
+
+    try:
+        # df_signals: latest signal per symbol (most recent workflow_date)
+        try:
+            result["df_signals"] = conn.execute("""
+                SELECT ts.*
+                FROM technical_signals ts
+                INNER JOIN (
+                    SELECT symbol, MAX(workflow_date) AS max_date
+                    FROM technical_signals
+                    GROUP BY symbol
+                ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date
+                ORDER BY ts.symbol
+            """).fetchdf()
+        except Exception:
+            result["df_signals"] = pd.DataFrame()
+
+        # df_runs: run log
+        try:
+            result["df_runs"] = conn.execute("""
+                SELECT * FROM run_log ORDER BY started_at DESC
+            """).fetchdf()
+        except Exception:
+            result["df_runs"] = pd.DataFrame()
+
+        # df_signals_all: all signals for history
+        try:
+            result["df_signals_all"] = conn.execute("""
+                SELECT * FROM technical_signals ORDER BY workflow_date DESC, symbol
+            """).fetchdf()
+        except Exception:
+            result["df_signals_all"] = pd.DataFrame()
+
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    return result
+
+
+# ============================================================
+# HELPERS V2 - Analyse Technique V2 page
+# ============================================================
+
+
+def _action_badge(action: object) -> str:
+    """Retourne un badge HTML colore selon l'action (BUY/SELL/NEUTRAL)."""
+    s = str(action).strip().upper() if action else ""
+    if s == "BUY":
+        return '<span class="badge-buy">BUY</span>'
+    elif s == "SELL":
+        return '<span class="badge-sell">SELL</span>'
+    elif s == "NEUTRAL":
+        return '<span class="badge-neutral-v2">NEUTRAL</span>'
+    return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
+
+
+def _ai_badge(decision: object) -> str:
+    """Retourne un badge HTML colore selon la decision IA."""
+    s = str(decision).strip().upper() if decision else ""
+    if s == "APPROVE":
+        return '<span class="badge-approve">APPROVE</span>'
+    elif s == "REJECT":
+        return '<span class="badge-reject">REJECT</span>'
+    elif s == "WATCH":
+        return '<span class="badge-watch">WATCH</span>'
+    return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
+
+
+def _status_badge(status: object) -> str:
+    """Retourne un badge HTML colore selon le statut du run."""
+    s = str(status).strip().upper() if status else ""
+    if s == "SUCCESS":
+        return '<span class="badge-success">SUCCESS</span>'
+    elif s == "PARTIAL":
+        return '<span class="badge-partial">PARTIAL</span>'
+    elif s == "FAILED":
+        return '<span class="badge-failed">FAILED</span>'
+    elif s == "RUNNING":
+        return '<span class="badge-running">RUNNING</span>'
+    return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
+
+
+def _make_rsi_gauge(rsi_val: float, title: str = "RSI") -> go.Figure:
+    """Cree une jauge Plotly pour le RSI avec zones colorees."""
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=rsi_val,
+            title={"text": title, "font": {"size": 14, "color": "#ccc"}},
+            number={"font": {"size": 24, "color": "#fff"}},
+            gauge={
+                "axis": {"range": [0, 100], "tickcolor": "#666"},
+                "bar": {"color": "#ffffff", "thickness": 0.3},
+                "steps": [
+                    {"range": [0, 30], "color": "#28a745"},
+                    {"range": [30, 70], "color": "#444"},
+                    {"range": [70, 100], "color": "#dc3545"},
+                ],
+                "threshold": {
+                    "line": {"color": "#ffc107", "width": 2},
+                    "thickness": 0.8,
+                    "value": rsi_val,
+                },
+            },
+        )
+    )
+    fig.update_layout(
+        height=200,
+        margin=dict(t=40, b=10, l=30, r=30),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+    )
+    return fig
+
+
+def _sma_alignment_text(price: float, sma20: float, sma50: float, sma200: float) -> str:
+    """Genere le texte d'alignement SMA avec checkmarks/crosses."""
+    if price == 0:
+        return "Donnees indisponibles"
+
+    parts = [f"Prix({price:.2f})"]
+
+    sma_list = [("SMA20", sma20), ("SMA50", sma50), ("SMA200", sma200)]
+    all_above = True
+
+    for name, val in sma_list:
+        if val > 0:
+            if price > val:
+                parts.append(f"> {name}({val:.2f}) ✅")
+            else:
+                parts.append(f"< {name}({val:.2f}) ❌")
+                all_above = False
+        else:
+            parts.append(f"{name}(N/A)")
+            all_above = False
+
+    alignment = " ".join(parts)
+
+    if all_above and sma20 > 0 and sma50 > 0 and sma200 > 0:
+        if price > sma20 > sma50 > sma200:
+            alignment += " → **BULLISH ALIGNMENT**"
+        else:
+            alignment += " → BULLISH (prix au-dessus)"
+    elif price > 0 and sma200 > 0 and price < sma200:
+        alignment += " → **BEARISH**"
+    else:
+        alignment += " → MIXTE"
+
+    return alignment
+
+
+# ============================================================
 # MAIN APP
 # ============================================================
 
 st.sidebar.title("🤖 TradingSim AI")
-page = st.sidebar.radio("Navigation", ["📊 Dashboard Trading", "🛠️ System Health (Monitoring)"])
+page = st.sidebar.radio(
+    "Navigation",
+    ["📊 Dashboard Trading", "🛠️ System Health (Monitoring)", "📈 Analyse Technique V2"],
+)
 
 data_dict = load_data()
 if not data_dict:
-    st.stop()
+    st.warning("Donnees Google Sheets indisponibles. Seule la page Analyse Technique V2 peut fonctionner.")
+
+# Load DuckDB data (non-blocking)
+duckdb_data = load_duckdb_data()
 
 # ------------------------------------------------------------
 # PRE-CALCULS (ROBUSTES)
 # ------------------------------------------------------------
 
-df_univ = data_dict.get("Universe", pd.DataFrame())
-df_port = enrich_df_with_name(data_dict.get("Portefeuille", pd.DataFrame()), df_univ)
-df_perf = data_dict.get("Performance", pd.DataFrame())
-df_trans = enrich_df_with_name(data_dict.get("Transactions", pd.DataFrame()), df_univ)
-df_prices = data_dict.get("Market_Prices", pd.DataFrame())
+df_univ = data_dict.get("Universe", pd.DataFrame()) if data_dict else pd.DataFrame()
+df_port = enrich_df_with_name(data_dict.get("Portefeuille", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
+df_perf = data_dict.get("Performance", pd.DataFrame()) if data_dict else pd.DataFrame()
+df_trans = enrich_df_with_name(data_dict.get("Transactions", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
+df_prices = data_dict.get("Market_Prices", pd.DataFrame()) if data_dict else pd.DataFrame()
 
 total_val = 0.0
 cash = 0.0
@@ -539,10 +756,15 @@ cash_pct = (cash / total_val) * 100 if total_val else 0
 # ============================================================
 
 if page == "📊 Dashboard Trading":
+    if not data_dict:
+        st.error("Donnees Google Sheets requises pour cette page.")
+        st.stop()
+
     st.title("🤖 AI Trading Executor Dashboard")
 
     if st.button("🔄 Rafraîchir"):
         load_data.clear()
+        load_duckdb_data.clear()
         st.rerun()
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
@@ -879,10 +1101,15 @@ if page == "📊 Dashboard Trading":
 # ============================================================
 
 elif page == "🛠️ System Health (Monitoring)":
+    if not data_dict:
+        st.error("Donnees Google Sheets requises pour cette page.")
+        st.stop()
+
     st.title("🛠️ Tour de Contrôle")
 
     if st.button("🔄 Rafraîchir"):
         load_data.clear()
+        load_duckdb_data.clear()
         st.rerun()
 
     df_univ2 = data_dict.get("Universe", pd.DataFrame())
@@ -1086,7 +1313,7 @@ elif page == "🛠️ System Health (Monitoring)":
             monitor_df = monitor_df.rename(columns=ren_cons)
 
     # ============================================================
-    # 5) MERGE TECH (Split H1/D1)
+    # 5) MERGE TECH (Split H1/D1) - Google Sheets + DuckDB complement
     # ============================================================
     if df_tech_hist is not None and not df_tech_hist.empty:
         df_tech_hist = norm_symbol(df_tech_hist, "symbol")
@@ -1149,6 +1376,42 @@ elif page == "🛠️ System Health (Monitoring)":
 
         if ren_t:
             monitor_df = monitor_df.rename(columns=ren_t)
+
+    # DuckDB complement for tech data
+    duck_signals = duckdb_data.get("df_signals", pd.DataFrame())
+    if duck_signals is not None and not duck_signals.empty:
+        duck_tech = duck_signals.copy()
+        if "symbol" in duck_tech.columns:
+            duck_tech = norm_symbol(duck_tech, "symbol")
+
+            if "workflow_date" in duck_tech.columns:
+                duck_tech["workflow_date"] = pd.to_datetime(duck_tech["workflow_date"], errors="coerce", utc=True)
+
+            # For symbols missing tech data from Sheets, fill from DuckDB
+            for _, drow in duck_tech.iterrows():
+                sk = drow.get("symbol_key", "")
+                if sk and sk in monitor_df["symbol_key"].values:
+                    idx = monitor_df.index[monitor_df["symbol_key"] == sk]
+                    if not idx.empty:
+                        i = idx[0]
+                        # Fill Last_H1_Date / Last_D1_Date if missing
+                        wf_date = drow.get("workflow_date")
+                        if pd.isna(monitor_df.at[i, "Last_H1_Date"]) if "Last_H1_Date" in monitor_df.columns else True:
+                            if "Last_H1_Date" not in monitor_df.columns:
+                                monitor_df["Last_H1_Date"] = pd.NaT
+                            monitor_df.at[i, "Last_H1_Date"] = wf_date
+                        if pd.isna(monitor_df.at[i, "Last_D1_Date"]) if "Last_D1_Date" in monitor_df.columns else True:
+                            if "Last_D1_Date" not in monitor_df.columns:
+                                monitor_df["Last_D1_Date"] = pd.NaT
+                            monitor_df.at[i, "Last_D1_Date"] = wf_date
+                        # Fill signal if missing
+                        if "signal" not in monitor_df.columns:
+                            monitor_df["signal"] = ""
+                        cur_sig = str(monitor_df.at[i, "signal"]).strip()
+                        if not cur_sig or cur_sig.lower() in ("", "nan", "none"):
+                            d1_act = str(drow.get("d1_action", "")).strip()
+                            if d1_act:
+                                monitor_df.at[i, "signal"] = d1_act
 
     # ============================================================
     # Remplissages par défaut
@@ -1246,24 +1509,24 @@ elif page == "🛠️ System Health (Monitoring)":
         score = 50
         # Potentiel News (Impact x3) -> +/- 30 pts max
         score += safe_float(row.get("News_Score", 0)) * 3
-        
+
         # Bonus/Malus Funda (Confiance extrême)
         conf = safe_float(row.get("Funda_Conf", 0))
         if conf > 80: score += 10
         elif conf < 30: score -= 10
-        
+
         # Signal Technique (Le juge de paix à court terme)
         sig = str(row.get("signal", "")).upper()
         if "BUY" in sig: score += 15
         elif "SELL" in sig: score -= 15
-        
+
         return min(100, max(0, score))
 
     def calc_robust(row):
         # Base : La qualité fondamentale (0-100)
         # CORRECTION : On utilise le score plein (facteur 1.0) pour atteindre 100
         score = safe_float(row.get("Funda_Conf", 50))
-        
+
         # Malus d'Obsolescence (L'incertitude tue la robustesse)
         # 1. Funda > 3 mois
         if row.get("Age_F", 999) > 90:
@@ -1271,12 +1534,12 @@ elif page == "🛠️ System Health (Monitoring)":
         # 2. Tech > 1 semaine (Tendance D1 perdue)
         if row.get("Age_T", 999) > 7:
             score -= 10
-            
+
         return min(100, max(0, score))
 
     mat["Attractivité"] = mat.apply(calc_attract, axis=1)
     mat["Robustesse"] = mat.apply(calc_robust, axis=1)
-    
+
     # La taille de la bulle dépend de la confiance fondamentale
     mat["Taille"] = mat["Funda_Conf"].apply(lambda x: max(15, safe_float(x)))
 
@@ -1284,23 +1547,23 @@ elif page == "🛠️ System Health (Monitoring)":
         mat["sector"] = "N/A"
 
     fig_mat = px.scatter(
-        mat, x="Robustesse", y="Attractivité", 
+        mat, x="Robustesse", y="Attractivité",
         size="Taille", color="sector",
         hover_name="name" if "name" in mat.columns else None, text="symbol",
         title="Carte des Opportunités (Risk/Reward)",
         labels={"Robustesse": "🛡️ Robustesse (Qualité & Fraîcheur)", "Attractivité": "🚀 Attractivité (Momentum & News)"}
     )
-    
+
     # Quadrants
     fig_mat.add_hline(y=50, line_dash="dot", line_color="grey")
     fig_mat.add_vline(x=50, line_dash="dot", line_color="grey")
-    
+
     # Annotations Zones
     fig_mat.add_annotation(x=95, y=95, text="🌟 TOP", showarrow=False, font=dict(color="green", size=14))
     fig_mat.add_annotation(x=5, y=95, text="🎰 SPÉCULATIF", showarrow=False, font=dict(color="orange"))
     fig_mat.add_annotation(x=95, y=5, text="🐢 STABLE", showarrow=False, font=dict(color="blue"))
     fig_mat.add_annotation(x=5, y=5, text="🗑️ FLOP", showarrow=False, font=dict(color="red"))
-    
+
     fig_mat.update_traces(textposition="top center")
     fig_mat.update_layout(height=650)
     st.plotly_chart(fig_mat, use_container_width=True)
@@ -1312,3 +1575,375 @@ elif page == "🛠️ System Health (Monitoring)":
     st.subheader("Détail Synchronisation")
     cols_sync = [c for c in ["symbol", "name", "News_Stat", "Funda_Stat", "Tech_Stat"] if c in monitor_df.columns]
     st.dataframe(monitor_df[cols_sync], use_container_width=True, hide_index=True)
+
+
+# ============================================================
+# PAGE 3: ANALYSE TECHNIQUE V2
+# ============================================================
+
+elif page == "📈 Analyse Technique V2":
+    st.title("📈 Analyse Technique V2 (AG2)")
+
+    if st.button("🔄 Rafraîchir", key="refresh_v2"):
+        load_data.clear()
+        load_duckdb_data.clear()
+        st.rerun()
+
+    if not duckdb_data:
+        st.info(
+            "Base DuckDB non disponible. Vérifiez que le fichier existe "
+            f"à l'emplacement : `{DUCKDB_PATH}`"
+        )
+        st.stop()
+
+    df_signals = duckdb_data.get("df_signals", pd.DataFrame())
+    df_runs = duckdb_data.get("df_runs", pd.DataFrame())
+    df_signals_all = duckdb_data.get("df_signals_all", pd.DataFrame())
+
+    if df_signals is None or df_signals.empty:
+        st.warning("Aucun signal technique V2 disponible dans DuckDB.")
+        st.stop()
+
+    # Enrich with universe names if available
+    if df_univ is not None and not df_univ.empty:
+        df_signals = enrich_df_with_name(df_signals, df_univ)
+
+    tab_overview, tab_detail, tab_runs = st.tabs(
+        ["Vue d'ensemble", "Vue détaillée", "Historique Runs"]
+    )
+
+    # ================================================================
+    # TAB 1: VUE D'ENSEMBLE
+    # ================================================================
+    with tab_overview:
+        # KPI row
+        total_symbols = len(df_signals)
+        buy_count = int((df_signals.get("d1_action", pd.Series(dtype=str)).astype(str).str.upper() == "BUY").sum())
+        sell_count = int((df_signals.get("d1_action", pd.Series(dtype=str)).astype(str).str.upper() == "SELL").sum())
+        neutral_count = total_symbols - buy_count - sell_count
+        ai_calls = int(df_signals.get("call_ai", pd.Series(dtype=object)).apply(lambda x: str(x).strip().upper() in ("TRUE", "1", "OUI", "YES")).sum()) if "call_ai" in df_signals.columns else 0
+        ai_approvals = int(df_signals.get("ai_decision", pd.Series(dtype=str)).astype(str).str.upper().eq("APPROVE").sum()) if "ai_decision" in df_signals.columns else 0
+
+        kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
+        kc1.metric("Symboles analysés", total_symbols)
+        kc2.metric("BUY", buy_count)
+        kc3.metric("SELL", sell_count)
+        kc4.metric("NEUTRAL", neutral_count)
+        kc5.metric("Appels IA", ai_calls)
+        kc6.metric("IA Approuvés", ai_approvals)
+
+        st.divider()
+
+        # Build styled overview dataframe
+        overview_cols = {
+            "symbol": "Symbol",
+        }
+
+        df_ov = df_signals.copy()
+
+        # Ensure columns exist with defaults
+        for col_name in [
+            "name", "sector", "last_close",
+            "h1_action", "h1_score", "h1_rsi14",
+            "d1_action", "d1_score", "d1_rsi14",
+            "filter_reason", "ai_decision", "ai_quality",
+            "workflow_date",
+        ]:
+            if col_name not in df_ov.columns:
+                df_ov[col_name] = ""
+
+        # Format for display
+        df_display = pd.DataFrame()
+        df_display["Symbol"] = df_ov["symbol"]
+        df_display["Name"] = df_ov["name"].fillna("")
+        df_display["Sector"] = df_ov["sector"].fillna("")
+        df_display["Close"] = df_ov["last_close"].apply(lambda x: f"{safe_float(x):.2f}" if safe_float(x) > 0 else "—")
+        df_display["H1 Action"] = df_ov["h1_action"].apply(_action_badge)
+        df_display["H1 Score"] = df_ov["h1_score"].apply(lambda x: f"{safe_float(x):.0f}" if safe_float(x) != 0 else "—")
+        df_display["H1 RSI"] = df_ov["h1_rsi14"].apply(lambda x: f"{safe_float(x):.1f}" if safe_float(x) > 0 else "—")
+        df_display["D1 Action"] = df_ov["d1_action"].apply(_action_badge)
+        df_display["D1 Score"] = df_ov["d1_score"].apply(lambda x: f"{safe_float(x):.0f}" if safe_float(x) != 0 else "—")
+        df_display["D1 RSI"] = df_ov["d1_rsi14"].apply(lambda x: f"{safe_float(x):.1f}" if safe_float(x) > 0 else "—")
+        df_display["Filtre"] = df_ov["filter_reason"].fillna("—")
+        df_display["IA"] = df_ov["ai_decision"].apply(_ai_badge)
+        df_display["Qualité IA"] = df_ov["ai_quality"].apply(lambda x: f"{safe_float(x):.0f}/10" if safe_float(x) > 0 else "—")
+        df_display["Date"] = df_ov["workflow_date"].apply(lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() not in ("", "nan", "NaT") else "—")
+
+        # Apply RSI coloring via Styler on a numeric version for conditional formatting
+        # Since we use HTML badges, we display via HTML table
+        display_wrapped_table(df_display, "v2_overview")
+
+    # ================================================================
+    # TAB 2: VUE DETAILLEE
+    # ================================================================
+    with tab_detail:
+        symbol_list = sorted(df_signals["symbol"].dropna().unique().tolist())
+
+        if not symbol_list:
+            st.warning("Aucun symbole disponible.")
+        else:
+            selected_symbol = st.selectbox(
+                "Sélectionner un symbole :",
+                symbol_list,
+                key="v2_symbol_select",
+            )
+
+            if selected_symbol:
+                row_mask = df_signals["symbol"] == selected_symbol
+                if row_mask.sum() == 0:
+                    st.warning(f"Aucune donnée pour {selected_symbol}")
+                else:
+                    row = df_signals[row_mask].iloc[0]
+
+                    # ---- Row 1: KPI Cards ----
+                    st.subheader(f"📊 {selected_symbol} — {row.get('name', '')}")
+
+                    mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+
+                    close_price = safe_float(row.get("last_close", 0))
+                    mc1.metric("Close", f"{close_price:.2f} €" if close_price > 0 else "—")
+
+                    h1_act = str(row.get("h1_action", "")).upper()
+                    h1_sc = safe_float(row.get("h1_score", 0))
+                    mc2.metric("H1", f"{h1_act}", delta=f"Score: {h1_sc:.0f}")
+
+                    d1_act = str(row.get("d1_action", "")).upper()
+                    d1_sc = safe_float(row.get("d1_score", 0))
+                    mc3.metric("D1", f"{d1_act}", delta=f"Score: {d1_sc:.0f}")
+
+                    ai_dec = str(row.get("ai_decision", "—"))
+                    mc4.metric("Décision IA", ai_dec if ai_dec.strip() else "—")
+
+                    ai_qual = safe_float(row.get("ai_quality", 0))
+                    mc5.metric("Qualité IA", f"{ai_qual:.0f}/10" if ai_qual > 0 else "—")
+
+                    rr = safe_float(row.get("ai_rr_theoretical", 0))
+                    mc6.metric("R/R Théorique", f"{rr:.2f}" if rr > 0 else "—")
+
+                    st.divider()
+
+                    # ---- Row 2: Indicators H1 | D1 ----
+                    col_h1, col_d1 = st.columns(2)
+
+                    for tf_col, tf_label in [(col_h1, "H1"), (col_d1, "D1")]:
+                        prefix = tf_label.lower() + "_"
+                        with tf_col:
+                            st.markdown(f"#### Indicateurs {tf_label}")
+
+                            # RSI Gauge
+                            rsi_val = safe_float(row.get(f"{prefix}rsi14", 0))
+                            if rsi_val > 0:
+                                fig_rsi = _make_rsi_gauge(rsi_val, f"RSI 14 ({tf_label})")
+                                st.plotly_chart(fig_rsi, use_container_width=True, key=f"rsi_{tf_label}_{selected_symbol}")
+
+                            # Key metrics
+                            m1, m2 = st.columns(2)
+                            with m1:
+                                macd_hist = safe_float(row.get(f"{prefix}macd_hist", 0))
+                                st.metric("MACD Hist", f"{macd_hist:.4f}" if macd_hist != 0 else "—")
+
+                                stoch_k = safe_float(row.get(f"{prefix}stoch_k", 0))
+                                st.metric("Stochastic K", f"{stoch_k:.1f}" if stoch_k > 0 else "—")
+
+                                adx_val = safe_float(row.get(f"{prefix}adx", 0))
+                                st.metric("ADX", f"{adx_val:.1f}" if adx_val > 0 else "—")
+
+                                bb_width = safe_float(row.get(f"{prefix}bb_width", 0))
+                                st.metric("BB Width", f"{bb_width:.4f}" if bb_width > 0 else "—")
+
+                            with m2:
+                                vol = safe_float(row.get(f"{prefix}volatility", 0))
+                                st.metric("Volatilité", f"{vol:.4f}" if vol > 0 else "—")
+
+                                stoch_d = safe_float(row.get(f"{prefix}stoch_d", 0))
+                                st.metric("Stochastic D", f"{stoch_d:.1f}" if stoch_d > 0 else "—")
+
+                                atr_pct = safe_float(row.get(f"{prefix}atr_pct", 0))
+                                st.metric("ATR %", f"{atr_pct:.2f}%" if atr_pct > 0 else "—")
+
+                                obv_slope = safe_float(row.get(f"{prefix}obv_slope", 0))
+                                st.metric("OBV Slope", f"{obv_slope:.2f}" if obv_slope != 0 else "—")
+
+                    st.divider()
+
+                    # ---- Row 3: SMA Alignment ----
+                    st.markdown("#### Alignement SMA")
+
+                    sma_col1, sma_col2 = st.columns(2)
+
+                    with sma_col1:
+                        st.markdown("**H1**")
+                        h1_close = safe_float(row.get("h1_last_close", row.get("last_close", 0)))
+                        h1_sma20 = safe_float(row.get("h1_sma20", 0))
+                        h1_sma50 = safe_float(row.get("h1_sma50", 0))
+                        h1_sma200 = safe_float(row.get("h1_sma200", 0))
+                        st.markdown(_sma_alignment_text(h1_close, h1_sma20, h1_sma50, h1_sma200))
+
+                    with sma_col2:
+                        st.markdown("**D1**")
+                        d1_close = safe_float(row.get("d1_last_close", row.get("last_close", 0)))
+                        d1_sma20 = safe_float(row.get("d1_sma20", 0))
+                        d1_sma50 = safe_float(row.get("d1_sma50", 0))
+                        d1_sma200 = safe_float(row.get("d1_sma200", 0))
+                        st.markdown(_sma_alignment_text(d1_close, d1_sma20, d1_sma50, d1_sma200))
+
+                    st.divider()
+
+                    # ---- Row 4: Support / Resistance ----
+                    st.markdown("#### Support / Résistance")
+
+                    sr_col1, sr_col2 = st.columns(2)
+
+                    for sr_col, tf_label in [(sr_col1, "H1"), (sr_col2, "D1")]:
+                        prefix = tf_label.lower() + "_"
+                        with sr_col:
+                            support = safe_float(row.get(f"{prefix}support", 0))
+                            resistance = safe_float(row.get(f"{prefix}resistance", 0))
+                            price = safe_float(row.get(f"{prefix}last_close", row.get("last_close", 0)))
+                            dist_sup = safe_float(row.get(f"{prefix}dist_sup_pct", 0))
+                            dist_res = safe_float(row.get(f"{prefix}dist_res_pct", 0))
+
+                            if support > 0 or resistance > 0:
+                                fig_sr = go.Figure()
+
+                                # Determine range
+                                all_vals = [v for v in [support, price, resistance] if v > 0]
+                                if not all_vals:
+                                    st.caption(f"Pas de niveaux S/R pour {tf_label}")
+                                    continue
+
+                                y_min = min(all_vals) * 0.98
+                                y_max = max(all_vals) * 1.02
+
+                                # Support line
+                                if support > 0:
+                                    fig_sr.add_trace(go.Scatter(
+                                        x=[0, 1], y=[support, support],
+                                        mode="lines+text",
+                                        name="Support",
+                                        line=dict(color="#28a745", width=2, dash="dash"),
+                                        text=[f"Support: {support:.2f} ({dist_sup:+.1f}%)", ""],
+                                        textposition="top left",
+                                        textfont=dict(color="#28a745"),
+                                    ))
+
+                                # Resistance line
+                                if resistance > 0:
+                                    fig_sr.add_trace(go.Scatter(
+                                        x=[0, 1], y=[resistance, resistance],
+                                        mode="lines+text",
+                                        name="Résistance",
+                                        line=dict(color="#dc3545", width=2, dash="dash"),
+                                        text=[f"Résistance: {resistance:.2f} ({dist_res:+.1f}%)", ""],
+                                        textposition="bottom left",
+                                        textfont=dict(color="#dc3545"),
+                                    ))
+
+                                # Current price marker
+                                if price > 0:
+                                    fig_sr.add_trace(go.Scatter(
+                                        x=[0.5], y=[price],
+                                        mode="markers+text",
+                                        name="Prix actuel",
+                                        marker=dict(color="#ffc107", size=14, symbol="diamond"),
+                                        text=[f"Prix: {price:.2f}"],
+                                        textposition="top center",
+                                        textfont=dict(color="#ffc107"),
+                                    ))
+
+                                fig_sr.update_layout(
+                                    title=f"S/R {tf_label}",
+                                    height=250,
+                                    showlegend=False,
+                                    xaxis=dict(showticklabels=False, showgrid=False, range=[-0.1, 1.1]),
+                                    yaxis=dict(range=[y_min, y_max]),
+                                    margin=dict(t=30, b=10, l=50, r=20),
+                                    paper_bgcolor="rgba(0,0,0,0)",
+                                    plot_bgcolor="rgba(0,0,0,0)",
+                                )
+                                st.plotly_chart(fig_sr, use_container_width=True, key=f"sr_{tf_label}_{selected_symbol}")
+                            else:
+                                st.caption(f"Pas de niveaux S/R pour {tf_label}")
+
+                    st.divider()
+
+                    # ---- Row 5: AI Analysis Card ----
+                    ai_decision = str(row.get("ai_decision", "")).strip()
+
+                    if ai_decision and ai_decision.lower() not in ("", "nan", "none"):
+                        st.markdown("#### Analyse IA")
+
+                        with st.container(border=True):
+                            ai_c1, ai_c2, ai_c3 = st.columns(3)
+
+                            with ai_c1:
+                                st.markdown(f"**Décision :** {_ai_badge(ai_decision)}", unsafe_allow_html=True)
+                                st.markdown(f"**Qualité :** {safe_float(row.get('ai_quality', 0)):.0f}/10")
+                                st.markdown(f"**Biais SMA200 :** {row.get('ai_bias_sma200', '—')}")
+                                st.markdown(f"**Régime D1 :** {row.get('ai_regime_d1', '—')}")
+
+                            with ai_c2:
+                                st.markdown(f"**Alignement :** {row.get('ai_alignment', '—')}")
+                                st.markdown(f"**Pattern :** {row.get('ai_chart_pattern', '—')}")
+                                st.markdown(f"**Stop Loss :** {row.get('ai_stop_loss', '—')} ({row.get('ai_stop_basis', '—')})")
+                                st.markdown(f"**R/R Théorique :** {safe_float(row.get('ai_rr_theoretical', 0)):.2f}")
+
+                            with ai_c3:
+                                ai_missing = str(row.get("ai_missing", "")).strip()
+                                ai_anomalies = str(row.get("ai_anomalies", "")).strip()
+                                if ai_missing and ai_missing.lower() not in ("nan", "none", ""):
+                                    st.markdown(f"**Données manquantes :** {ai_missing}")
+                                if ai_anomalies and ai_anomalies.lower() not in ("nan", "none", ""):
+                                    st.markdown(f"**Anomalies :** {ai_anomalies}")
+
+                            # Reasoning (full width)
+                            ai_reasoning = str(row.get("ai_reasoning", "")).strip()
+                            if ai_reasoning and ai_reasoning.lower() not in ("nan", "none", ""):
+                                st.markdown("---")
+                                st.markdown(f"**Raisonnement IA :**")
+                                st.markdown(ai_reasoning)
+                    else:
+                        st.info("Pas d'analyse IA pour ce symbole (filtre non passé ou IA non appelée).")
+
+    # ================================================================
+    # TAB 3: HISTORIQUE RUNS
+    # ================================================================
+    with tab_runs:
+        if df_runs is None or df_runs.empty:
+            st.info("Aucun historique de runs disponible.")
+        else:
+            st.subheader("Historique des exécutions AG2-V2")
+
+            df_runs_display = df_runs.copy()
+
+            # Format status badges
+            if "status" in df_runs_display.columns:
+                df_runs_display["Statut"] = df_runs_display["status"].apply(_status_badge)
+            else:
+                df_runs_display["Statut"] = "—"
+
+            display_cols = []
+            col_mapping = {
+                "run_id": "Run ID",
+                "started_at": "Démarré",
+                "finished_at": "Terminé",
+                "Statut": "Statut",
+                "symbols_ok": "Symboles OK",
+                "symbols_error": "Symboles Erreur",
+                "ai_calls": "Appels IA",
+                "vectors_written": "Vecteurs écrits",
+            }
+
+            for src, dst in col_mapping.items():
+                if src in df_runs_display.columns:
+                    display_cols.append(src)
+                elif src == "Statut":
+                    display_cols.append(src)
+
+            df_runs_show = df_runs_display[[c for c in display_cols if c in df_runs_display.columns]].copy()
+
+            # Rename for display
+            rename_map = {k: v for k, v in col_mapping.items() if k in df_runs_show.columns}
+            df_runs_show = df_runs_show.rename(columns=rename_map)
+
+            display_wrapped_table(df_runs_show, "v2_runs")
