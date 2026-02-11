@@ -17,7 +17,7 @@
         -1248,
         112
       ],
-      "id": "c0a177bb-317a-4e9e-b03e-324f84b0f78d",
+      "id": "906ad0d9-cc37-44bb-94d4-cb41df158422",
       "name": "Cron Trigger"
     },
     {
@@ -28,7 +28,7 @@
         -1248,
         304
       ],
-      "id": "96dab5c7-16b1-4785-84ed-d4827577f1e7",
+      "id": "332adb5b-4116-48a0-b628-9db36aee7ee9",
       "name": "Manual Trigger"
     },
     {
@@ -63,7 +63,7 @@
         -1008,
         208
       ],
-      "id": "d9b915dc-1166-41fb-8652-4b21cb18a2ad",
+      "id": "61663e31-65cb-4409-96e0-314fee2c5dee",
       "name": "Read Universe",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -82,7 +82,7 @@
         -752,
         208
       ],
-      "id": "f9f4efa9-9fc7-46b5-9003-3501beb3f570",
+      "id": "aaf89bd5-04e8-4b74-86b7-f1958984952d",
       "name": "Init Config + Batch"
     },
     {
@@ -96,7 +96,7 @@
         -496,
         208
       ],
-      "id": "d97313df-a775-42ba-ac4f-058a79fa5185",
+      "id": "56baaf93-73ed-479b-8912-b8b1abc0f2a9",
       "name": "DuckDB Init Schema"
     },
     {
@@ -109,7 +109,7 @@
         -272,
         208
       ],
-      "id": "c1421728-1144-455d-b165-0d373b8c6ba1",
+      "id": "e5c7216b-b0a9-48a6-8288-50fb36418c10",
       "name": "Loop Symbols",
       "onError": "continueRegularOutput"
     },
@@ -124,8 +124,1118 @@
         -16,
         0
       ],
-      "id": "7fda4f36-d549-46ca-8d0a-412bc52395e4",
+      "id": "5368e687-ec97-4c3f-92c0-59a55d08ff42",
       "name": "Finalize Run"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"\nNode 11 — Sync DuckDB → Google Sheets format.\nReads latest signals from DuckDB and outputs items matching\nthe expected column format of \"AG2 - étape 1 - sortie\" sheet.\nRuns AFTER Finalize (node 10) — one batch for all symbols.\n\"\"\"\nimport duckdb, gc, json, time\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag2_v2.duckdb\"\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, base_delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except duckdb.IOException:\n            if attempt < retries - 1:\n                time.sleep(base_delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n# ── Column mapping: DuckDB snake_case → Sheets PascalCase ──\n# Existing columns (85 from the old AG2 sheet)\nFIELD_MAP = {\n    # Identity\n    \"symbol\": \"Symbol\",\n    \"run_id\": \"Run_ID\",\n    \"workflow_date\": \"Workflow_Date\",\n    # H1 signal\n    \"h1_action\": \"H1_Action\",\n    \"h1_score\": \"H1_Score\",\n    \"h1_confidence\": \"H1_Confidence\",\n    \"h1_rationale\": \"H1_Rationale\",\n    \"h1_date\": \"H1_Date\",\n    \"h1_source\": \"H1_Source\",\n    \"h1_status\": \"H1_Status\",\n    \"h1_warnings\": \"H1_Warnings\",\n    # D1 signal\n    \"d1_action\": \"D1_Action\",\n    \"d1_score\": \"D1_Score\",\n    \"d1_confidence\": \"D1_Confidence\",\n    \"d1_rationale\": \"D1_Rationale\",\n    \"d1_date\": \"D1_Date\",\n    \"d1_source\": \"D1_Source\",\n    \"d1_status\": \"D1_Status\",\n    \"d1_warnings\": \"D1_Warnings\",\n    # Price\n    \"last_close\": \"Last_Close\",\n    # Signal processing\n    \"filter_reason\": \"Reason\",\n    \"pass_ai\": \"Pass_AI\",\n    \"pass_pm\": \"Pass_PM\",\n    \"sig_hash\": \"Sig_JSON\",\n    \"vector_status\": \"vector_status\",\n    \"vectorized_at\": \"vectorizedAt\",\n    # H1 indicators\n    \"h1_sma20\": \"H1_SMA20\",\n    \"h1_sma50\": \"H1_SMA50\",\n    \"h1_sma200\": \"H1_SMA200\",\n    \"h1_ema12\": \"H1_EMA12\",\n    \"h1_ema26\": \"H1_EMA26\",\n    \"h1_macd\": \"H1_MACD\",\n    \"h1_macd_signal\": \"H1_MACD_Signal\",\n    \"h1_macd_hist\": \"H1_MACD_Hist\",\n    \"h1_rsi14\": \"H1_RSI14\",\n    \"h1_volatility\": \"H1_Volatility_Ann\",\n    \"h1_last_close\": \"H1_Last_Close_Ind\",\n    \"h1_atr\": \"H1_ATR_Value\",\n    \"h1_atr_pct\": \"H1_ATR_Pct\",\n    \"h1_resistance\": \"H1_Resistance_50\",\n    \"h1_dist_res_pct\": \"H1_Dist_To_Res_Pct_50\",\n    # D1 indicators\n    \"d1_sma20\": \"D1_SMA20\",\n    \"d1_sma50\": \"D1_SMA50\",\n    \"d1_sma200\": \"D1_SMA200\",\n    \"d1_ema12\": \"D1_EMA12\",\n    \"d1_ema26\": \"D1_EMA26\",\n    \"d1_macd\": \"D1_MACD\",\n    \"d1_macd_signal\": \"D1_MACD_Signal\",\n    \"d1_macd_hist\": \"D1_MACD_Hist\",\n    \"d1_rsi14\": \"D1_RSI14\",\n    \"d1_volatility\": \"D1_Volatility_Ann\",\n    \"d1_last_close\": \"D1_Last_Close_Ind\",\n    \"d1_atr\": \"D1_ATR_Value\",\n    \"d1_atr_pct\": \"D1_ATR_Pct\",\n    \"d1_resistance\": \"D1_Resistance_50\",\n    \"d1_dist_res_pct\": \"D1_Dist_To_Res_Pct_50\",\n    # AI fields\n    \"ai_decision\": \"AI_Decision\",\n    \"ai_validated\": \"AI_Validated\",\n    \"ai_quality\": \"AI_QualityScore\",\n    \"ai_reasoning\": \"AI_Reasoning\",\n    \"ai_bias_sma200\": \"AI_Bias_SMA200\",\n    \"ai_regime_d1\": \"AI_Regime_D1\",\n    \"ai_alignment\": \"AI_Alignment\",\n    \"ai_stop_loss\": \"AI_StopLoss\",\n    \"ai_stop_basis\": \"AI_StopLoss_Basis\",\n    \"ai_missing\": \"AI_MissingFields\",\n    \"ai_anomalies\": \"AI_Anomalies\",\n    \"ai_output_ref\": \"AI_Output\",\n    \"ai_chart_pattern\": \"AI_ChartPattern\",\n    \"ai_rr_theoretical\": \"AI_RR_Theoretical\",\n}\n\n# \"Combined\" columns: same as H1 values (backward compat with old AG2)\nCOMBINED_MAP = {\n    \"h1_sma20\": \"SMA20\",\n    \"h1_sma50\": \"SMA50\",\n    \"h1_sma200\": \"SMA_200\",\n    \"h1_ema12\": \"EMA12\",\n    \"h1_ema26\": \"EMA26\",\n    \"h1_macd\": \"MACD\",\n    \"h1_macd_signal\": \"MACD_Signal\",\n    \"h1_macd_hist\": \"MACD_Hist\",\n    \"h1_rsi14\": \"RSI14\",\n    \"h1_volatility\": \"Volatility_Ann\",\n    \"h1_last_close\": \"Last_Close_Ind\",\n    \"h1_atr\": \"ATR_Value\",\n    \"h1_atr_pct\": \"ATR_Pct\",\n    \"h1_resistance\": \"Resistance_50\",\n    \"h1_dist_res_pct\": \"Dist_To_Res_Pct_50\",\n}\n\n# V2-only columns (new indicators not in old sheet — will create headers)\nV2_EXTRA_MAP = {\n    \"h1_bb_upper\": \"H1_BB_Upper\",\n    \"h1_bb_lower\": \"H1_BB_Lower\",\n    \"h1_bb_width\": \"H1_BB_Width\",\n    \"h1_stoch_k\": \"H1_Stoch_K\",\n    \"h1_stoch_d\": \"H1_Stoch_D\",\n    \"h1_adx\": \"H1_ADX\",\n    \"h1_obv_slope\": \"H1_OBV_Slope\",\n    \"h1_support\": \"H1_Support\",\n    \"h1_dist_sup_pct\": \"H1_Dist_To_Sup_Pct\",\n    \"d1_bb_upper\": \"D1_BB_Upper\",\n    \"d1_bb_lower\": \"D1_BB_Lower\",\n    \"d1_bb_width\": \"D1_BB_Width\",\n    \"d1_stoch_k\": \"D1_Stoch_K\",\n    \"d1_stoch_d\": \"D1_Stoch_D\",\n    \"d1_adx\": \"D1_ADX\",\n    \"d1_obv_slope\": \"D1_OBV_Slope\",\n    \"d1_support\": \"D1_Support\",\n    \"d1_dist_sup_pct\": \"D1_Dist_To_Sup_Pct\",\n}\n\ndef _fmt(val):\n    \"\"\"Format a value for Sheets: convert None/NaN to empty string, bools to strings.\"\"\"\n    if val is None:\n        return \"\"\n    s = str(val)\n    if s.lower() in (\"nan\", \"nat\", \"none\"):\n        return \"\"\n    if isinstance(val, bool):\n        return str(val).upper()\n    return val\n\n# ── Main ──\nitems = []\n\nwith db_con() as con:\n    rows = con.execute(\"\"\"\n        SELECT ts.*\n        FROM technical_signals ts\n        INNER JOIN (\n            SELECT symbol, MAX(workflow_date) AS max_date\n            FROM technical_signals\n            GROUP BY symbol\n        ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date\n        ORDER BY ts.symbol\n    \"\"\").fetchall()\n    col_names = [desc[0] for desc in con.description]\n\nfor row_tuple in rows:\n    row = dict(zip(col_names, row_tuple))\n    item = {}\n\n    # Map standard fields\n    for db_col, sheet_col in FIELD_MAP.items():\n        item[sheet_col] = _fmt(row.get(db_col))\n\n    # Map combined fields (H1 values as default \"combined\" for backward compat)\n    for db_col, sheet_col in COMBINED_MAP.items():\n        item[sheet_col] = _fmt(row.get(db_col))\n\n    # Map V2 extra fields\n    for db_col, sheet_col in V2_EXTRA_MAP.items():\n        item[sheet_col] = _fmt(row.get(db_col))\n\n    # Static/computed fields\n    item[\"TTL_Minutes\"] = 180\n    item[\"row_hash\"] = _fmt(row.get(\"sig_hash\", \"\"))\n\n    items.append({\"json\": item})\n\n# Output for n8n\nreturn items if items else [{\"json\": {\"_sync\": \"no_data\"}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "11047c09-c162-49c2-9eda-c0114f8f527f",
+      "name": "Sync DuckDB → Sheets",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": 1444959091,
+          "cachedResultName": "AG2 - étape 1 - sortie",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1444959091"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Symbol": "={{ $json.Symbol }}",
+            "Run_ID": "={{ $json.Run_ID }}",
+            "Workflow_Date": "={{ $json.Workflow_Date }}",
+            "H1_Action": "={{ $json.H1_Action }}",
+            "H1_Score": "={{ $json.H1_Score }}",
+            "H1_Confidence": "={{ $json.H1_Confidence }}",
+            "H1_Rationale": "={{ $json.H1_Rationale }}",
+            "H1_Date": "={{ $json.H1_Date }}",
+            "H1_Source": "={{ $json.H1_Source }}",
+            "H1_Status": "={{ $json.H1_Status }}",
+            "H1_Warnings": "={{ $json.H1_Warnings }}",
+            "D1_Action": "={{ $json.D1_Action }}",
+            "D1_Score": "={{ $json.D1_Score }}",
+            "D1_Confidence": "={{ $json.D1_Confidence }}",
+            "D1_Rationale": "={{ $json.D1_Rationale }}",
+            "D1_Date": "={{ $json.D1_Date }}",
+            "D1_Source": "={{ $json.D1_Source }}",
+            "D1_Status": "={{ $json.D1_Status }}",
+            "D1_Warnings": "={{ $json.D1_Warnings }}",
+            "Last_Close": "={{ $json.Last_Close }}",
+            "SMA_200": "={{ $json.SMA_200 }}",
+            "Reason": "={{ $json.Reason }}",
+            "Pass_AI": "={{ $json.Pass_AI }}",
+            "Pass_PM": "={{ $json.Pass_PM }}",
+            "Sig_JSON": "={{ $json.Sig_JSON }}",
+            "AI_Output": "={{ $json.AI_Output }}",
+            "vector_status": "={{ $json.vector_status }}",
+            "vectorizedAt": "={{ $json.vectorizedAt }}",
+            "row_hash": "={{ $json.row_hash }}",
+            "TTL_Minutes": "={{ $json.TTL_Minutes }}",
+            "AI_Decision": "={{ $json.AI_Decision }}",
+            "AI_Validated": "={{ $json.AI_Validated }}",
+            "AI_QualityScore": "={{ $json.AI_QualityScore }}",
+            "AI_Reasoning": "={{ $json.AI_Reasoning }}",
+            "AI_Alignment": "={{ $json.AI_Alignment }}",
+            "AI_Bias_SMA200": "={{ $json.AI_Bias_SMA200 }}",
+            "AI_Regime_D1": "={{ $json.AI_Regime_D1 }}",
+            "AI_StopLoss": "={{ $json.AI_StopLoss }}",
+            "AI_StopLoss_Basis": "={{ $json.AI_StopLoss_Basis }}",
+            "AI_MissingFields": "={{ $json.AI_MissingFields }}",
+            "AI_Anomalies": "={{ $json.AI_Anomalies }}",
+            "AI_ChartPattern": "={{ $json.AI_ChartPattern }}",
+            "AI_RR_Theoretical": "={{ $json.AI_RR_Theoretical }}",
+            "H1_SMA20": "={{ $json.H1_SMA20 }}",
+            "H1_SMA50": "={{ $json.H1_SMA50 }}",
+            "H1_SMA200": "={{ $json.H1_SMA200 }}",
+            "H1_EMA12": "={{ $json.H1_EMA12 }}",
+            "H1_EMA26": "={{ $json.H1_EMA26 }}",
+            "H1_MACD": "={{ $json.H1_MACD }}",
+            "H1_MACD_Signal": "={{ $json.H1_MACD_Signal }}",
+            "H1_MACD_Hist": "={{ $json.H1_MACD_Hist }}",
+            "H1_RSI14": "={{ $json.H1_RSI14 }}",
+            "H1_Volatility_Ann": "={{ $json.H1_Volatility_Ann }}",
+            "H1_Last_Close_Ind": "={{ $json.H1_Last_Close_Ind }}",
+            "H1_ATR_Value": "={{ $json.H1_ATR_Value }}",
+            "H1_ATR_Pct": "={{ $json.H1_ATR_Pct }}",
+            "H1_Resistance_50": "={{ $json.H1_Resistance_50 }}",
+            "H1_Dist_To_Res_Pct_50": "={{ $json.H1_Dist_To_Res_Pct_50 }}",
+            "D1_SMA20": "={{ $json.D1_SMA20 }}",
+            "D1_SMA50": "={{ $json.D1_SMA50 }}",
+            "D1_SMA200": "={{ $json.D1_SMA200 }}",
+            "D1_EMA12": "={{ $json.D1_EMA12 }}",
+            "D1_EMA26": "={{ $json.D1_EMA26 }}",
+            "D1_MACD": "={{ $json.D1_MACD }}",
+            "D1_MACD_Signal": "={{ $json.D1_MACD_Signal }}",
+            "D1_MACD_Hist": "={{ $json.D1_MACD_Hist }}",
+            "D1_RSI14": "={{ $json.D1_RSI14 }}",
+            "D1_Volatility_Ann": "={{ $json.D1_Volatility_Ann }}",
+            "D1_Last_Close_Ind": "={{ $json.D1_Last_Close_Ind }}",
+            "D1_ATR_Value": "={{ $json.D1_ATR_Value }}",
+            "D1_ATR_Pct": "={{ $json.D1_ATR_Pct }}",
+            "D1_Resistance_50": "={{ $json.D1_Resistance_50 }}",
+            "D1_Dist_To_Res_Pct_50": "={{ $json.D1_Dist_To_Res_Pct_50 }}",
+            "SMA20": "={{ $json.SMA20 }}",
+            "SMA50": "={{ $json.SMA50 }}",
+            "EMA12": "={{ $json.EMA12 }}",
+            "EMA26": "={{ $json.EMA26 }}",
+            "MACD": "={{ $json.MACD }}",
+            "MACD_Signal": "={{ $json.MACD_Signal }}",
+            "MACD_Hist": "={{ $json.MACD_Hist }}",
+            "RSI14": "={{ $json.RSI14 }}",
+            "Volatility_Ann": "={{ $json.Volatility_Ann }}",
+            "Last_Close_Ind": "={{ $json.Last_Close_Ind }}",
+            "ATR_Value": "={{ $json.ATR_Value }}",
+            "ATR_Pct": "={{ $json.ATR_Pct }}",
+            "Resistance_50": "={{ $json.Resistance_50 }}",
+            "Dist_To_Res_Pct_50": "={{ $json.Dist_To_Res_Pct_50 }}",
+            "H1_BB_Upper": "={{ $json.H1_BB_Upper }}",
+            "H1_BB_Lower": "={{ $json.H1_BB_Lower }}",
+            "H1_BB_Width": "={{ $json.H1_BB_Width }}",
+            "H1_Stoch_K": "={{ $json.H1_Stoch_K }}",
+            "H1_Stoch_D": "={{ $json.H1_Stoch_D }}",
+            "H1_ADX": "={{ $json.H1_ADX }}",
+            "H1_OBV_Slope": "={{ $json.H1_OBV_Slope }}",
+            "H1_Support": "={{ $json.H1_Support }}",
+            "H1_Dist_To_Sup_Pct": "={{ $json.H1_Dist_To_Sup_Pct }}",
+            "D1_BB_Upper": "={{ $json.D1_BB_Upper }}",
+            "D1_BB_Lower": "={{ $json.D1_BB_Lower }}",
+            "D1_BB_Width": "={{ $json.D1_BB_Width }}",
+            "D1_Stoch_K": "={{ $json.D1_Stoch_K }}",
+            "D1_Stoch_D": "={{ $json.D1_Stoch_D }}",
+            "D1_ADX": "={{ $json.D1_ADX }}",
+            "D1_OBV_Slope": "={{ $json.D1_OBV_Slope }}",
+            "D1_Support": "={{ $json.D1_Support }}",
+            "D1_Dist_To_Sup_Pct": "={{ $json.D1_Dist_To_Sup_Pct }}"
+          },
+          "matchingColumns": [
+            "Symbol"
+          ],
+          "schema": [
+            {
+              "id": "Symbol",
+              "displayName": "Symbol",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Run_ID",
+              "displayName": "Run_ID",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Workflow_Date",
+              "displayName": "Workflow_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Action",
+              "displayName": "H1_Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Score",
+              "displayName": "H1_Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Confidence",
+              "displayName": "H1_Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Rationale",
+              "displayName": "H1_Rationale",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Date",
+              "displayName": "H1_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Source",
+              "displayName": "H1_Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Status",
+              "displayName": "H1_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Warnings",
+              "displayName": "H1_Warnings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Action",
+              "displayName": "D1_Action",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Score",
+              "displayName": "D1_Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Confidence",
+              "displayName": "D1_Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Rationale",
+              "displayName": "D1_Rationale",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Date",
+              "displayName": "D1_Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Source",
+              "displayName": "D1_Source",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Status",
+              "displayName": "D1_Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Warnings",
+              "displayName": "D1_Warnings",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last_Close",
+              "displayName": "Last_Close",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SMA_200",
+              "displayName": "SMA_200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reason",
+              "displayName": "Reason",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pass_AI",
+              "displayName": "Pass_AI",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Pass_PM",
+              "displayName": "Pass_PM",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Sig_JSON",
+              "displayName": "Sig_JSON",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Output",
+              "displayName": "AI_Output",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "vector_status",
+              "displayName": "vector_status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "vectorizedAt",
+              "displayName": "vectorizedAt",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_hash",
+              "displayName": "row_hash",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "TTL_Minutes",
+              "displayName": "TTL_Minutes",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Decision",
+              "displayName": "AI_Decision",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Validated",
+              "displayName": "AI_Validated",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_QualityScore",
+              "displayName": "AI_QualityScore",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Reasoning",
+              "displayName": "AI_Reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Alignment",
+              "displayName": "AI_Alignment",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Bias_SMA200",
+              "displayName": "AI_Bias_SMA200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Regime_D1",
+              "displayName": "AI_Regime_D1",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_StopLoss",
+              "displayName": "AI_StopLoss",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_StopLoss_Basis",
+              "displayName": "AI_StopLoss_Basis",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_MissingFields",
+              "displayName": "AI_MissingFields",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_Anomalies",
+              "displayName": "AI_Anomalies",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_ChartPattern",
+              "displayName": "AI_ChartPattern",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "AI_RR_Theoretical",
+              "displayName": "AI_RR_Theoretical",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_SMA20",
+              "displayName": "H1_SMA20",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_SMA50",
+              "displayName": "H1_SMA50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_SMA200",
+              "displayName": "H1_SMA200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_EMA12",
+              "displayName": "H1_EMA12",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_EMA26",
+              "displayName": "H1_EMA26",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_MACD",
+              "displayName": "H1_MACD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_MACD_Signal",
+              "displayName": "H1_MACD_Signal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_MACD_Hist",
+              "displayName": "H1_MACD_Hist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_RSI14",
+              "displayName": "H1_RSI14",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Volatility_Ann",
+              "displayName": "H1_Volatility_Ann",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Last_Close_Ind",
+              "displayName": "H1_Last_Close_Ind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_ATR_Value",
+              "displayName": "H1_ATR_Value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_ATR_Pct",
+              "displayName": "H1_ATR_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Resistance_50",
+              "displayName": "H1_Resistance_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Dist_To_Res_Pct_50",
+              "displayName": "H1_Dist_To_Res_Pct_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_SMA20",
+              "displayName": "D1_SMA20",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_SMA50",
+              "displayName": "D1_SMA50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_SMA200",
+              "displayName": "D1_SMA200",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_EMA12",
+              "displayName": "D1_EMA12",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_EMA26",
+              "displayName": "D1_EMA26",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_MACD",
+              "displayName": "D1_MACD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_MACD_Signal",
+              "displayName": "D1_MACD_Signal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_MACD_Hist",
+              "displayName": "D1_MACD_Hist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_RSI14",
+              "displayName": "D1_RSI14",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Volatility_Ann",
+              "displayName": "D1_Volatility_Ann",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Last_Close_Ind",
+              "displayName": "D1_Last_Close_Ind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_ATR_Value",
+              "displayName": "D1_ATR_Value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_ATR_Pct",
+              "displayName": "D1_ATR_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Resistance_50",
+              "displayName": "D1_Resistance_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Dist_To_Res_Pct_50",
+              "displayName": "D1_Dist_To_Res_Pct_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SMA20",
+              "displayName": "SMA20",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "SMA50",
+              "displayName": "SMA50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EMA12",
+              "displayName": "EMA12",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "EMA26",
+              "displayName": "EMA26",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MACD",
+              "displayName": "MACD",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MACD_Signal",
+              "displayName": "MACD_Signal",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "MACD_Hist",
+              "displayName": "MACD_Hist",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "RSI14",
+              "displayName": "RSI14",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Volatility_Ann",
+              "displayName": "Volatility_Ann",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Last_Close_Ind",
+              "displayName": "Last_Close_Ind",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ATR_Value",
+              "displayName": "ATR_Value",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "ATR_Pct",
+              "displayName": "ATR_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Resistance_50",
+              "displayName": "Resistance_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Dist_To_Res_Pct_50",
+              "displayName": "Dist_To_Res_Pct_50",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_BB_Upper",
+              "displayName": "H1_BB_Upper",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_BB_Lower",
+              "displayName": "H1_BB_Lower",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_BB_Width",
+              "displayName": "H1_BB_Width",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Stoch_K",
+              "displayName": "H1_Stoch_K",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Stoch_D",
+              "displayName": "H1_Stoch_D",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_ADX",
+              "displayName": "H1_ADX",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_OBV_Slope",
+              "displayName": "H1_OBV_Slope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Support",
+              "displayName": "H1_Support",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "H1_Dist_To_Sup_Pct",
+              "displayName": "H1_Dist_To_Sup_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_BB_Upper",
+              "displayName": "D1_BB_Upper",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_BB_Lower",
+              "displayName": "D1_BB_Lower",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_BB_Width",
+              "displayName": "D1_BB_Width",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Stoch_K",
+              "displayName": "D1_Stoch_K",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Stoch_D",
+              "displayName": "D1_Stoch_D",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_ADX",
+              "displayName": "D1_ADX",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_OBV_Slope",
+              "displayName": "D1_OBV_Slope",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Support",
+              "displayName": "D1_Support",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "D1_Dist_To_Sup_Pct",
+              "displayName": "D1_Dist_To_Sup_Pct",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        480,
+        0
+      ],
+      "id": "c0c9fdaf-6906-4bf6-bc09-213a0aeb087d",
+      "name": "Write AG2 Sortie",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
     },
     {
       "parameters": {
@@ -174,7 +1284,7 @@
         80,
         160
       ],
-      "id": "18a18f9b-182b-4dfa-9687-755b96ccfc94",
+      "id": "10a2f7df-8c7f-4c44-825d-0e8fb111fa5a",
       "name": "AG2.10 — HTTP — Fetch Yahoo OHLCV (1H Timing)",
       "onError": "continueRegularOutput"
     },
@@ -225,7 +1335,7 @@
         80,
         336
       ],
-      "id": "f8c8121d-1763-496e-8991-5af42098f24c",
+      "id": "92c1a484-864f-4c30-9e00-4e1a12881855",
       "name": "AG2.15 — HTTP — Fetch Yahoo OHLCV (1D Strategy)",
       "onError": "continueRegularOutput"
     },
@@ -239,7 +1349,7 @@
         304,
         160
       ],
-      "id": "8dc38cd0-798e-4451-8fcc-56829213db16",
+      "id": "a2f77460-712c-45a6-9998-ff9d3349817d",
       "name": "AG2.11 — Code — Wrap H1"
     },
     {
@@ -252,7 +1362,7 @@
         304,
         336
       ],
-      "id": "7e6c4a1b-5b19-4038-8c45-c87bbaf6e726",
+      "id": "ab0ee283-15f9-49c1-89af-1681bdae9fc6",
       "name": "AG2.16 — Code — Wrap D1"
     },
     {
@@ -267,7 +1377,7 @@
         544,
         240
       ],
-      "id": "1828b838-4380-43a9-9aec-efd1c29b5466",
+      "id": "03b451b9-e4fb-42d2-9c9b-8721a38b4baf",
       "name": "Merge"
     },
     {
@@ -281,7 +1391,7 @@
         736,
         240
       ],
-      "id": "1c6a2e0c-0703-4059-ab1c-5456bd5db9ad",
+      "id": "c44e4d58-f644-4983-8309-79bef8bb09d6",
       "name": "Compute + Filter + Write",
       "onError": "continueRegularOutput"
     },
@@ -314,7 +1424,7 @@
         960,
         320
       ],
-      "id": "4e0ed86e-bc58-4fe9-81fb-cce4a52ae39e",
+      "id": "1b6ea8dd-0c35-4f27-bd25-dccee805ee39",
       "name": "IF Call AI?",
       "alwaysOutputData": true
     },
@@ -328,7 +1438,7 @@
         1168,
         208
       ],
-      "id": "613f6da5-53ae-406f-b94c-3c45c0d9b60c",
+      "id": "ae267c4f-b420-4437-941a-538c00fdbd73",
       "name": "Snapshot Context"
     },
     {
@@ -367,7 +1477,7 @@
         1376,
         208
       ],
-      "id": "d4ca00be-b4db-4e38-9df1-5473752801a1",
+      "id": "0de5db69-4953-42f2-a975-f3e28213be9e",
       "name": "AI Validation GPT",
       "credentials": {
         "openAiApi": {
@@ -387,7 +1497,7 @@
         1680,
         208
       ],
-      "id": "12a31ddb-f192-407d-8786-c9dcba5957eb",
+      "id": "897879e6-d8b9-4802-b11f-d80b7e7184b6",
       "name": "Extract AI + Write",
       "onError": "continueRegularOutput"
     },
@@ -420,7 +1530,7 @@
         1968,
         464
       ],
-      "id": "c072b2fc-8b97-4216-b520-c21b1ef67217",
+      "id": "2940a70f-b932-460c-9263-63fd035b2846",
       "name": "IF Vectorize?",
       "alwaysOutputData": true
     },
@@ -434,7 +1544,7 @@
         2176,
         112
       ],
-      "id": "480c9128-5194-40f7-ac30-d7284bfed1c2",
+      "id": "af144ade-5718-4c66-8d77-f3e26c215d11",
       "name": "Prep Vector Text"
     },
     {
@@ -447,7 +1557,7 @@
         2336,
         288
       ],
-      "id": "bd9a3672-17da-4eb1-aa18-02184a96a1e9",
+      "id": "7077b93a-689c-4087-875d-abba0578c9a3",
       "name": "Embeddings OpenAI",
       "credentials": {
         "openAiApi": {
@@ -466,7 +1576,7 @@
         2384,
         416
       ],
-      "id": "ea3996bc-c8ed-4be8-9d5e-da7449217a5e",
+      "id": "d3542e86-5aff-40cd-84d1-5e4e3add86b2",
       "name": "Default Data Loader"
     },
     {
@@ -481,7 +1591,7 @@
         2384,
         608
       ],
-      "id": "83620261-2c2e-4a43-aad1-bae2259fb46c",
+      "id": "42754e42-b3a3-4a11-bc63-43becfbb14a1",
       "name": "Text Splitter"
     },
     {
@@ -504,7 +1614,7 @@
         2416,
         112
       ],
-      "id": "e8092c74-8821-448c-b19c-067d38b0e926",
+      "id": "4b744a63-c764-4d4f-b102-e971660f09b9",
       "name": "Qdrant Upsert",
       "credentials": {
         "qdrantApi": {
@@ -524,7 +1634,7 @@
         2848,
         576
       ],
-      "id": "28a7f541-c31d-4cbd-b97c-b646b8a18808",
+      "id": "14b89722-3963-4727-af55-a640a1f66d9b",
       "name": "Mark Vectorized"
     }
   ],
@@ -803,6 +1913,28 @@
           {
             "node": "Default Data Loader",
             "type": "ai_textSplitter",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finalize Run": {
+      "main": [
+        [
+          {
+            "node": "Sync DuckDB → Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sync DuckDB → Sheets": {
+      "main": [
+        [
+          {
+            "node": "Write AG2 Sortie",
+            "type": "main",
             "index": 0
           }
         ]

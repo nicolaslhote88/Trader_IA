@@ -7,7 +7,7 @@ Architecture: Cron/Manual → Read Universe → Init Config → DuckDB Init → 
   Loop (each) → HTTP H1 + HTTP D1 (parallel) → Wrap H1 + Wrap D1 → Merge → Compute
   → IF Call AI? → Snapshot → AI GPT → Extract AI → IF Vectorize?
   → Prep Vector → Qdrant Upsert → Mark Vectorized → Loop
-  Loop (done) → Finalize Run
+  Loop (done) → Finalize Run → Sync Sheets Format → Write Sheets
 """
 import json, uuid, os
 
@@ -31,7 +31,7 @@ IDS = {k: nid() for k in [
     "http_h1","http_d1","wrap_h1","wrap_d1","merge",
     "compute","if_ai","snapshot","ai_validate","extract_ai",
     "if_vector","prep_vector","embed_openai","data_loader","text_splitter",
-    "qdrant","mark_vector","finalize"]}
+    "qdrant","mark_vector","finalize","sync_sheets","write_sheets"]}
 
 AI_SYSTEM = (
     "Tu es l'Agent n\u00b02 : Validateur Technique H1 \u2194 D1. Senior Technical Analyst et Risk Manager.\n\n"
@@ -138,6 +138,61 @@ add(IDS["loop"], "Loop Symbols", "n8n-nodes-base.splitInBatches", 3, [-272, 208]
 # ─── FINALIZE ───
 add(IDS["finalize"], "Finalize Run", "n8n-nodes-base.code", 2, [-16, 0],
     {"language": "pythonNative", "pythonCode": load("10_finalize.py")})
+
+# ─── SYNC SHEETS (DuckDB → Sheets format) ───
+SORTIE_GID = 1444959091
+add(IDS["sync_sheets"], "Sync DuckDB → Sheets", "n8n-nodes-base.code", 2, [224, 0],
+    {"language": "pythonNative", "pythonCode": load("11_sync_sheets.py")},
+    extra={"onError": "continueRegularOutput"})
+
+# Build column mapping for Google Sheets node (all columns as expressions)
+_SHEET_COLS = [
+    "Symbol","Run_ID","Workflow_Date",
+    "H1_Action","H1_Score","H1_Confidence","H1_Rationale",
+    "H1_Date","H1_Source","H1_Status","H1_Warnings",
+    "D1_Action","D1_Score","D1_Confidence","D1_Rationale",
+    "D1_Date","D1_Source","D1_Status","D1_Warnings",
+    "Last_Close","SMA_200","Reason","Pass_AI","Pass_PM",
+    "Sig_JSON","AI_Output","vector_status","vectorizedAt","row_hash","TTL_Minutes",
+    "AI_Decision","AI_Validated","AI_QualityScore","AI_Reasoning",
+    "AI_Alignment","AI_Bias_SMA200","AI_Regime_D1",
+    "AI_StopLoss","AI_StopLoss_Basis","AI_MissingFields","AI_Anomalies",
+    "AI_ChartPattern","AI_RR_Theoretical",
+    # H1 indicators
+    "H1_SMA20","H1_SMA50","H1_SMA200","H1_EMA12","H1_EMA26",
+    "H1_MACD","H1_MACD_Signal","H1_MACD_Hist","H1_RSI14",
+    "H1_Volatility_Ann","H1_Last_Close_Ind","H1_ATR_Value","H1_ATR_Pct",
+    "H1_Resistance_50","H1_Dist_To_Res_Pct_50",
+    # D1 indicators
+    "D1_SMA20","D1_SMA50","D1_SMA200","D1_EMA12","D1_EMA26",
+    "D1_MACD","D1_MACD_Signal","D1_MACD_Hist","D1_RSI14",
+    "D1_Volatility_Ann","D1_Last_Close_Ind","D1_ATR_Value","D1_ATR_Pct",
+    "D1_Resistance_50","D1_Dist_To_Res_Pct_50",
+    # Combined (H1 as default)
+    "SMA20","SMA50","EMA12","EMA26","MACD","MACD_Signal","MACD_Hist",
+    "RSI14","Volatility_Ann","Last_Close_Ind","ATR_Value","ATR_Pct",
+    "Resistance_50","Dist_To_Res_Pct_50",
+    # V2 extras
+    "H1_BB_Upper","H1_BB_Lower","H1_BB_Width","H1_Stoch_K","H1_Stoch_D",
+    "H1_ADX","H1_OBV_Slope","H1_Support","H1_Dist_To_Sup_Pct",
+    "D1_BB_Upper","D1_BB_Lower","D1_BB_Width","D1_Stoch_K","D1_Stoch_D",
+    "D1_ADX","D1_OBV_Slope","D1_Support","D1_Dist_To_Sup_Pct",
+]
+_col_value = {c: "={{ $json." + c + " }}" for c in _SHEET_COLS}
+
+add(IDS["write_sheets"], "Write AG2 Sortie", "n8n-nodes-base.googleSheets", 4.5, [480, 0],
+    {"operation": "appendOrUpdate",
+     "documentId": {"__rl": True, "mode": "list", "value": SHEET_ID,
+                     "cachedResultName": "TradingSim_GoogleSheet_Template",
+                     "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit?usp=drivesdk"},
+     "sheetName": {"__rl": True, "mode": "list", "value": SORTIE_GID,
+                    "cachedResultName": "AG2 - étape 1 - sortie",
+                    "cachedResultUrl": f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/edit#gid={SORTIE_GID}"},
+     "columns": {"mappingMode": "defineBelow", "value": _col_value,
+                  "matchingColumns": ["Symbol"], "schema": [{"id": c, "displayName": c, "required": False, "defaultMatch": c == "Symbol", "display": True, "type": "string", "canBeUsedToMatch": True} for c in _SHEET_COLS]},
+     "options": {}},
+    creds={"googleSheetsOAuth2Api": {"id": GS_CRED, "name": "Google Sheets account"}},
+    extra={"onError": "continueRegularOutput"})
 
 # ─── HTTP FETCH (parallel H1 + D1) ───
 http_h1_params = {
@@ -303,6 +358,10 @@ conn("Mark Vectorized", "Loop Symbols")
 conn("Embeddings OpenAI", "Qdrant Upsert", ct="ai_embedding")
 conn("Default Data Loader", "Qdrant Upsert", ct="ai_document")
 conn("Text Splitter", "Default Data Loader", ct="ai_textSplitter")
+
+# Finalize → Sync Sheets → Write Sheets
+conn("Finalize Run", "Sync DuckDB → Sheets")
+conn("Sync DuckDB → Sheets", "Write AG2 Sortie")
 
 wf = {
     "nodes": nodes,
