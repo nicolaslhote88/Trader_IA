@@ -2,7 +2,7 @@ import math
 import json
 import duckdb, time, gc
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 DB_PATH = "/files/duckdb/ag2_v2.duckdb"
 
@@ -307,6 +307,51 @@ def compute_indicators(bars, interval):
     })
 
 # ===================================================
+# FRESHNESS GATE
+# ===================================================
+
+def check_freshness(last_bar_time, interval, now=None):
+    """Check if data is stale. Returns (is_fresh, age_hours, status).
+    H1: stale if age > 3h during market hours, > 72h otherwise
+    D1: stale if age > 96h (4 days — covers weekends)
+    """
+    if not last_bar_time:
+        return False, None, "NO_TIMESTAMP"
+    if now is None:
+        now = datetime.now(timezone.utc)
+    try:
+        t = last_bar_time
+        if isinstance(t, str):
+            t = t.replace("Z", "+00:00")
+            if "+" not in t and "-" not in t[10:]:
+                t += "+00:00"
+            t = datetime.fromisoformat(t)
+        if t.tzinfo is None:
+            t = t.replace(tzinfo=timezone.utc)
+        age = now - t
+        age_hours = round(age.total_seconds() / 3600, 1)
+    except Exception:
+        return False, None, "PARSE_ERROR"
+
+    il = (interval or "").lower()
+    if "h" in il or "m" in il:
+        # Intraday: stale if > 3 hours in market session, > 72h always
+        max_age_h = 72
+        wd = now.weekday()
+        hr = now.hour
+        if wd < 5 and 7 <= hr <= 18:  # Mon-Fri market hours (UTC approx)
+            max_age_h = 3
+        if age_hours > max_age_h:
+            return False, age_hours, "STALE"
+    else:
+        # Daily+: stale if > 96h (covers weekends + 1 day margin)
+        if age_hours > 96:
+            return False, age_hours, "STALE"
+
+    return True, age_hours, "FRESH"
+
+
+# ===================================================
 # FILTER + DEDUP + WRITE
 # ===================================================
 
@@ -429,8 +474,31 @@ for it in items:
         h1_interval = str(h1_resp.get("interval") or "1h")
         d1_interval = str(d1_resp.get("interval") or "1d")
 
+        # ── Symbol consistency check (P0.2) ──
+        h1_sym = str(h1_resp.get("symbol", "") or "").strip()
+        d1_sym = str(d1_resp.get("symbol", "") or "").strip()
+        if h1_sym and d1_sym and h1_sym != d1_sym:
+            results.append({"json": {
+                "symbol": symbol, "run_id": run_id, "_status": "error",
+                "error": f"Symbol mismatch: H1={h1_sym} vs D1={d1_sym}",
+                "call_ai": False, "pass_ai": False, "pass_pm": False
+            }})
+            continue
+
         h1_result = compute_indicators(h1_resp.get("bars", []), h1_interval)
         d1_result = compute_indicators(d1_resp.get("bars", []), d1_interval)
+
+        # ── Freshness Gate (P0.1) ──
+        now_utc = datetime.now(timezone.utc)
+        h1_fresh, h1_age_h, h1_freshness = check_freshness(h1_result.get("last_bar_time"), h1_interval, now_utc)
+        d1_fresh, d1_age_h, d1_freshness = check_freshness(d1_result.get("last_bar_time"), d1_interval, now_utc)
+
+        if not h1_fresh and h1_freshness == "STALE":
+            h1_result["status"] = "STALE"
+            h1_result.setdefault("warnings", []).append(f"H1 data is {h1_age_h}h old — STALE")
+        if not d1_fresh and d1_freshness == "STALE":
+            d1_result["status"] = "STALE"
+            d1_result.setdefault("warnings", []).append(f"D1 data is {d1_age_h}h old — STALE")
 
         h1_ind = h1_result.get("indicators", {}) or {}
         d1_ind = d1_result.get("indicators", {}) or {}
@@ -438,6 +506,12 @@ for it in items:
         d1_sig = d1_result.get("signal", {}) or {}
 
         pass_ai, filter_reason = pre_filter(h1_result, d1_ind)
+
+        # Override pass_ai if data is stale
+        if pass_ai and not h1_fresh:
+            pass_ai = False
+            filter_reason = "STALE_H1_DATA"
+
         sig_hash = compute_sig_hash(symbol, h1_sig, h1_ind, d1_ind)
 
         call_ai = False
@@ -481,7 +555,9 @@ for it in items:
                 "sig_hash": sig_hash,
                 "call_ai": call_ai,
                 "dedup_reason": dedup_reason,
-                "vector_status": "PENDING",
+                "vector_status": "PENDING" if call_ai else "SKIPPED",
+                "data_age_h1_hours": h1_age_h,
+                "data_age_d1_hours": d1_age_h,
             }
 
             for k in IND_KEYS:
@@ -503,6 +579,8 @@ for it in items:
         out["d1_indicators"] = d1_ind
         out["h1_signal"] = h1_sig
         out["d1_signal"] = d1_sig
+        out["h1_freshness"] = h1_freshness
+        out["d1_freshness"] = d1_freshness
         out["_status"] = "ok"
         results.append({"json": out})
 

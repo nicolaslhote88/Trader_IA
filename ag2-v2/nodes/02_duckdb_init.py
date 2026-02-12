@@ -36,9 +36,19 @@ SCHEMA_STMTS = [
 items = _items
 first_json = items[0].get("json", {}) if items else {}
 
+MIGRATE_STMTS = [
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_h1_hours DOUBLE",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_d1_hours DOUBLE",
+]
+
 with db_con() as con:
     for stmt in SCHEMA_STMTS:
         con.execute(stmt)
+    for stmt in MIGRATE_STMTS:
+        try:
+            con.execute(stmt)
+        except Exception:
+            pass  # column already exists
 
     universe = first_json.get("_universe", []) or []
     for r in universe:

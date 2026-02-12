@@ -134,9 +134,19 @@ for it in items:
                 [symbol, sig_hash, sig_json, run_id, d.get("filter_reason", ""), output_ref, ttl]
             )
 
+        should_vec = pass_pm or decision in ("APPROVE", "WATCH")
+
+        # P1.2: Mark vector_status = SKIPPED if we won't vectorize
+        if not should_vec:
+            with db_con() as con2:
+                con2.execute(
+                    "UPDATE technical_signals SET vector_status = 'SKIPPED', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    [signal_id]
+                )
+
         out = dict(d)
         out.update(ai_data)
-        out["should_vectorize"] = pass_pm or decision in ("APPROVE", "WATCH")
+        out["should_vectorize"] = should_vec
         results.append({"json": out})
 
     except Exception as e:

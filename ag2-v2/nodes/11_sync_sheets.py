@@ -1,8 +1,8 @@
 """
 Node 11 — Sync DuckDB → Google Sheets format.
-Reads latest signals from DuckDB and outputs items matching
+Reads signals from the LATEST RUN only and outputs items matching
 the expected column format of "AG2 - étape 1 - sortie" sheet.
-Runs AFTER Finalize (node 10) — one batch for all symbols.
+Runs AFTER Finalize (node 10) — delta sync (batch only).
 """
 import duckdb, gc, json, time
 from contextlib import contextmanager
@@ -170,14 +170,13 @@ def _fmt(val):
 items = []
 
 with db_con() as con:
+    # Delta sync: only symbols from the latest run (not the full universe)
     rows = con.execute("""
         SELECT ts.*
         FROM technical_signals ts
-        INNER JOIN (
-            SELECT symbol, MAX(workflow_date) AS max_date
-            FROM technical_signals
-            GROUP BY symbol
-        ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date
+        WHERE ts.run_id = (
+            SELECT run_id FROM run_log ORDER BY started_at DESC LIMIT 1
+        )
         ORDER BY ts.symbol
     """).fetchall()
     col_names = [desc[0] for desc in con.description]
