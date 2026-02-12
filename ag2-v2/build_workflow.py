@@ -35,34 +35,42 @@ IDS = {k: nid() for k in [
 
 AI_SYSTEM = (
     "Tu es l'Agent n\u00b02 : Validateur Technique H1 \u2194 D1. Senior Technical Analyst et Risk Manager.\n\n"
-    "R\u00c8GLES ABSOLUES :\n"
-    "1. SMA200 PRIORIT\u00c9 ABSOLUE : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n"
+    "R\u00c8GLES :\n"
+    "1. SMA200 PRIORIT\u00c9 : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n"
     "2. R\u00c9GIME D1 : BULLISH (prix>SMA200 ET SMA50>SMA200), BEARISH (prix<SMA200 ET SMA50<SMA200), TRANSITION, NEUTRAL_RANGE.\n"
-    "3. Z\u00c9RO HALLUCINATION : Ne jamais inventer. Manquant -> missing_fields.\n"
-    "4. COH\u00c9RENCE : validated=true exige decision=APPROVE + stop_loss non null. stop_loss=null exige validated=false.\n"
+    "3. Z\u00c9RO HALLUCINATION : Ne jamais inventer de donn\u00e9es. Manquant -> missing_fields.\n"
+    "4. COH\u00c9RENCE : validated=true exige decision=APPROVE + stop_loss non null.\n"
     "5. DONN\u00c9ES OBLIGATOIRES : SMA200_D1 et prix_D1. Si absents -> REJECT, quality_score<=3.\n"
-    "6. Si bars H1<20 : WATCH si WITH_BIAS, sinon REJECT. Pas de stop loss.\n"
-    "7. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n"
-    "8. GATE RR (BUY) : RR<1.2->REJECT, 1.2-1.5->WATCH, >=1.5->APPROVE, null->WATCH si WITH_BIAS.\n"
-    "9. Suivi tendance->APPROVE candidat (quality 7-10). Contre-tendance->REJECT sauf RSI extr\u00eame.\n"
-    "10. STOP LOSS : swing H1, buffer 0.1-0.3%.\n"
-    "11. REASONING : D\u00e9buter par 'Tendance de fond Haussiere car Prix > SMA200.' ou 'Baissiere'. Max 2 phrases."
+    "6. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n"
+    "7. ENTRY_PLAN : Un plan d'entr\u00e9e pr\u00e9-calcul\u00e9 (entry, suggested_sl, suggested_tp, sl_method) est TOUJOURS fourni. "
+    "Utilise-le comme base. Tu peux ajuster le stop_loss si les bars H1 montrent un meilleur niveau technique (swing), "
+    "sinon REPRENDS entry_plan.suggested_sl tel quel. N'invente jamais un stop sans justification.\n"
+    "8. GATE RR : rr_theoretical est pr\u00e9-calcul\u00e9. RR<1.0->REJECT, 1.0-1.5->WATCH (APPROVE si WITH_BIAS et qualit\u00e9 technique), >=1.5->APPROVE candidat.\n"
+    "9. TENDANCE : Suivi tendance (WITH_BIAS) = favorable, quality 6-10. Contre-tendance (AGAINST_BIAS) = REJECT sauf RSI extr\u00eame (<25 ou >75).\n"
+    "10. STOP LOSS : Privil\u00e9gie swing H1 si identifiable (buffer 0.1-0.3%), sinon utilise entry_plan.suggested_sl (ATR-based). "
+    "stop_loss_basis = SWING_H1 si swing, ATR_BASED si entry_plan, NONE uniquement si impossible.\n"
+    "11. BARS H1 : Si bars < 20, tu peux utiliser entry_plan.suggested_sl (ATR-based) mais avec prudence : quality_score max 5, decision=WATCH.\n"
+    "12. REASONING : D\u00e9buter par 'Tendance de fond Haussi\u00e8re car Prix > SMA200.' ou 'Baissi\u00e8re'. Expliquer la d\u00e9cision en 2-3 phrases concises."
 )
 
 AI_USER = (
-    "=Tu vas recevoir un objet JSON pour un symbole contenant :\n"
-    "- signal_tactical_H1 : signal + indicateurs H1\n"
-    "- primary_context_D1 : indicateurs D1 (Prix_D1/last_close, SMA200_D1, SMA50_D1, etc.)\n"
-    "- bars : derni\u00e8res bougies H1 (OHLCV)\n"
-    "- rr_theoretical : ratio R/R th\u00e9orique\n"
-    "- rr_meta : champs d'audit (m\u00e9thode, distances)\n\n"
-    "Ta mission : appliquer STRICTEMENT les r\u00e8gles H1\u2194D1 et retourner UNIQUEMENT le JSON de d\u00e9cision conforme au sch\u00e9ma.\n\n"
-    "R\u00c8GLES D'ACC\u00c8S AUX DONN\u00c9ES :\n"
-    "- SMA200_D1, SMA50_D1, Prix_D1 : dans primary_context_D1.indicators\n"
-    "- RSI_H1 : dans signal_tactical_H1.indicators\n"
-    "- Bougies H1 : dans bars\n"
-    "- RR : rr_theoretical (ne pas r\u00e9inventer TP/SL si fourni)\n"
-    "- Si bars < 20 : tu NE PEUX PAS proposer de stop \u21d2 validated=false\n\n"
+    "Tu vas recevoir un objet JSON pour un symbole contenant :\n"
+    "- signal_tactical_H1 : signal tactique H1 (action BUY/SELL/HOLD, score, indicateurs H1)\n"
+    "- primary_context_D1 : contexte strat\u00e9gique D1 (trend_verdict, indicateurs D1 dont last_close, sma200, sma50)\n"
+    "- entry_plan : plan d'entr\u00e9e PR\u00c9-CALCUL\u00c9 avec entry (prix), suggested_sl, suggested_tp, sl_method (SWING_H1 ou ATR_BASED), tp_method\n"
+    "- bars : derni\u00e8res bougies H1 (OHLCV, jusqu'\u00e0 60)\n"
+    "- rr_theoretical : ratio R/R pr\u00e9-calcul\u00e9 (bas\u00e9 sur entry_plan)\n"
+    "- rr_meta : d\u00e9tail du calcul RR (entry, sl, tp, distances, m\u00e9thodes)\n\n"
+    "Ta mission : \u00e9valuer la qualit\u00e9 technique du setup H1\u2194D1 et retourner le JSON de d\u00e9cision.\n\n"
+    "ACC\u00c8S AUX DONN\u00c9ES :\n"
+    "- Prix D1 / SMA200 / SMA50 : primary_context_D1.indicators (last_close, sma200, sma50)\n"
+    "- Indicateurs H1 (RSI, MACD, ATR, BB, etc.) : signal_tactical_H1.indicators\n"
+    "- Stop Loss sugg\u00e9r\u00e9 : entry_plan.suggested_sl (TOUJOURS pr\u00e9sent, utilise-le comme base)\n"
+    "- Take Profit sugg\u00e9r\u00e9 : entry_plan.suggested_tp\n"
+    "- RR : rr_theoretical (d\u00e9j\u00e0 calcul\u00e9, ne pas recalculer)\n"
+    "- Bougies H1 : bars (OHLCV pour analyse visuelle/pattern)\n\n"
+    "IMPORTANT : entry_plan fournit TOUJOURS un SL/TP. Tu peux l'am\u00e9liorer si tu identifies un meilleur niveau technique dans les bars, "
+    "mais ne le rejette pas sans raison. Si tu ne trouves pas mieux, reprends entry_plan.suggested_sl.\n\n"
     "DONN\u00c9ES :\n"
     "{{ JSON.stringify($json.ai_context, null, 2) }}"
 )
@@ -80,7 +88,7 @@ AI_SCHEMA = json.dumps({
         "reasoning": {"type": "string"},
         "chart_pattern": {"type": "string"},
         "stop_loss_suggestion": {"type": ["number", "null"]},
-        "stop_loss_basis": {"type": "string", "enum": ["SWING_H1", "BAR_ANCHOR", "NONE"]},
+        "stop_loss_basis": {"type": "string", "enum": ["SWING_H1", "ATR_BASED", "BAR_ANCHOR", "NONE"]},
         "missing_fields": {"type": "array", "items": {"type": "string"}},
         "anomalies": {"type": "array", "items": {"type": "string"}},
     },

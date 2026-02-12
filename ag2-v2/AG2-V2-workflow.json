@@ -17,7 +17,7 @@
         -1248,
         112
       ],
-      "id": "ad0e025d-c669-48db-9e86-7f8fc0020f04",
+      "id": "de6807bd-f09a-4dbe-b95c-56637a5c8cba",
       "name": "Cron Trigger"
     },
     {
@@ -28,7 +28,7 @@
         -1248,
         304
       ],
-      "id": "abfc0e65-031f-40dc-8f9b-839d5b94fa53",
+      "id": "ce5ea934-371c-4114-b7a5-6eebc91671ff",
       "name": "Manual Trigger"
     },
     {
@@ -63,7 +63,7 @@
         -1008,
         208
       ],
-      "id": "e9c7873b-6deb-4dbb-80a8-fd4edf89510d",
+      "id": "4c9437f4-176a-4b61-afc0-2931598ef4c5",
       "name": "Read Universe",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -82,7 +82,7 @@
         -752,
         208
       ],
-      "id": "a7acb1b2-200b-4a32-9593-6d6ebfe76782",
+      "id": "de445dc8-fc62-491e-a51a-3b5a8bf7be15",
       "name": "Init Config + Batch"
     },
     {
@@ -96,7 +96,7 @@
         -496,
         208
       ],
-      "id": "b6d5b2e6-fb1c-4f36-9f8b-4dae92f4c1a4",
+      "id": "be368988-984f-46b0-96d5-e99efa5db004",
       "name": "DuckDB Init Schema"
     },
     {
@@ -109,7 +109,7 @@
         -272,
         208
       ],
-      "id": "5f59d020-b939-4f2f-a4ec-1a8f8aade24f",
+      "id": "1161b590-96fc-40a6-b7d4-63d00b7cddc5",
       "name": "Loop Symbols",
       "onError": "continueRegularOutput"
     },
@@ -124,7 +124,7 @@
         -16,
         0
       ],
-      "id": "2146fdb4-dcde-4506-8570-509a3d51e7ef",
+      "id": "5a828f19-1150-40f5-ac08-9c61312ad2a3",
       "name": "Finalize Run"
     },
     {
@@ -138,7 +138,7 @@
         224,
         0
       ],
-      "id": "dfb2520f-192c-4713-8f2f-d32595f6217d",
+      "id": "6e9da218-4725-4ba7-8aa5-094644c00cb0",
       "name": "Sync DuckDB → Sheets",
       "onError": "continueRegularOutput"
     },
@@ -1227,7 +1227,7 @@
         480,
         0
       ],
-      "id": "0beccae0-cb06-42da-badd-45ccf6621f53",
+      "id": "96a9b762-4964-48fa-80be-e7ff6f9fc359",
       "name": "Write AG2 Sortie",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -1284,7 +1284,7 @@
         80,
         160
       ],
-      "id": "91e563a8-a007-4e29-bce6-13db42fd3f24",
+      "id": "c6219a01-bf74-461b-bb70-3bda24964208",
       "name": "AG2.10 — HTTP — Fetch Yahoo OHLCV (1H Timing)",
       "onError": "continueRegularOutput"
     },
@@ -1335,7 +1335,7 @@
         80,
         336
       ],
-      "id": "f33fadb9-fe23-4230-a479-871722c0d355",
+      "id": "026ee5df-3163-4a96-ace3-8b84171d8138",
       "name": "AG2.15 — HTTP — Fetch Yahoo OHLCV (1D Strategy)",
       "onError": "continueRegularOutput"
     },
@@ -1349,7 +1349,7 @@
         304,
         160
       ],
-      "id": "abfee67e-50e0-4866-bb20-c837cb67aff3",
+      "id": "05a777b2-d439-4b49-a940-50ec7021442f",
       "name": "AG2.11 — Code — Wrap H1"
     },
     {
@@ -1362,7 +1362,7 @@
         304,
         336
       ],
-      "id": "52587148-a92c-4fc1-af31-9c81c684f6ac",
+      "id": "24dcf23a-71c7-4ca0-b3d2-b05b90cd8331",
       "name": "AG2.16 — Code — Wrap D1"
     },
     {
@@ -1377,7 +1377,7 @@
         544,
         240
       ],
-      "id": "0578739f-9a2d-4b65-8271-4d9fb3c22927",
+      "id": "fc0a26fc-4ada-4e47-9892-180da7566c93",
       "name": "Merge"
     },
     {
@@ -1391,7 +1391,7 @@
         736,
         240
       ],
-      "id": "8a8d96a7-c46e-4c9d-be41-d58e43cbe179",
+      "id": "e935b7ec-71ad-4040-b0c3-ebc73cfe1aa9",
       "name": "Compute + Filter + Write",
       "onError": "continueRegularOutput"
     },
@@ -1424,7 +1424,7 @@
         960,
         320
       ],
-      "id": "ce9a33b6-3a47-41e7-aa5a-f7a13c24b36a",
+      "id": "de787f64-3de4-4f68-a8c3-c8f2efd37b18",
       "name": "IF Call AI?",
       "alwaysOutputData": true
     },
@@ -1438,7 +1438,7 @@
         1168,
         208
       ],
-      "id": "67c19701-d1a0-4aa0-b5dc-b20ea6aae736",
+      "id": "be8f80f2-05b3-4015-b4ee-44c02e5b4116",
       "name": "Snapshot Context"
     },
     {
@@ -1452,10 +1452,10 @@
           "values": [
             {
               "role": "system",
-              "content": "Tu es l'Agent n°2 : Validateur Technique H1 ↔ D1. Senior Technical Analyst et Risk Manager.\n\nRÈGLES ABSOLUES :\n1. SMA200 PRIORITÉ ABSOLUE : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n2. RÉGIME D1 : BULLISH (prix>SMA200 ET SMA50>SMA200), BEARISH (prix<SMA200 ET SMA50<SMA200), TRANSITION, NEUTRAL_RANGE.\n3. ZÉRO HALLUCINATION : Ne jamais inventer. Manquant -> missing_fields.\n4. COHÉRENCE : validated=true exige decision=APPROVE + stop_loss non null. stop_loss=null exige validated=false.\n5. DONNÉES OBLIGATOIRES : SMA200_D1 et prix_D1. Si absents -> REJECT, quality_score<=3.\n6. Si bars H1<20 : WATCH si WITH_BIAS, sinon REJECT. Pas de stop loss.\n7. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n8. GATE RR (BUY) : RR<1.2->REJECT, 1.2-1.5->WATCH, >=1.5->APPROVE, null->WATCH si WITH_BIAS.\n9. Suivi tendance->APPROVE candidat (quality 7-10). Contre-tendance->REJECT sauf RSI extrême.\n10. STOP LOSS : swing H1, buffer 0.1-0.3%.\n11. REASONING : Débuter par 'Tendance de fond Haussiere car Prix > SMA200.' ou 'Baissiere'. Max 2 phrases."
+              "content": "Tu es l'Agent n°2 : Validateur Technique H1 ↔ D1. Senior Technical Analyst et Risk Manager.\n\nRÈGLES :\n1. SMA200 PRIORITÉ : bias_sma200=BULLISH si prix>SMA200_D1, sinon BEARISH.\n2. RÉGIME D1 : BULLISH (prix>SMA200 ET SMA50>SMA200), BEARISH (prix<SMA200 ET SMA50<SMA200), TRANSITION, NEUTRAL_RANGE.\n3. ZÉRO HALLUCINATION : Ne jamais inventer de données. Manquant -> missing_fields.\n4. COHÉRENCE : validated=true exige decision=APPROVE + stop_loss non null.\n5. DONNÉES OBLIGATOIRES : SMA200_D1 et prix_D1. Si absents -> REJECT, quality_score<=3.\n6. ALIGNEMENT : WITH_BIAS (BUY+BULLISH ou SELL+BEARISH), AGAINST_BIAS, MIXED, UNKNOWN.\n7. ENTRY_PLAN : Un plan d'entrée pré-calculé (entry, suggested_sl, suggested_tp, sl_method) est TOUJOURS fourni. Utilise-le comme base. Tu peux ajuster le stop_loss si les bars H1 montrent un meilleur niveau technique (swing), sinon REPRENDS entry_plan.suggested_sl tel quel. N'invente jamais un stop sans justification.\n8. GATE RR : rr_theoretical est pré-calculé. RR<1.0->REJECT, 1.0-1.5->WATCH (APPROVE si WITH_BIAS et qualité technique), >=1.5->APPROVE candidat.\n9. TENDANCE : Suivi tendance (WITH_BIAS) = favorable, quality 6-10. Contre-tendance (AGAINST_BIAS) = REJECT sauf RSI extrême (<25 ou >75).\n10. STOP LOSS : Privilégie swing H1 si identifiable (buffer 0.1-0.3%), sinon utilise entry_plan.suggested_sl (ATR-based). stop_loss_basis = SWING_H1 si swing, ATR_BASED si entry_plan, NONE uniquement si impossible.\n11. BARS H1 : Si bars < 20, tu peux utiliser entry_plan.suggested_sl (ATR-based) mais avec prudence : quality_score max 5, decision=WATCH.\n12. REASONING : Débuter par 'Tendance de fond Haussière car Prix > SMA200.' ou 'Baissière'. Expliquer la décision en 2-3 phrases concises."
             },
             {
-              "content": "=Tu vas recevoir un objet JSON pour un symbole contenant :\n- signal_tactical_H1 : signal + indicateurs H1\n- primary_context_D1 : indicateurs D1 (Prix_D1/last_close, SMA200_D1, SMA50_D1, etc.)\n- bars : dernières bougies H1 (OHLCV)\n- rr_theoretical : ratio R/R théorique\n- rr_meta : champs d'audit (méthode, distances)\n\nTa mission : appliquer STRICTEMENT les règles H1↔D1 et retourner UNIQUEMENT le JSON de décision conforme au schéma.\n\nRÈGLES D'ACCÈS AUX DONNÉES :\n- SMA200_D1, SMA50_D1, Prix_D1 : dans primary_context_D1.indicators\n- RSI_H1 : dans signal_tactical_H1.indicators\n- Bougies H1 : dans bars\n- RR : rr_theoretical (ne pas réinventer TP/SL si fourni)\n- Si bars < 20 : tu NE PEUX PAS proposer de stop ⇒ validated=false\n\nDONNÉES :\n{{ JSON.stringify($json.ai_context, null, 2) }}"
+              "content": "Tu vas recevoir un objet JSON pour un symbole contenant :\n- signal_tactical_H1 : signal tactique H1 (action BUY/SELL/HOLD, score, indicateurs H1)\n- primary_context_D1 : contexte stratégique D1 (trend_verdict, indicateurs D1 dont last_close, sma200, sma50)\n- entry_plan : plan d'entrée PRÉ-CALCULÉ avec entry (prix), suggested_sl, suggested_tp, sl_method (SWING_H1 ou ATR_BASED), tp_method\n- bars : dernières bougies H1 (OHLCV, jusqu'à 60)\n- rr_theoretical : ratio R/R pré-calculé (basé sur entry_plan)\n- rr_meta : détail du calcul RR (entry, sl, tp, distances, méthodes)\n\nTa mission : évaluer la qualité technique du setup H1↔D1 et retourner le JSON de décision.\n\nACCÈS AUX DONNÉES :\n- Prix D1 / SMA200 / SMA50 : primary_context_D1.indicators (last_close, sma200, sma50)\n- Indicateurs H1 (RSI, MACD, ATR, BB, etc.) : signal_tactical_H1.indicators\n- Stop Loss suggéré : entry_plan.suggested_sl (TOUJOURS présent, utilise-le comme base)\n- Take Profit suggéré : entry_plan.suggested_tp\n- RR : rr_theoretical (déjà calculé, ne pas recalculer)\n- Bougies H1 : bars (OHLCV pour analyse visuelle/pattern)\n\nIMPORTANT : entry_plan fournit TOUJOURS un SL/TP. Tu peux l'améliorer si tu identifies un meilleur niveau technique dans les bars, mais ne le rejette pas sans raison. Si tu ne trouves pas mieux, reprends entry_plan.suggested_sl.\n\nDONNÉES :\n{{ JSON.stringify($json.ai_context, null, 2) }}"
             }
           ]
         },
@@ -1465,7 +1465,7 @@
           "textFormat": {
             "textOptions": {
               "type": "json_schema",
-              "schema": "={\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"validated\": {\"type\": \"boolean\"}, \"decision\": {\"type\": \"string\", \"enum\": [\"APPROVE\", \"REJECT\", \"WATCH\"]}, \"quality_score\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 10}, \"bias_sma200\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\"]}, \"regime_d1\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\", \"NEUTRAL_RANGE\", \"TRANSITION\"]}, \"h1_d1_alignment\": {\"type\": \"string\", \"enum\": [\"WITH_BIAS\", \"AGAINST_BIAS\", \"MIXED\", \"UNKNOWN\"]}, \"reasoning\": {\"type\": \"string\"}, \"chart_pattern\": {\"type\": \"string\"}, \"stop_loss_suggestion\": {\"type\": [\"number\", \"null\"]}, \"stop_loss_basis\": {\"type\": \"string\", \"enum\": [\"SWING_H1\", \"BAR_ANCHOR\", \"NONE\"]}, \"missing_fields\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"anomalies\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"validated\", \"decision\", \"quality_score\", \"reasoning\", \"bias_sma200\", \"regime_d1\", \"h1_d1_alignment\", \"chart_pattern\", \"stop_loss_suggestion\", \"stop_loss_basis\", \"missing_fields\", \"anomalies\"]}"
+              "schema": "={\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"validated\": {\"type\": \"boolean\"}, \"decision\": {\"type\": \"string\", \"enum\": [\"APPROVE\", \"REJECT\", \"WATCH\"]}, \"quality_score\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 10}, \"bias_sma200\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\"]}, \"regime_d1\": {\"type\": \"string\", \"enum\": [\"BULLISH\", \"BEARISH\", \"NEUTRAL_RANGE\", \"TRANSITION\"]}, \"h1_d1_alignment\": {\"type\": \"string\", \"enum\": [\"WITH_BIAS\", \"AGAINST_BIAS\", \"MIXED\", \"UNKNOWN\"]}, \"reasoning\": {\"type\": \"string\"}, \"chart_pattern\": {\"type\": \"string\"}, \"stop_loss_suggestion\": {\"type\": [\"number\", \"null\"]}, \"stop_loss_basis\": {\"type\": \"string\", \"enum\": [\"SWING_H1\", \"ATR_BASED\", \"BAR_ANCHOR\", \"NONE\"]}, \"missing_fields\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}, \"anomalies\": {\"type\": \"array\", \"items\": {\"type\": \"string\"}}}, \"required\": [\"validated\", \"decision\", \"quality_score\", \"reasoning\", \"bias_sma200\", \"regime_d1\", \"h1_d1_alignment\", \"chart_pattern\", \"stop_loss_suggestion\", \"stop_loss_basis\", \"missing_fields\", \"anomalies\"]}"
             }
           },
           "temperature": 0.1
@@ -1477,7 +1477,7 @@
         1376,
         208
       ],
-      "id": "10a987b2-17c4-4ba2-b235-f3229faba164",
+      "id": "4720b069-e2ac-4323-b077-b6b6a82c6d41",
       "name": "AI Validation GPT",
       "credentials": {
         "openAiApi": {
@@ -1496,7 +1496,7 @@
         1536,
         208
       ],
-      "id": "b1fcd580-bba6-43b3-8f20-0ff0e1afef6a",
+      "id": "b3c76a8c-6b67-45f5-b2ff-096b18936c22",
       "name": "Merge AI + Context"
     },
     {
@@ -1510,7 +1510,7 @@
         1744,
         208
       ],
-      "id": "ab505e2f-ada7-41ff-b2bf-d04bb74e5cf8",
+      "id": "f48987af-89c2-4233-8bf7-15c1e805937e",
       "name": "Extract AI + Write",
       "onError": "continueRegularOutput"
     },
@@ -1543,7 +1543,7 @@
         1968,
         464
       ],
-      "id": "462845f6-9826-4ff3-b4a9-2c6d33f75c30",
+      "id": "b1d0f9b8-1649-4edd-821e-8e8f5dd189c3",
       "name": "IF Vectorize?",
       "alwaysOutputData": true
     },
@@ -1557,7 +1557,7 @@
         2176,
         112
       ],
-      "id": "60261654-6718-481e-8244-991e7a17a3de",
+      "id": "0aa86cfc-a879-4b0f-adf3-03af6142116f",
       "name": "Prep Vector Text"
     },
     {
@@ -1570,7 +1570,7 @@
         2336,
         288
       ],
-      "id": "1d5130a8-679c-463b-8adc-e66c71b88d88",
+      "id": "57f94054-1836-4750-8418-f16e576322a7",
       "name": "Embeddings OpenAI",
       "credentials": {
         "openAiApi": {
@@ -1589,7 +1589,7 @@
         2384,
         416
       ],
-      "id": "75a27a7e-816e-4d50-bfca-dda46857fc13",
+      "id": "91f53f88-6ff4-40ab-a227-3f95aa33e02b",
       "name": "Default Data Loader"
     },
     {
@@ -1604,7 +1604,7 @@
         2384,
         608
       ],
-      "id": "a0617bc8-6a16-4ec4-901e-0508f6419d65",
+      "id": "0da95eba-e7a0-4647-8a8c-1f768be711bd",
       "name": "Text Splitter"
     },
     {
@@ -1627,7 +1627,7 @@
         2416,
         112
       ],
-      "id": "0a19d2ad-2898-4ffe-9693-e92affaa4e9e",
+      "id": "340e06da-12e0-4822-ba28-b9f2ae2d9956",
       "name": "Qdrant Upsert",
       "credentials": {
         "qdrantApi": {
@@ -1647,7 +1647,7 @@
         2848,
         576
       ],
-      "id": "5d6c35ea-8b48-4b79-ac4e-32e99ec96bfb",
+      "id": "c3da1e35-1f45-486f-81bf-65f294d2d64b",
       "name": "Mark Vectorized"
     }
   ],
