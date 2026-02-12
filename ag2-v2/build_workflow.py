@@ -204,7 +204,7 @@ http_h1_params = {
         {"name": "lookback_days", "value": "={{ $json.intraday.lookback_days }}"},
         {"name": "max_bars", "value": "={{ $json.intraday.max_bars }}"},
         {"name": "min_bars", "value": "={{ $json.intraday.min_bars }}"},
-        {"name": "allow_stale", "value": "true"},
+        {"name": "allow_stale", "value": "false"},
     ]},
     "options": {"response": {"response": {"responseFormat": "json"}}, "timeout": 60000}
 }
@@ -221,7 +221,7 @@ http_d1_params = {
         {"name": "lookback_days", "value": "={{ $json.daily.lookback_days }}"},
         {"name": "max_bars", "value": "={{ $json.daily.max_bars }}"},
         {"name": "min_bars", "value": "={{ $json.daily.min_bars }}"},
-        {"name": "allow_stale", "value": "true"},
+        {"name": "allow_stale", "value": "false"},
     ]},
     "options": {"response": {"response": {"responseFormat": "json"}}, "timeout": 60000}
 }

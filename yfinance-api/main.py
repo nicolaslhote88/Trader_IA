@@ -46,11 +46,11 @@ DEFAULT_CACHE_TTL = {
     "1m":  900,       # 15 min
     "2m":  1800,      # 30 min
     "5m":  1800,      # 30 min
-    "15m": 3600,      # 1h
-    "30m": 7200,      # 2h
-    "60m": 7200,      # 2h
-    "1h":  7200,      # 2h
-    "90m": 7200,      # 2h
+    "15m": 2100,      # 35 min  (interval + 5-min buffer)
+    "30m": 2400,      # 40 min  (interval + 10-min buffer)
+    "60m": 3900,      # 1h 5min (interval + 5-min buffer)
+    "1h":  3900,      # 1h 5min (interval + 5-min buffer)
+    "90m": 5700,      # 1h 35min (interval + 5-min buffer)
     "1d":  14400,     # 4h  (covers market close + some buffer)
     "5d":  86400,     # 24h
     "1wk": 172800,    # 48h
@@ -212,10 +212,42 @@ def _get_cache_ttl(interval: str) -> int:
     return DEFAULT_CACHE_TTL.get(interval, 14400)
 
 
+def _weekend_buffer(now: datetime, interval: str) -> float:
+    """
+    Return extra seconds to add to TTL to account for weekends/non-market hours.
+    Euronext Paris: ~08:00-17:30 UTC (CET/CEST). We use 07:00-18:00 UTC as safe range.
+    """
+    weekday = now.weekday()  # 0=Monday, 6=Sunday
+    hour = now.hour
+
+    is_daily_plus = interval in ("1d", "5d", "1wk", "1mo", "3mo")
+
+    if weekday == 5:  # Saturday
+        # Last bar: Friday ~17:00. Add ~24h buffer.
+        return 1.0 * 86400 if is_daily_plus else 0.75 * 86400
+    elif weekday == 6:  # Sunday
+        # Last bar: Friday ~17:00. Add ~48h buffer.
+        return 1.5 * 86400 if is_daily_plus else 1.5 * 86400
+    elif weekday == 0:  # Monday
+        if is_daily_plus:
+            return 2 * 86400  # Friday daily bar → Monday
+        # Intraday on Monday: before market open, last bar was Friday ~17:00
+        if hour < 9:
+            return 2.5 * 86400  # ~60h buffer (Fri 17:00 → Mon 09:00)
+        return 0
+    else:
+        # Tue-Fri: off-hours buffer for intraday only
+        if not is_daily_plus and (hour < 7 or hour >= 18):
+            # Overnight: last bar was ~17:00 yesterday
+            return 15 * 3600  # 15h buffer
+        return 0
+
+
 def _is_cache_stale(df: Optional[pd.DataFrame], interval: str) -> bool:
     """
     Check if cached data is stale based on the age of the most recent bar.
     Returns True if cache should be refreshed.
+    Accounts for weekends and non-market hours (Euronext: ~07-18 UTC).
     """
     if df is None or df.empty:
         return True
@@ -232,27 +264,15 @@ def _is_cache_stale(df: Optional[pd.DataFrame], interval: str) -> bool:
         if last_bar_dt.tzinfo is None:
             last_bar_dt = last_bar_dt.replace(tzinfo=timezone.utc)
 
-        age_seconds = (_utcnow() - last_bar_dt).total_seconds()
-        ttl = _get_cache_ttl(interval)
-
-        # For daily+ intervals, account for weekends:
-        # If today is Monday and last bar is Friday, that's ~63h which is normal.
-        # We add weekend buffer for daily intervals.
-        if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
-            now = _utcnow()
-            weekday = now.weekday()  # 0=Monday, 6=Sunday
-            if weekday == 0:  # Monday
-                ttl += 2 * 86400  # Add 2 days for weekend
-            elif weekday == 6:  # Sunday
-                ttl += 1 * 86400  # Add 1 day
-            elif weekday == 5:  # Saturday
-                ttl += 0.5 * 86400
+        now = _utcnow()
+        age_seconds = (now - last_bar_dt).total_seconds()
+        ttl = _get_cache_ttl(interval) + _weekend_buffer(now, interval)
 
         is_stale = age_seconds > ttl
         if is_stale:
-            print(f"[CACHE] Stale: last bar age={age_seconds:.0f}s > ttl={ttl}s", flush=True)
+            print(f"[CACHE] Stale: last bar age={age_seconds:.0f}s > ttl={ttl:.0f}s ({interval})", flush=True)
         else:
-            print(f"[CACHE] Fresh: last bar age={age_seconds:.0f}s <= ttl={ttl}s", flush=True)
+            print(f"[CACHE] Fresh: last bar age={age_seconds:.0f}s <= ttl={ttl:.0f}s ({interval})", flush=True)
         return is_stale
 
     except Exception as e:
