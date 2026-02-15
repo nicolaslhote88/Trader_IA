@@ -10,6 +10,8 @@ def safe_float(val: object) -> float:
     try:
         if val is None:
             return 0.0
+        if pd.isna(val):
+            return 0.0
         if isinstance(val, bool):
             return float(val)
         if isinstance(val, (int, float)):
