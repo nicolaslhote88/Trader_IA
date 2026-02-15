@@ -1,20 +1,19 @@
-# AG2-V2 - Technical Analyst Pipeline
+# AG2-V2 - Workflow Final (Canonical)
 
-## Etat des workflows locaux
+## Source canonique
 
-Le dossier contient maintenant **2 exports n8n** :
+Le workflow de référence est:
+
+- `ag2-v2/AG2-V2-workflow.final-loop-vector-test.json`
+
+Les fichiers suivants sont des miroirs du canonique:
 
 - `ag2-v2/AG2-V2-workflow.json`
-  - Snapshot **fidele au workflow actuel n8n** fourni (initialisation + indicateurs + analyse IA + sync Sheets).
-  - La branche vectorisation est presente mais **non cablee** au flux principal.
-
 - `ag2-v2/AG2-V2-workflow.vector-wired-proposed.json`
-  - Variante **proposee** avec cablage vectoriel fonctionnel.
-  - Les sorties `Extract AI + Write` **et** `Hydrate AI from cache` passent par `IF Vectorize?` puis Qdrant si `should_vectorize=true`.
 
-## Scripts de noeuds synchronises
+## Scripts de noeuds synchronisés
 
-Les scripts sous `ag2-v2/nodes/` sont alignes avec la version n8n courante :
+Le dossier `ag2-v2/nodes/` est aligné sur le workflow final:
 
 - `01_init_config.js`
 - `02_duckdb_init.py`
@@ -24,54 +23,35 @@ Les scripts sous `ag2-v2/nodes/` sont alignes avec la version n8n courante :
 - `05_snapshot.js`
 - `06a_merge_ai.js`
 - `06_extract_ai.py`
-- `07_hydrate_ai_cache.py` (ajoute)
-- `08_prep_vector.js`
+- `07_hydrate_ai_cache.py`
 - `09_mark_vector.py`
 - `10_finalize.py`
 - `11_sync_sheets.py`
+- `12_build_vector_docs_final_loop.py`
 
-## Proposition de cablage vectoriel (recommandee)
+Note: `08_prep_vector.js` est conservé en fichier legacy (non utilisé par le workflow final).
 
-### Pourquoi
+## Commandes utiles
 
-Dans le workflow actuel, la partie vectorielle ne recoit aucun item du flux principal.
-Resultat: `Prep Vector Text` / `Qdrant Upsert` / `Mark Vectorized` ne tournent pas pendant l'execution AG2.
-
-### Design recommande
-
-- Ajouter un `IF Vectorize?` base sur:
-  - `={{ $json.should_vectorize.toString().trim().toBoolean() }}`
-- Brancher vers ce IF depuis:
-  - `Extract AI + Write`
-  - `Hydrate AI from cache`
-- Sortie `true`:
-  - `Prep Vector Text -> Qdrant Upsert -> Mark Vectorized -> Loop Symbols`
-- Sortie `false`:
-  - retour direct `Loop Symbols`
-
-Ce design garde la logique symbole-par-symbole, met a jour `vector_status` au fil de l'eau, et evite d'attendre la fin de run.
-
-## Build / regeneration
-
-`ag2-v2/build_workflow.py` gere 2 variantes:
+Depuis `ag2-v2/`:
 
 ```bash
-# Export courant (snapshot n8n actuel)
-python ag2-v2/build_workflow.py > ag2-v2/AG2-V2-workflow.json
+# Afficher/exporter le workflow canonique
+python build_workflow.py > AG2-V2-workflow.json
 
-# Export propose avec vectorisation cablee
-python ag2-v2/build_workflow.py --variant vector-wired > ag2-v2/AG2-V2-workflow.vector-wired-proposed.json
+# Resynchroniser les scripts nodes/* depuis le workflow canonique
+python build_workflow.py --sync-nodes
 
-# Ecrit les 2 fichiers d'un coup
-python ag2-v2/build_workflow.py --write-files
+# Mettre à jour les deux JSON miroir depuis le canonique
+python build_workflow.py --sync-workflows
+
+# Tout resynchroniser d'un coup
+python build_workflow.py --write-files
 ```
 
-## Notes d'exploitation
+## Paramètres clés du workflow final
 
-- Base DuckDB: `/files/duckdb/ag2_v2.duckdb`
+- DuckDB: `/files/duckdb/ag2_v2.duckdb`
 - YFinance API: `http://yfinance-api:8080`
-- Collection Qdrant: `financial_tech_v1`
-- Le calcul de `should_vectorize` est deja alimente par:
-  - `Extract AI + Write`
-  - `Hydrate AI from cache`
-
+- Qdrant collection: `financial_tech_v1`
+- Rotation batch DuckDB: `BATCH_SIZE = 1` (dans `nodes/02_duckdb_init.py`)

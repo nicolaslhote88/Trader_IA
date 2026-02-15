@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DB_PATH = "/files/duckdb/ag2_v2.duckdb"
-BATCH_SIZE = 30
+BATCH_SIZE = 1
 
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
