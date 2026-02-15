@@ -313,7 +313,7 @@ def compute_indicators(bars, interval):
 def check_freshness(last_bar_time, interval, now=None):
     """Check if data is stale. Returns (is_fresh, age_hours, status).
     H1: stale if age > 3h during market hours, > 72h otherwise
-    D1: stale if age > 96h (4 days — covers weekends)
+    D1: stale if age > 96h (4 days - covers weekends)
     """
     if not last_bar_time:
         return False, None, "NO_TIMESTAMP"
@@ -474,7 +474,7 @@ for it in items:
         h1_interval = str(h1_resp.get("interval") or "1h")
         d1_interval = str(d1_resp.get("interval") or "1d")
 
-        # ── Symbol consistency check (P0.2) ──
+        # Symbol consistency check (P0.2)
         h1_sym = str(h1_resp.get("symbol", "") or "").strip()
         d1_sym = str(d1_resp.get("symbol", "") or "").strip()
         if h1_sym and d1_sym and h1_sym != d1_sym:
@@ -488,17 +488,17 @@ for it in items:
         h1_result = compute_indicators(h1_resp.get("bars", []), h1_interval)
         d1_result = compute_indicators(d1_resp.get("bars", []), d1_interval)
 
-        # ── Freshness Gate (P0.1) ──
+        # Freshness Gate (P0.1)
         now_utc = datetime.now(timezone.utc)
         h1_fresh, h1_age_h, h1_freshness = check_freshness(h1_result.get("last_bar_time"), h1_interval, now_utc)
         d1_fresh, d1_age_h, d1_freshness = check_freshness(d1_result.get("last_bar_time"), d1_interval, now_utc)
 
         if not h1_fresh and h1_freshness == "STALE":
             h1_result["status"] = "STALE"
-            h1_result.setdefault("warnings", []).append(f"H1 data is {h1_age_h}h old — STALE")
+            h1_result.setdefault("warnings", []).append(f"H1 data is {h1_age_h}h old - STALE")
         if not d1_fresh and d1_freshness == "STALE":
             d1_result["status"] = "STALE"
-            d1_result.setdefault("warnings", []).append(f"D1 data is {d1_age_h}h old — STALE")
+            d1_result.setdefault("warnings", []).append(f"D1 data is {d1_age_h}h old - STALE")
 
         h1_ind = h1_result.get("indicators", {}) or {}
         d1_ind = d1_result.get("indicators", {}) or {}
@@ -573,6 +573,13 @@ for it in items:
             )
 
         out = dict(row)
+        # Keep a small, AI-friendly H1 slice (do NOT store full bars in h1_response)
+        h1_bars = (h1_resp.get("bars", []) or [])
+        d1_bars = (d1_resp.get("bars", []) or [])
+        out["h1_bars_60"] = h1_bars[-60:] if len(h1_bars) > 60 else h1_bars
+        out["h1_bars_count"] = len(h1_bars)
+        out["d1_bars_count"] = len(d1_bars)
+
         out["h1_response"] = slim_response(h1_resp, keep=3)
         out["d1_response"] = slim_response(d1_resp, keep=3)
         out["h1_indicators"] = h1_ind

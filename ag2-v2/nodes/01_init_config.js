@@ -1,4 +1,4 @@
-// AG2-V2 — Init Config (pass-through, no batch rotation)
+// AG2-V2 - Init Config (pass-through, no batch rotation)
 // Batch rotation is handled by DuckDB Init (persisted in DB)
 const items = $input.all();
 

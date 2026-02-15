@@ -1,196 +1,77 @@
-# AG2-V2 — Technical Analyst Pipeline
+# AG2-V2 - Technical Analyst Pipeline
 
-## Vue d'ensemble
+## Etat des workflows locaux
 
-Un seul workflow n8n remplaçant les 2 workflows V1 (étape 1 + étape 2).
-Stockage DuckDB au lieu de Google Sheets (sauf lecture Universe).
+Le dossier contient maintenant **2 exports n8n** :
 
-### V1 → V2 : ce qui change
+- `ag2-v2/AG2-V2-workflow.json`
+  - Snapshot **fidele au workflow actuel n8n** fourni (initialisation + indicateurs + analyse IA + sync Sheets).
+  - La branche vectorisation est presente mais **non cablee** au flux principal.
 
-| Aspect | V1 | V2 |
-|--------|----|----|
-| Workflows | 2 (étape 1 + étape 2) | **1 seul unifié** |
-| Nodes | 36 | **20** |
-| Stockage output | Google Sheets (85 cols) | **DuckDB** (SQL, indexé, rapide) |
-| Stockage cache | Google Sheets `ag2_ai_cache` | **DuckDB** `ai_dedup_cache` |
-| Traçabilité runs | Aucune (Run_ID vide) | **Table `run_log`** complète |
-| Port yfinance-api | 8080 OU 8000 (bug C1) | **8080 fixe** |
-| RSI | Simple average | **Wilder smoothing** |
-| EMA init | values[0] | **SMA warmup** |
-| Scoring | Asymétrique (BUY≥2, SELL≤-1) | **Symétrique (±2)** |
-| Support/Résistance | max(highs[-50:]) naïf | **Pivot-based** (swing H/L) |
-| Indicateurs | 15 | **23** (+Bollinger, Stoch, ADX, OBV) |
-| Vectorisation | Insert-only (doublons) | **Upsert** via ID |
-| Vectorisation bug | Seul le dernier marqué DONE | **Tous marqués** |
-| Code Python | Dupliqué H1/D1 | **Fonction unique** |
-| Cooldown | Global | Per-symbol (via yfinance-api v2) |
-| Fetch HTTP | 6 nodes (Set+HTTP+Merge ×2) | **1 node** (JS `$http.request`) |
+- `ag2-v2/AG2-V2-workflow.vector-wired-proposed.json`
+  - Variante **proposee** avec cablage vectoriel fonctionnel.
+  - Les sorties `Extract AI + Write` **et** `Hydrate AI from cache` passent par `IF Vectorize?` puis Qdrant si `should_vectorize=true`.
 
-## Architecture du workflow
+## Scripts de noeuds synchronises
 
-```
-Cron (9h10-17h10 lun-ven) ──┐
-Manual Trigger ──────────────┤
-                             ▼
-              Read Universe (Google Sheets)
-                             │
-              Init Config + Batch (25 symboles, round-robin)
-                             │
-              DuckDB Init Schema
-                             │
-              ╔══════════════╧══════════════╗
-              ║     Loop Symbols (1×1)      ║
-              ║                             ║
-              ║  Fetch H1+D1 (JS, parallel) ║
-              ║         │                   ║
-              ║  Compute+Filter+Dedup+Write ║
-              ║  (Python, DuckDB)           ║
-              ║         │                   ║
-              ║    ┌────┴────┐              ║
-              ║    │ IF AI?  │              ║
-              ║    ▼         └──→ Loop      ║
-              ║  Snapshot Context            ║
-              ║    │                         ║
-              ║  AI Validation (GPT-4o-mini) ║
-              ║    │                         ║
-              ║  Extract AI + Write DuckDB   ║
-              ║    │                         ║
-              ║    ┌────┴────┐              ║
-              ║    │IF Vector│              ║
-              ║    ▼         └──→ Loop      ║
-              ║  Prep Text                  ║
-              ║    │                         ║
-              ║  Qdrant Upsert (embeddings) ║
-              ║    │                         ║
-              ║  Mark Vectorized (DuckDB)   ║
-              ║    └──→ Loop                ║
-              ╚═══════════╤═════════════════╝
-                          │ (done)
-              Finalize Run (DuckDB run_log)
-```
+Les scripts sous `ag2-v2/nodes/` sont alignes avec la version n8n courante :
 
-## Fichiers
+- `01_init_config.js`
+- `02_duckdb_init.py`
+- `03a_wrap_h1.js`
+- `03b_wrap_d1.js`
+- `04_compute.py`
+- `05_snapshot.js`
+- `06a_merge_ai.js`
+- `06_extract_ai.py`
+- `07_hydrate_ai_cache.py` (ajoute)
+- `08_prep_vector.js`
+- `09_mark_vector.py`
+- `10_finalize.py`
+- `11_sync_sheets.py`
 
-```
-ag2-v2/
-├── build_workflow.py          # Générateur du JSON n8n
-├── AG2-V2-workflow.json       # JSON importable dans n8n
-├── sql/
-│   └── schema.sql             # Schéma DuckDB complet (avec vues)
-├── python/
-│   ├── indicators.py          # Moteur d'indicateurs (référence, testable)
-│   └── duckdb_ops.py          # Opérations DuckDB (référence)
-├── nodes/                     # Code source de chaque node n8n
-│   ├── 01_init_config.js
-│   ├── 02_duckdb_init.py
-│   ├── 03_fetch_data.js
-│   ├── 04_compute.py          # Moteur complet + filter + dedup + write
-│   ├── 05_snapshot.js
-│   ├── 06_extract_ai.py
-│   ├── 08_prep_vector.js
-│   ├── 09_mark_vector.py
-│   └── 10_finalize.py
-└── docs/
-    └── GUIDE.md               # Ce fichier
-```
+## Proposition de cablage vectoriel (recommandee)
 
-## Déploiement
+### Pourquoi
 
-### 1. Préparer le VPS
+Dans le workflow actuel, la partie vectorielle ne recoit aucun item du flux principal.
+Resultat: `Prep Vector Text` / `Qdrant Upsert` / `Mark Vectorized` ne tournent pas pendant l'execution AG2.
+
+### Design recommande
+
+- Ajouter un `IF Vectorize?` base sur:
+  - `={{ $json.should_vectorize.toString().trim().toBoolean() }}`
+- Brancher vers ce IF depuis:
+  - `Extract AI + Write`
+  - `Hydrate AI from cache`
+- Sortie `true`:
+  - `Prep Vector Text -> Qdrant Upsert -> Mark Vectorized -> Loop Symbols`
+- Sortie `false`:
+  - retour direct `Loop Symbols`
+
+Ce design garde la logique symbole-par-symbole, met a jour `vector_status` au fil de l'eau, et evite d'attendre la fin de run.
+
+## Build / regeneration
+
+`ag2-v2/build_workflow.py` gere 2 variantes:
 
 ```bash
-# Créer le dossier DuckDB (sera accessible par task-runners via /files)
-sudo mkdir -p /local-files/duckdb
-sudo chown 1000:1000 /local-files/duckdb
+# Export courant (snapshot n8n actuel)
+python ag2-v2/build_workflow.py > ag2-v2/AG2-V2-workflow.json
+
+# Export propose avec vectorisation cablee
+python ag2-v2/build_workflow.py --variant vector-wired > ag2-v2/AG2-V2-workflow.vector-wired-proposed.json
+
+# Ecrit les 2 fichiers d'un coup
+python ag2-v2/build_workflow.py --write-files
 ```
 
-### 2. Importer le workflow dans n8n
+## Notes d'exploitation
 
-1. Ouvrir n8n → Menu → Import from File
-2. Sélectionner `AG2-V2-workflow.json`
-3. Vérifier que les credentials sont associés :
-   - Google Sheets OAuth2
-   - OpenAI API
-   - Qdrant API
-4. Désactiver les workflows V1 (AG2 étape 1 + AG2 étape 2)
-5. Activer le workflow V2
+- Base DuckDB: `/files/duckdb/ag2_v2.duckdb`
+- YFinance API: `http://yfinance-api:8080`
+- Collection Qdrant: `financial_tech_v1`
+- Le calcul de `should_vectorize` est deja alimente par:
+  - `Extract AI + Write`
+  - `Hydrate AI from cache`
 
-### 3. Premier lancement
-
-1. Cliquer "Execute Workflow" (trigger manuel)
-2. Vérifier les logs dans l'exécution n8n
-3. Vérifier DuckDB :
-   ```bash
-   docker exec -it task-runners python3 -c "
-   import duckdb
-   con = duckdb.connect('/files/duckdb/ag2_v2.duckdb')
-   print(con.execute('SELECT count(*) FROM technical_signals').fetchone())
-   print(con.execute('SELECT * FROM run_log ORDER BY started_at DESC LIMIT 1').fetchone())
-   "
-   ```
-
-### 4. Vérifier Qdrant
-
-```bash
-curl -s http://localhost:6333/collections/financial_tech_v1 | jq .result.points_count
-```
-
-## Indicateurs techniques V2
-
-| Indicateur | V1 | V2 | Correction |
-|---|---|---|---|
-| RSI(14) | Simple avg | **Wilder smoothing** | Fix M1 |
-| EMA(12,26) | Init=values[0] | **SMA warmup** | Fix M3 |
-| MACD/Signal/Hist | Via EMA buggées | **Via EMA corrigées** | Fix M3 |
-| SMA(20,50,200) | OK | OK | — |
-| ATR(14) | Simple avg | **Wilder smoothing** | Amélioration |
-| Volatilité ann. | bpd=7 hardcodé | **8h/day (Europe)** | Fix D8 |
-| Support | — | **Pivot swing lows** | Fix M5 |
-| Résistance | max(highs[-50:]) | **Pivot swing highs** | Fix M5 |
-| Bollinger Bands | — | **SMA20 ± 2σ** | Nouveau |
-| Stochastic(14,3) | — | **%K et %D** | Nouveau |
-| ADX(14) | — | **Wilder smoothed** | Nouveau |
-| OBV Slope(20) | — | **Régression normalisée** | Nouveau |
-
-## Scoring V2 (symétrique)
-
-| Condition | Score |
-|---|---|
-| Prix > SMA50 | +1 |
-| Prix < SMA50 | -1 |
-| SMA50 > SMA200 | +1 |
-| SMA50 < SMA200 | -1 |
-| MACD Hist > 0 | +1 |
-| MACD Hist < 0 | -1 |
-| RSI < 30 | +1 |
-| RSI > 70 | -1 |
-| Stoch %K < 20 | +1 |
-| Stoch %K > 80 | -1 |
-| Prix sur BB basse | +1 |
-| Prix sur BB haute | -1 |
-
-**Score ≥ +2** → BUY | **Score ≤ -2** → SELL | sinon → NEUTRAL
-**Plage** : -6 à +6 (vs -4 à +4 en V1)
-
-## Vues SQL utiles
-
-```sql
--- Derniers signaux par symbole (pour AG1)
-SELECT * FROM v_latest_signals;
-
--- Signaux prêts pour vectorisation
-SELECT * FROM v_pending_vectors;
-
--- Résumé pour Portfolio Manager
-SELECT * FROM v_ag1_summary;
-
--- Historique des runs
-SELECT * FROM run_log ORDER BY started_at DESC LIMIT 10;
-```
-
-## Rollback vers V1
-
-Si problème avec la V2 :
-1. Désactiver le workflow V2 dans n8n
-2. Réactiver les workflows V1 (étape 1 + étape 2)
-3. Les données V1 (Google Sheets) sont intactes — la V2 écrit dans DuckDB uniquement

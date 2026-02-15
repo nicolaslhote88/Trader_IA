@@ -1634,6 +1634,41 @@
       ],
       "id": "3d1d1a86-6ebe-49a4-b5c7-1701383b00d5",
       "name": "Hydrate AI from cache"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ $json.should_vectorize.toString().trim().toBoolean() }}",
+              "rightValue": "true"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2144,
+        496
+      ],
+      "id": "9c0d7bd3-4821-451b-8e68-6db2d11d26f0",
+      "name": "IF Vectorize?",
+      "alwaysOutputData": false
     }
   ],
   "connections": {
@@ -1847,7 +1882,7 @@
       "main": [
         [
           {
-            "node": "Loop Symbols",
+            "node": "IF Vectorize?",
             "type": "main",
             "index": 0
           }
@@ -1858,7 +1893,7 @@
       "main": [
         [
           {
-            "node": "Loop Symbols",
+            "node": "IF Vectorize?",
             "type": "main",
             "index": 0
           }
@@ -1922,7 +1957,13 @@
     },
     "Mark Vectorized": {
       "main": [
-        []
+        [
+          {
+            "node": "Loop Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     },
     "Sync DuckDB → Sheets": {
@@ -1930,6 +1971,24 @@
         [
           {
             "node": "Write AG2 Sortie",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Vectorize?": {
+      "main": [
+        [
+          {
+            "node": "Prep Vector Text",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Symbols",
             "type": "main",
             "index": 0
           }

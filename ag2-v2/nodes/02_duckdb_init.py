@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DB_PATH = "/files/duckdb/ag2_v2.duckdb"
-BATCH_SIZE = 25
+BATCH_SIZE = 30
 
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
@@ -72,7 +72,7 @@ with db_con() as con:
             [sym, r.get("Name", ""), r.get("AssetClass", "Equity"), r.get("Exchange", "Euronext Paris"), r.get("Currency", "EUR"), r.get("Country", ""), r.get("Sector", ""), r.get("Industry", ""), r.get("ISIN", ""), str(r.get("Enabled", "true")).lower() == "true", r.get("BoursoramaRef", "")],
         )
 
-    # ── Batch rotation from DuckDB (persistent across re-imports) ──
+    # Batch rotation from DuckDB (persistent across re-imports)
     row = con.execute("SELECT value FROM batch_state WHERE key = 'last_index'").fetchone()
     idx = int(row[0]) if row else 0
     total = len(all_symbols)
@@ -99,7 +99,7 @@ with db_con() as con:
         [run_id, idx, len(batch), total],
     )
 
-# ── Explode: one item per symbol ──
+# Explode: one item per symbol
 out = []
 for i, symbol in enumerate(batch):
     out.append({"json": {
