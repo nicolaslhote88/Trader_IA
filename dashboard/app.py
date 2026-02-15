@@ -1,8 +1,10 @@
 import json
 import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import duckdb
 import gspread
@@ -77,318 +79,32 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# ============================================================
-# HELPERS GENERAUX
-# ============================================================
+# Ensure local imports resolve whether app is launched from repo root or dashboard/.
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
-
-def safe_float(val: object) -> float:
-    """Conversion float robuste (support virgule, nettoyage, valeurs vides)."""
-    try:
-        if val is None:
-            return 0.0
-        if isinstance(val, bool):
-            return float(val)
-        if isinstance(val, (int, float)):
-            return float(val)
-        s = str(val).strip()
-        if s == "" or s.lower() == "nan":
-            return 0.0
-        s = s.replace(",", ".")
-        s = re.sub(r"[^\d.\-]", "", s)
-        if s in ("", "-", "."):
-            return 0.0
-        return float(s)
-    except Exception:
-        return 0.0
-
-
-def safe_json_parse(json_str: object) -> dict:
-    if not isinstance(json_str, str) or not json_str.strip():
-        return {}
-    try:
-        return json.loads(json_str)
-    except json.JSONDecodeError:
-        return {}
-
-
-def clean_text(text: object) -> str:
-    if not text:
-        return ""
-    return str(text).replace("\\n", " ").replace("\n", " ").strip()
-
-
-def clean_research_text(text: object) -> str:
-    if not isinstance(text, str):
-        return ""
-    t = text.replace("\n", "<br>")
-    t = re.sub(r"(Note:|BestScenario:|Consensus:|Risque:|Action:|Why:)", r"<strong>\1</strong>", t)
-    return t
-
-
-def format_impact_html(val: object) -> str:
-    try:
-        v = float(val)
-        color = "#888"
-        if v >= 4:
-            color = "#28a745"
-        elif v <= -4:
-            color = "#dc3545"
-        elif v > 0:
-            color = "#90ee90"
-        elif v < 0:
-            color = "#f08080"
-        return f'<span style="color:{color}; font-weight:bold;">{val}</span>'
-    except Exception:
-        return str(val)
-
-
-def normalize_cols(df: pd.DataFrame) -> pd.DataFrame:
-    """Met toutes les colonnes en minuscules pour eviter les erreurs de casse."""
-    if df is None or df.empty:
-        return df
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    return df
-
-
-def norm_symbol(df: pd.DataFrame, col_name: str = "symbol") -> pd.DataFrame:
-    """Cree une cle de jointure normalisee (symbol_key)."""
-    if df is None or df.empty:
-        return df
-    col_lower = str(col_name).lower()
-    if col_lower in df.columns:
-        df["symbol_key"] = df[col_lower].astype(str).str.strip().str.upper()
-    return df
-
-
-def enrich_df_with_name(df: pd.DataFrame, universe_df: pd.DataFrame) -> pd.DataFrame:
-    """Ajoute/complete la colonne name et sector fallback depuis Universe via symbol."""
-    if df is None or df.empty or universe_df is None or universe_df.empty:
-        return df
-    if "symbol" not in df.columns:
-        return df
-
-    u_clean = universe_df.copy()
-    if "symbol" in u_clean.columns:
-        u_clean["symbol"] = u_clean["symbol"].astype(str).str.strip()
-
-    # Name mapping
-    if "name" in u_clean.columns:
-        mapping = pd.Series(u_clean["name"].values, index=u_clean["symbol"]).to_dict()
-        df["symbol"] = df["symbol"].astype(str).str.strip()
-        df["name_enrich"] = df["symbol"].map(mapping).fillna("")
-        if "name" not in df.columns:
-            df["name"] = df["name_enrich"]
-        else:
-            df["name"] = df["name"].fillna(df["name_enrich"])
-
-    # Sector fallback
-    if "sector" not in df.columns and "sector" in u_clean.columns:
-        sec_map = pd.Series(u_clean["sector"].values, index=u_clean["symbol"]).to_dict()
-        df["sector"] = df["symbol"].map(sec_map).fillna("N/A")
-
-    return df
-
-
-def check_freshness(date_val: object, days_limit: int) -> tuple[str, int]:
-    """Retourne (icone, age_en_jours). Robust: None / NaT / formats ISO."""
-    try:
-        if date_val is None:
-            return "❌", 999
-
-        # Pandas NaT / NaN
-        if pd.isna(date_val):
-            return "❌", 999
-
-        s = str(date_val).strip()
-        if s == "" or s.lower() in ("nan", "nat", "none", "null"):
-            return "❌", 999
-
-        # Cas pandas Timestamp / datetime
-        if isinstance(date_val, (pd.Timestamp, datetime)):
-            d = date_val.to_pydatetime() if isinstance(date_val, pd.Timestamp) else date_val
-        else:
-            d_str = s.replace("Z", "").split(".")[0]
-            try:
-                d = datetime.fromisoformat(d_str)
-            except ValueError:
-                d = pd.to_datetime(d_str, errors="coerce")
-                if pd.isna(d):
-                    return "❓", 999
-                d = d.to_pydatetime()
-
-        # Neutraliser TZ
-        if getattr(d, "tzinfo", None) is not None:
-            d = d.replace(tzinfo=None)
-
-        delta = (datetime.now() - d).days
-
-        if delta <= days_limit:
-            return "✅", int(delta)
-        if delta <= days_limit * 3:
-            return "⚠️", int(delta)
-        return "🛑", int(delta)
-
-    except Exception:
-        return "❓", 999
-
+from app_modules.core import (
+    calculate_sector_sentiment,
+    calculate_symbol_momentum,
+    check_freshness,
+    clean_research_text,
+    clean_text,
+    enrich_df_with_name,
+    extract_valuation_scenarios,
+    format_impact_html,
+    norm_symbol,
+    normalize_cols,
+    safe_float,
+    safe_float_series,
+    safe_json_parse,
+    truthy_series,
+)
+from app_modules.tables import render_interactive_table
 
 # ============================================================
-# HELPER : EXTRACTION SCENARIOS (Bear/Base/Bull)
+# HELPERS GENERAUX (modules externes)
 # ============================================================
-
-
-def extract_valuation_scenarios(text: object) -> dict:
-    """Extrait des prix Bear/Base/Bull depuis un texte (moyenne si range)."""
-    if not isinstance(text, str):
-        return {}
-
-    scenarios = {}
-    patterns = {
-        "Bear": r"Bear.*?[:\s]+~?([\d.,]+)(?:[–-]([\d.,]+))?",
-        "Base": r"Base.*?[:\s]+~?([\d.,]+)(?:[–-]([\d.,]+))?",
-        "Bull": r"Bull.*?[:\s]+~?([\d.,]+)(?:[–-]([\d.,]+))?",
-    }
-
-    for key, pat in patterns.items():
-        m = re.search(pat, text, re.IGNORECASE)
-        if not m:
-            continue
-        try:
-            v1 = safe_float(m.group(1))
-            v2 = safe_float(m.group(2)) if m.group(2) else v1
-            if v1 > 0:
-                scenarios[key] = (v1 + v2) / 2
-        except Exception:
-            continue
-
-    return scenarios
-
-
-# ============================================================
-# CALCULS METIERS
-# ============================================================
-
-
-def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -> pd.DataFrame:
-    """Barometre sectoriel base sur News_History (publishedat, impactscore, winners, losers)."""
-    if df_news is None or df_news.empty:
-        return pd.DataFrame()
-    if "publishedat" not in df_news.columns:
-        return pd.DataFrame()
-
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days_lookback)
-    df_wk = df_news.copy()
-    df_wk["publishedat"] = pd.to_datetime(df_wk["publishedat"], errors="coerce", utc=True)
-    df_wk = df_wk.dropna(subset=["publishedat"])
-    df_recent = df_wk[df_wk["publishedat"] >= cutoff].copy()
-
-    sector_scores = {}
-
-    def parse_sectors(txt: object) -> list[str]:
-        if not isinstance(txt, str) or not txt.strip():
-            return []
-        return [s.strip().title() for s in txt.split(",") if s.strip()]
-
-    for _, row in df_recent.iterrows():
-        try:
-            impact = abs(safe_float(row.get("impactscore", 0)))
-            if impact == 0:
-                continue
-
-            winners = parse_sectors(row.get("winners"))
-            losers = parse_sectors(row.get("losers"))
-
-            for w in winners:
-                sector_scores[w] = sector_scores.get(w, 0) + impact
-            for l in losers:
-                sector_scores[l] = sector_scores.get(l, 0) - impact
-        except Exception:
-            continue
-
-    if not sector_scores:
-        return pd.DataFrame()
-
-    df_res = pd.DataFrame(list(sector_scores.items()), columns=["Sector", "NetScore"])
-    df_res = df_res.sort_values("NetScore", ascending=True)
-    df_res["Color"] = df_res["NetScore"].apply(lambda x: "#28a745" if x >= 0 else "#dc3545")
-    return df_res
-
-
-def calculate_symbol_momentum(df_news: pd.DataFrame, days_lookback: int = 30, top_n: int = 10) -> pd.DataFrame:
-    """Palmares actions base sur news_raw_Symbol (publishedat, symbol, impactscore, companyname/name)."""
-    if df_news is None or df_news.empty:
-        return pd.DataFrame()
-    if "publishedat" not in df_news.columns or "symbol" not in df_news.columns:
-        return pd.DataFrame()
-
-    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=days_lookback)
-    df_wk = df_news.copy()
-    df_wk["publishedat"] = pd.to_datetime(df_wk["publishedat"], errors="coerce", utc=True)
-    df_wk = df_wk.dropna(subset=["publishedat"])
-    df_recent = df_wk[df_wk["publishedat"] >= cutoff].copy()
-
-    if "impactscore" not in df_recent.columns:
-        return pd.DataFrame()
-
-    df_recent["ImpactNum"] = df_recent["impactscore"].apply(safe_float)
-
-    group_cols = ["symbol"]
-    name_col = None
-    if "companyname" in df_recent.columns:
-        name_col = "companyname"
-    elif "name" in df_recent.columns:
-        name_col = "name"
-
-    if name_col:
-        group_cols.append(name_col)
-
-    symbol_scores = df_recent.groupby(group_cols)["ImpactNum"].sum().reset_index()
-    symbol_scores.rename(columns={"ImpactNum": "NetScore"}, inplace=True)
-
-    def mk_label(r: pd.Series) -> str:
-        s = str(r["symbol"])
-        if name_col and pd.notna(r.get(name_col)) and str(r.get(name_col)).strip():
-            return f"{s} ({r.get(name_col)})"
-        return s
-
-    symbol_scores["Label"] = symbol_scores.apply(mk_label, axis=1)
-
-    positive = symbol_scores[symbol_scores["NetScore"] > 0.1].nlargest(top_n, "NetScore")
-    negative = symbol_scores[symbol_scores["NetScore"] < -0.1].nsmallest(top_n, "NetScore")
-
-    final_df = pd.concat([positive, negative]).sort_values("NetScore", ascending=True)
-    final_df["Color"] = final_df["NetScore"].apply(lambda x: "#28a745" if x >= 0 else "#dc3545")
-    return final_df
-
-
-def display_wrapped_table(
-    df: pd.DataFrame,
-    key_suffix: str = "",
-    hide_header: bool = False,
-    enable_controls: bool = True,
-) -> None:
-    if df is None or df.empty:
-        st.info("Aucune donnee.")
-        return
-
-    df_show = df.copy()
-
-    if enable_controls:
-        _, c2 = st.columns([1, 3])
-        with c2:
-            search = st.text_input(f"Rechercher ({key_suffix})", "", key=f"search_{key_suffix}")
-        if search:
-            mask = df_show.astype(str).apply(lambda x: x.str.contains(search, case=False, na=False)).any(axis=1)
-            df_show = df_show[mask]
-
-    html = df_show.to_html(classes="dataframe-wrap", escape=False, index=False, header=not hide_header)
-    st.markdown(html, unsafe_allow_html=True)
-
-    if enable_controls:
-        st.markdown("<br>", unsafe_allow_html=True)
-
-
 # ============================================================
 # LOAD DATA - Google Sheets
 # ============================================================
@@ -1028,7 +744,7 @@ if page == "📊 Dashboard Trading":
             df_view = df_clean[cols_exist].copy()
             if "marketvalue" in df_view.columns:
                 df_view = df_view.sort_values("marketvalue", ascending=False)
-            st.dataframe(df_view, use_container_width=True, hide_index=True)
+            render_interactive_table(df_view, key_suffix="positions", hide_index=True)
         else:
             st.info("Portefeuille vide.")
 
@@ -1090,13 +806,13 @@ if page == "📊 Dashboard Trading":
         if df_sig is not None and not df_sig.empty:
             if "rationale" in df_sig.columns:
                 df_sig["rationale"] = df_sig["rationale"].apply(clean_text)
-            display_wrapped_table(df_sig, "sig")
+            render_interactive_table(df_sig, key_suffix="sig")
         else:
             st.caption("Aucun signal.")
 
         st.subheader("🛡️ Alertes")
         if df_alt is not None and not df_alt.empty:
-            display_wrapped_table(df_alt, "alt")
+            render_interactive_table(df_alt, key_suffix="alt")
         else:
             st.caption("RAS")
 
@@ -1289,7 +1005,7 @@ if page == "📊 Dashboard Trading":
                         df_list = df_list.sort_values("_score_num_tmp", ascending=False).drop(
                             columns=["_score_num_tmp"]
                         )
-                    display_wrapped_table(df_list, "res_list")
+                    render_interactive_table(df_list, key_suffix="res_list")
                 else:
                     st.info("Aucune colonne exploitable pour afficher la liste complète.")
 
@@ -1582,37 +1298,37 @@ elif page == "🛠️ System Health (Monitoring)":
         if "symbol" in duck_tech.columns:
             duck_tech = norm_symbol(duck_tech, "symbol")
 
+            duck_cols = ["symbol_key"]
             if "workflow_date" in duck_tech.columns:
                 duck_tech["workflow_date"] = pd.to_datetime(duck_tech["workflow_date"], errors="coerce", utc=True)
+                duck_cols.append("workflow_date")
+            if "d1_action" in duck_tech.columns:
+                duck_cols.append("d1_action")
 
-            # For symbols missing tech data from Sheets, fill from DuckDB
-            for _, drow in duck_tech.iterrows():
-                sk = drow.get("symbol_key", "")
-                if sk and sk in monitor_df["symbol_key"].values:
-                    idx = monitor_df.index[monitor_df["symbol_key"] == sk]
-                    if not idx.empty:
-                        i = idx[0]
-                        # Fill Last_H1_Date / Last_D1_Date if missing
-                        wf_date = drow.get("workflow_date")
-                        if pd.isna(monitor_df.at[i, "Last_H1_Date"]) if "Last_H1_Date" in monitor_df.columns else True:
-                            if "Last_H1_Date" not in monitor_df.columns:
-                                monitor_df["Last_H1_Date"] = pd.NaT
-                            monitor_df.at[i, "Last_H1_Date"] = wf_date
-                        if pd.isna(monitor_df.at[i, "Last_D1_Date"]) if "Last_D1_Date" in monitor_df.columns else True:
-                            if "Last_D1_Date" not in monitor_df.columns:
-                                monitor_df["Last_D1_Date"] = pd.NaT
-                            monitor_df.at[i, "Last_D1_Date"] = wf_date
-                        # Fill signal if missing
-                        if "signal" not in monitor_df.columns:
-                            monitor_df["signal"] = ""
-                        cur_sig = str(monitor_df.at[i, "signal"]).strip()
-                        if not cur_sig or cur_sig.lower() in ("", "nan", "none"):
-                            d1_act = str(drow.get("d1_action", "")).strip()
-                            if d1_act:
-                                monitor_df.at[i, "signal"] = d1_act
+            duck_latest = duck_tech[duck_cols].dropna(subset=["symbol_key"]).drop_duplicates(subset=["symbol_key"])
+            monitor_df = monitor_df.merge(duck_latest, on="symbol_key", how="left", suffixes=("", "_duck"))
+
+            if "Last_H1_Date" not in monitor_df.columns:
+                monitor_df["Last_H1_Date"] = pd.NaT
+            if "Last_D1_Date" not in monitor_df.columns:
+                monitor_df["Last_D1_Date"] = pd.NaT
+            if "signal" not in monitor_df.columns:
+                monitor_df["signal"] = ""
+
+            if "workflow_date" in monitor_df.columns:
+                monitor_df["Last_H1_Date"] = monitor_df["Last_H1_Date"].combine_first(monitor_df["workflow_date"])
+                monitor_df["Last_D1_Date"] = monitor_df["Last_D1_Date"].combine_first(monitor_df["workflow_date"])
+
+            if "d1_action" in monitor_df.columns:
+                signal_clean = monitor_df["signal"].fillna("").astype(str).str.strip()
+                d1_clean = monitor_df["d1_action"].fillna("").astype(str).str.strip()
+                missing_signal = signal_clean.eq("") | signal_clean.str.lower().isin(["nan", "none"])
+                monitor_df.loc[missing_signal & d1_clean.ne(""), "signal"] = d1_clean[missing_signal & d1_clean.ne("")]
+
+            monitor_df = monitor_df.drop(columns=[c for c in ["workflow_date", "d1_action"] if c in monitor_df.columns])
 
     # ============================================================
-    # Remplissages par défaut
+    # Remplissages par defaut
     # ============================================================
     for c in [
         "Last_News_Date",
@@ -1640,44 +1356,39 @@ elif page == "🛠️ System Health (Monitoring)":
     # ============================================================
     # Fraîcheur : News / IA / Consensus / H1 / D1
     # ============================================================
-    def get_status(row: pd.Series) -> pd.Series:
-        ico_n, age_n = check_freshness(row.get("Last_News_Date"), 7)
-        ico_ia, age_ia = check_freshness(row.get("Last_IA_Date"), 90)
-        ico_cons, age_cons = check_freshness(row.get("Last_Consensus_Date"), 30)
-        cons_view = str(row.get("Consensus_View") or "").strip()
+    news_pairs = monitor_df["Last_News_Date"].map(lambda v: check_freshness(v, 7))
+    ia_pairs = monitor_df["Last_IA_Date"].map(lambda v: check_freshness(v, 90))
+    cons_pairs = monitor_df["Last_Consensus_Date"].map(lambda v: check_freshness(v, 30))
+    h1_pairs = monitor_df["Last_H1_Date"].map(lambda v: check_freshness(v, 2))
 
-        ico_h1, age_h1 = check_freshness(row.get("Last_H1_Date"), 2)
+    d1_ref = monitor_df["Last_D1_Date"].where(monitor_df["Last_D1_Date"].notna(), monitor_df["Last_Tech_Date"])
+    d1_pairs = d1_ref.map(lambda v: check_freshness(v, 3))
 
-        last_d1 = row.get("Last_D1_Date")
-        last_tech = row.get("Last_Tech_Date")
-        d1_ref = last_d1 if pd.notna(last_d1) else last_tech
+    monitor_df["Age_N"] = news_pairs.str[1].astype(int)
+    monitor_df["Age_IA"] = ia_pairs.str[1].astype(int)
+    monitor_df["Age_Cons"] = cons_pairs.str[1].astype(int)
+    monitor_df["Age_H1"] = h1_pairs.str[1].astype(int)
+    monitor_df["Age_D1"] = d1_pairs.str[1].astype(int)
 
-        ico_d1, age_d1 = check_freshness(d1_ref, 3)
+    ico_n = news_pairs.str[0]
+    ico_ia = ia_pairs.str[0]
+    ico_cons = cons_pairs.str[0]
+    ico_h1 = h1_pairs.str[0]
+    ico_d1 = d1_pairs.str[0]
 
-        tech_stat = f"H1:{ico_h1}{age_h1}j | D1:{ico_d1}{age_d1}j"
+    monitor_df["News_Stat"] = ico_n + monitor_df["Age_N"].astype(str) + "j"
 
-        ia_stat = f"IA:{ico_ia}{age_ia}j"
-        cons_stat = f"Cons:{ico_cons}{age_cons}j"
-        if cons_view:
-            cons_stat = f"{cons_stat} ({cons_view})"
+    cons_view = monitor_df["Consensus_View"].fillna("").astype(str).str.strip()
+    cons_stat = "Cons:" + ico_cons + monitor_df["Age_Cons"].astype(str) + "j"
+    cons_stat = cons_stat.where(cons_view == "", cons_stat + " (" + cons_view + ")")
 
-        funda_stat = f"{ia_stat} | {cons_stat}"
-
-        return pd.Series(
-            [
-                age_n,
-                age_ia,
-                age_cons,
-                age_h1,
-                age_d1,
-                f"{ico_n}{age_n}j",
-                funda_stat,
-                tech_stat,
-            ]
-        )
-
-    out = monitor_df.apply(get_status, axis=1)
-    monitor_df[["Age_N", "Age_IA", "Age_Cons", "Age_H1", "Age_D1", "News_Stat", "Funda_Stat", "Tech_Stat"]] = out
+    monitor_df["Funda_Stat"] = (
+        "IA:" + ico_ia + monitor_df["Age_IA"].astype(str) + "j | " + cons_stat
+    )
+    monitor_df["Tech_Stat"] = (
+        "H1:" + ico_h1 + monitor_df["Age_H1"].astype(str) + "j | "
+        + "D1:" + ico_d1 + monitor_df["Age_D1"].astype(str) + "j"
+    )
 
     # ============================================================
     # KPIs
@@ -1703,43 +1414,30 @@ elif page == "🛠️ System Health (Monitoring)":
 
     mat = monitor_df.copy()
 
-    def calc_attract(row):
-        score = 50
-        # Potentiel News (Impact x3) -> +/- 30 pts max
-        score += safe_float(row.get("News_Score", 0)) * 3
+    news_score_num = safe_float_series(mat["News_Score"])
+    funda_conf_num = safe_float_series(mat["Funda_Conf"])
+    signal_upper = mat["signal"].fillna("").astype(str).str.upper()
 
-        # Bonus/Malus Funda (Confiance extrême)
-        conf = safe_float(row.get("Funda_Conf", 0))
-        if conf > 80: score += 10
-        elif conf < 30: score -= 10
+    mat["Attractivité"] = (
+        50
+        + news_score_num * 3
+        + (funda_conf_num > 80).astype(int) * 10
+        - (funda_conf_num < 30).astype(int) * 10
+        + signal_upper.str.contains("BUY", regex=False).astype(int) * 15
+        - signal_upper.str.contains("SELL", regex=False).astype(int) * 15
+    ).clip(0, 100)
 
-        # Signal Technique (Le juge de paix à court terme)
-        sig = str(row.get("signal", "")).upper()
-        if "BUY" in sig: score += 15
-        elif "SELL" in sig: score -= 15
+    age_funda = mat["Age_IA"] if "Age_IA" in mat.columns else pd.Series(999, index=mat.index)
+    age_tech = mat["Age_D1"] if "Age_D1" in mat.columns else pd.Series(999, index=mat.index)
 
-        return min(100, max(0, score))
+    mat["Robustesse"] = (
+        funda_conf_num
+        - (age_funda > 90).astype(int) * 20
+        - (age_tech > 7).astype(int) * 10
+    ).clip(0, 100)
 
-    def calc_robust(row):
-        # Base : La qualité fondamentale (0-100)
-        # CORRECTION : On utilise le score plein (facteur 1.0) pour atteindre 100
-        score = safe_float(row.get("Funda_Conf", 50))
-
-        # Malus d'Obsolescence (L'incertitude tue la robustesse)
-        # 1. Funda > 3 mois
-        if row.get("Age_F", 999) > 90:
-            score -= 20
-        # 2. Tech > 1 semaine (Tendance D1 perdue)
-        if row.get("Age_T", 999) > 7:
-            score -= 10
-
-        return min(100, max(0, score))
-
-    mat["Attractivité"] = mat.apply(calc_attract, axis=1)
-    mat["Robustesse"] = mat.apply(calc_robust, axis=1)
-
-    # La taille de la bulle dépend de la confiance fondamentale
-    mat["Taille"] = mat["Funda_Conf"].apply(lambda x: max(15, safe_float(x)))
+    # La taille de la bulle depend de la confiance fondamentale
+    mat["Taille"] = funda_conf_num.clip(lower=15)
 
     if "sector" not in mat.columns:
         mat["sector"] = "N/A"
@@ -1772,7 +1470,7 @@ elif page == "🛠️ System Health (Monitoring)":
     # ============================================================
     st.subheader("Détail Synchronisation")
     cols_sync = [c for c in ["symbol", "name", "News_Stat", "Funda_Stat", "Tech_Stat"] if c in monitor_df.columns]
-    st.dataframe(monitor_df[cols_sync], use_container_width=True, hide_index=True)
+    render_interactive_table(monitor_df[cols_sync], key_suffix="sync_detail", hide_index=True)
 
 
 # ============================================================
@@ -1819,7 +1517,7 @@ elif page == "📈 Analyse Technique V2":
         buy_count = int((df_signals.get("d1_action", pd.Series(dtype=str)).astype(str).str.upper() == "BUY").sum())
         sell_count = int((df_signals.get("d1_action", pd.Series(dtype=str)).astype(str).str.upper() == "SELL").sum())
         neutral_count = total_symbols - buy_count - sell_count
-        ai_calls = int(df_signals.get("call_ai", pd.Series(dtype=object)).apply(lambda x: str(x).strip().upper() in ("TRUE", "1", "OUI", "YES")).sum()) if "call_ai" in df_signals.columns else 0
+        ai_calls = int(truthy_series(df_signals.get("call_ai", pd.Series(dtype=object))).sum()) if "call_ai" in df_signals.columns else 0
         ai_approvals = int(df_signals.get("ai_decision", pd.Series(dtype=str)).astype(str).str.upper().eq("APPROVE").sum()) if "ai_decision" in df_signals.columns else 0
 
         kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
@@ -1855,27 +1553,41 @@ elif page == "📈 Analyse Technique V2":
         df_display["Symbol"] = df_ov["symbol"]
         df_display["Name"] = df_ov["name"].fillna("")
         df_display["Sector"] = df_ov["sector"].fillna("")
-        df_display["Close"] = df_ov["last_close"].apply(lambda x: f"{safe_float(x):.2f}" if safe_float(x) > 0 else "—")
-        df_display["H1 Action"] = df_ov["h1_action"].apply(_action_badge)
-        df_display["H1 Score"] = df_ov["h1_score"].apply(lambda x: f"{safe_float(x):.0f}" if safe_float(x) != 0 else "—")
-        df_display["H1 RSI"] = df_ov["h1_rsi14"].apply(lambda x: f"{safe_float(x):.1f}" if safe_float(x) > 0 else "—")
-        df_display["D1 Action"] = df_ov["d1_action"].apply(_action_badge)
-        df_display["D1 Score"] = df_ov["d1_score"].apply(lambda x: f"{safe_float(x):.0f}" if safe_float(x) != 0 else "—")
-        df_display["D1 RSI"] = df_ov["d1_rsi14"].apply(lambda x: f"{safe_float(x):.1f}" if safe_float(x) > 0 else "—")
+        close_num = safe_float_series(df_ov["last_close"])
+        h1_score_num = safe_float_series(df_ov["h1_score"])
+        h1_rsi_num = safe_float_series(df_ov["h1_rsi14"])
+        d1_score_num = safe_float_series(df_ov["d1_score"])
+        d1_rsi_num = safe_float_series(df_ov["d1_rsi14"])
+        ai_quality_num = safe_float_series(df_ov["ai_quality"])
+
+        df_display["Close"] = close_num.apply(lambda v: f"{v:.2f}" if v > 0 else "—")
+        df_display["H1 Action"] = df_ov["h1_action"].fillna("").astype(str).str.upper().replace("", "—")
+        df_display["H1 Score"] = h1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "—")
+        df_display["H1 RSI"] = h1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "—")
+        df_display["D1 Action"] = df_ov["d1_action"].fillna("").astype(str).str.upper().replace("", "—")
+        df_display["D1 Score"] = d1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "—")
+        df_display["D1 RSI"] = d1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "—")
         df_display["Filtre"] = df_ov["filter_reason"].fillna("—")
-        df_display["IA"] = df_ov["ai_decision"].apply(_ai_badge)
-        df_display["Qualité IA"] = df_ov["ai_quality"].apply(lambda x: f"{safe_float(x):.0f}/10" if safe_float(x) > 0 else "—")
-        df_display["Date"] = df_ov["workflow_date"].apply(lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() not in ("", "nan", "NaT") else "—")
+        df_display["IA"] = df_ov["ai_decision"].fillna("").astype(str).str.upper().replace("", "—")
+        df_display["Qualité IA"] = ai_quality_num.apply(lambda v: f"{v:.0f}/10" if v > 0 else "—")
+        df_display["Date"] = df_ov["workflow_date"].apply(
+            lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() not in ("", "nan", "NaT") else "—"
+        )
 
         # Apply RSI coloring via Styler on a numeric version for conditional formatting
         # Since we use HTML badges, we display via HTML table
-        display_wrapped_table(df_display, "v2_overview")
+        render_interactive_table(df_display, key_suffix="v2_overview")
 
     # ================================================================
     # TAB 2: VUE DETAILLEE
     # ================================================================
     with tab_detail:
-        symbol_list = sorted(df_signals["symbol"].dropna().unique().tolist())
+        signals_by_symbol = (
+            df_signals.dropna(subset=["symbol"])
+            .drop_duplicates(subset=["symbol"], keep="first")
+            .set_index("symbol", drop=False)
+        )
+        symbol_list = sorted(signals_by_symbol.index.tolist())
 
         if not symbol_list:
             st.warning("Aucun symbole disponible.")
@@ -1884,8 +1596,8 @@ elif page == "📈 Analyse Technique V2":
             _name_map = {}
             _label_list = []
             for sym in symbol_list:
-                sym_rows = df_signals[df_signals["symbol"] == sym]
-                name = str(sym_rows.iloc[0].get("name", "")).strip() if not sym_rows.empty else ""
+                base_row = signals_by_symbol.loc[sym]
+                name = str(base_row.get("name", "")).strip()
                 label = f"{sym} — {name}" if name and name.lower() not in ("", "nan", "none") else sym
                 _name_map[label] = sym
                 _label_list.append(label)
@@ -1898,11 +1610,10 @@ elif page == "📈 Analyse Technique V2":
             selected_symbol = _name_map.get(selected_label, selected_label)
 
             if selected_symbol:
-                row_mask = df_signals["symbol"] == selected_symbol
-                if row_mask.sum() == 0:
+                if selected_symbol not in signals_by_symbol.index:
                     st.warning(f"Aucune donnée pour {selected_symbol}")
                 else:
-                    row = df_signals[row_mask].iloc[0]
+                    row = signals_by_symbol.loc[selected_symbol]
 
                     # ---- Row 1: KPI Cards ----
                     st.subheader(f"📊 {selected_symbol} — {row.get('name', '')}")
@@ -2068,7 +1779,7 @@ elif page == "📈 Analyse Technique V2":
 
             # Format status badges
             if "status" in df_runs_display.columns:
-                df_runs_display["Statut"] = df_runs_display["status"].apply(_status_badge)
+                df_runs_display["Statut"] = df_runs_display["status"].fillna("").astype(str).str.upper().replace("", "—")
             else:
                 df_runs_display["Statut"] = "—"
 
@@ -2096,4 +1807,5 @@ elif page == "📈 Analyse Technique V2":
             rename_map = {k: v for k, v in col_mapping.items() if k in df_runs_show.columns}
             df_runs_show = df_runs_show.rename(columns=rename_map)
 
-            display_wrapped_table(df_runs_show, "v2_runs")
+            render_interactive_table(df_runs_show, key_suffix="v2_runs")
+
