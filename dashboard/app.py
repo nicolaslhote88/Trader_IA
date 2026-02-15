@@ -1413,9 +1413,8 @@ elif page == "🛠️ System Health (Monitoring)":
     st.subheader("🎯 Matrice Risk/Reward")
 
     mat = monitor_df.copy()
-
-    news_score_num = safe_float_series(mat["News_Score"])
-    funda_conf_num = safe_float_series(mat["Funda_Conf"])
+    news_score_num = pd.to_numeric(safe_float_series(mat["News_Score"]), errors="coerce").fillna(0.0)
+    funda_conf_num = pd.to_numeric(safe_float_series(mat["Funda_Conf"]), errors="coerce").fillna(0.0)
     signal_upper = mat["signal"].fillna("").astype(str).str.upper()
 
     mat["Attractivité"] = (
@@ -1425,7 +1424,7 @@ elif page == "🛠️ System Health (Monitoring)":
         - (funda_conf_num < 30).astype(int) * 10
         + signal_upper.str.contains("BUY", regex=False).astype(int) * 15
         - signal_upper.str.contains("SELL", regex=False).astype(int) * 15
-    ).clip(0, 100)
+    )
 
     age_funda = mat["Age_IA"] if "Age_IA" in mat.columns else pd.Series(999, index=mat.index)
     age_tech = mat["Age_D1"] if "Age_D1" in mat.columns else pd.Series(999, index=mat.index)
@@ -1434,18 +1433,24 @@ elif page == "🛠️ System Health (Monitoring)":
         funda_conf_num
         - (age_funda > 90).astype(int) * 20
         - (age_tech > 7).astype(int) * 10
-    ).clip(0, 100)
+    )
 
     # La taille de la bulle depend de la confiance fondamentale
-    mat["Taille"] = funda_conf_num.clip(lower=15)
+    mat["Taille"] = funda_conf_num
 
     if "sector" not in mat.columns:
         mat["sector"] = "N/A"
 
+    # Hard guardrail: Plotly n'accepte pas de NaN dans size/x/y.
+    mat_plot = mat.copy()
+    mat_plot["Attractivité"] = pd.to_numeric(mat_plot["Attractivité"], errors="coerce").replace([float("inf"), float("-inf")], pd.NA).fillna(50.0).clip(0, 100)
+    mat_plot["Robustesse"] = pd.to_numeric(mat_plot["Robustesse"], errors="coerce").replace([float("inf"), float("-inf")], pd.NA).fillna(50.0).clip(0, 100)
+    mat_plot["Taille"] = pd.to_numeric(mat_plot["Taille"], errors="coerce").replace([float("inf"), float("-inf")], pd.NA).fillna(15.0).clip(lower=15.0)
+
     fig_mat = px.scatter(
-        mat, x="Robustesse", y="Attractivité",
+        mat_plot, x="Robustesse", y="Attractivité",
         size="Taille", color="sector",
-        hover_name="name" if "name" in mat.columns else None, text="symbol",
+        hover_name="name" if "name" in mat_plot.columns else None, text="symbol",
         title="Carte des Opportunités (Risk/Reward)",
         labels={"Robustesse": "🛡️ Robustesse (Qualité & Fraîcheur)", "Attractivité": "🚀 Attractivité (Momentum & News)"}
     )
