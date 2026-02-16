@@ -18,13 +18,18 @@ def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | Non
 
 
 def _normalize_portfolio_positions(df_portfolio: pd.DataFrame) -> pd.DataFrame:
-    cols = ["symbol", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl"]
+    cols = ["symbol", "name", "sector", "industry", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl"]
     if df_portfolio is None or df_portfolio.empty:
         return pd.DataFrame(columns=cols)
 
     df = df_portfolio.copy()
     if "symbol" not in df.columns:
         return pd.DataFrame(columns=cols)
+
+    for txt_col in ["name", "sector", "industry"]:
+        if txt_col not in df.columns:
+            df[txt_col] = ""
+        df[txt_col] = df[txt_col].fillna("").astype(str).str.strip()
 
     for col in ["quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl"]:
         if col not in df.columns:
@@ -62,9 +67,18 @@ def _normalize_transactions(df_transactions: pd.DataFrame) -> pd.DataFrame:
     if not symbol_col or not side_col:
         return pd.DataFrame(columns=cols)
 
-    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce") if ts_col else pd.NaT
+    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
     df["symbol"] = df[symbol_col].astype(str).str.strip().str.upper()
     df["side"] = df[side_col].astype(str).str.strip().str.upper()
+    side_map = {
+        "OPEN": "BUY",
+        "INCREASE": "BUY",
+        "BUY": "BUY",
+        "CLOSE": "SELL",
+        "DECREASE": "SELL",
+        "SELL": "SELL",
+    }
+    df["side"] = df["side"].map(lambda s: side_map.get(str(s).upper(), str(s).upper()))
     df["price"] = safe_float_series(df[price_col]) if price_col else 0.0
     df["quantity"] = safe_float_series(df[qty_col]) if qty_col else 0.0
     df["notional"] = safe_float_series(df[notional_col]) if notional_col else 0.0
@@ -176,17 +190,53 @@ def _compute_buy_levels(symbol: str, tx_buy: pd.DataFrame) -> tuple[list[float],
     return levels, pru
 
 
-def _build_position_sparkline(
+def _extract_trade_events(
     symbol: str,
+    tx: pd.DataFrame,
+    *,
+    start_ts: pd.Timestamp | None,
+    end_ts: pd.Timestamp | None,
+) -> pd.DataFrame:
+    cols = ["timestamp", "side"]
+    if tx is None or tx.empty:
+        return pd.DataFrame(columns=cols)
+
+    ev = tx[(tx["symbol"] == symbol) & (tx["side"].isin(["BUY", "SELL"]))].copy()
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    ev = ev.dropna(subset=["timestamp"])
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    if start_ts is not None:
+        ev = ev[ev["timestamp"] >= start_ts]
+    if end_ts is not None:
+        ev = ev[ev["timestamp"] <= end_ts]
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    ev["trade_day"] = ev["timestamp"].dt.floor("D")
+    ev = (
+        ev.sort_values("timestamp")
+        .drop_duplicates(subset=["trade_day", "side"], keep="first")
+        .sort_values("timestamp")
+    )
+    return ev[cols]
+
+
+def _build_position_sparkline(
+    title_text: str,
     hist: pd.DataFrame,
     buy_levels: list[float],
+    trade_events: pd.DataFrame,
     pnl_pct: float | None,
     profitable: bool | None,
 ) -> go.Figure:
     if hist is None or hist.empty:
         fig = go.Figure()
         fig.update_layout(
-            title=f"{symbol} | no history",
+            title=f"{title_text} | no history",
             height=190,
             margin=dict(t=34, b=8, l=8, r=8),
             paper_bgcolor="rgba(0,0,0,0)",
@@ -225,6 +275,23 @@ def _build_position_sparkline(
         )
     )
 
+    y_min = float(hist["close"].min())
+    y_max = float(hist["close"].max())
+    if y_max <= y_min:
+        y_max = y_min + 1.0
+
+    if trade_events is not None and not trade_events.empty:
+        for ev in trade_events.itertuples(index=False):
+            color = "rgba(40,167,69,0.85)" if str(ev.side).upper() == "BUY" else "rgba(220,53,69,0.85)"
+            fig.add_shape(
+                type="line",
+                x0=ev.timestamp,
+                x1=ev.timestamp,
+                y0=y_min,
+                y1=y_max,
+                line=dict(color=color, width=1.5, dash="dot"),
+            )
+
     for level in buy_levels:
         fig.add_hline(
             y=level,
@@ -234,7 +301,7 @@ def _build_position_sparkline(
         )
 
     fig.update_layout(
-        title=f"{symbol} | {title_pnl}",
+        title=f"{title_text} | {title_pnl}",
         height=190,
         margin=dict(t=34, b=8, l=8, r=8),
         paper_bgcolor="rgba(0,0,0,0)",
@@ -278,6 +345,9 @@ def render_portfolio_sparklines(
     grid_cols = st.columns(max(1, int(columns_per_row)))
     for idx, pos in enumerate(df_pos.itertuples(index=False)):
         symbol = str(pos.symbol)
+        name = str(getattr(pos, "name", "") or "").strip()
+        sector = str(getattr(pos, "sector", "") or "").strip()
+        industry = str(getattr(pos, "industry", "") or "").strip()
         qty = safe_float(getattr(pos, "quantity", 0))
         avgprice = safe_float(getattr(pos, "avgprice", 0))
         lastprice = safe_float(getattr(pos, "lastprice", 0))
@@ -301,10 +371,28 @@ def render_portfolio_sparklines(
 
         profitable = bool(lastprice > pru) if (lastprice > 0 and pru and pru > 0) else (bool(pnl_pct and pnl_pct > 0))
 
+        hist = histories.get(symbol, pd.DataFrame())
+        start_ts = hist["timestamp"].min() if (hist is not None and not hist.empty) else None
+        end_ts = hist["timestamp"].max() if (hist is not None and not hist.empty) else None
+        trade_events = _extract_trade_events(symbol, tx, start_ts=start_ts, end_ts=end_ts)
+
+        title_bits = [symbol]
+        if name:
+            title_bits.append(name)
+        label_meta = []
+        if sector:
+            label_meta.append(sector)
+        if industry:
+            label_meta.append(industry)
+        if label_meta:
+            title_bits.append(f"({', '.join(label_meta)})")
+        title_text = " - ".join(title_bits)
+
         fig = _build_position_sparkline(
-            symbol=symbol,
-            hist=histories.get(symbol, pd.DataFrame()),
+            title_text=title_text,
+            hist=hist,
             buy_levels=buy_levels,
+            trade_events=trade_events,
             pnl_pct=pnl_pct,
             profitable=profitable,
         )

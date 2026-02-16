@@ -1056,7 +1056,34 @@ if page == "📊 Dashboard Trading":
 
             st.divider()
             st.subheader("Positions")
-            cols_show = ["name", "symbol", "sector", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl"]
+            qty_basis = (
+                df_clean.get("avgprice", pd.Series(0.0, index=df_clean.index))
+                * df_clean.get("quantity", pd.Series(0.0, index=df_clean.index))
+            )
+            mv_basis = (
+                df_clean.get("marketvalue", pd.Series(0.0, index=df_clean.index))
+                - df_clean.get("unrealizedpnl", pd.Series(0.0, index=df_clean.index))
+            )
+            cost_basis = qty_basis.where(qty_basis > 0, mv_basis)
+            df_clean["unrealizedpnl_pct"] = 0.0
+            valid_basis = cost_basis != 0
+            df_clean.loc[valid_basis, "unrealizedpnl_pct"] = (
+                df_clean.loc[valid_basis, "unrealizedpnl"] / cost_basis[valid_basis] * 100
+            )
+            df_clean["unrealizedpnl_pct"] = df_clean["unrealizedpnl_pct"].round(2)
+
+            cols_show = [
+                "name",
+                "symbol",
+                "sector",
+                "industry",
+                "quantity",
+                "avgprice",
+                "lastprice",
+                "marketvalue",
+                "unrealizedpnl",
+                "unrealizedpnl_pct",
+            ]
             cols_exist = [c for c in cols_show if c in df_clean.columns]
             df_view = df_clean[cols_exist].copy()
             if "marketvalue" in df_view.columns:
