@@ -24,6 +24,7 @@ st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="�
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
 DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
+AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
 # ============================================================
@@ -217,72 +218,163 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(ttl=30)
 def load_duckdb_data() -> dict[str, pd.DataFrame]:
-    """Charge les donnees depuis la base DuckDB AG2-V2.
-
-    Retourne un dict avec les cles: df_signals, df_runs, df_signals_all.
-    En cas d'indisponibilite, retourne un dict vide sans crash.
-    """
-    result = {}
-
-    if not os.path.exists(DUCKDB_PATH):
-        return result
+    """Charge les donnees DuckDB AG2 (technique) + AG3 (fondamentale)."""
+    result = {
+        "df_signals": pd.DataFrame(),
+        "df_runs": pd.DataFrame(),
+        "df_signals_all": pd.DataFrame(),
+        "df_funda_latest": pd.DataFrame(),
+        "df_funda_runs": pd.DataFrame(),
+        "df_funda_history": pd.DataFrame(),
+        "df_funda_consensus": pd.DataFrame(),
+        "df_funda_metrics": pd.DataFrame(),
+    }
 
     max_retries = 3
     delay = 0.5
-    conn = None
 
-    for attempt in range(max_retries):
-        try:
-            conn = duckdb.connect(DUCKDB_PATH, read_only=True)
-            break
-        except duckdb.IOException:
-            if attempt < max_retries - 1:
-                time.sleep(delay)
-            else:
-                return result
-        except Exception:
-            return result
+    def _connect_readonly(path: str):
+        conn = None
+        for attempt in range(max_retries):
+            try:
+                conn = duckdb.connect(path, read_only=True)
+                return conn
+            except duckdb.IOException:
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+                else:
+                    return None
+            except Exception:
+                return None
+        return conn
 
-    if conn is None:
-        return result
+    # -------------------------------
+    # AG2-V2 (Technique)
+    # -------------------------------
+    if os.path.exists(DUCKDB_PATH):
+        conn = _connect_readonly(DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_signals"] = conn.execute("""
+                        SELECT ts.*
+                        FROM technical_signals ts
+                        INNER JOIN (
+                            SELECT symbol, MAX(workflow_date) AS max_date
+                            FROM technical_signals
+                            GROUP BY symbol
+                        ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date
+                        ORDER BY ts.symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_signals"] = pd.DataFrame()
 
-    try:
-        # df_signals: latest signal per symbol (most recent workflow_date)
-        try:
-            result["df_signals"] = conn.execute("""
-                SELECT ts.*
-                FROM technical_signals ts
-                INNER JOIN (
-                    SELECT symbol, MAX(workflow_date) AS max_date
-                    FROM technical_signals
-                    GROUP BY symbol
-                ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date
-                ORDER BY ts.symbol
-            """).fetchdf()
-        except Exception:
-            result["df_signals"] = pd.DataFrame()
+                try:
+                    result["df_runs"] = conn.execute("""
+                        SELECT * FROM run_log ORDER BY started_at DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_runs"] = pd.DataFrame()
 
-        # df_runs: run log
-        try:
-            result["df_runs"] = conn.execute("""
-                SELECT * FROM run_log ORDER BY started_at DESC
-            """).fetchdf()
-        except Exception:
-            result["df_runs"] = pd.DataFrame()
+                try:
+                    result["df_signals_all"] = conn.execute("""
+                        SELECT * FROM technical_signals ORDER BY workflow_date DESC, symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_signals_all"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
-        # df_signals_all: all signals for history
-        try:
-            result["df_signals_all"] = conn.execute("""
-                SELECT * FROM technical_signals ORDER BY workflow_date DESC, symbol
-            """).fetchdf()
-        except Exception:
-            result["df_signals_all"] = pd.DataFrame()
+    # -------------------------------
+    # AG3-V2 (Fondamentale)
+    # -------------------------------
+    if os.path.exists(AG3_DUCKDB_PATH):
+        conn = _connect_readonly(AG3_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_funda_latest"] = conn.execute("""
+                        SELECT * FROM v_latest_triage ORDER BY symbol
+                    """).fetchdf()
+                except Exception:
+                    try:
+                        result["df_funda_latest"] = conn.execute("""
+                            SELECT * EXCLUDE(rn)
+                            FROM (
+                              SELECT t.*,
+                                     ROW_NUMBER() OVER (
+                                       PARTITION BY t.symbol
+                                       ORDER BY COALESCE(t.updated_at, t.created_at) DESC, t.created_at DESC
+                                     ) AS rn
+                              FROM fundamentals_triage_history t
+                            )
+                            WHERE rn = 1
+                            ORDER BY symbol
+                        """).fetchdf()
+                    except Exception:
+                        result["df_funda_latest"] = pd.DataFrame()
 
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+                try:
+                    result["df_funda_runs"] = conn.execute("""
+                        SELECT * FROM run_log ORDER BY started_at DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_funda_runs"] = pd.DataFrame()
+
+                try:
+                    result["df_funda_history"] = conn.execute("""
+                        SELECT * FROM fundamentals_triage_history
+                        ORDER BY COALESCE(updated_at, created_at) DESC, symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_funda_history"] = pd.DataFrame()
+
+                try:
+                    result["df_funda_consensus"] = conn.execute("""
+                        SELECT * FROM v_latest_consensus ORDER BY symbol
+                    """).fetchdf()
+                except Exception:
+                    try:
+                        result["df_funda_consensus"] = conn.execute("""
+                            SELECT * EXCLUDE(rn)
+                            FROM (
+                              SELECT c.*,
+                                     ROW_NUMBER() OVER (
+                                       PARTITION BY c.symbol
+                                       ORDER BY COALESCE(c.updated_at, c.created_at) DESC, c.created_at DESC
+                                     ) AS rn
+                              FROM analyst_consensus_history c
+                            )
+                            WHERE rn = 1
+                            ORDER BY symbol
+                        """).fetchdf()
+                    except Exception:
+                        result["df_funda_consensus"] = pd.DataFrame()
+
+                try:
+                    result["df_funda_metrics"] = conn.execute("""
+                        SELECT m.*
+                        FROM fundamental_metrics_history m
+                        INNER JOIN (
+                          SELECT symbol, metric, MAX(COALESCE(extracted_at, created_at)) AS latest_ts
+                          FROM fundamental_metrics_history
+                          GROUP BY symbol, metric
+                        ) x
+                          ON m.symbol = x.symbol
+                         AND m.metric = x.metric
+                         AND COALESCE(m.extracted_at, m.created_at) = x.latest_ts
+                        ORDER BY m.symbol, m.section, m.metric
+                    """).fetchdf()
+                except Exception:
+                    result["df_funda_metrics"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     return result
 
@@ -903,18 +995,147 @@ def _make_return_gauge(value_pct: float, title: str, axis_limit: float) -> go.Fi
 
 
 # ============================================================
+# HELPERS V2 - Analyse Fondamentale V2 page
+# ============================================================
+
+FUNDAMENTAL_META = {
+    "score": {
+        "label": "Triage Score",
+        "desc": "Score composite de conviction fondamentale (qualite, croissance, valorisation, sante financiere, consensus).",
+        "higher_is_better": True,
+        "good": 75,
+        "warn": 60,
+    },
+    "risk_score": {
+        "label": "Risk Score",
+        "desc": "Niveau de risque fondamental. Plus le score est bas, meilleur est le profil de risque.",
+        "higher_is_better": False,
+        "good": 35,
+        "warn": 55,
+    },
+    "quality_score": {
+        "label": "Quality Score",
+        "desc": "Qualite du business (marges, ROE/ROA, capacite a generer du cash).",
+        "higher_is_better": True,
+        "good": 70,
+        "warn": 55,
+    },
+    "growth_score": {
+        "label": "Growth Score",
+        "desc": "Dynamique de croissance des revenus et benefices.",
+        "higher_is_better": True,
+        "good": 65,
+        "warn": 50,
+    },
+    "valuation_score": {
+        "label": "Valuation Score",
+        "desc": "Attractivite du prix relatif aux fondamentaux et a l'upside consensus.",
+        "higher_is_better": True,
+        "good": 65,
+        "warn": 50,
+    },
+    "health_score": {
+        "label": "Financial Health",
+        "desc": "Solidite du bilan (dette, liquidite, ratio de couverture).",
+        "higher_is_better": True,
+        "good": 70,
+        "warn": 55,
+    },
+    "consensus_score": {
+        "label": "Consensus Score",
+        "desc": "Qualite du support sell-side (recommandation, couverture, objectif de cours).",
+        "higher_is_better": True,
+        "good": 60,
+        "warn": 45,
+    },
+    "data_coverage_pct": {
+        "label": "Data Coverage",
+        "desc": "Couverture des donnees disponibles. Faible couverture = confiance plus faible.",
+        "higher_is_better": True,
+        "good": 70,
+        "warn": 45,
+    },
+}
+
+
+def _funda_eval(key: str, value: float) -> tuple[str, str]:
+    meta = FUNDAMENTAL_META.get(key, {})
+    hib = bool(meta.get("higher_is_better", True))
+    good = float(meta.get("good", 70))
+    warn = float(meta.get("warn", 50))
+
+    if hib:
+        if value >= good:
+            return ("Bon", "#28a745")
+        if value >= warn:
+            return ("Moyen", "#ffc107")
+        return ("Faible", "#dc3545")
+
+    if value <= good:
+        return ("Bon", "#28a745")
+    if value <= warn:
+        return ("Moyen", "#ffc107")
+    return ("Eleve", "#dc3545")
+
+
+def _make_funda_gauge(value: float, title: str, inverse: bool = False) -> go.Figure:
+    v = max(0.0, min(100.0, float(value)))
+    steps = [
+        {"range": [0, 35], "color": "rgba(220,53,69,0.25)"},
+        {"range": [35, 60], "color": "rgba(255,193,7,0.25)"},
+        {"range": [60, 100], "color": "rgba(40,167,69,0.25)"},
+    ]
+    if inverse:
+        steps = list(reversed(steps))
+
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=v,
+            number={"suffix": "/100", "font": {"size": 22, "color": "#fff"}},
+            title={"text": title, "font": {"size": 13, "color": "#ccc"}},
+            gauge={
+                "axis": {"range": [0, 100], "tickcolor": "#666"},
+                "bar": {"color": "#ffffff", "thickness": 0.28},
+                "steps": steps,
+            },
+        )
+    )
+    fig.update_layout(
+        height=190,
+        margin=dict(t=35, b=8, l=24, r=24),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+    )
+    return fig
+
+
+def _safe_series(df: pd.DataFrame, candidates: list[str], default: float = 0.0) -> pd.Series:
+    col = _first_existing_column(df, candidates)
+    if col:
+        return safe_float_series(df[col])
+    return pd.Series(default, index=df.index, dtype=float)
+
+
+# ============================================================
 # MAIN APP
 # ============================================================
 
 st.sidebar.title("🤖 TradingSim AI")
 page = st.sidebar.radio(
     "Navigation",
-    ["📊 Dashboard Trading", "🛠️ System Health (Monitoring)", "📈 Analyse Technique V2"],
+    [
+        "📊 Dashboard Trading",
+        "🛠️ System Health (Monitoring)",
+        "📈 Analyse Technique V2",
+        "📚 Analyse Fondamentale V2",
+    ],
 )
 
 data_dict = load_data()
 if not data_dict:
-    st.warning("Donnees Google Sheets indisponibles. Seule la page Analyse Technique V2 peut fonctionner.")
+    st.warning("Donnees Google Sheets indisponibles. Seules les pages d'analyse V2 (Technique/Fondamentale) peuvent fonctionner.")
 
 # Load DuckDB data (non-blocking)
 duckdb_data = load_duckdb_data()
@@ -2319,4 +2540,503 @@ elif page == "📈 Analyse Technique V2":
             df_runs_show = df_runs_show.rename(columns=rename_map)
 
             render_interactive_table(df_runs_show, key_suffix="v2_runs")
+
+
+# ================================================================
+# PAGE 4: ANALYSE FONDAMENTALE V2
+# ================================================================
+elif page == "📚 Analyse Fondamentale V2":
+    st.title("📚 Analyse Fondamentale V2 (AG3)")
+
+    if st.button("🔄 Rafraîchir", key="refresh_funda_v2"):
+        load_data.clear()
+        load_duckdb_data.clear()
+        st.rerun()
+
+    df_funda_latest = duckdb_data.get("df_funda_latest", pd.DataFrame())
+    df_funda_runs = duckdb_data.get("df_funda_runs", pd.DataFrame())
+    df_funda_history = duckdb_data.get("df_funda_history", pd.DataFrame())
+    df_funda_consensus = duckdb_data.get("df_funda_consensus", pd.DataFrame())
+    df_funda_metrics = duckdb_data.get("df_funda_metrics", pd.DataFrame())
+
+    if df_funda_latest is None or df_funda_latest.empty:
+        st.info(
+            "Aucune donnée fondamentale AG3-V2 disponible dans DuckDB. "
+            f"Vérifiez le fichier `{AG3_DUCKDB_PATH}` et l'exécution du workflow AG3."
+        )
+        st.stop()
+
+    # Enrichissements noms/secteurs depuis Universe si présent
+    if df_univ is not None and not df_univ.empty and "symbol" in df_funda_latest.columns:
+        df_funda_latest = enrich_df_with_name(df_funda_latest, df_univ)
+    if (
+        df_funda_consensus is not None
+        and not df_funda_consensus.empty
+        and df_univ is not None
+        and not df_univ.empty
+        and "symbol" in df_funda_consensus.columns
+    ):
+        df_funda_consensus = enrich_df_with_name(df_funda_consensus, df_univ)
+
+    tab_overview, tab_detail, tab_runs = st.tabs(
+        ["Vue d'ensemble", "Vue détaillée", "Historique Runs"]
+    )
+
+    # ================================================================
+    # TAB 1: VUE D'ENSEMBLE
+    # ================================================================
+    with tab_overview:
+        df_ov = df_funda_latest.copy()
+        score_num = _safe_series(df_ov, ["score", "funda_conf"])
+        risk_num = _safe_series(df_ov, ["risk_score"])
+        upside_num = _safe_series(df_ov, ["upside_pct"])
+        analysts_num = _safe_series(df_ov, ["analyst_count"])
+        coverage_num = _safe_series(df_ov, ["data_coverage_pct"])
+        quality_num = _safe_series(df_ov, ["quality_score"])
+
+        total_symbols = len(df_ov)
+        high_conv = int(((score_num >= 70) & (risk_num <= 50)).sum())
+        weak_conv = int((score_num < 55).sum())
+        risk_high = int((risk_num > 60).sum())
+        avg_score = float(score_num.mean()) if total_symbols > 0 else 0.0
+        avg_upside = float(upside_num.mean()) if total_symbols > 0 else 0.0
+
+        kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
+        kc1.metric("Symboles scorés", total_symbols)
+        kc2.metric("Convictions fortes", high_conv)
+        kc3.metric("Scores faibles", weak_conv)
+        kc4.metric("Risque élevé", risk_high)
+        kc5.metric("Score moyen", f"{avg_score:.1f}/100")
+        kc6.metric("Upside moyen", f"{avg_upside:.1f}%")
+
+        st.divider()
+
+        c1, c2 = st.columns(2)
+
+        with c1:
+            fig_hist = px.histogram(
+                pd.DataFrame({"score": score_num}),
+                x="score",
+                nbins=20,
+                title="Distribution du Triage Score",
+                color_discrete_sequence=["#2ca02c"],
+            )
+            fig_hist.add_vline(x=75, line_dash="dot", line_color="#28a745")
+            fig_hist.add_vline(x=60, line_dash="dot", line_color="#ffc107")
+            fig_hist.update_layout(height=340, margin=dict(t=40, b=20, l=20, r=20))
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+        with c2:
+            sc = df_ov.copy()
+            sc["score_num"] = score_num
+            sc["risk_num"] = risk_num
+            sc["size_num"] = analysts_num.where(analysts_num > 0, 3.0)
+            sc["horizon_txt"] = sc.get("horizon", pd.Series(index=sc.index)).fillna("WATCH").astype(str)
+            sc["symbol"] = sc.get("symbol", pd.Series(index=sc.index)).fillna("").astype(str)
+            sc = sc[sc["symbol"] != ""]
+
+            if not sc.empty:
+                fig_sc = px.scatter(
+                    sc,
+                    x="risk_num",
+                    y="score_num",
+                    size="size_num",
+                    color="horizon_txt",
+                    hover_name="symbol",
+                    title="Carte Conviction vs Risque",
+                    labels={"risk_num": "Risk Score (plus bas = mieux)", "score_num": "Triage Score"},
+                )
+                fig_sc.add_hline(y=70, line_dash="dot", line_color="#28a745")
+                fig_sc.add_hline(y=55, line_dash="dot", line_color="#ffc107")
+                fig_sc.add_vline(x=50, line_dash="dot", line_color="#ffc107")
+                fig_sc.update_layout(height=340, margin=dict(t=40, b=20, l=20, r=20))
+                st.plotly_chart(fig_sc, use_container_width=True)
+
+        st.divider()
+
+        # Performance du moteur fondamental par run
+        if df_funda_history is not None and not df_funda_history.empty and "run_id" in df_funda_history.columns:
+            hist = df_funda_history.copy()
+            ts_col = _first_existing_column(hist, ["updated_at", "created_at", "fetched_at"])
+            if ts_col:
+                hist["ts"] = pd.to_datetime(hist[ts_col], errors="coerce")
+                hist = hist.dropna(subset=["ts"])
+                if not hist.empty:
+                    hist["score_num"] = _safe_series(hist, ["score", "funda_conf"])
+                    hist["risk_num"] = _safe_series(hist, ["risk_score"])
+                    run_perf = (
+                        hist.groupby("run_id", as_index=False)
+                        .agg(
+                            ts=("ts", "max"),
+                            avg_score=("score_num", "mean"),
+                            avg_risk=("risk_num", "mean"),
+                            symbols=("symbol", "nunique"),
+                        )
+                        .sort_values("ts")
+                    )
+                    if not run_perf.empty:
+                        fig_run = go.Figure()
+                        fig_run.add_trace(
+                            go.Scatter(
+                                x=run_perf["ts"],
+                                y=run_perf["avg_score"],
+                                mode="lines+markers",
+                                name="Score moyen",
+                                line=dict(color="#28a745", width=2),
+                            )
+                        )
+                        fig_run.add_trace(
+                            go.Scatter(
+                                x=run_perf["ts"],
+                                y=run_perf["avg_risk"],
+                                mode="lines+markers",
+                                name="Risque moyen",
+                                line=dict(color="#dc3545", width=2),
+                            )
+                        )
+                        fig_run.update_layout(
+                            title="Performance des runs AG3 (qualité des sorties)",
+                            height=320,
+                            margin=dict(t=40, b=20, l=20, r=20),
+                            yaxis=dict(title="Score /100"),
+                        )
+                        st.plotly_chart(fig_run, use_container_width=True)
+
+        # Tableau de synthèse
+        show = pd.DataFrame()
+        show["Symbol"] = df_ov.get("symbol", pd.Series(index=df_ov.index)).fillna("").astype(str)
+        show["Name"] = df_ov.get("name", pd.Series(index=df_ov.index)).fillna("")
+        show["Sector"] = df_ov.get("sector", pd.Series(index=df_ov.index)).fillna("")
+        show["Triage"] = score_num.round(0).astype(int)
+        show["Risk"] = risk_num.round(0).astype(int)
+        show["Quality"] = quality_num.round(0).astype(int)
+        show["Upside %"] = upside_num.round(1)
+        show["Analystes"] = analysts_num.round(0).astype(int)
+        show["Coverage %"] = coverage_num.round(1)
+        show["Horizon"] = df_ov.get("horizon", pd.Series(index=df_ov.index)).fillna("WATCH")
+        show["Verdict Score"] = score_num.map(lambda v: _funda_eval("score", float(v))[0])
+        show["Verdict Risque"] = risk_num.map(lambda v: _funda_eval("risk_score", float(v))[0])
+        show = show[show["Symbol"] != ""].sort_values("Triage", ascending=False)
+
+        st.subheader("Tableau synthèse fondamentale")
+        render_interactive_table(show, key_suffix="funda_v2_overview")
+
+    # ================================================================
+    # TAB 2: VUE DETAILLEE
+    # ================================================================
+    with tab_detail:
+        by_symbol = (
+            df_funda_latest.dropna(subset=["symbol"])
+            .drop_duplicates(subset=["symbol"], keep="first")
+            .set_index("symbol", drop=False)
+        )
+        symbols = sorted(by_symbol.index.tolist())
+
+        if not symbols:
+            st.warning("Aucun symbole fondamental disponible.")
+        else:
+            labels_map = {}
+            labels = []
+            for sym in symbols:
+                r = by_symbol.loc[sym]
+                name = str(r.get("name", "")).strip()
+                lbl = f"{sym} — {name}" if name else sym
+                labels_map[lbl] = sym
+                labels.append(lbl)
+
+            selected_label = st.selectbox(
+                "Sélectionner un symbole :",
+                labels,
+                key="funda_v2_symbol",
+            )
+            selected_symbol = labels_map[selected_label]
+            row = by_symbol.loc[selected_symbol]
+
+            score_v = safe_float(row.get("score", row.get("funda_conf", 0)))
+            risk_v = safe_float(row.get("risk_score", 0))
+            quality_v = safe_float(row.get("quality_score", 0))
+            growth_v = safe_float(row.get("growth_score", 0))
+            val_v = safe_float(row.get("valuation_score", 0))
+            health_v = safe_float(row.get("health_score", 0))
+            cons_v = safe_float(row.get("consensus_score", 0))
+            cov_v = safe_float(row.get("data_coverage_pct", 0))
+            upside_v = safe_float(row.get("upside_pct", 0))
+            analysts_v = safe_float(row.get("analyst_count", 0))
+
+            st.subheader(f"🔬 {selected_symbol} — {row.get('name', '')}")
+            mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
+            mc1.metric("Triage", f"{score_v:.0f}/100", delta=_funda_eval("score", score_v)[0])
+            mc2.metric("Risque", f"{risk_v:.0f}/100", delta=_funda_eval("risk_score", risk_v)[0])
+            mc3.metric("Horizon", str(row.get("horizon", "WATCH")))
+            mc4.metric("Upside", f"{upside_v:.1f}%")
+            mc5.metric("Analystes", f"{analysts_v:.0f}")
+            mc6.metric("Coverage", f"{cov_v:.1f}%")
+
+            st.divider()
+
+            gauges = [
+                ("score", score_v),
+                ("risk_score", risk_v),
+                ("quality_score", quality_v),
+                ("growth_score", growth_v),
+                ("valuation_score", val_v),
+                ("health_score", health_v),
+                ("consensus_score", cons_v),
+            ]
+            cols = st.columns(3)
+            for idx, (k, v) in enumerate(gauges):
+                if idx > 0 and idx % 3 == 0:
+                    cols = st.columns(3)
+                with cols[idx % 3]:
+                    title = FUNDAMENTAL_META.get(k, {}).get("label", k)
+                    fig = _make_funda_gauge(v, title=title, inverse=(k == "risk_score"))
+                    st.plotly_chart(fig, use_container_width=True, key=f"gauge_{selected_symbol}_{k}")
+
+            st.divider()
+
+            # Table d'interprétation (bon/mauvais + sens de l'indicateur)
+            interp_rows = []
+            for key, val in [
+                ("score", score_v),
+                ("risk_score", risk_v),
+                ("quality_score", quality_v),
+                ("growth_score", growth_v),
+                ("valuation_score", val_v),
+                ("health_score", health_v),
+                ("consensus_score", cons_v),
+                ("data_coverage_pct", cov_v),
+            ]:
+                meta = FUNDAMENTAL_META.get(key, {})
+                verdict, _ = _funda_eval(key, val)
+                interp_rows.append(
+                    {
+                        "Indicateur": meta.get("label", key),
+                        "Valeur": f"{val:.1f}/100",
+                        "Lecture": verdict,
+                        "Ce que cela veut dire": meta.get("desc", ""),
+                    }
+                )
+
+            st.markdown("#### Interprétation des indicateurs")
+            render_interactive_table(
+                pd.DataFrame(interp_rows),
+                key_suffix="funda_v2_interp",
+                enable_controls=False,
+                height=320,
+            )
+
+            # Evolution historique du symbole
+            if (
+                df_funda_history is not None
+                and not df_funda_history.empty
+                and "symbol" in df_funda_history.columns
+            ):
+                h = df_funda_history[df_funda_history["symbol"] == selected_symbol].copy()
+                ts_col = _first_existing_column(h, ["updated_at", "created_at", "fetched_at"])
+                if ts_col:
+                    h["ts"] = pd.to_datetime(h[ts_col], errors="coerce")
+                    h = h.dropna(subset=["ts"]).sort_values("ts")
+                    if not h.empty:
+                        h_score = _safe_series(h, ["score", "funda_conf"])
+                        h_risk = _safe_series(h, ["risk_score"])
+                        fig_hist = go.Figure()
+                        fig_hist.add_trace(
+                            go.Scatter(
+                                x=h["ts"],
+                                y=h_score,
+                                mode="lines+markers",
+                                name="Triage",
+                                line=dict(color="#28a745", width=2),
+                            )
+                        )
+                        fig_hist.add_trace(
+                            go.Scatter(
+                                x=h["ts"],
+                                y=h_risk,
+                                mode="lines+markers",
+                                name="Risk",
+                                line=dict(color="#dc3545", width=2),
+                            )
+                        )
+                        fig_hist.update_layout(
+                            title=f"Évolution historique — {selected_symbol}",
+                            height=320,
+                            margin=dict(t=40, b=20, l=20, r=20),
+                            yaxis=dict(title="Score /100"),
+                        )
+                        st.plotly_chart(fig_hist, use_container_width=True)
+
+            # Consensus + scénarios
+            c_left, c_right = st.columns([1, 1])
+            with c_left:
+                st.markdown("#### Consensus")
+                c_row = pd.DataFrame()
+                if (
+                    df_funda_consensus is not None
+                    and not df_funda_consensus.empty
+                    and "symbol" in df_funda_consensus.columns
+                ):
+                    c_row = df_funda_consensus[df_funda_consensus["symbol"] == selected_symbol].head(1)
+
+                if not c_row.empty:
+                    cr = c_row.iloc[0]
+                    st.markdown(f"**Recommendation**: {cr.get('recommendation', '—')}")
+                    st.markdown(f"**Target Mean**: {safe_float(cr.get('target_mean_price', 0)):.2f}")
+                    st.markdown(f"**Target High**: {safe_float(cr.get('target_high_price', 0)):.2f}")
+                    st.markdown(f"**Target Low**: {safe_float(cr.get('target_low_price', 0)):.2f}")
+                    st.markdown(f"**Upside**: {safe_float(cr.get('upside_pct', 0)):.1f}%")
+                    st.markdown(f"**Analystes**: {safe_float(cr.get('analyst_count', 0)):.0f}")
+                else:
+                    st.caption("Pas de ligne consensus disponible.")
+
+            with c_right:
+                st.markdown("#### Scénarios de valorisation")
+                scenarios = extract_valuation_scenarios(str(row.get("valuation", "")))
+                current_px = safe_float(row.get("current_price", 0))
+                if scenarios and current_px > 0:
+                    now = datetime.now()
+                    fut = now + timedelta(days=365)
+                    fig_sc = go.Figure()
+                    fig_sc.add_trace(
+                        go.Scatter(
+                            x=[now, fut],
+                            y=[current_px, safe_float(scenarios.get("Bear", current_px * 0.85))],
+                            mode="lines+markers+text",
+                            name="Bear",
+                            text=[None, f"{safe_float(scenarios.get('Bear', 0)):.1f}"],
+                            textposition="top right",
+                            line=dict(color="#dc3545", dash="dash"),
+                        )
+                    )
+                    fig_sc.add_trace(
+                        go.Scatter(
+                            x=[now, fut],
+                            y=[current_px, safe_float(scenarios.get("Base", current_px))],
+                            mode="lines+markers+text",
+                            name="Base",
+                            text=[None, f"{safe_float(scenarios.get('Base', 0)):.1f}"],
+                            textposition="top right",
+                            line=dict(color="#ffc107", dash="dash"),
+                        )
+                    )
+                    fig_sc.add_trace(
+                        go.Scatter(
+                            x=[now, fut],
+                            y=[current_px, safe_float(scenarios.get("Bull", current_px * 1.15))],
+                            mode="lines+markers+text",
+                            name="Bull",
+                            text=[None, f"{safe_float(scenarios.get('Bull', 0)):.1f}"],
+                            textposition="top right",
+                            line=dict(color="#28a745", dash="dash"),
+                        )
+                    )
+                    fig_sc.update_layout(
+                        height=300,
+                        margin=dict(t=20, b=20, l=20, r=20),
+                        title="Cone de valorisation (12 mois)",
+                    )
+                    st.plotly_chart(fig_sc, use_container_width=True)
+                else:
+                    st.caption("Scénarios Bear/Base/Bull non disponibles pour ce symbole.")
+
+            # Métriques fondamentales brutes (latest)
+            if df_funda_metrics is not None and not df_funda_metrics.empty and "symbol" in df_funda_metrics.columns:
+                m = df_funda_metrics[df_funda_metrics["symbol"] == selected_symbol].copy()
+                if not m.empty:
+                    m["value_num"] = pd.to_numeric(m.get("value_num", pd.Series(index=m.index)), errors="coerce")
+                    m["Valeur"] = m["value_num"]
+                    if "value_text" in m.columns:
+                        m["Valeur"] = m["Valeur"].fillna(m["value_text"])
+
+                    show_cols = []
+                    for col in ["section", "metric", "Valeur", "unit", "notes", "as_of_date", "extracted_at"]:
+                        if col in m.columns:
+                            show_cols.append(col)
+                    if show_cols:
+                        st.markdown("#### Métriques fondamentales (latest)")
+                        render_interactive_table(
+                            m[show_cols].rename(
+                                columns={
+                                    "section": "Section",
+                                    "metric": "Metric",
+                                    "unit": "Unit",
+                                    "notes": "Notes",
+                                    "as_of_date": "AsOf",
+                                    "extracted_at": "ExtractedAt",
+                                }
+                            ),
+                            key_suffix=f"funda_metrics_{selected_symbol}",
+                            height=300,
+                        )
+
+    # ================================================================
+    # TAB 3: HISTORIQUE RUNS
+    # ================================================================
+    with tab_runs:
+        if df_funda_runs is None or df_funda_runs.empty:
+            st.info("Aucun historique de runs AG3 disponible.")
+        else:
+            st.subheader("Historique des exécutions AG3-V2")
+
+            run_df = df_funda_runs.copy()
+            if "status" in run_df.columns:
+                run_df["status"] = run_df["status"].fillna("").astype(str).str.upper()
+
+            # KPIs run-level
+            last = run_df.iloc[0]
+            rk1, rk2, rk3, rk4, rk5 = st.columns(5)
+            rk1.metric("Dernier statut", str(last.get("status", "—")))
+            rk2.metric("Symboles", f"{safe_float(last.get('symbols_total', 0)):.0f}")
+            rk3.metric("OK", f"{safe_float(last.get('symbols_ok', 0)):.0f}")
+            rk4.metric("Erreur", f"{safe_float(last.get('symbols_error', 0)):.0f}")
+            rk5.metric("Metrics écrits", f"{safe_float(last.get('metric_rows', 0)):.0f}")
+
+            if "started_at" in run_df.columns:
+                run_df["started_at"] = pd.to_datetime(run_df["started_at"], errors="coerce")
+                chart_df = run_df.dropna(subset=["started_at"]).copy().sort_values("started_at")
+                if not chart_df.empty:
+                    fig_runs = go.Figure()
+                    fig_runs.add_trace(
+                        go.Bar(
+                            x=chart_df["started_at"],
+                            y=_safe_series(chart_df, ["symbols_ok"]),
+                            name="Symbols OK",
+                            marker_color="#28a745",
+                        )
+                    )
+                    fig_runs.add_trace(
+                        go.Bar(
+                            x=chart_df["started_at"],
+                            y=_safe_series(chart_df, ["symbols_error"]),
+                            name="Symbols Erreur",
+                            marker_color="#dc3545",
+                        )
+                    )
+                    fig_runs.update_layout(
+                        barmode="stack",
+                        height=320,
+                        margin=dict(t=30, b=20, l=20, r=20),
+                        title="Qualité des runs AG3 dans le temps",
+                    )
+                    st.plotly_chart(fig_runs, use_container_width=True)
+
+            ren_map = {
+                "run_id": "Run ID",
+                "started_at": "Démarré",
+                "finished_at": "Terminé",
+                "status": "Statut",
+                "symbols_total": "Total",
+                "symbols_ok": "OK",
+                "symbols_error": "Erreurs",
+                "triage_rows": "Rows Triage",
+                "consensus_rows": "Rows Consensus",
+                "metric_rows": "Rows Metrics",
+                "snapshot_rows": "Rows Snapshot",
+                "version": "Version",
+            }
+            keep = [c for c in ren_map.keys() if c in run_df.columns]
+            render_interactive_table(
+                run_df[keep].rename(columns={k: v for k, v in ren_map.items() if k in keep}),
+                key_suffix="funda_v2_runs",
+            )
 
