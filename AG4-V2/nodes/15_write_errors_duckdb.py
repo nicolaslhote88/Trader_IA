@@ -1,4 +1,4 @@
-﻿import json
+import json
 import duckdb, time, gc
 from contextlib import contextmanager
 from datetime import datetime, timezone, date

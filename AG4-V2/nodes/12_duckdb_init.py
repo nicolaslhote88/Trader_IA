@@ -1,4 +1,4 @@
-﻿import duckdb, time, gc
+import duckdb, time, gc
 from contextlib import contextmanager
 from datetime import datetime, timezone
 

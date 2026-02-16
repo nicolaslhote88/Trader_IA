@@ -1,4 +1,4 @@
-﻿import duckdb, time, gc
+import duckdb, time, gc
 from contextlib import contextmanager
 
 DB_PATH = "/files/duckdb/ag4_v2.duckdb"
