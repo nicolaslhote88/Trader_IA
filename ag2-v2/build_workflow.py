@@ -7,12 +7,10 @@ Canonical source:
 
 This script can:
 1) Print/export the canonical workflow JSON
-2) Mirror canonical JSON to repository workflow files
-3) Synchronize node source files (ag2-v2/nodes/*) from code nodes embedded in the canonical workflow
+2) Synchronize node source files (ag2-v2/nodes/*) from code nodes embedded in the canonical workflow
 
 Usage examples:
-  python build_workflow.py > AG2-V2-workflow.json
-  python build_workflow.py --sync-workflows
+  python build_workflow.py > AG2-V2-workflow.final-loop-vector-test.json
   python build_workflow.py --sync-nodes
   python build_workflow.py --write-files
 """
@@ -26,21 +24,19 @@ from pathlib import Path
 DIR = Path(__file__).resolve().parent
 NODES_DIR = DIR / "nodes"
 CANONICAL_FILE = DIR / "AG2-V2-workflow.final-loop-vector-test.json"
-MIRROR_FILES = [
-    DIR / "AG2-V2-workflow.json",
-    DIR / "AG2-V2-workflow.vector-wired-proposed.json",
-]
 
 
 def load_workflow(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def save_json(path: Path, payload: dict) -> None:
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-
-
-def find_node(workflow: dict, *, name: str | None = None, starts: str | None = None, contains: str | None = None) -> dict:
+def find_node(
+    workflow: dict,
+    *,
+    name: str | None = None,
+    starts: str | None = None,
+    contains: str | None = None,
+) -> dict:
     for node in workflow.get("nodes", []):
         nm = node.get("name", "")
         if name is not None and nm == name:
@@ -85,34 +81,26 @@ def sync_nodes(workflow: dict) -> None:
     )
 
 
-def sync_workflow_mirrors(workflow: dict) -> None:
-    for path in MIRROR_FILES:
-        save_json(path, workflow)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", default=str(CANONICAL_FILE), help="Canonical workflow JSON path")
     parser.add_argument("--output", default="-", help="Output path or '-' for stdout")
-    parser.add_argument("--sync-nodes", action="store_true", help="Sync ag2-v2/nodes/* from canonical workflow code nodes")
-    parser.add_argument("--sync-workflows", action="store_true", help="Overwrite AG2-V2-workflow.json and AG2-V2-workflow.vector-wired-proposed.json")
-    parser.add_argument("--write-files", action="store_true", help="Shortcut for --sync-nodes --sync-workflows")
+    parser.add_argument(
+        "--sync-nodes",
+        action="store_true",
+        help="Sync ag2-v2/nodes/* from canonical workflow code nodes",
+    )
+    parser.add_argument("--write-files", action="store_true", help="Shortcut for --sync-nodes")
     args = parser.parse_args()
 
-    src = Path(args.source)
-    workflow = load_workflow(src)
+    workflow = load_workflow(Path(args.source))
 
     if args.write_files:
         args.sync_nodes = True
-        args.sync_workflows = True
 
     if args.sync_nodes:
         sync_nodes(workflow)
         print("Synced node source files from canonical workflow")
-
-    if args.sync_workflows:
-        sync_workflow_mirrors(workflow)
-        print("Updated workflow mirrors from canonical workflow")
 
     payload = json.dumps(workflow, indent=2, ensure_ascii=False) + "\n"
     if args.output == "-":
