@@ -45,6 +45,7 @@ for (const r of rows) {
       nowIso: ctx.nowIso || new Date().toISOString(),
       asOfDate: ctx.asOfDate || null,
       api_base: ctx.api_base || "http://yfinance-api:8080",
+      db_path: ctx.db_path || "/files/duckdb/ag3_v2.duckdb",
       strategy_version: ctx.strategy_version || "ag3_v2_fundamentals",
       config_version: ctx.config_version || "ag3_v2_default",
       Symbol: symbol,

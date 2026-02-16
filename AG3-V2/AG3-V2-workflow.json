@@ -1,5 +1,5 @@
 {
-  "name": "AG3-V2 - Fundamental Analyst (API-first)",
+  "name": "AG3-V2 - Fundamental Analyst (DuckDB-first)",
   "nodes": [
     {
       "parameters": {
@@ -15,10 +15,10 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.3,
       "position": [
-        -1520,
-        -240
+        -1424,
+        -224
       ],
-      "id": "b96fcb6d-90ab-4dc6-9182-9fc5f5117121",
+      "id": "dcd6b2a3-cc74-4f03-8588-b8a24fe9908d",
       "name": "Schedule Trigger"
     },
     {
@@ -26,23 +26,23 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        -1520,
-        -80
+        -1424,
+        -64
       ],
-      "id": "c6376e35-3d35-4827-9267-a9529abf9db9",
+      "id": "092be7cc-16e7-4904-8d73-bf0ae727f25a",
       "name": "Manual Trigger"
     },
     {
       "parameters": {
-        "jsCode": "function pad(n) {\n  return String(n).padStart(2, \"0\");\n}\n\nfunction isoDate(d) {\n  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;\n}\n\nconst now = new Date();\nconst ts = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;\nconst rand = Math.random().toString(16).slice(2, 8).toUpperCase();\n\nconst input = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst maxSymbolsIn = Number(input.max_symbols);\n\nreturn [\n  {\n    json: {\n      run_id: `AG3V2_${ts}_${rand}`,\n      nowIso: now.toISOString(),\n      asOfDate: isoDate(now),\n      api_base: String(input.api_base || \"http://yfinance-api:8080\"),\n      max_symbols: Number.isFinite(maxSymbolsIn) && maxSymbolsIn > 0 ? Math.floor(maxSymbolsIn) : 0,\n      only_enabled: true,\n      strategy_version: \"ag3_v2_fundamentals\",\n      config_version: \"ag3_v2_default\",\n    },\n  },\n];\n"
+        "jsCode": "function pad(n) {\n  return String(n).padStart(2, \"0\");\n}\n\nfunction isoDate(d) {\n  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;\n}\n\nconst now = new Date();\nconst ts = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;\nconst rand = Math.random().toString(16).slice(2, 8).toUpperCase();\n\nconst input = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst maxSymbolsIn = Number(input.max_symbols);\n\nreturn [\n  {\n    json: {\n      run_id: `AG3V2_${ts}_${rand}`,\n      nowIso: now.toISOString(),\n      asOfDate: isoDate(now),\n      api_base: String(input.api_base || \"http://yfinance-api:8080\"),\n      db_path: String(input.db_path || \"/files/duckdb/ag3_v2.duckdb\"),\n      max_symbols: Number.isFinite(maxSymbolsIn) && maxSymbolsIn > 0 ? Math.floor(maxSymbolsIn) : 0,\n      only_enabled: true,\n      strategy_version: \"ag3_v2_fundamentals\",\n      config_version: \"ag3_v2_default\",\n    },\n  },\n];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1280,
-        -160
+        -1184,
+        -144
       ],
-      "id": "7bf94f32-95fb-429a-a09c-1fcfc8d79556",
+      "id": "013e013b-4655-4bdb-8f2b-66fdffb09e95",
       "name": "AG3V2.00 - Init Context"
     },
     {
@@ -66,10 +66,10 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
       "position": [
-        -1040,
-        -160
+        -960,
+        -144
       ],
-      "id": "622f053a-f64c-4a56-b4da-880f3a56e440",
+      "id": "8e3a18ed-9e2d-43f1-8b12-a90ff3daa49f",
       "name": "AG3V2.01 - Read Universe",
       "credentials": {
         "googleSheetsOAuth2Api": {
@@ -80,16 +80,30 @@
     },
     {
       "parameters": {
-        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst out = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  out.push({\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      Symbol: symbol,\n      Name: name,\n      Sector: sector,\n      BoursoramaRef: boursoramaRef,\n      UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n    },\n  });\n}\n\nif (ctx.max_symbols && Number(ctx.max_symbols) > 0) {\n  return out.slice(0, Number(ctx.max_symbols));\n}\nreturn out;\n"
+        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst out = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  out.push({\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      Symbol: symbol,\n      Name: name,\n      Sector: sector,\n      BoursoramaRef: boursoramaRef,\n      UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n    },\n  });\n}\n\nif (ctx.max_symbols && Number(ctx.max_symbols) > 0) {\n  return out.slice(0, Number(ctx.max_symbols));\n}\nreturn out;\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -816,
-        -160
+        -736,
+        -144
       ],
-      "id": "58f0084f-b69f-47b0-8a95-c705e8067f89",
+      "id": "d7dc6bbd-c6b9-402f-b2da-21594941e731",
       "name": "AG3V2.02 - Build Queue"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\nWORKFLOW_VERSION = \"2.1.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nfirst = items[0].get(\"json\", {}) if items else {}\nrun_id = str(first.get(\"run_id\") or f\"AG3V2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\")\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nschema_stmts = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      triage_rows INTEGER DEFAULT 0,\n      consensus_rows INTEGER DEFAULT 0,\n      metric_rows INTEGER DEFAULT 0,\n      snapshot_rows INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.1.0'\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (\n      snapshot_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      as_of_date DATE,\n      fetched_at TIMESTAMP,\n      status VARCHAR,\n      error VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      data_coverage_pct DOUBLE,\n      profile_json VARCHAR,\n      price_json VARCHAR,\n      valuation_json VARCHAR,\n      profitability_json VARCHAR,\n      growth_json VARCHAR,\n      financial_health_json VARCHAR,\n      consensus_json VARCHAR,\n      dividends_json VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_triage_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      as_of_date DATE,\n      status VARCHAR,\n      error VARCHAR,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      score INTEGER,\n      funda_conf INTEGER,\n      risk_score INTEGER,\n      quality_score INTEGER,\n      growth_score INTEGER,\n      valuation_score INTEGER,\n      health_score INTEGER,\n      consensus_score INTEGER,\n      horizon VARCHAR,\n      current_price DOUBLE,\n      target_price DOUBLE,\n      upside_pct DOUBLE,\n      recommendation VARCHAR,\n      analyst_count INTEGER,\n      valuation VARCHAR,\n      why VARCHAR,\n      risks VARCHAR,\n      next_steps VARCHAR,\n      data_coverage_pct DOUBLE,\n      strategy_version VARCHAR,\n      config_version VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS analyst_consensus_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      recommendation VARCHAR,\n      recommendation_mean DOUBLE,\n      analyst_count INTEGER,\n      current_price DOUBLE,\n      target_mean_price DOUBLE,\n      target_high_price DOUBLE,\n      target_low_price DOUBLE,\n      upside_pct DOUBLE,\n      dispersion_pct DOUBLE,\n      confidence_proxy INTEGER,\n      risk_proxy INTEGER,\n      source VARCHAR,\n      source_url VARCHAR,\n      status VARCHAR,\n      error VARCHAR,\n      horizon VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamental_metrics_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      extracted_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      boursorama_ref VARCHAR,\n      data_type VARCHAR,\n      section VARCHAR,\n      metric VARCHAR,\n      period VARCHAR,\n      value_num DOUBLE,\n      value_text VARCHAR,\n      unit VARCHAR,\n      source_url VARCHAR,\n      sig_hash VARCHAR,\n      title VARCHAR,\n      author VARCHAR,\n      excerpt VARCHAR,\n      raw_text VARCHAR,\n      signal VARCHAR,\n      score DOUBLE,\n      currency VARCHAR,\n      title_or_label VARCHAR,\n      notes VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_triage AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT t.*,\n             ROW_NUMBER() OVER (PARTITION BY t.symbol ORDER BY t.updated_at DESC, t.created_at DESC) AS rn\n      FROM fundamentals_triage_history t\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_consensus AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT c.*,\n             ROW_NUMBER() OVER (PARTITION BY c.symbol ORDER BY c.updated_at DESC, c.created_at DESC) AS rn\n      FROM analyst_consensus_history c\n    )\n    WHERE rn = 1\n    \"\"\",\n]\n\nwith db_con(db_path) as con:\n    for stmt in schema_stmts:\n        con.execute(stmt)\n\n    total = len(items)\n    if total == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, total, WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -512,
+        -144
+      ],
+      "id": "d75538b7-502e-463e-ad73-69b940339f2c",
+      "name": "AG3V2.02B - DuckDB Init Run"
     },
     {
       "parameters": {
@@ -98,10 +112,10 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        -608,
-        -160
+        -304,
+        -144
       ],
-      "id": "3516ad96-f981-4a32-81ff-b2938f55a8a8",
+      "id": "b3f5f89f-7c85-49ad-907f-f715ea79754a",
       "name": "AG3V2.03 - Split Symbols"
     },
     {
@@ -123,10 +137,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        -384,
-        -272
+        -80,
+        -256
       ],
-      "id": "3ba395fc-657e-49f2-bf9f-f0f6e42c8f6a",
+      "id": "3208f39c-278d-4a0d-b3a6-c7f89f2e6f50",
       "name": "AG3V2.04 - HTTP Fundamentals",
       "retryOnFail": true,
       "maxTries": 3,
@@ -143,10 +157,10 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        -176,
-        -160
+        128,
+        -144
       ],
-      "id": "374f30b0-4952-4164-8e5e-5398574e4f4d",
+      "id": "045b4a91-afca-4c67-b1d9-03b7f0107f3a",
       "name": "AG3V2.05 - Merge Queue + API"
     },
     {
@@ -156,69 +170,25 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        32,
-        -160
+        336,
+        -144
       ],
-      "id": "b8829d80-2643-4625-9bcf-01035548f38e",
+      "id": "f21995ee-8c01-43dc-b90a-fcf877539f61",
       "name": "AG3V2.06 - Score Fundamentals"
     },
     {
       "parameters": {
-        "jsCode": "const row = $json.triageRow || null;\nif (!row) return [];\nreturn [{ json: row }];\n"
+        "language": "pythonNative",
+        "pythonCode": "import duckdb, time, gc, json, hashlib\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return None\n    s = str(v).strip()\n    return s if s else None\n\n\ndef to_float(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        return float(v)\n    except Exception:\n        return None\n\n\ndef to_int(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        return int(round(float(v)))\n    except Exception:\n        return None\n\n\ndef to_json(v):\n    try:\n        if v is None:\n            return None\n        return json.dumps(v, ensure_ascii=False)\n    except Exception:\n        return None\n\n\nitems = _items or []\nif not items:\n    return []\n\nfirst = items[0].get(\"json\", {}) or {}\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for it in items:\n        j = it.get(\"json\", {}) or {}\n        run_id = str(j.get(\"run_id\", \"\") or \"\").strip()\n        symbol = str(j.get(\"Symbol\") or j.get(\"symbol\") or \"\").strip().upper()\n        if not run_id or not symbol:\n            continue\n\n        triage = j.get(\"triageRow\", {}) or {}\n        consensus = j.get(\"consensusRow\", {}) or {}\n        metric_rows = j.get(\"metricRows\", []) or []\n\n        status = str((triage.get(\"Status\") if triage else j.get(\"ok\")) or \"\").strip()\n        if status in (\"True\", \"true\", \"1\"):\n            status = \"OK\"\n        if not status:\n            status = \"OK\" if j.get(\"ok\") is True else \"ERR_SOURCE\"\n\n        error_txt = to_text(triage.get(\"Error\") if triage else j.get(\"error\"))\n        as_of = to_text((triage.get(\"AsOfDate\") if triage else j.get(\"asOfDate\")) or j.get(\"as_of_date\"))\n        fetched = to_text((triage.get(\"fetchedAt\") if triage else j.get(\"fetchedAt\")) or j.get(\"nowIso\"))\n\n        snapshot_seed = f\"{run_id}|{symbol}|{as_of or ''}\"\n        snapshot_id = hashlib.sha1(snapshot_seed.encode(\"utf-8\")).hexdigest()\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO fundamentals_snapshot (\n              snapshot_id, run_id, symbol, name, sector, industry, country, boursorama_ref,\n              as_of_date, fetched_at, status, error, source, source_url, data_coverage_pct,\n              profile_json, price_json, valuation_json, profitability_json, growth_json,\n              financial_health_json, consensus_json, dividends_json, updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                snapshot_id,\n                run_id,\n                symbol,\n                to_text(triage.get(\"Name\") if triage else j.get(\"Name\")),\n                to_text(triage.get(\"Sector\") if triage else j.get(\"Sector\")),\n                to_text(triage.get(\"Industry\") if triage else (j.get(\"profile\") or {}).get(\"industry\")),\n                to_text(triage.get(\"Country\") if triage else (j.get(\"profile\") or {}).get(\"country\")),\n                to_text(triage.get(\"BoursoramaRef\") if triage else j.get(\"BoursoramaRef\")),\n                as_of,\n                fetched,\n                status,\n                error_txt,\n                to_text(triage.get(\"Source\") if triage else j.get(\"source\")) or \"yfinance_api\",\n                to_text(triage.get(\"SourceUrl\") if triage else j.get(\"sourceUrl\")),\n                to_float(triage.get(\"data_coverage_pct\") if triage else (j.get(\"meta\") or {}).get(\"dataCoveragePctApprox\")),\n                to_json(j.get(\"profile\")),\n                to_json(j.get(\"price\")),\n                to_json(j.get(\"valuation\")),\n                to_json(j.get(\"profitability\")),\n                to_json(j.get(\"growth\")),\n                to_json(j.get(\"financialHealth\")),\n                to_json(j.get(\"consensus\")),\n                to_json(j.get(\"dividends\")),\n            ],\n        )\n\n        if triage and triage.get(\"RecordId\"):\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO fundamentals_triage_history (\n                  record_id, run_id, updated_at, fetched_at, as_of_date, status, error,\n                  symbol, name, sector, industry, country, boursorama_ref, source, source_url,\n                  score, funda_conf, risk_score, quality_score, growth_score, valuation_score,\n                  health_score, consensus_score, horizon, current_price, target_price, upside_pct,\n                  recommendation, analyst_count, valuation, why, risks, next_steps,\n                  data_coverage_pct, strategy_version, config_version, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    to_text(triage.get(\"RecordId\")),\n                    run_id,\n                    to_text(triage.get(\"UpdatedAt\")),\n                    to_text(triage.get(\"fetchedAt\")),\n                    to_text(triage.get(\"AsOfDate\")),\n                    to_text(triage.get(\"Status\")),\n                    to_text(triage.get(\"Error\")),\n                    to_text(triage.get(\"Symbol\")) or symbol,\n                    to_text(triage.get(\"Name\")),\n                    to_text(triage.get(\"Sector\")),\n                    to_text(triage.get(\"Industry\")),\n                    to_text(triage.get(\"Country\")),\n                    to_text(triage.get(\"BoursoramaRef\")),\n                    to_text(triage.get(\"Source\")),\n                    to_text(triage.get(\"SourceUrl\")),\n                    to_int(triage.get(\"Score\")),\n                    to_int(triage.get(\"funda_conf\")),\n                    to_int(triage.get(\"risk_score\")),\n                    to_int(triage.get(\"quality_score\")),\n                    to_int(triage.get(\"growth_score\")),\n                    to_int(triage.get(\"valuation_score\")),\n                    to_int(triage.get(\"health_score\")),\n                    to_int(triage.get(\"consensus_score\")),\n                    to_text(triage.get(\"horizon\")),\n                    to_float(triage.get(\"current_price\")),\n                    to_float(triage.get(\"target_price\")),\n                    to_float(triage.get(\"upside_pct\")),\n                    to_text(triage.get(\"recommendation\")),\n                    to_int(triage.get(\"analyst_count\")),\n                    to_text(triage.get(\"valuation\")),\n                    to_text(triage.get(\"why\")),\n                    to_text(triage.get(\"risks\")),\n                    to_text(triage.get(\"nextSteps\")),\n                    to_float(triage.get(\"data_coverage_pct\")),\n                    to_text(triage.get(\"strategy_version\")),\n                    to_text(triage.get(\"config_version\")),\n                ],\n            )\n\n        if consensus and consensus.get(\"RecordId\"):\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO analyst_consensus_history (\n                  record_id, run_id, updated_at, as_of_date, symbol, name, sector, recommendation,\n                  recommendation_mean, analyst_count, current_price, target_mean_price, target_high_price,\n                  target_low_price, upside_pct, dispersion_pct, confidence_proxy, risk_proxy,\n                  source, source_url, status, error, horizon, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    to_text(consensus.get(\"RecordId\")),\n                    run_id,\n                    to_text(consensus.get(\"UpdatedAt\")),\n                    to_text(consensus.get(\"AsOfDate\")),\n                    to_text(consensus.get(\"Symbol\")) or symbol,\n                    to_text(consensus.get(\"Name\")),\n                    to_text(consensus.get(\"Sector\")),\n                    to_text(consensus.get(\"recommendation\")),\n                    to_float(consensus.get(\"recommendationMean\")),\n                    to_int(consensus.get(\"analystCount\")),\n                    to_float(consensus.get(\"currentPrice\")),\n                    to_float(consensus.get(\"targetMeanPrice\")),\n                    to_float(consensus.get(\"targetHighPrice\")),\n                    to_float(consensus.get(\"targetLowPrice\")),\n                    to_float(consensus.get(\"upsidePct\")),\n                    to_float(consensus.get(\"dispersionPct\")),\n                    to_int(consensus.get(\"confidenceProxy\")),\n                    to_int(consensus.get(\"riskProxy\")),\n                    to_text(consensus.get(\"Source\")),\n                    to_text(consensus.get(\"SourceUrl\")),\n                    to_text(consensus.get(\"Status\")),\n                    to_text(consensus.get(\"Error\")),\n                    to_text(consensus.get(\"horizon\")),\n                ],\n            )\n\n        for m in metric_rows:\n            rid = to_text(m.get(\"RecordId\"))\n            if not rid:\n                continue\n            raw_val = m.get(\"Value\")\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO fundamental_metrics_history (\n                  record_id, run_id, extracted_at, as_of_date, symbol, boursorama_ref, data_type,\n                  section, metric, period, value_num, value_text, unit, source_url, sig_hash,\n                  title, author, excerpt, raw_text, signal, score, currency, title_or_label, notes, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    rid,\n                    run_id,\n                    to_text(m.get(\"ExtractedAt\")),\n                    to_text(m.get(\"AsOfDate\")),\n                    to_text(m.get(\"Symbol\")) or symbol,\n                    to_text(m.get(\"BoursoramaRef\")),\n                    to_text(m.get(\"DataType\")),\n                    to_text(m.get(\"Section\")),\n                    to_text(m.get(\"Metric\")),\n                    to_text(m.get(\"Period\")),\n                    to_float(raw_val),\n                    to_text(raw_val),\n                    to_text(m.get(\"Unit\")),\n                    to_text(m.get(\"SourceUrl\")),\n                    to_text(m.get(\"SigHash\")),\n                    to_text(m.get(\"Title\")),\n                    to_text(m.get(\"Author\")),\n                    to_text(m.get(\"Excerpt\")),\n                    to_text(m.get(\"RawText\")),\n                    to_text(m.get(\"Signal\")),\n                    to_float(m.get(\"Score\")),\n                    to_text(m.get(\"Currency\")),\n                    to_text(m.get(\"TitleOrLabel\")),\n                    to_text(m.get(\"Notes\")),\n                ],\n            )\n\nreturn items\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        272,
-        -272
+        560,
+        -144
       ],
-      "id": "ce4f7f3f-e9c2-4538-8e86-e8f823849caa",
-      "name": "AG3V2.07 - Prepare Triage Row"
-    },
-    {
-      "parameters": {
-        "operation": "appendOrUpdate",
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": "AG3_Triage_History",
-          "cachedResultName": "AG3_Triage_History",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "columns": {
-          "mappingMode": "autoMapInputData",
-          "matchingColumns": [
-            "RecordId"
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        },
-        "options": {
-          "handlingExtraData": "ignoreIt"
-        }
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        512,
-        -272
-      ],
-      "id": "20b5ad8f-df11-4121-b0c2-526e56ea0815",
-      "name": "AG3V2.08 - Upsert AG3_Triage_History",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      },
-      "onError": "continueRegularOutput"
+      "id": "568aee73-8511-4db6-885d-f90e85dc7ca8",
+      "name": "AG3V2.07 - Write Fundamentals DuckDB"
     },
     {
       "parameters": {
@@ -228,156 +198,40 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        736,
-        -272
+        768,
+        -144
       ],
-      "id": "6a7e5f58-eb61-4e54-aed4-fd2f4f30167c",
-      "name": "AG3V2.09 - Wait Rate Limit"
+      "id": "51f057cb-5dcb-4bc9-95a7-a8161eb45f7b",
+      "name": "AG3V2.08 - Wait Rate Limit"
     },
     {
       "parameters": {
-        "jsCode": "const row = $json.consensusRow || null;\nif (!row) return [];\nreturn [{ json: row }];\n"
+        "language": "pythonNative",
+        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\") or \"\").strip()\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\"SELECT run_id FROM run_log WHERE status='RUNNING' ORDER BY started_at DESC LIMIT 1\").fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\", \"run_id\": \"\", \"db_path\": db_path}}]\n\n    r = con.execute(\"SELECT COALESCE(symbols_total, 0) FROM run_log WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_total = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_snapshot WHERE run_id = ?\", [run_id]).fetchone()\n    snapshot_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_snapshot WHERE run_id = ? AND status = 'OK'\", [run_id]).fetchone()\n    symbols_ok = int(r[0]) if r else 0\n    symbols_error = max(snapshot_rows - symbols_ok, 0)\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_triage_history WHERE run_id = ?\", [run_id]).fetchone()\n    triage_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM analyst_consensus_history WHERE run_id = ?\", [run_id]).fetchone()\n    consensus_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamental_metrics_history WHERE run_id = ?\", [run_id]).fetchone()\n    metric_rows = int(r[0]) if r else 0\n\n    if symbols_total == 0:\n        status = \"NO_DATA\"\n    elif symbols_ok == symbols_total and symbols_total > 0:\n        status = \"SUCCESS\"\n    elif symbols_ok > 0:\n        status = \"PARTIAL\"\n    else:\n        status = \"FAILED\"\n\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            status = ?,\n            symbols_ok = ?,\n            symbols_error = ?,\n            triage_rows = ?,\n            consensus_rows = ?,\n            metric_rows = ?,\n            snapshot_rows = ?,\n            error_detail = ?\n        WHERE run_id = ?\n        \"\"\",\n        [status, symbols_ok, symbols_error, triage_rows, consensus_rows, metric_rows, snapshot_rows, None, run_id],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"db_path\": db_path,\n            \"status\": status,\n            \"symbols_total\": symbols_total,\n            \"symbols_ok\": symbols_ok,\n            \"symbols_error\": symbols_error,\n            \"triage_rows\": triage_rows,\n            \"consensus_rows\": consensus_rows,\n            \"metric_rows\": metric_rows,\n            \"snapshot_rows\": snapshot_rows,\n        }\n    }\n]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        272,
-        -112
+        -80,
+        64
       ],
-      "id": "7999b87a-f3ec-4d1d-ac2f-276d7094d0a9",
-      "name": "AG3V2.10 - Prepare Consensus Row"
+      "id": "1a4ac7a0-e2ac-4eb0-bbc5-eb33f2533204",
+      "name": "AG3V2.09 - Finalize Run"
     },
     {
       "parameters": {
-        "operation": "appendOrUpdate",
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": "research_analyst_consensus",
-          "cachedResultName": "research_analyst_consensus",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "columns": {
-          "mappingMode": "autoMapInputData",
-          "matchingColumns": [
-            "RecordId"
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        },
-        "options": {
-          "handlingExtraData": "ignoreIt"
-        }
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        512,
-        -112
-      ],
-      "id": "84cedd7e-5f26-4f54-adcb-6e8e5d0896ec",
-      "name": "AG3V2.11 - Upsert research_analyst_consensus",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "jsCode": "const rows = Array.isArray($json.metricRows) ? $json.metricRows : [];\nif (!rows.length) return [];\nreturn [{ json: { metricRows: rows } }];\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        272,
-        48
-      ],
-      "id": "357701ca-baa0-4fb5-9c8f-e299fbb4e71b",
-      "name": "AG3V2.12 - Prepare Metric Rows"
-    },
-    {
-      "parameters": {
-        "fieldToSplitOut": "metricRows",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.itemLists",
-      "typeVersion": 3.1,
-      "position": [
-        512,
-        48
-      ],
-      "id": "f5e69c54-765a-422f-865b-3690f85e8ab6",
-      "name": "AG3V2.13 - Split Metric Rows"
-    },
-    {
-      "parameters": {
-        "operation": "appendOrUpdate",
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": "Fundamental_Data",
-          "cachedResultName": "Fundamental_Data",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "columns": {
-          "mappingMode": "autoMapInputData",
-          "matchingColumns": [
-            "RecordId"
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        },
-        "options": {
-          "handlingExtraData": "ignoreIt"
-        }
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        736,
-        48
-      ],
-      "id": "8f6676e8-44a1-411b-be2e-f7f34a23ef6e",
-      "name": "AG3V2.14 - Upsert Fundamental_Data",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "content": "AG3-V2: robust fundamentals pipeline (API-first) for scoring + consensus + raw metrics.",
+        "content": "AG3-V2 (DuckDB-first): yfinance fundamentals -> scoring -> DuckDB only (no Google Sheets writes).",
         "height": 160,
-        "width": 980,
+        "width": 1160,
         "color": 5
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -1568,
-        -352
+        -1488,
+        -336
       ],
-      "id": "0f0ec6f2-6d54-43ea-b929-ce0f8d6f0050",
+      "id": "f46735a8-4b73-4685-9493-bf170c0afcb6",
       "name": "AG3V2 - Note"
     }
   ],
@@ -430,6 +284,17 @@
       "main": [
         [
           {
+            "node": "AG3V2.02B - DuckDB Init Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.02B - DuckDB Init Run": {
+      "main": [
+        [
+          {
             "node": "AG3V2.03 - Split Symbols",
             "type": "main",
             "index": 0
@@ -449,6 +314,13 @@
             "node": "AG3V2.05 - Merge Queue + API",
             "type": "main",
             "index": 1
+          }
+        ],
+        [
+          {
+            "node": "AG3V2.09 - Finalize Run",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -479,83 +351,29 @@
       "main": [
         [
           {
-            "node": "AG3V2.07 - Prepare Triage Row",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "AG3V2.10 - Prepare Consensus Row",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "AG3V2.12 - Prepare Metric Rows",
+            "node": "AG3V2.07 - Write Fundamentals DuckDB",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "AG3V2.07 - Prepare Triage Row": {
+    "AG3V2.07 - Write Fundamentals DuckDB": {
       "main": [
         [
           {
-            "node": "AG3V2.08 - Upsert AG3_Triage_History",
+            "node": "AG3V2.08 - Wait Rate Limit",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "AG3V2.08 - Upsert AG3_Triage_History": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.09 - Wait Rate Limit",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.09 - Wait Rate Limit": {
+    "AG3V2.08 - Wait Rate Limit": {
       "main": [
         [
           {
             "node": "AG3V2.03 - Split Symbols",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.10 - Prepare Consensus Row": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.11 - Upsert research_analyst_consensus",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.12 - Prepare Metric Rows": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.13 - Split Metric Rows",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.13 - Split Metric Rows": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.14 - Upsert Fundamental_Data",
             "type": "main",
             "index": 0
           }

@@ -20,6 +20,7 @@ return [
       nowIso: now.toISOString(),
       asOfDate: isoDate(now),
       api_base: String(input.api_base || "http://yfinance-api:8080"),
+      db_path: String(input.db_path || "/files/duckdb/ag3_v2.duckdb"),
       max_symbols: Number.isFinite(maxSymbolsIn) && maxSymbolsIn > 0 ? Math.floor(maxSymbolsIn) : 0,
       only_enabled: true,
       strategy_version: "ag3_v2_fundamentals",
