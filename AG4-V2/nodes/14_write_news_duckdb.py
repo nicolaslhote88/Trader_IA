@@ -49,20 +49,27 @@ def to_text(v):
         return ", ".join([str(x) for x in v if x is not None and str(x).strip()])
     return str(v)
 
+def ensure_utc_aware(dt):
+    if dt is None:
+        return None
+    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
 def parse_ts(v):
     if v is None:
         return None
     if isinstance(v, (datetime, date)):
         if isinstance(v, date) and not isinstance(v, datetime):
             return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)
-        return v
+        return ensure_utc_aware(v)
     s = str(v).strip()
     if not s or s.lower() == "unknown":
         return None
     if s.endswith("Z"):
         s = s[:-1] + "+00:00"
     try:
-        return datetime.fromisoformat(s)
+        return ensure_utc_aware(datetime.fromisoformat(s))
     except Exception:
         return None
 
@@ -102,14 +109,15 @@ with db_con(db_path) as con:
         confidence = safe_float(j.get("confidence"), 0.0)
         urgency = str(j.get("urgency", "") or "low")
         snippet = str(j.get("Snippet", "") or j.get("snippet", "") or "")
-        new_first_seen = parse_ts(j.get("firstSeenAt")) or published_at or datetime.now(timezone.utc)
+        now_utc = datetime.now(timezone.utc)
+        new_first_seen = parse_ts(j.get("firstSeenAt")) or published_at or now_utc
         strategy = str(j.get("Strategy", "") or "")
         losers = str(j.get("Losers", "") or "")
         winners = str(j.get("Winners", "") or "")
         theme = str(j.get("Theme", "") or "Resultats/Micro")
         regime = str(j.get("Regime", "") or "Neutral")
-        analyzed_at = parse_ts(j.get("analyzedAt")) or datetime.now(timezone.utc)
-        last_seen_at = parse_ts(j.get("seenNowAt")) or datetime.now(timezone.utc)
+        analyzed_at = parse_ts(j.get("analyzedAt")) or now_utc
+        last_seen_at = parse_ts(j.get("seenNowAt")) or now_utc
         source_tier = safe_int(j.get("sourceTier"), 2)
         action = str(j.get("_action", "") or "skip")
         reason = str(j.get("_reason", "") or "")
@@ -118,8 +126,9 @@ with db_con(db_path) as con:
             "SELECT first_seen_at FROM news_history WHERE dedupe_key = ?",
             [dedupe_key],
         ).fetchone()
-        if existing and existing[0] is not None and existing[0] < new_first_seen:
-            first_seen_at = existing[0]
+        existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None
+        if existing_first_seen is not None and existing_first_seen < new_first_seen:
+            first_seen_at = existing_first_seen
         else:
             first_seen_at = new_first_seen
 
