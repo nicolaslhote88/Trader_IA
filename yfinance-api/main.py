@@ -8,6 +8,7 @@ import os
 import json
 import time
 import random
+import math
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict
 
@@ -66,6 +67,54 @@ INTERVAL_MAX_LOOKBACK = {
 }
 
 app = FastAPI(title="yfinance-api", version=APP_VERSION)
+
+
+def _safe_num(v) -> Optional[float]:
+    """Convert scalar-like value to finite float, else None."""
+    try:
+        if v is None or isinstance(v, bool):
+            return None
+        n = float(v)
+        if not math.isfinite(n):
+            return None
+        return n
+    except Exception:
+        return None
+
+
+def _safe_int(v) -> Optional[int]:
+    n = _safe_num(v)
+    if n is None:
+        return None
+    try:
+        return int(round(n))
+    except Exception:
+        return None
+
+
+def _safe_str(v, max_len: int = 4000) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    if not s:
+        return ""
+    return s[:max_len]
+
+
+def _pick_num(*vals) -> Optional[float]:
+    for v in vals:
+        n = _safe_num(v)
+        if n is not None:
+            return n
+    return None
+
+
+def _pick_str(*vals, max_len: int = 4000) -> str:
+    for v in vals:
+        s = _safe_str(v, max_len=max_len)
+        if s:
+            return s
+    return ""
 
 
 # =========================
@@ -758,6 +807,7 @@ def history(
 @app.get("/info")
 def get_info(symbol: str = Query(...)):
     try:
+        _global_rate_limit_sleep()
         tick = yf.Ticker(symbol)
         isin = tick.isin
         i = tick.info
@@ -776,6 +826,197 @@ def get_info(symbol: str = Query(...)):
         return {
             "ok": False, "symbol": symbol, "error": str(e),
             "sector": "", "industry": "", "isin": "", "quoteType": "",
+        }
+
+
+@app.get("/fundamentals")
+def get_fundamentals(symbol: str = Query(...)):
+    """Structured fundamental snapshot for AG3 (quality/valuation/consensus inputs)."""
+    fetched_at = _utcnow().isoformat()
+    symbol = _safe_str(symbol, max_len=32).upper()
+
+    profile = {}
+    price = {}
+    valuation = {}
+    profitability = {}
+    growth = {}
+    financial_health = {}
+    consensus = {}
+    dividends = {}
+
+    try:
+        _global_rate_limit_sleep()
+        tick = yf.Ticker(symbol)
+
+        info = {}
+        try:
+            info = tick.info or {}
+        except Exception:
+            info = {}
+
+        fast = {}
+        try:
+            fast = dict(tick.fast_info or {})
+        except Exception:
+            fast = {}
+
+        isin = ""
+        try:
+            isin = _safe_str(tick.isin, max_len=64)
+        except Exception:
+            isin = ""
+
+        current_price = _pick_num(
+            info.get("currentPrice"),
+            info.get("regularMarketPrice"),
+            info.get("previousClose"),
+            fast.get("lastPrice"),
+            fast.get("regularMarketPrice"),
+            fast.get("previous_close"),
+        )
+
+        profile = {
+            "symbol": symbol,
+            "shortName": _pick_str(info.get("shortName"), info.get("longName"), max_len=200),
+            "longName": _pick_str(info.get("longName"), info.get("shortName"), max_len=300),
+            "sector": _safe_str(info.get("sector"), max_len=200),
+            "industry": _safe_str(info.get("industry"), max_len=200),
+            "country": _safe_str(info.get("country"), max_len=100),
+            "currency": _pick_str(info.get("currency"), fast.get("currency"), max_len=16),
+            "exchange": _pick_str(info.get("exchange"), fast.get("exchange"), max_len=64),
+            "website": _safe_str(info.get("website"), max_len=300),
+            "isin": _pick_str(isin, info.get("isin"), max_len=64),
+            "quoteType": _safe_str(info.get("quoteType"), max_len=64),
+            "businessSummary": _safe_str(info.get("longBusinessSummary"), max_len=4000),
+        }
+
+        price = {
+            "currentPrice": current_price,
+            "marketCap": _pick_num(info.get("marketCap"), fast.get("marketCap")),
+            "sharesOutstanding": _pick_num(info.get("sharesOutstanding"), fast.get("shares")),
+            "beta": _safe_num(info.get("beta")),
+            "fiftyTwoWeekLow": _pick_num(info.get("fiftyTwoWeekLow"), fast.get("yearLow")),
+            "fiftyTwoWeekHigh": _pick_num(info.get("fiftyTwoWeekHigh"), fast.get("yearHigh")),
+        }
+
+        valuation = {
+            "trailingPE": _safe_num(info.get("trailingPE")),
+            "forwardPE": _safe_num(info.get("forwardPE")),
+            "pegRatio": _safe_num(info.get("pegRatio")),
+            "priceToBook": _safe_num(info.get("priceToBook")),
+            "enterpriseToEbitda": _safe_num(info.get("enterpriseToEbitda")),
+            "enterpriseToRevenue": _safe_num(info.get("enterpriseToRevenue")),
+            "trailingEps": _safe_num(info.get("trailingEps")),
+            "forwardEps": _safe_num(info.get("forwardEps")),
+            "bookValue": _safe_num(info.get("bookValue")),
+        }
+
+        profitability = {
+            "grossMargins": _safe_num(info.get("grossMargins")),
+            "operatingMargins": _safe_num(info.get("operatingMargins")),
+            "profitMargins": _safe_num(info.get("profitMargins")),
+            "returnOnEquity": _safe_num(info.get("returnOnEquity")),
+            "returnOnAssets": _safe_num(info.get("returnOnAssets")),
+            "ebitdaMargins": _safe_num(info.get("ebitdaMargins")),
+            "freeCashflow": _safe_num(info.get("freeCashflow")),
+            "operatingCashflow": _safe_num(info.get("operatingCashflow")),
+        }
+
+        growth = {
+            "revenueGrowth": _safe_num(info.get("revenueGrowth")),
+            "earningsGrowth": _safe_num(info.get("earningsGrowth")),
+            "earningsQuarterlyGrowth": _safe_num(info.get("earningsQuarterlyGrowth")),
+        }
+
+        financial_health = {
+            "debtToEquity": _safe_num(info.get("debtToEquity")),
+            "totalCash": _safe_num(info.get("totalCash")),
+            "totalDebt": _safe_num(info.get("totalDebt")),
+            "currentRatio": _safe_num(info.get("currentRatio")),
+            "quickRatio": _safe_num(info.get("quickRatio")),
+        }
+
+        target_mean = _safe_num(info.get("targetMeanPrice"))
+        target_high = _safe_num(info.get("targetHighPrice"))
+        target_low = _safe_num(info.get("targetLowPrice"))
+        rec_mean = _safe_num(info.get("recommendationMean"))
+        analyst_count = _safe_int(info.get("numberOfAnalystOpinions"))
+
+        upside_pct = None
+        if current_price and target_mean:
+            upside_pct = ((target_mean / current_price) - 1.0) * 100.0
+
+        consensus = {
+            "recommendationKey": _safe_str(info.get("recommendationKey"), max_len=64),
+            "recommendationMean": rec_mean,
+            "numberOfAnalystOpinions": analyst_count,
+            "targetMeanPrice": target_mean,
+            "targetHighPrice": target_high,
+            "targetLowPrice": target_low,
+            "upsidePctToTargetMean": upside_pct,
+        }
+
+        dividends = {
+            "dividendYield": _safe_num(info.get("dividendYield")),
+            "payoutRatio": _safe_num(info.get("payoutRatio")),
+            "fiveYearAvgDividendYield": _safe_num(info.get("fiveYearAvgDividendYield")),
+        }
+
+        blocks = [
+            profile,
+            price,
+            valuation,
+            profitability,
+            growth,
+            financial_health,
+            consensus,
+            dividends,
+        ]
+        data_points = 0
+        for block in blocks:
+            for v in block.values():
+                if v is None:
+                    continue
+                if isinstance(v, str) and not v:
+                    continue
+                data_points += 1
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "source": "yahoo_finance_yfinance",
+            "fetchedAt": fetched_at,
+            "profile": profile,
+            "price": price,
+            "valuation": valuation,
+            "profitability": profitability,
+            "growth": growth,
+            "financialHealth": financial_health,
+            "consensus": consensus,
+            "dividends": dividends,
+            "meta": {
+                "dataPoints": data_points,
+                "dataCoveragePctApprox": round((data_points / 46.0) * 100.0, 1),
+            },
+        }
+    except Exception as e:
+        err = str(e)
+        print(f"[ERROR FUNDAMENTALS] {symbol}: {err}", flush=True)
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "source": "yahoo_finance_yfinance",
+            "fetchedAt": fetched_at,
+            "error": err,
+            "profile": profile,
+            "price": price,
+            "valuation": valuation,
+            "profitability": profitability,
+            "growth": growth,
+            "financialHealth": financial_health,
+            "consensus": consensus,
+            "dividends": dividends,
+            "meta": {"dataPoints": 0, "dataCoveragePctApprox": 0.0},
         }
 
 

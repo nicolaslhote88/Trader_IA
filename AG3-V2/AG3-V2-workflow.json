@@ -1,0 +1,573 @@
+{
+  "name": "AG3-V2 - Fundamental Analyst (API-first)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 7 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1520,
+        -240
+      ],
+      "id": "b96fcb6d-90ab-4dc6-9182-9fc5f5117121",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1520,
+        -80
+      ],
+      "id": "c6376e35-3d35-4827-9267-a9529abf9db9",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "function pad(n) {\n  return String(n).padStart(2, \"0\");\n}\n\nfunction isoDate(d) {\n  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;\n}\n\nconst now = new Date();\nconst ts = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;\nconst rand = Math.random().toString(16).slice(2, 8).toUpperCase();\n\nconst input = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst maxSymbolsIn = Number(input.max_symbols);\n\nreturn [\n  {\n    json: {\n      run_id: `AG3V2_${ts}_${rand}`,\n      nowIso: now.toISOString(),\n      asOfDate: isoDate(now),\n      api_base: String(input.api_base || process.env.YFINANCE_API_URL || \"http://yfinance-api:8080\"),\n      max_symbols: Number.isFinite(maxSymbolsIn) && maxSymbolsIn > 0 ? Math.floor(maxSymbolsIn) : 0,\n      only_enabled: true,\n      strategy_version: \"ag3_v2_fundamentals\",\n      config_version: \"ag3_v2_default\",\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        -160
+      ],
+      "id": "7bf94f32-95fb-429a-a09c-1fcfc8d79556",
+      "name": "AG3V2.00 - Init Context"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Universe",
+          "cachedResultName": "Universe",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        -1040,
+        -160
+      ],
+      "id": "622f053a-f64c-4a56-b4da-880f3a56e440",
+      "name": "AG3V2.01 - Read Universe",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst out = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  out.push({\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      Symbol: symbol,\n      Name: name,\n      Sector: sector,\n      BoursoramaRef: boursoramaRef,\n      UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n    },\n  });\n}\n\nif (ctx.max_symbols && Number(ctx.max_symbols) > 0) {\n  return out.slice(0, Number(ctx.max_symbols));\n}\nreturn out;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -816,
+        -160
+      ],
+      "id": "58f0084f-b69f-47b0-8a95-c705e8067f89",
+      "name": "AG3V2.02 - Build Queue"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -608,
+        -160
+      ],
+      "id": "3516ad96-f981-4a32-81ff-b2938f55a8a8",
+      "name": "AG3V2.03 - Split Symbols"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.api_base}}/fundamentals",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{$json.Symbol}}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -384,
+        -272
+      ],
+      "id": "3ba395fc-657e-49f2-bf9f-f0f6e42c8f6a",
+      "name": "AG3V2.04 - HTTP Fundamentals",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "continueOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -176,
+        -160
+      ],
+      "id": "374f30b0-4952-4164-8e5e-5398574e4f4d",
+      "name": "AG3V2.05 - Merge Queue + API"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require(\"crypto\");\n\nfunction sha1(x) {\n  return crypto.createHash(\"sha1\").update(String(x || \"\"), \"utf8\").digest(\"hex\");\n}\n\nfunction num(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction text(v, maxLen = 4000) {\n  const s = String(v || \"\").replace(/\\s+/g, \" \").trim();\n  return s.slice(0, maxLen);\n}\n\nfunction clamp(v, lo = 0, hi = 100) {\n  if (!Number.isFinite(v)) return lo;\n  return Math.max(lo, Math.min(hi, v));\n}\n\nfunction pct(v) {\n  const n = num(v);\n  if (n === null) return null;\n  if (Math.abs(n) <= 1.5) return n * 100;\n  return n;\n}\n\nfunction scoreHigher(v, floor, ceil) {\n  if (v === null || v === undefined) return null;\n  if (v <= floor) return 0;\n  if (v >= ceil) return 100;\n  return Math.round(((v - floor) / (ceil - floor)) * 100);\n}\n\nfunction scoreLower(v, best, worst) {\n  if (v === null || v === undefined) return null;\n  if (v <= best) return 100;\n  if (v >= worst) return 0;\n  return Math.round((1 - (v - best) / (worst - best)) * 100);\n}\n\nfunction weighted(parts, fallback = 50) {\n  let acc = 0;\n  let wsum = 0;\n  for (const p of parts) {\n    if (!p || p.value === null || p.value === undefined) continue;\n    const w = Number.isFinite(p.weight) ? p.weight : 1;\n    acc += p.value * w;\n    wsum += w;\n  }\n  if (wsum <= 0) return fallback;\n  return Math.round(acc / wsum);\n}\n\nfunction priceFmt(v) {\n  const n = num(v);\n  if (n === null) return \"n/a\";\n  return String(Math.round(n * 100) / 100);\n}\n\nfunction obj(v) {\n  return v && typeof v === \"object\" && !Array.isArray(v) ? v : {};\n}\n\nreturn $input.all().map((item) => {\n  const j = item.json || {};\n  const nowIso = new Date().toISOString();\n\n  const runId = String(j.run_id || \"\").trim();\n  const asOfDate = String(j.asOfDate || nowIso.slice(0, 10));\n  const symbol = String(j.Symbol || j.symbol || \"\").trim().toUpperCase();\n  const boursoramaRef = String(j.BoursoramaRef || \"\").trim();\n\n  const ok = j.ok === true;\n  const err = text(j.error || \"\", 500);\n\n  const profile = obj(j.profile);\n  const price = obj(j.price);\n  const val = obj(j.valuation);\n  const prof = obj(j.profitability);\n  const growth = obj(j.growth);\n  const health = obj(j.financialHealth);\n  const cons = obj(j.consensus);\n  const meta = obj(j.meta);\n\n  const companyName = text(j.Name || profile.longName || profile.shortName || symbol, 200);\n  const sector = text(j.Sector || profile.sector || \"\", 120);\n  const industry = text(profile.industry || \"\", 120);\n  const country = text(profile.country || \"\", 80);\n  const currency = text(profile.currency || \"EUR\", 16);\n  const fetchedAt = text(j.fetchedAt || j.nowIso || nowIso, 64);\n\n  const currentPrice = num(price.currentPrice);\n  const marketCap = num(price.marketCap);\n  const beta = num(price.beta);\n  const debtToEquity = num(health.debtToEquity);\n  const currentRatio = num(health.currentRatio);\n  const quickRatio = num(health.quickRatio);\n  const freeCashflow = num(prof.freeCashflow);\n\n  const gm = pct(prof.grossMargins);\n  const om = pct(prof.operatingMargins);\n  const pm = pct(prof.profitMargins);\n  const roe = pct(prof.returnOnEquity);\n  const roa = pct(prof.returnOnAssets);\n\n  const rg = pct(growth.revenueGrowth);\n  const eg = pct(growth.earningsGrowth);\n  const eqg = pct(growth.earningsQuarterlyGrowth);\n\n  const trailingPE = num(val.trailingPE);\n  const forwardPE = num(val.forwardPE);\n  const peg = num(val.pegRatio);\n  const pb = num(val.priceToBook);\n\n  const recMean = num(cons.recommendationMean);\n  const analysts = num(cons.numberOfAnalystOpinions);\n  const targetMean = num(cons.targetMeanPrice);\n  const targetHigh = num(cons.targetHighPrice);\n  const targetLow = num(cons.targetLowPrice);\n  const upside = num(cons.upsidePctToTargetMean);\n\n  let fcfYield = null;\n  if (freeCashflow !== null && marketCap !== null && marketCap > 0) {\n    fcfYield = (freeCashflow / marketCap) * 100;\n  }\n\n  const qualityScore = weighted(\n    [\n      { value: scoreHigher(gm, 20, 65), weight: 1.0 },\n      { value: scoreHigher(om, 8, 30), weight: 1.2 },\n      { value: scoreHigher(pm, 5, 25), weight: 1.0 },\n      { value: scoreHigher(roe, 8, 25), weight: 1.2 },\n      { value: scoreHigher(roa, 2, 12), weight: 0.8 },\n    ],\n    50\n  );\n\n  const growthScore = weighted(\n    [\n      { value: scoreHigher(rg, -2, 15), weight: 1.0 },\n      { value: scoreHigher(eg, -5, 20), weight: 1.2 },\n      { value: scoreHigher(eqg, -10, 25), weight: 0.8 },\n    ],\n    50\n  );\n\n  const valuationScore = weighted(\n    [\n      { value: scoreLower(trailingPE, 10, 35), weight: 1.0 },\n      { value: scoreLower(forwardPE, 9, 30), weight: 1.0 },\n      { value: scoreLower(pb, 1.5, 8), weight: 0.7 },\n      { value: scoreLower(peg, 0.8, 2.5), weight: 1.0 },\n      { value: scoreHigher(upside, -5, 25), weight: 1.0 },\n    ],\n    50\n  );\n\n  const healthScore = weighted(\n    [\n      { value: scoreLower(debtToEquity, 30, 250), weight: 1.2 },\n      { value: scoreHigher(currentRatio, 0.8, 2.2), weight: 1.0 },\n      { value: scoreHigher(quickRatio, 0.7, 1.8), weight: 0.8 },\n      { value: scoreHigher(fcfYield, 2, 8), weight: 1.0 },\n    ],\n    50\n  );\n\n  let dispersionPct = null;\n  if (targetHigh !== null && targetLow !== null && targetMean !== null && targetMean > 0) {\n    dispersionPct = ((targetHigh - targetLow) / targetMean) * 100;\n  }\n\n  const consensusScore = weighted(\n    [\n      { value: scoreLower(recMean, 1.5, 4.2), weight: 1.2 },\n      { value: scoreHigher(analysts, 3, 20), weight: 0.8 },\n      { value: scoreHigher(upside, 0, 25), weight: 1.0 },\n      { value: scoreLower(dispersionPct, 10, 80), weight: 0.6 },\n    ],\n    50\n  );\n\n  const coverage = num(meta.dataCoveragePctApprox);\n\n  let triageScore = Math.round(\n    qualityScore * 0.32 +\n      growthScore * 0.2 +\n      valuationScore * 0.2 +\n      healthScore * 0.18 +\n      consensusScore * 0.1\n  );\n  if (coverage !== null && coverage < 35) triageScore -= 8;\n  if (!ok) triageScore = Math.min(triageScore, 40);\n  triageScore = clamp(triageScore);\n\n  let riskScore = Math.round(100 - (healthScore * 0.45 + qualityScore * 0.3 + consensusScore * 0.15 + (coverage !== null ? coverage : 50) * 0.1));\n  if (debtToEquity !== null && debtToEquity > 250) riskScore += 12;\n  if (currentRatio !== null && currentRatio < 1.0) riskScore += 8;\n  if (rg !== null && rg < 0) riskScore += 6;\n  if (eg !== null && eg < 0) riskScore += 6;\n  if (!ok) riskScore = Math.max(riskScore, 80);\n  riskScore = clamp(riskScore);\n\n  const bull = [];\n  if (qualityScore >= 65) bull.push(\"High quality profitability profile.\");\n  if (growthScore >= 60) bull.push(\"Revenue/earnings growth remains supportive.\");\n  if (valuationScore >= 60) bull.push(\"Valuation appears acceptable vs fundamentals.\");\n  if (consensusScore >= 60) bull.push(\"Analyst consensus and target imply upside.\");\n  if (fcfYield !== null && fcfYield > 4) bull.push(\"Free cash-flow yield is healthy.\");\n\n  const bear = [];\n  if (qualityScore < 45) bear.push(\"Weak quality metrics (margins/returns).\");\n  if (growthScore < 45) bear.push(\"Growth profile is soft or negative.\");\n  if (valuationScore < 40) bear.push(\"Valuation is stretched vs peers/risk.\");\n  if (debtToEquity !== null && debtToEquity > 220) bear.push(\"High leverage raises balance-sheet risk.\");\n  if (consensusScore < 45) bear.push(\"Sell-side sentiment is not supportive.\");\n  if (coverage !== null && coverage < 35) bear.push(\"Low data coverage lowers confidence.\");\n  if (!ok) bear.push(`Data provider issue: ${err || \"unknown error\"}.`);\n\n  let horizon = \"WATCH\";\n  if (triageScore >= 72 && riskScore <= 45) horizon = \"LONG_TERM\";\n  else if (triageScore >= 58 && riskScore <= 62) horizon = \"SWING\";\n\n  const basePx = targetMean !== null ? targetMean : currentPrice;\n  const bullPx = targetHigh !== null ? targetHigh : (basePx !== null ? basePx * 1.15 : null);\n  const bearPx = targetLow !== null ? targetLow : (basePx !== null ? basePx * 0.85 : null);\n  const valuationText = `Bear: ~${priceFmt(bearPx)} | Base: ~${priceFmt(basePx)} | Bull: ~${priceFmt(bullPx)} ${currency}`.trim();\n\n  const why = `Quality ${qualityScore}/100, Growth ${growthScore}/100, Valuation ${valuationScore}/100, Financial health ${healthScore}/100, Consensus ${consensusScore}/100. Bull case: ${bull.length ? bull.join(\" \") : \"No strong fundamental edge detected.\"}`;\n  const risks = `Bear case: ${bear.length ? bear.join(\" \") : \"No major red flag in available data.\"}`;\n\n  const nextSteps = [\n    coverage !== null && coverage < 45 ? \"Backfill missing fundamentals before sizing aggressively.\" : \"\",\n    analysts !== null && analysts < 3 ? \"Consensus depth is limited; confirm with additional sources.\" : \"\",\n    horizon === \"WATCH\" ? \"Wait for next earnings/news catalyst before action.\" : \"\",\n  ]\n    .filter(Boolean)\n    .join(\" | \");\n\n  const sourceUrl = symbol ? `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}` : \"\";\n  const triageRecordId = sha1(`${runId}|triage|${symbol}`);\n  const consensusRecordId = sha1(`${runId}|consensus|${symbol}`);\n\n  const triageRow = {\n    RecordId: triageRecordId,\n    RunId: runId,\n    UpdatedAt: nowIso,\n    fetchedAt: fetchedAt,\n    AsOfDate: asOfDate,\n    Status: ok ? \"OK\" : \"ERR_SOURCE\",\n    Error: err || null,\n    Symbol: symbol,\n    Name: companyName,\n    Sector: sector,\n    Industry: industry,\n    Country: country,\n    BoursoramaRef: boursoramaRef,\n    Source: \"yfinance_api\",\n    SourceUrl: sourceUrl,\n    Score: triageScore,\n    funda_conf: triageScore,\n    risk_score: riskScore,\n    quality_score: qualityScore,\n    growth_score: growthScore,\n    valuation_score: valuationScore,\n    health_score: healthScore,\n    consensus_score: consensusScore,\n    horizon: horizon,\n    current_price: currentPrice,\n    target_price: targetMean,\n    upside_pct: upside,\n    recommendation: text(cons.recommendationKey || \"\", 64),\n    analyst_count: analysts,\n    valuation: valuationText,\n    why: text(why, 3000),\n    risks: text(risks, 3000),\n    nextSteps: text(nextSteps, 1500),\n    data_coverage_pct: coverage,\n    strategy_version: String(j.strategy_version || \"ag3_v2_fundamentals\"),\n    config_version: String(j.config_version || \"ag3_v2_default\"),\n  };\n\n  const consensusRow = {\n    RecordId: consensusRecordId,\n    RunId: runId,\n    UpdatedAt: nowIso,\n    AsOfDate: asOfDate,\n    Symbol: symbol,\n    Name: companyName,\n    Sector: sector,\n    recommendation: text(cons.recommendationKey || \"\", 64),\n    recommendationMean: recMean,\n    analystCount: analysts,\n    currentPrice: currentPrice,\n    targetMeanPrice: targetMean,\n    targetHighPrice: targetHigh,\n    targetLowPrice: targetLow,\n    upsidePct: upside,\n    dispersionPct: dispersionPct,\n    confidenceProxy: triageScore,\n    riskProxy: riskScore,\n    Source: \"yfinance_api\",\n    SourceUrl: sourceUrl,\n    Status: ok ? \"OK\" : \"ERR_SOURCE\",\n    Error: err || null,\n    horizon: horizon,\n  };\n\n  function metricRow(section, metric, value, unit = null, notes = null) {\n    if (value === null || value === undefined || value === \"\") return null;\n    const rid = sha1(`${runId}|metric|${symbol}|${section}|${metric}|${asOfDate}`);\n    return {\n      Symbol: symbol,\n      RecordId: rid,\n      BoursoramaRef: boursoramaRef || null,\n      DataType: \"metric\",\n      Section: section,\n      Metric: metric,\n      Period: null,\n      Value: value,\n      Unit: unit,\n      AsOfDate: asOfDate,\n      SourceUrl: sourceUrl,\n      ExtractedAt: nowIso,\n      RunId: runId,\n      SigHash: sha1(`${metric}|${String(value)}`),\n      Title: null,\n      Author: null,\n      Excerpt: null,\n      RawText: null,\n      Signal: null,\n      Score: null,\n      Currency: currency,\n      TitleOrLabel: null,\n      Notes: notes,\n    };\n  }\n\n  const metricRows = [\n    metricRow(\"scores\", \"triage_score\", triageScore, \"/100\"),\n    metricRow(\"scores\", \"risk_score\", riskScore, \"/100\"),\n    metricRow(\"scores\", \"quality_score\", qualityScore, \"/100\"),\n    metricRow(\"scores\", \"growth_score\", growthScore, \"/100\"),\n    metricRow(\"scores\", \"valuation_score\", valuationScore, \"/100\"),\n    metricRow(\"scores\", \"health_score\", healthScore, \"/100\"),\n    metricRow(\"scores\", \"consensus_score\", consensusScore, \"/100\"),\n    metricRow(\"price\", \"current_price\", currentPrice, currency),\n    metricRow(\"price\", \"market_cap\", marketCap, currency),\n    metricRow(\"price\", \"beta\", beta, null),\n    metricRow(\"valuation\", \"trailing_pe\", trailingPE, \"x\"),\n    metricRow(\"valuation\", \"forward_pe\", forwardPE, \"x\"),\n    metricRow(\"valuation\", \"peg_ratio\", peg, \"x\"),\n    metricRow(\"valuation\", \"price_to_book\", pb, \"x\"),\n    metricRow(\"profitability\", \"gross_margin_pct\", gm, \"%\"),\n    metricRow(\"profitability\", \"operating_margin_pct\", om, \"%\"),\n    metricRow(\"profitability\", \"profit_margin_pct\", pm, \"%\"),\n    metricRow(\"profitability\", \"roe_pct\", roe, \"%\"),\n    metricRow(\"profitability\", \"roa_pct\", roa, \"%\"),\n    metricRow(\"growth\", \"revenue_growth_pct\", rg, \"%\"),\n    metricRow(\"growth\", \"earnings_growth_pct\", eg, \"%\"),\n    metricRow(\"growth\", \"earnings_q_growth_pct\", eqg, \"%\"),\n    metricRow(\"health\", \"debt_to_equity\", debtToEquity, \"x\"),\n    metricRow(\"health\", \"current_ratio\", currentRatio, \"x\"),\n    metricRow(\"health\", \"quick_ratio\", quickRatio, \"x\"),\n    metricRow(\"health\", \"fcf_yield_pct\", fcfYield, \"%\"),\n    metricRow(\"consensus\", \"target_mean_price\", targetMean, currency),\n    metricRow(\"consensus\", \"target_high_price\", targetHigh, currency),\n    metricRow(\"consensus\", \"target_low_price\", targetLow, currency),\n    metricRow(\"consensus\", \"upside_pct\", upside, \"%\"),\n    metricRow(\"consensus\", \"recommendation_mean\", recMean, \"score\"),\n    metricRow(\"consensus\", \"analyst_count\", analysts, \"count\"),\n  ].filter(Boolean);\n\n  return {\n    json: {\n      ...j,\n      triageRow,\n      consensusRow,\n      metricRows,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        -160
+      ],
+      "id": "b8829d80-2643-4625-9bcf-01035548f38e",
+      "name": "AG3V2.06 - Score Fundamentals"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json.triageRow || null;\nif (!row) return [];\nreturn [{ json: row }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -272
+      ],
+      "id": "ce4f7f3f-e9c2-4538-8e86-e8f823849caa",
+      "name": "AG3V2.07 - Prepare Triage Row"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "AG3_Triage_History",
+          "cachedResultName": "AG3_Triage_History",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "RecordId"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        512,
+        -272
+      ],
+      "id": "20b5ad8f-df11-4121-b0c2-526e56ea0815",
+      "name": "AG3V2.08 - Upsert AG3_Triage_History",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "amount": 0.4,
+        "unit": "seconds"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        736,
+        -272
+      ],
+      "id": "6a7e5f58-eb61-4e54-aed4-fd2f4f30167c",
+      "name": "AG3V2.09 - Wait Rate Limit"
+    },
+    {
+      "parameters": {
+        "jsCode": "const row = $json.consensusRow || null;\nif (!row) return [];\nreturn [{ json: row }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -112
+      ],
+      "id": "7999b87a-f3ec-4d1d-ac2f-276d7094d0a9",
+      "name": "AG3V2.10 - Prepare Consensus Row"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "research_analyst_consensus",
+          "cachedResultName": "research_analyst_consensus",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "RecordId"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        512,
+        -112
+      ],
+      "id": "84cedd7e-5f26-4f54-adcb-6e8e5d0896ec",
+      "name": "AG3V2.11 - Upsert research_analyst_consensus",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = Array.isArray($json.metricRows) ? $json.metricRows : [];\nif (!rows.length) return [];\nreturn [{ json: { metricRows: rows } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        48
+      ],
+      "id": "357701ca-baa0-4fb5-9c8f-e299fbb4e71b",
+      "name": "AG3V2.12 - Prepare Metric Rows"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "metricRows",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.itemLists",
+      "typeVersion": 3.1,
+      "position": [
+        512,
+        48
+      ],
+      "id": "f5e69c54-765a-422f-865b-3690f85e8ab6",
+      "name": "AG3V2.13 - Split Metric Rows"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "Fundamental_Data",
+          "cachedResultName": "Fundamental_Data",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "matchingColumns": [
+            "RecordId"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {
+          "handlingExtraData": "ignoreIt"
+        }
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        736,
+        48
+      ],
+      "id": "8f6676e8-44a1-411b-be2e-f7f34a23ef6e",
+      "name": "AG3V2.14 - Upsert Fundamental_Data",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "content": "AG3-V2: robust fundamentals pipeline (API-first) for scoring + consensus + raw metrics.",
+        "height": 160,
+        "width": 980,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1568,
+        -352
+      ],
+      "id": "0f0ec6f2-6d54-43ea-b929-ce0f8d6f0050",
+      "name": "AG3V2 - Note"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.00 - Init Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.00 - Init Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.00 - Init Context": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.01 - Read Universe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.01 - Read Universe": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.02 - Build Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.02 - Build Queue": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.03 - Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.03 - Split Symbols": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.04 - HTTP Fundamentals",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG3V2.05 - Merge Queue + API",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "AG3V2.04 - HTTP Fundamentals": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.05 - Merge Queue + API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.05 - Merge Queue + API": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.06 - Score Fundamentals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.06 - Score Fundamentals": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.07 - Prepare Triage Row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG3V2.10 - Prepare Consensus Row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG3V2.12 - Prepare Metric Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.07 - Prepare Triage Row": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.08 - Upsert AG3_Triage_History",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.08 - Upsert AG3_Triage_History": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.09 - Wait Rate Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.09 - Wait Rate Limit": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.03 - Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.10 - Prepare Consensus Row": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.11 - Upsert research_analyst_consensus",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.12 - Prepare Metric Rows": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.13 - Split Metric Rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG3V2.13 - Split Metric Rows": {
+      "main": [
+        [
+          {
+            "node": "AG3V2.14 - Upsert Fundamental_Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
