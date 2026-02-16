@@ -101,6 +101,7 @@ from app_modules.core import (
     truthy_series,
 )
 from app_modules.tables import render_interactive_table
+from app_modules.visualizations import render_portfolio_sparklines
 
 # ============================================================
 # HELPERS GENERAUX (modules externes)
@@ -1044,7 +1045,17 @@ if page == "📊 Dashboard Trading":
                     st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
-            st.subheader("📋 Positions")
+            st.subheader("Portfolio Sparklines (90j)")
+            render_portfolio_sparklines(
+                df_clean,
+                df_trans,
+                yfinance_api_url=YFINANCE_API_URL,
+                lookback_days=90,
+                columns_per_row=3,
+            )
+
+            st.divider()
+            st.subheader("Positions")
             cols_show = ["name", "symbol", "sector", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl"]
             cols_exist = [c for c in cols_show if c in df_clean.columns]
             df_view = df_clean[cols_exist].copy()
