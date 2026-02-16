@@ -595,6 +595,312 @@ def _make_candlestick_chart(df: pd.DataFrame, title: str, sma20: float = 0, sma5
     return fig
 
 
+def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
+    for col in candidates:
+        if col in df.columns:
+            return col
+    return None
+
+
+def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
+    cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
+    if df_perf is None or df_perf.empty:
+        return pd.DataFrame(columns=cols)
+
+    df = df_perf.copy()
+    ts_col = _first_existing_column(df, ["timestamp", "date", "updatedat", "created_at"])
+    if not ts_col:
+        return pd.DataFrame(columns=cols)
+
+    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce")
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    total_col = _first_existing_column(df, ["totalvalue", "totalvalueeur", "total_value", "portfolio_value"])
+    cash_col = _first_existing_column(df, ["cash", "casheur", "cash_eur"])
+    equity_col = _first_existing_column(df, ["equity", "equityeur", "equity_value", "invested"])
+    if not any([total_col, cash_col, equity_col]):
+        return pd.DataFrame(columns=cols)
+
+    total_value = safe_float_series(df[total_col]) if total_col else pd.Series(0.0, index=df.index)
+    cash_value = safe_float_series(df[cash_col]) if cash_col else pd.Series(0.0, index=df.index)
+    equity_value = safe_float_series(df[equity_col]) if equity_col else pd.Series(0.0, index=df.index)
+
+    if not total_col and (cash_col or equity_col):
+        total_value = cash_value + equity_value
+    if total_col and not cash_col and equity_col:
+        cash_value = total_value - equity_value
+    if total_col and cash_col and not equity_col:
+        equity_value = total_value - cash_value
+    if total_col and not cash_col and not equity_col:
+        equity_value = total_value
+        cash_value = pd.Series(0.0, index=df.index)
+
+    out = pd.DataFrame(
+        {
+            "timestamp": df["timestamp"],
+            "total_value": total_value,
+            "cash_value": cash_value,
+            "equity_value": equity_value,
+        }
+    )
+    out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["total_value"])
+    out = out.groupby("timestamp", as_index=False).last().sort_values("timestamp")
+    out["invested_value"] = out["equity_value"]
+    if (out["invested_value"].abs().sum() == 0) and ("cash_value" in out.columns):
+        out["invested_value"] = out["total_value"] - out["cash_value"]
+    return out
+
+
+def _prepare_transactions(df_trans: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "timestamp",
+        "symbol",
+        "side",
+        "quantity",
+        "notional",
+        "realized_pnl",
+        "agent_label",
+    ]
+    if df_trans is None or df_trans.empty:
+        return pd.DataFrame(columns=cols)
+
+    df = df_trans.copy()
+
+    ts_col = _first_existing_column(df, ["timestamp", "date", "created_at", "updatedat"])
+    side_col = _first_existing_column(df, ["side", "action", "signal"])
+    symbol_col = _first_existing_column(df, ["symbol", "ticker"])
+    qty_col = _first_existing_column(df, ["quantity", "qty"])
+    notional_col = _first_existing_column(df, ["notional", "tradevalue", "value", "amount"])
+    realized_col = _first_existing_column(df, ["realizedpnl", "realized_pnl", "pnl_realized", "pnl"])
+    agent_col = _first_existing_column(
+        df,
+        ["agent", "agent_id", "agentname", "agent_name", "source_agent", "sourceagent"],
+    )
+    rationale_col = _first_existing_column(df, ["rationale", "commentary", "notes"])
+
+    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce") if ts_col else pd.NaT
+    df["symbol"] = df[symbol_col].astype(str).str.strip().str.upper() if symbol_col else ""
+    df["side"] = df[side_col].astype(str).str.strip().str.upper() if side_col else ""
+    df["quantity"] = safe_float_series(df[qty_col]) if qty_col else 0.0
+    df["notional"] = safe_float_series(df[notional_col]) if notional_col else 0.0
+    df["realized_pnl"] = safe_float_series(df[realized_col]) if realized_col else 0.0
+
+    if agent_col:
+        agent_series = df[agent_col].fillna("").astype(str).str.strip()
+    else:
+        agent_series = pd.Series("", index=df.index, dtype=object)
+
+    parsed_agent = pd.Series("", index=df.index, dtype=object)
+    if rationale_col:
+        extracted = df[rationale_col].fillna("").astype(str).str.extract(r"(?i)agent[\s_-]*([0-9]+)")[0]
+        parsed_agent = extracted.fillna("").astype(str).str.strip()
+        parsed_agent = parsed_agent.where(parsed_agent == "", "Agent " + parsed_agent)
+
+    df["agent_label"] = agent_series.where(agent_series != "", parsed_agent)
+    df["agent_label"] = df["agent_label"].fillna("").astype(str).str.strip().replace("", "Unknown")
+
+    out = df[cols].copy()
+    return out.sort_values("timestamp", na_position="last")
+
+
+def _build_realized_vs_total_curve(df_perf_ts: pd.DataFrame, df_tx: pd.DataFrame, init_cap: float) -> pd.DataFrame:
+    cols = ["timestamp", "realized_equity", "total_equity"]
+    if df_perf_ts is None or df_perf_ts.empty:
+        return pd.DataFrame(columns=cols)
+
+    curve = pd.DataFrame(
+        {
+            "timestamp": df_perf_ts["timestamp"],
+            "total_equity": df_perf_ts["total_value"],
+        }
+    ).sort_values("timestamp")
+
+    if df_tx is None or df_tx.empty:
+        curve["realized_equity"] = init_cap
+        return curve
+
+    realized = df_tx[(df_tx["realized_pnl"] != 0) & (df_tx["timestamp"].notna())][["timestamp", "realized_pnl"]].copy()
+    realized = realized.sort_values("timestamp")
+
+    if realized.empty:
+        curve["realized_equity"] = init_cap
+        return curve
+
+    realized["cum_realized"] = realized["realized_pnl"].cumsum()
+    merged = pd.merge_asof(
+        curve,
+        realized[["timestamp", "cum_realized"]],
+        on="timestamp",
+        direction="backward",
+    )
+    merged["cum_realized"] = merged["cum_realized"].fillna(0.0)
+    merged["realized_equity"] = init_cap + merged["cum_realized"]
+    return merged[cols]
+
+
+def _build_trade_quality_dataframe(df_tx: pd.DataFrame) -> pd.DataFrame:
+    out_cols = ["timestamp", "symbol", "agent_label", "duration_days", "trade_return_pct", "realized_pnl"]
+    if df_tx is None or df_tx.empty:
+        return pd.DataFrame(columns=out_cols)
+
+    trades = df_tx.copy()
+    trades = trades[~trades["symbol"].isin(["", "__RUN__"])].sort_values("timestamp", na_position="last")
+    if trades.empty:
+        return pd.DataFrame(columns=out_cols)
+
+    inventory: dict[str, list[dict[str, object]]] = {}
+    rows: list[dict[str, object]] = []
+
+    for rec in trades.itertuples(index=False):
+        side = str(rec.side or "").upper()
+        symbol = str(rec.symbol or "").upper()
+        qty = float(rec.quantity or 0)
+        ts = rec.timestamp
+
+        if not symbol or qty <= 0:
+            continue
+
+        if side == "BUY":
+            inventory.setdefault(symbol, []).append({"qty": qty, "ts": ts})
+            continue
+
+        if side != "SELL":
+            continue
+
+        qty_left = qty
+        matched_qty = 0.0
+        weighted_days = 0.0
+
+        for _ in range(10000):
+            if qty_left <= 1e-9 or symbol not in inventory or not inventory[symbol]:
+                break
+
+            lot = inventory[symbol][0]
+            lot_qty = float(lot.get("qty", 0) or 0)
+            buy_ts = lot.get("ts")
+            take_qty = min(qty_left, lot_qty)
+            if take_qty <= 0:
+                inventory[symbol].pop(0)
+                continue
+
+            if pd.notna(ts) and pd.notna(buy_ts):
+                delta_days = (ts - buy_ts).total_seconds() / 86400
+                weighted_days += max(delta_days, 0) * take_qty
+                matched_qty += take_qty
+
+            lot["qty"] = lot_qty - take_qty
+            qty_left -= take_qty
+            if float(lot["qty"]) <= 1e-9:
+                inventory[symbol].pop(0)
+
+        duration_days = (weighted_days / matched_qty) if matched_qty > 0 else pd.NA
+        denom = abs(float(rec.notional or 0))
+        trade_return_pct = (float(rec.realized_pnl or 0) / denom * 100) if denom > 0 else pd.NA
+
+        if float(rec.realized_pnl or 0) != 0 or pd.notna(duration_days):
+            rows.append(
+                {
+                    "timestamp": ts,
+                    "symbol": symbol,
+                    "agent_label": rec.agent_label,
+                    "duration_days": duration_days,
+                    "trade_return_pct": trade_return_pct,
+                    "realized_pnl": float(rec.realized_pnl or 0),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=out_cols)
+    return pd.DataFrame(rows).sort_values("timestamp", na_position="last")
+
+
+def _build_underwater_dataframe(df_perf_ts: pd.DataFrame) -> pd.DataFrame:
+    cols = ["timestamp", "drawdown_pct"]
+    if df_perf_ts is None or df_perf_ts.empty:
+        return pd.DataFrame(columns=cols)
+
+    df = df_perf_ts[["timestamp", "total_value"]].copy().sort_values("timestamp")
+    rolling_peak = df["total_value"].cummax().replace(0, pd.NA)
+    df["drawdown_pct"] = ((df["total_value"] / rolling_peak) - 1.0) * 100
+    df["drawdown_pct"] = df["drawdown_pct"].fillna(0.0)
+    return df[cols]
+
+
+def _compute_risk_scorecards(df_perf_ts: pd.DataFrame, df_tx: pd.DataFrame) -> dict[str, float]:
+    sharpe = 0.0
+    max_drawdown = 0.0
+
+    if df_perf_ts is not None and not df_perf_ts.empty:
+        rets = df_perf_ts["total_value"].pct_change().replace([float("inf"), float("-inf")], pd.NA).dropna()
+        if len(rets) >= 2:
+            std = float(rets.std(ddof=0))
+            if std > 0:
+                step_days = df_perf_ts["timestamp"].diff().dt.total_seconds().div(86400)
+                step_days = step_days[step_days > 0]
+                median_days = float(step_days.median()) if not step_days.empty else 1.0
+                periods_per_year = 252 / median_days if median_days > 0 else 252
+                sharpe = float((rets.mean() / std) * (periods_per_year ** 0.5))
+
+        underwater = _build_underwater_dataframe(df_perf_ts)
+        if not underwater.empty:
+            max_drawdown = float(underwater["drawdown_pct"].min())
+
+    profit_factor = 0.0
+    win_rate = 0.0
+
+    if df_tx is not None and not df_tx.empty:
+        pnl = df_tx[df_tx["realized_pnl"] != 0]["realized_pnl"]
+        if not pnl.empty:
+            gross_profit = float(pnl[pnl > 0].sum())
+            gross_loss = abs(float(pnl[pnl < 0].sum()))
+            wins = int((pnl > 0).sum())
+            losses = int((pnl < 0).sum())
+            total_closed = wins + losses
+            win_rate = (wins / total_closed * 100) if total_closed > 0 else 0.0
+            if gross_loss > 0:
+                profit_factor = gross_profit / gross_loss
+            elif gross_profit > 0:
+                profit_factor = float("inf")
+
+    return {
+        "sharpe": sharpe,
+        "profit_factor": profit_factor,
+        "win_rate": win_rate,
+        "max_drawdown_pct": max_drawdown,
+    }
+
+
+def _make_return_gauge(value_pct: float, title: str, axis_limit: float) -> go.Figure:
+    axis_limit = max(10.0, float(axis_limit))
+    color = "#28a745" if value_pct >= 0 else "#dc3545"
+    fig = go.Figure(
+        go.Indicator(
+            mode="gauge+number",
+            value=value_pct,
+            number={"suffix": "%", "font": {"size": 24, "color": "#fff"}},
+            title={"text": title, "font": {"size": 14, "color": "#ccc"}},
+            gauge={
+                "axis": {"range": [-axis_limit, axis_limit], "tickcolor": "#666"},
+                "bar": {"color": color, "thickness": 0.35},
+                "steps": [
+                    {"range": [-axis_limit, 0], "color": "rgba(220,53,69,0.25)"},
+                    {"range": [0, axis_limit], "color": "rgba(40,167,69,0.25)"},
+                ],
+            },
+        )
+    )
+    fig.update_layout(
+        height=220,
+        margin=dict(t=40, b=10, l=30, r=30),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(color="#ccc"),
+    )
+    return fig
+
+
 # ============================================================
 # MAIN APP
 # ============================================================
@@ -750,52 +1056,214 @@ if page == "📊 Dashboard Trading":
 
     # TAB 2: PERFORMANCE
     with t2:
-        st.subheader("Historique Valeur")
-        if df_perf is not None and not df_perf.empty:
-            if "timestamp" in df_perf.columns:
-                df_perf = df_perf.sort_values("timestamp", ascending=True)
+        perf_ts = _prepare_performance_timeseries(df_perf)
+        tx_norm = _prepare_transactions(df_trans)
 
-            for c in ["totalvalue", "equity", "cash"]:
-                if c in df_perf.columns:
-                    df_perf[c] = df_perf[c].apply(safe_float)
+        latent_pnl = 0.0
+        if df_port is not None and not df_port.empty and "unrealizedpnl" in df_port.columns:
+            sym = df_port.get("symbol", pd.Series("", index=df_port.index)).astype(str).str.upper().str.strip()
+            latent_pnl = float(safe_float_series(df_port[~sym.isin(["CASH_EUR", "__META__"])]["unrealizedpnl"]).sum())
 
-            y_cols = [c for c in ["totalvalue", "equity", "cash"] if c in df_perf.columns]
-            if "timestamp" in df_perf.columns and y_cols:
-                fig = px.line(df_perf, x="timestamp", y=y_cols, title="Evolution")
-                st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("Pas d'historique.")
+        realized_pnl = float(tx_norm["realized_pnl"].sum()) if not tx_norm.empty else 0.0
+        total_gain = total_val - init_cap
 
-        st.divider()
-        st.subheader("💰 P&L Réalisé (Ventes)")
+        v_pnl, v_eff, v_quality, v_risk = st.tabs(
+            [
+                "1) Performance Financiere",
+                "2) Efficacite du Capital",
+                "3) Qualite du Trading",
+                "4) Risque",
+            ]
+        )
 
-        if df_trans is not None and not df_trans.empty and "realizedpnl" in df_trans.columns:
-            df_pnl = df_trans.copy()
+        with v_pnl:
+            m1, m2, m3 = st.columns(3)
+            m1.metric("P&L realise", f"{realized_pnl:,.2f} EUR")
+            m2.metric("P&L latent", f"{latent_pnl:,.2f} EUR")
+            m3.metric("Gain total", f"{total_gain:,.2f} EUR")
 
-            if "timestamp" in df_pnl.columns:
-                df_pnl = df_pnl.sort_values("timestamp", ascending=True)
-            else:
-                df_pnl["timestamp"] = pd.NaT
-
-            df_pnl["realized_num"] = df_pnl["realizedpnl"].apply(safe_float)
-            df_sales = df_pnl[df_pnl["realized_num"] != 0].copy()
-
-            if not df_sales.empty:
-                df_sales["CumPnL"] = df_sales["realized_num"].cumsum()
-                df_sales["Color"] = df_sales["CumPnL"].apply(lambda x: "green" if x >= 0 else "red")
-                fig_pnl = px.bar(
-                    df_sales,
-                    x="timestamp",
-                    y="CumPnL",
-                    color="Color",
-                    title="P&L Cumulé",
-                    color_discrete_map={"green": "#28a745", "red": "#dc3545"},
+            fig_wf = go.Figure(
+                go.Waterfall(
+                    orientation="v",
+                    measure=["absolute", "relative", "relative", "total"],
+                    x=["Capital initial", "P&L realise", "P&L latent", "Total equity"],
+                    y=[init_cap, realized_pnl, latent_pnl, 0],
+                    increasing={"marker": {"color": "#28a745"}},
+                    decreasing={"marker": {"color": "#dc3545"}},
+                    totals={"marker": {"color": "#0d6efd"}},
+                    connector={"line": {"color": "#666"}},
                 )
-                st.plotly_chart(fig_pnl, use_container_width=True)
+            )
+            fig_wf.update_layout(title="Cascade de valeur", height=360, margin=dict(t=50, b=20, l=20, r=20))
+            st.plotly_chart(fig_wf, use_container_width=True)
+
+            curve = _build_realized_vs_total_curve(perf_ts, tx_norm, init_cap)
+            if curve.empty:
+                st.info("Donnees insuffisantes pour la courbe Realise vs Totale.")
             else:
-                st.info("Pas de ventes.")
-        else:
-            st.caption("Pas de données Transactions.")
+                fig_curve = go.Figure()
+                fig_curve.add_trace(
+                    go.Scatter(
+                        x=curve["timestamp"],
+                        y=curve["realized_equity"],
+                        mode="lines",
+                        name="Capital + gains realises",
+                        line=dict(width=2.5, color="#00c2ff"),
+                    )
+                )
+                fig_curve.add_trace(
+                    go.Scatter(
+                        x=curve["timestamp"],
+                        y=curve["total_equity"],
+                        mode="lines",
+                        name="Valeur liquidative",
+                        line=dict(width=2.5, color="#ffffff", dash="dash"),
+                    )
+                )
+                fig_curve.update_layout(
+                    title="Equity realisee vs equity totale",
+                    height=360,
+                    margin=dict(t=50, b=20, l=20, r=20),
+                )
+                st.plotly_chart(fig_curve, use_container_width=True)
+
+        with v_eff:
+            if perf_ts.empty:
+                st.info("Donnees insuffisantes pour l'efficacite du capital.")
+            else:
+                eff = perf_ts.copy()
+                eff["total_value"] = eff["total_value"].replace(0, pd.NA)
+                eff["cash_pct"] = (eff["cash_value"] / eff["total_value"] * 100).fillna(0.0).clip(lower=0, upper=100)
+                eff["invested_pct"] = (eff["invested_value"] / eff["total_value"] * 100).fillna(0.0).clip(lower=0, upper=100)
+                eff["roi_pct"] = ((eff["total_value"] / init_cap) - 1.0) * 100 if init_cap else 0.0
+                eff = eff.fillna(0.0)
+
+                fig_eff = go.Figure()
+                fig_eff.add_trace(
+                    go.Scatter(
+                        x=eff["timestamp"],
+                        y=eff["cash_pct"],
+                        mode="lines",
+                        name="% Cash",
+                        stackgroup="alloc",
+                        line=dict(width=0.7, color="#4e79a7"),
+                    )
+                )
+                fig_eff.add_trace(
+                    go.Scatter(
+                        x=eff["timestamp"],
+                        y=eff["invested_pct"],
+                        mode="lines",
+                        name="% Investi",
+                        stackgroup="alloc",
+                        line=dict(width=0.7, color="#59a14f"),
+                    )
+                )
+                fig_eff.add_trace(
+                    go.Scatter(
+                        x=eff["timestamp"],
+                        y=eff["roi_pct"],
+                        mode="lines",
+                        name="ROI global",
+                        yaxis="y2",
+                        line=dict(width=2.5, color="#ff9d00"),
+                    )
+                )
+                fig_eff.update_layout(
+                    title="Exposition capital vs performance",
+                    height=380,
+                    margin=dict(t=50, b=20, l=20, r=20),
+                    yaxis=dict(title="Allocation (%)", range=[0, 100]),
+                    yaxis2=dict(title="ROI (%)", overlaying="y", side="right", showgrid=False),
+                )
+                st.plotly_chart(fig_eff, use_container_width=True)
+
+                avg_invested = float(eff["invested_value"].mean()) if "invested_value" in eff.columns else 0.0
+                roi_global_pct = (total_gain / init_cap * 100) if init_cap else 0.0
+                roic_pct = (total_gain / avg_invested * 100) if avg_invested > 0 else 0.0
+                gauge_axis = max(20.0, abs(roi_global_pct), abs(roic_pct)) * 1.25
+
+                g1, g2 = st.columns(2)
+                with g1:
+                    st.plotly_chart(
+                        _make_return_gauge(roi_global_pct, "ROI Global", gauge_axis),
+                        use_container_width=True,
+                    )
+                with g2:
+                    st.plotly_chart(
+                        _make_return_gauge(roic_pct, "ROIC", gauge_axis),
+                        use_container_width=True,
+                    )
+                st.caption(
+                    f"Montant moyen investi: {avg_invested:,.2f} EUR | "
+                    "ROIC = Gains / montant moyen investi"
+                )
+
+        with v_quality:
+            quality_df = _build_trade_quality_dataframe(tx_norm)
+            hist_df = quality_df.dropna(subset=["trade_return_pct"]) if not quality_df.empty else pd.DataFrame()
+            scat_df = quality_df.dropna(subset=["duration_days", "trade_return_pct"]) if not quality_df.empty else pd.DataFrame()
+
+            if hist_df.empty:
+                st.info("Pas assez de trades closes pour analyser la distribution des returns.")
+            else:
+                fig_hist = px.histogram(
+                    hist_df,
+                    x="trade_return_pct",
+                    nbins=28,
+                    title="Distribution des returns par trade (%)",
+                )
+                fig_hist.add_vline(x=0, line_dash="dash", line_color="#999")
+                fig_hist.update_layout(height=340, margin=dict(t=50, b=20, l=20, r=20))
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+            if scat_df.empty:
+                st.info("Pas assez d'historique pour le nuage Duree vs ROI.")
+            else:
+                fig_scatter = px.scatter(
+                    scat_df,
+                    x="duration_days",
+                    y="trade_return_pct",
+                    color="agent_label",
+                    hover_data=["symbol", "realized_pnl"],
+                    title="Duree de detention vs ROI",
+                )
+                fig_scatter.add_hline(y=0, line_dash="dash", line_color="#999")
+                fig_scatter.update_layout(height=360, margin=dict(t=50, b=20, l=20, r=20))
+                st.plotly_chart(fig_scatter, use_container_width=True)
+
+        with v_risk:
+            underwater = _build_underwater_dataframe(perf_ts)
+            if underwater.empty:
+                st.info("Pas d'historique suffisant pour le drawdown.")
+            else:
+                fig_dd = go.Figure()
+                fig_dd.add_trace(
+                    go.Scatter(
+                        x=underwater["timestamp"],
+                        y=underwater["drawdown_pct"],
+                        mode="lines",
+                        fill="tozeroy",
+                        line=dict(color="#dc3545", width=2),
+                        name="Drawdown %",
+                    )
+                )
+                fig_dd.update_layout(
+                    title="Underwater plot (drawdown)",
+                    height=340,
+                    margin=dict(t=50, b=20, l=20, r=20),
+                    yaxis=dict(title="Drawdown %"),
+                )
+                st.plotly_chart(fig_dd, use_container_width=True)
+
+            cards = _compute_risk_scorecards(perf_ts, tx_norm)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Sharpe Ratio", f"{cards['sharpe']:.2f}")
+            pf_val = cards["profit_factor"]
+            c2.metric("Profit Factor", "inf" if pf_val == float("inf") else f"{pf_val:.2f}")
+            c3.metric("Win Rate", f"{cards['win_rate']:.1f}%")
+            c4.metric("Max Drawdown", f"{cards['max_drawdown_pct']:.2f}%")
+            st.caption("Repere: Profit Factor > 1.5")
 
     # TAB 3: CERVEAU IA
     with t3:
