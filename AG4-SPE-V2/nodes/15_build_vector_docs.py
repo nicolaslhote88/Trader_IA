@@ -117,6 +117,21 @@ with db_con(db_path) as con:
     if not run_id:
         return []
 
+    stats = con.execute(
+        """
+        SELECT
+          COUNT(*) AS total_rows,
+          SUM(CASE WHEN action = 'analyze' THEN 1 ELSE 0 END) AS analyzed_rows,
+          SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE THEN 1 ELSE 0 END) AS relevant_analyzed_rows,
+          SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE
+                    AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0 THEN 1 ELSE 0 END) AS with_content_rows,
+          SUM(CASE WHEN vector_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_rows
+        FROM news_history
+        WHERE run_id = ?
+        """,
+        [run_id],
+    ).fetchone()
+
     rows = con.execute(
         """
         SELECT
@@ -191,7 +206,25 @@ for tup in rows:
         "payload_json": json.dumps(payload, ensure_ascii=False, default=json_default),
     }
 
-    out.append({"json": {"text": text, "metadata": metadata}})
+    out.append({"json": {"text": text, "metadata": metadata, "_vectorNoop": False}})
+
+if len(out) == 0:
+    return [
+        {
+            "json": {
+                "_vectorNoop": True,
+                "run_id": run_id,
+                "db_path": db_path,
+                "vectorStats": {
+                    "totalRows": int(stats[0]) if stats and stats[0] is not None else 0,
+                    "analyzedRows": int(stats[1]) if stats and stats[1] is not None else 0,
+                    "relevantAnalyzedRows": int(stats[2]) if stats and stats[2] is not None else 0,
+                    "withContentRows": int(stats[3]) if stats and stats[3] is not None else 0,
+                    "pendingRows": int(stats[4]) if stats and stats[4] is not None else 0,
+                },
+                "message": "No vector docs for this run (nothing with vector_status=PENDING and relevant analyzed content).",
+            }
+        }
+    ]
 
 return out
-

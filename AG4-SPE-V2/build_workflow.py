@@ -485,6 +485,28 @@ def build() -> dict:
             "onError": "continueRegularOutput",
         },
         {
+            "parameters": {
+                "conditions": {
+                    "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "strict", "version": 3},
+                    "conditions": [
+                        {
+                            "id": "has-vector-docs",
+                            "leftValue": "={{ $json._vectorNoop || false }}",
+                            "rightValue": False,
+                            "operator": {"type": "boolean", "operation": "equals"},
+                        }
+                    ],
+                    "combinator": "and",
+                },
+                "options": {},
+            },
+            "type": "n8n-nodes-base.if",
+            "typeVersion": 2.3,
+            "position": [-400, -256],
+            "id": "8a492ee9-8276-4fd5-9d5f-02d64db00943",
+            "name": "S25A - IF Has Vector Docs?",
+        },
+        {
             "parameters": {"options": {"dimensions": 1536}},
             "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
             "typeVersion": 1.2,
@@ -664,7 +686,13 @@ def build() -> dict:
         "S20 - Parse LLM Output": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
         "S21 - Build Skip Row": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
         "S22 - Upsert News DuckDB": {"main": [[{"node": "S10 - Split Articles", "type": "main", "index": 0}]]},
-        "S25 - Build Vector Docs": {"main": [[{"node": "Qdrant Upsert", "type": "main", "index": 0}]]},
+        "S25 - Build Vector Docs": {"main": [[{"node": "S25A - IF Has Vector Docs?", "type": "main", "index": 0}]]},
+        "S25A - IF Has Vector Docs?": {
+            "main": [
+                [{"node": "Qdrant Upsert", "type": "main", "index": 0}],
+                [],
+            ]
+        },
         "Embeddings OpenAI": {"ai_embedding": [[{"node": "Qdrant Upsert", "type": "ai_embedding", "index": 0}]]},
         "Text Splitter": {"ai_textSplitter": [[{"node": "Default Data Loader", "type": "ai_textSplitter", "index": 0}]]},
         "Default Data Loader": {"ai_document": [[{"node": "Qdrant Upsert", "type": "ai_document", "index": 0}]]},
