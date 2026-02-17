@@ -10,6 +10,8 @@ Le job:
 
 ## Fichiers
 - `yf-enrichment-v1/daily_enrichment.py`
+- `yf-enrichment-v1/YF-ENRICH-V1-daily-workflow.json` (workflow n8n via HTTP)
+- `yf-enrichment-service/` (micro-service FastAPI qui execute le job)
 
 ## Tables creees
 - `run_log`
@@ -40,15 +42,35 @@ python yf-enrichment-v1/daily_enrichment.py \
 Si `NO_EXPIRATIONS_AVAILABLE` est detecte, le job memorise l'etat et saute les appels options pendant `YF_OPTIONS_RECHECK_DAYS` jours.
 Ca evite de repayer des appels inutiles quotidiennement sur les titres non couverts.
 
-## Integration n8n (daily)
+## Integration n8n (daily) - recommandee
 
-Option simple:
-- Noeud `Execute Command` quotidien (cron 1x/jour)
-- Commande:
+Architecture robuste:
+- `n8n` declenche un appel HTTP `POST http://yf-enrichment:8081/run`
+- le micro-service `yf-enrichment` execute `daily_enrichment.py` dans un container Python slim
+- le dashboard lit ensuite uniquement `v_latest_symbol_enrichment`
+
+Workflow n8n importable:
+- `yf-enrichment-v1/YF-ENRICH-V1-daily-workflow.json`
+
+## Service Docker `yf-enrichment`
+
+Construire et demarrer:
 
 ```bash
-python /workspace/yf-enrichment-v1/daily_enrichment.py
+docker compose build yf-enrichment
+docker compose up -d yf-enrichment
 ```
 
-Le dashboard lit ensuite uniquement `v_latest_symbol_enrichment`.
+Verifier la sante du service:
 
+```bash
+curl http://localhost:8081/health
+```
+
+Declencher un run manuellement:
+
+```bash
+curl -X POST http://localhost:8081/run \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```

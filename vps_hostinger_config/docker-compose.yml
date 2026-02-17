@@ -50,6 +50,28 @@ services:
     networks:
       - web
 
+  yf-enrichment:
+    build:
+      context: ./yf-enrichment-service
+      dockerfile: Dockerfile
+    container_name: yf-enrichment
+    environment:
+      - TZ=Europe/Paris
+      - YF_ENRICH_SCRIPT=/workspace/yf-enrichment-v1/daily_enrichment.py
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    restart: unless-stopped
+    ports:
+      - 127.0.0.1:8081:8081
+    volumes:
+      - ./yf-enrichment-v1:/workspace/yf-enrichment-v1:ro
+      - /local-files:/files:rw
+    depends_on:
+      - yfinance-api
+    networks:
+      - web
+
   n8n:
     #image: docker.n8n.io/n8nio/n8n:2.1.4
     build: .
@@ -101,6 +123,7 @@ services:
       - /local-files:/files
     depends_on:
       - yfinance-api
+      - yf-enrichment
     networks:
       - web
 

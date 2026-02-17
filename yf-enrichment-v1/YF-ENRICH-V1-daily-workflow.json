@@ -34,20 +34,36 @@
     },
     {
       "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import os\nimport shlex\nimport subprocess\nfrom datetime import datetime, timezone\n\n\ndef _pick_script_path() -> str:\n    candidates = [\n        \"/files/yf-enrichment-v1/daily_enrichment.py\",\n        \"/workspace/yf-enrichment-v1/daily_enrichment.py\",\n        \"/opt/trader-ia/yf-enrichment-v1/daily_enrichment.py\",\n    ]\n    for p in candidates:\n        if os.path.exists(p):\n            return p\n    raise FileNotFoundError(\n        \"daily_enrichment.py introuvable. Chemins testes: \" + \", \".join(candidates)\n    )\n\n\nscript_path = _pick_script_path()\n\ncmd = [\n    \"python\",\n    script_path,\n    \"--yf-enrich-db-path\",\n    os.getenv(\"YF_ENRICH_DB_PATH\", \"/files/duckdb/yf_enrichment_v1.duckdb\"),\n    \"--ag2-db-path\",\n    os.getenv(\"AG2_DUCKDB_PATH\", \"/files/duckdb/ag2_v2.duckdb\"),\n    \"--yf-api-url\",\n    os.getenv(\"YFINANCE_API_URL\", \"http://yfinance-api:8080\"),\n    \"--target-days\",\n    os.getenv(\"YF_ENRICH_OPTIONS_TARGET_DAYS\", \"30\"),\n    \"--quote-chunk-size\",\n    os.getenv(\"YF_ENRICH_QUOTE_CHUNK\", \"80\"),\n    \"--timeout-sec\",\n    os.getenv(\"YF_ENRICH_TIMEOUT_SEC\", \"14\"),\n]\n\nproc = subprocess.run(cmd, capture_output=True, text=True)\n\nstdout = (proc.stdout or \"\")\nstderr = (proc.stderr or \"\")\n\nresult = {\n    \"at\": datetime.now(timezone.utc).isoformat(),\n    \"status\": \"OK\" if proc.returncode == 0 else \"ERROR\",\n    \"exitCode\": int(proc.returncode),\n    \"command\": \" \".join(shlex.quote(c) for c in cmd),\n    \"stdout\": stdout[-12000:],\n    \"stderr\": stderr[-12000:],\n}\n\nif proc.returncode != 0:\n    raise RuntimeError(f\"daily_enrichment failed rc={proc.returncode} stderr={stderr[-500:]}\")\n\nreturn [{\"json\": result}]\n"
+        "method": "POST",
+        "url": "http://yf-enrichment:8081/run",
+        "options": {
+          "timeout": 1800000
+        }
       },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
       "position": [
         -200,
         0
       ],
       "id": "fd2d5da6-568d-4b9a-93e0-cc2e0cc26003",
-      "name": "Run Daily Enrichment (Python)",
+      "name": "Run Daily Enrichment (HTTP)",
       "retryOnFail": true,
       "maxTries": 2,
       "waitBetweenTries": 20000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json || {};\nreturn [{\n  json: {\n    at: r.at || new Date().toISOString(),\n    status: r.status || 'UNKNOWN',\n    exitCode: r.exitCode,\n    run_id: r.run_id,\n    service_version: r.service_version,\n    command: r.command,\n    stderr: r.stderr || '',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ],
+      "id": "30961d4e-7f85-4c43-bf10-648ff5e95117",
+      "name": "Build Run Summary"
     }
   ],
   "connections": {
@@ -55,7 +71,7 @@
       "main": [
         [
           {
-            "node": "Run Daily Enrichment (Python)",
+            "node": "Run Daily Enrichment (HTTP)",
             "type": "main",
             "index": 0
           }
@@ -66,7 +82,18 @@
       "main": [
         [
           {
-            "node": "Run Daily Enrichment (Python)",
+            "node": "Run Daily Enrichment (HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Daily Enrichment (HTTP)": {
+      "main": [
+        [
+          {
+            "node": "Build Run Summary",
             "type": "main",
             "index": 0
           }
