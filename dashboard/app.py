@@ -749,6 +749,457 @@ def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=20)
+def fetch_yfinance_quote_batch(symbols: tuple[str, ...], qty: float = 100.0, side: str = "BUY") -> pd.DataFrame:
+    """Fetch quote snapshots for multiple symbols from yfinance-api /quote endpoint."""
+    if not symbols:
+        return pd.DataFrame()
+
+    cleaned = [str(s).strip().upper() for s in symbols if str(s).strip()]
+    if not cleaned:
+        return pd.DataFrame()
+
+    try:
+        resp = requests.get(
+            f"{YFINANCE_API_URL}/quote",
+            params={
+                "symbols": ",".join(cleaned),
+                "qty": float(qty),
+                "side": str(side or "BUY").upper(),
+                "max_age_seconds": 20,
+            },
+            timeout=12,
+        )
+        if resp.status_code != 200:
+            return pd.DataFrame()
+        data = resp.json()
+        rows = data.get("quotes", [])
+        if not isinstance(rows, list) or not rows:
+            return pd.DataFrame()
+        df = pd.DataFrame(rows)
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+            df = df[df["symbol"] != ""]
+        for c in [
+            "regularMarketPrice",
+            "bid",
+            "ask",
+            "bidSize",
+            "askSize",
+            "spreadAbs",
+            "spreadPct",
+            "slippageProxyPct",
+            "volume",
+            "exchangeDataDelayedBy",
+        ]:
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=300)
+def fetch_yfinance_options_snapshot(symbol: str, target_days: int = 30) -> dict:
+    """Fetch options snapshot from yfinance-api /options endpoint with robust empty handling."""
+    sym = str(symbol or "").strip().upper()
+    out = {
+        "symbol": sym,
+        "options_ok": False,
+        "options_error": "",
+        "expiration_selected": "",
+        "days_to_expiration": pd.NA,
+        "iv_atm": pd.NA,
+        "iv_atm_call": pd.NA,
+        "iv_atm_put": pd.NA,
+        "iv_skew_put_minus_call_5pct": pd.NA,
+        "put_call_oi_ratio": pd.NA,
+        "put_call_volume_ratio": pd.NA,
+        "options_warning": "",
+    }
+    if not sym:
+        return out
+
+    def _num_or_na(v: object):
+        try:
+            n = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+            return float(n) if pd.notna(n) else pd.NA
+        except Exception:
+            return pd.NA
+
+    try:
+        resp = requests.get(
+            f"{YFINANCE_API_URL}/options",
+            params={"symbol": sym, "target_days": int(target_days), "max_rows_per_side": 120, "max_age_seconds": 300},
+            timeout=14,
+        )
+        if resp.status_code != 200:
+            out["options_error"] = f"http_{resp.status_code}"
+            return out
+
+        data = resp.json()
+        out["options_ok"] = bool(data.get("ok", False))
+        out["options_error"] = str(data.get("error", "") or "")
+        out["expiration_selected"] = str(data.get("expirationSelected", "") or "")
+        out["days_to_expiration"] = _num_or_na(data.get("daysToExpiration", pd.NA))
+
+        metrics = data.get("metrics", {}) if isinstance(data.get("metrics"), dict) else {}
+        out["iv_atm"] = _num_or_na(metrics.get("ivAtm", pd.NA))
+        out["iv_atm_call"] = _num_or_na(metrics.get("ivAtmCall", pd.NA))
+        out["iv_atm_put"] = _num_or_na(metrics.get("ivAtmPut", pd.NA))
+        out["iv_skew_put_minus_call_5pct"] = _num_or_na(metrics.get("skewPutMinusCall5Pct", pd.NA))
+        out["put_call_oi_ratio"] = _num_or_na(metrics.get("putCallOiRatio", pd.NA))
+        out["put_call_volume_ratio"] = _num_or_na(metrics.get("putCallVolumeRatio", pd.NA))
+
+        warnings = data.get("warnings", [])
+        if isinstance(warnings, list):
+            out["options_warning"] = " | ".join([str(w) for w in warnings if str(w).strip()])
+        elif warnings:
+            out["options_warning"] = str(warnings)
+
+        return out
+    except Exception as exc:
+        out["options_error"] = str(exc)
+        return out
+
+
+@st.cache_data(ttl=1800)
+def fetch_yfinance_calendar_snapshot(symbol: str) -> dict:
+    """Fetch earnings/calendar snapshot from yfinance-api /calendar endpoint."""
+    sym = str(symbol or "").strip().upper()
+    out = {
+        "symbol": sym,
+        "calendar_ok": False,
+        "calendar_error": "",
+        "next_earnings_date": pd.NaT,
+        "days_to_earnings": pd.NA,
+    }
+    if not sym:
+        return out
+
+    try:
+        resp = requests.get(
+            f"{YFINANCE_API_URL}/calendar",
+            params={"symbol": sym, "earnings_limit": 8, "max_age_seconds": 1800},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            out["calendar_error"] = f"http_{resp.status_code}"
+            return out
+        data = resp.json()
+        out["calendar_ok"] = bool(data.get("ok", False))
+        out["calendar_error"] = str(data.get("error", "") or "")
+        nxt = pd.to_datetime(data.get("nextEarningsDate"), errors="coerce", utc=True)
+        out["next_earnings_date"] = nxt
+        if pd.notna(nxt):
+            days = (nxt - pd.Timestamp.now(tz="UTC")).total_seconds() / 86400.0
+            out["days_to_earnings"] = round(float(days), 1)
+        return out
+    except Exception as exc:
+        out["calendar_error"] = str(exc)
+        return out
+
+
+def _portfolio_exposure_maps(df_port: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
+    """Return symbol and sector weights (%) from portfolio table."""
+    if df_port is None or df_port.empty:
+        return {}, {}
+
+    wk = normalize_cols(df_port.copy())
+    if "symbol" not in wk.columns:
+        return {}, {}
+    if "marketvalue" not in wk.columns:
+        wk["marketvalue"] = 0.0
+    if "sector" not in wk.columns:
+        wk["sector"] = ""
+
+    wk["symbol"] = wk["symbol"].astype(str).str.strip().str.upper()
+    wk["sector"] = wk["sector"].fillna("").astype(str).str.strip()
+    wk["mv"] = safe_float_series(wk["marketvalue"]).fillna(0.0)
+    wk = wk[~wk["symbol"].isin(["CASH_EUR", "__META__", ""])]
+    wk = wk[wk["mv"] > 0]
+    if wk.empty:
+        return {}, {}
+
+    total = float(wk["mv"].sum())
+    if total <= 0:
+        return {}, {}
+
+    sym_map = (wk.groupby("symbol")["mv"].sum() / total * 100.0).to_dict()
+    sec_map = (wk.groupby("sector")["mv"].sum() / total * 100.0).to_dict()
+    return sym_map, sec_map
+
+
+def _score_to_1_5(v: float) -> int:
+    x = safe_float(v)
+    x = max(0.0, min(100.0, x))
+    return int(min(5, max(1, int((x // 20) + 1))))
+
+
+def _grade_from_prob(prob_score: float) -> str:
+    p = safe_float(prob_score)
+    if p >= 70:
+        return "A"
+    if p >= 55:
+        return "B"
+    return "C"
+
+
+def _build_multi_agent_matrix(
+    consolidated: pd.DataFrame,
+    df_portfolio: pd.DataFrame,
+) -> pd.DataFrame:
+    """Build mechanical Risk/Reward matrix from AG2+AG3+AG4 with yfinance enrichments."""
+    if consolidated is None or consolidated.empty:
+        return pd.DataFrame()
+
+    base = consolidated.copy()
+    base["symbol"] = base.get("symbol", pd.Series("", index=base.index)).astype(str).str.strip().str.upper()
+    base = base[base["symbol"] != ""].copy()
+    if base.empty:
+        return pd.DataFrame()
+
+    symbols = base["symbol"].drop_duplicates().tolist()
+
+    quote_df = fetch_yfinance_quote_batch(tuple(symbols), qty=100.0, side="BUY")
+    if quote_df is not None and not quote_df.empty and "symbol" in quote_df.columns:
+        keep_quote = [
+            "symbol",
+            "regularMarketPrice",
+            "bid",
+            "ask",
+            "bidSize",
+            "askSize",
+            "spreadPct",
+            "slippageProxyPct",
+            "marketState",
+            "exchangeDataDelayedBy",
+        ]
+        keep_quote = [c for c in keep_quote if c in quote_df.columns]
+        base = base.merge(quote_df[keep_quote].drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
+
+    opt_rows = [fetch_yfinance_options_snapshot(sym, target_days=30) for sym in symbols]
+    cal_rows = [fetch_yfinance_calendar_snapshot(sym) for sym in symbols]
+    if opt_rows:
+        df_opt = pd.DataFrame(opt_rows)
+        if "symbol" in df_opt.columns:
+            base = base.merge(df_opt.drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
+    if cal_rows:
+        df_cal = pd.DataFrame(cal_rows)
+        if "symbol" in df_cal.columns:
+            base = base.merge(df_cal.drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
+
+    sym_w_map, sec_w_map = _portfolio_exposure_maps(df_portfolio)
+
+    rows = []
+    for _, r in base.iterrows():
+        symbol = str(r.get("symbol", "")).strip().upper()
+        if not symbol:
+            continue
+
+        entry = safe_float(r.get("last_close", 0))
+        quote_px = safe_float(r.get("regularMarketPrice", 0))
+        if entry <= 0 and quote_px > 0:
+            entry = quote_px
+        if entry <= 0:
+            entry = safe_float(r.get("target_price", 0))
+        if entry <= 0:
+            entry = 0.0
+
+        stop = safe_float(r.get("ai_stop_loss", 0))
+        d1_support = safe_float(r.get("d1_support", 0))
+        d1_dist_sup = safe_float(r.get("d1_dist_sup_pct", 0))
+        d1_atr_pct = safe_float(r.get("d1_atr_pct", 0))
+
+        if entry > 0:
+            if stop <= 0 or stop >= entry:
+                if d1_support > 0 and d1_support < entry:
+                    stop = d1_support * 0.998
+                else:
+                    fallback_risk = max(2.0, d1_dist_sup if d1_dist_sup > 0 else d1_atr_pct * 2.0)
+                    stop = entry * (1.0 - fallback_risk / 100.0)
+        else:
+            stop = 0.0
+
+        d1_res = safe_float(r.get("d1_resistance", 0))
+        d1_dist_res = safe_float(r.get("d1_dist_res_pct", 0))
+        funda_upside = safe_float(r.get("funda_upside", 0))
+        target_price = safe_float(r.get("target_price", 0))
+
+        tp_candidates = []
+        if entry > 0 and d1_res > entry:
+            tp_candidates.append(d1_res)
+        if entry > 0 and funda_upside > 0:
+            tp_candidates.append(entry * (1.0 + funda_upside / 100.0))
+        if entry > 0 and target_price > entry:
+            tp_candidates.append(target_price)
+        if entry > 0 and not tp_candidates and d1_dist_res > 0:
+            tp_candidates.append(entry * (1.0 + d1_dist_res / 100.0))
+        if entry > 0 and not tp_candidates:
+            tp_candidates.append(entry * 1.03)
+        tp = min(tp_candidates) if tp_candidates else 0.0
+
+        reward_pct = ((tp - entry) / entry * 100.0) if entry > 0 else 0.0
+        risk_pct = ((entry - stop) / entry * 100.0) if entry > 0 else 0.0
+        risk_pct = max(0.1, risk_pct)
+        r_multiple = reward_pct / risk_pct if risk_pct > 0 else 0.0
+
+        funda_risk = safe_float(r.get("funda_risk", 50.0))
+        spread_pct = safe_float(r.get("spreadPct", 0))
+        slip_pct = safe_float(r.get("slippageProxyPct", 0))
+        symbol_news_impact = safe_float(r.get("symbol_news_impact_7d", 0))
+        macro_impact = safe_float(r.get("macro_impact_30d", 0))
+        sector = str(r.get("sector", "")).strip()
+        sector_weight = safe_float(sec_w_map.get(sector, 0.0))
+        symbol_weight = safe_float(sym_w_map.get(symbol, 0.0))
+
+        days_to_earnings = pd.to_numeric(pd.Series([r.get("days_to_earnings", pd.NA)]), errors="coerce").iloc[0]
+        if pd.notna(days_to_earnings) and float(days_to_earnings) <= 3:
+            event_risk = 95.0
+        elif pd.notna(days_to_earnings) and float(days_to_earnings) <= 7:
+            event_risk = 80.0
+        elif pd.notna(days_to_earnings) and float(days_to_earnings) <= 14:
+            event_risk = 60.0
+        elif pd.notna(days_to_earnings) and float(days_to_earnings) <= 30:
+            event_risk = 40.0
+        elif pd.notna(days_to_earnings) and float(days_to_earnings) > 30:
+            event_risk = 20.0
+        else:
+            event_risk = 40.0
+
+        vol_risk = min(100.0, max(0.0, d1_atr_pct * 20.0))
+        liq_risk = min(100.0, max(0.0, spread_pct * 35.0 + slip_pct * 20.0))
+        news_risk = min(100.0, max(0.0, max(0.0, -symbol_news_impact) * 8.0 + max(0.0, -macro_impact) * 3.0))
+        concentration_risk = min(100.0, max(0.0, sector_weight * 1.3 + symbol_weight * 1.1))
+
+        iv_atm = pd.to_numeric(pd.Series([r.get("iv_atm", pd.NA)]), errors="coerce").iloc[0]
+        options_ok = bool(r.get("options_ok", False))
+        if options_ok and pd.notna(iv_atm) and float(iv_atm) > 0:
+            iv_val = float(iv_atm)
+            iv_as_pct = iv_val * 100.0 if iv_val <= 3 else iv_val
+            options_risk = min(100.0, max(0.0, iv_as_pct * 1.8))
+        else:
+            options_risk = 45.0
+
+        risk_score_100 = (
+            0.30 * funda_risk
+            + 0.18 * vol_risk
+            + 0.14 * liq_risk
+            + 0.14 * event_risk
+            + 0.10 * news_risk
+            + 0.09 * concentration_risk
+            + 0.05 * options_risk
+        )
+        risk_score_100 = max(0.0, min(100.0, risk_score_100))
+
+        reward_r = min(100.0, max(0.0, r_multiple * 35.0))
+        reward_upside = min(100.0, max(0.0, funda_upside * 3.0))
+        reward_space = min(100.0, max(0.0, d1_dist_res * 4.0))
+        reward_catalyst = min(100.0, max(0.0, max(0.0, symbol_news_impact) * 6.0 + max(0.0, macro_impact) * 2.0))
+        tech_action = str(r.get("tech_action", "")).upper().strip()
+        tech_conf = safe_float(r.get("tech_confidence", 0))
+        if tech_action == "BUY":
+            trend_bonus = min(100.0, 55.0 + tech_conf * 0.45)
+        elif tech_action == "SELL":
+            trend_bonus = max(0.0, 35.0 - tech_conf * 0.25)
+        else:
+            trend_bonus = 45.0
+
+        reward_score_100 = (
+            0.36 * reward_r
+            + 0.22 * reward_upside
+            + 0.14 * reward_space
+            + 0.18 * reward_catalyst
+            + 0.10 * trend_bonus
+        )
+        reward_score_100 = max(0.0, min(100.0, reward_score_100))
+
+        funda_score = safe_float(r.get("funda_score", 50))
+        tech_prob = 50.0 + (8.0 if tech_action == "BUY" else (-8.0 if tech_action == "SELL" else 0.0)) + (tech_conf - 50.0) * 0.20
+        funda_prob = 0.7 * funda_score + 0.3 * (100.0 - funda_risk)
+        sentiment_prob = min(100.0, max(0.0, 50.0 + symbol_news_impact * 4.0 + macro_impact * 1.5))
+        regime = str(r.get("ai_regime_d1", "")).upper().strip()
+        alignment = str(r.get("ai_alignment", "")).upper().strip()
+        regime_adj = 8.0 if regime == "BULLISH" else (-6.0 if regime == "BEARISH" else 0.0)
+        align_adj = 6.0 if alignment == "WITH_BIAS" else (-6.0 if alignment == "AGAINST_BIAS" else 0.0)
+
+        prob_score = (
+            0.36 * tech_prob
+            + 0.34 * funda_prob
+            + 0.20 * sentiment_prob
+            + 0.10 * (50.0 + regime_adj + align_adj)
+        )
+        prob_score = max(0.0, min(100.0, prob_score))
+
+        p_win = max(0.05, min(0.95, prob_score / 100.0))
+        ev_r = (p_win * max(0.0, r_multiple)) - (1.0 - p_win)
+
+        risk_1_5 = _score_to_1_5(risk_score_100)
+        reward_1_5 = _score_to_1_5(reward_score_100)
+        grade = _grade_from_prob(prob_score)
+
+        if ev_r > 0.35 and reward_1_5 >= 4 and risk_1_5 <= 2 and grade in ("A", "B"):
+            matrix_action = "Entrer / Renforcer"
+        elif ev_r < 0 or (risk_1_5 >= 4 and reward_1_5 <= 2):
+            matrix_action = "Reduire / Sortir"
+        else:
+            matrix_action = "Surveiller"
+
+        options_note = ""
+        if not options_ok:
+            err = str(r.get("options_error", "") or "").strip()
+            warn = str(r.get("options_warning", "") or "").strip()
+            options_note = err or warn or "Aucune option disponible"
+
+        rows.append(
+            {
+                **r.to_dict(),
+                "regularMarketPrice": quote_px if quote_px > 0 else pd.NA,
+                "spreadPct": spread_pct if spread_pct > 0 else pd.NA,
+                "slippageProxyPct": slip_pct if slip_pct > 0 else pd.NA,
+                "days_to_earnings": float(days_to_earnings) if pd.notna(days_to_earnings) else pd.NA,
+                "iv_atm": float(iv_atm) if pd.notna(iv_atm) else pd.NA,
+                "options_ok": options_ok,
+                "options_error": str(r.get("options_error", "") or ""),
+                "options_warning": str(r.get("options_warning", "") or ""),
+                "entry_price": entry,
+                "stop_price": stop,
+                "tp_price": tp,
+                "reward_pct": reward_pct,
+                "risk_pct": risk_pct,
+                "r_multiple": r_multiple,
+                "risk_score_100": risk_score_100,
+                "reward_score_100": reward_score_100,
+                "prob_score": prob_score,
+                "p_win": p_win,
+                "ev_r": ev_r,
+                "risk_score_1_5": risk_1_5,
+                "reward_score_1_5": reward_1_5,
+                "setup_grade": grade,
+                "matrix_action": matrix_action,
+                "event_risk_score": event_risk,
+                "vol_risk_score": vol_risk,
+                "liquidity_risk_score": liq_risk,
+                "news_risk_score": news_risk,
+                "concentration_risk_score": concentration_risk,
+                "options_risk_score": options_risk,
+                "sector_weight_pct": sector_weight,
+                "symbol_weight_pct": symbol_weight,
+                "options_note": options_note,
+            }
+        )
+
+    out_df = pd.DataFrame(rows)
+    if out_df.empty:
+        return out_df
+    out_df = out_df.sort_values(
+        ["matrix_action", "ev_r", "reward_score_1_5", "risk_score_1_5"],
+        ascending=[True, False, False, True],
+        na_position="last",
+    ).reset_index(drop=True)
+    return out_df
+
+
 def _make_candlestick_chart(df: pd.DataFrame, title: str, sma20: float = 0, sma50: float = 0, sma200: float = 0, support: float = 0, resistance: float = 0) -> go.Figure:
     """Crée un graphique chandelier avec SMA et niveaux S/R optionnels."""
     fig = go.Figure()
@@ -1443,7 +1894,31 @@ def _prepare_multi_agent_view(
     else:
         tech["tech_action"] = ""
     tech["tech_confidence"] = safe_float_series(tech[conf_col]) if conf_col else 0.0
-    keep_tech = [c for c in ["symbol", "tech_action", "tech_confidence", "d1_rsi14", "d1_macd_hist", "last_tech_date"] if c in tech.columns]
+    keep_tech = [
+        c
+        for c in [
+            "symbol",
+            "tech_action",
+            "tech_confidence",
+            "last_close",
+            "d1_rsi14",
+            "d1_macd_hist",
+            "d1_atr_pct",
+            "d1_resistance",
+            "d1_support",
+            "d1_dist_res_pct",
+            "d1_dist_sup_pct",
+            "ai_stop_loss",
+            "ai_rr_theoretical",
+            "ai_decision",
+            "ai_alignment",
+            "ai_regime_d1",
+            "data_age_h1_hours",
+            "data_age_d1_hours",
+            "last_tech_date",
+        ]
+        if c in tech.columns
+    ]
     tech = tech[keep_tech].drop_duplicates(subset=["symbol"], keep="first") if "symbol" in keep_tech else pd.DataFrame()
 
     # Funda latest
@@ -1469,7 +1944,30 @@ def _prepare_multi_agent_view(
         funda["funda_sector"] = funda["sector"].fillna("").astype(str)
     if "industry" in funda.columns:
         funda["funda_industry"] = funda["industry"].fillna("").astype(str)
-    keep_funda = [c for c in ["symbol", "funda_name", "funda_sector", "funda_industry", "funda_score", "funda_risk", "funda_upside", "funda_horizon", "recommendation", "last_funda_date"] if c in funda.columns]
+    keep_funda = [
+        c
+        for c in [
+            "symbol",
+            "funda_name",
+            "funda_sector",
+            "funda_industry",
+            "funda_score",
+            "funda_risk",
+            "funda_upside",
+            "funda_horizon",
+            "recommendation",
+            "target_price",
+            "current_price",
+            "analyst_count",
+            "quality_score",
+            "growth_score",
+            "valuation_score",
+            "health_score",
+            "consensus_score",
+            "last_funda_date",
+        ]
+        if c in funda.columns
+    ]
     funda = funda[keep_funda].drop_duplicates(subset=["symbol"], keep="first") if "symbol" in keep_funda else pd.DataFrame()
 
     # News
@@ -1622,9 +2120,27 @@ def _prepare_multi_agent_view(
 
     for c in [
         "tech_confidence",
+        "last_close",
+        "d1_rsi14",
+        "d1_macd_hist",
+        "d1_atr_pct",
+        "d1_resistance",
+        "d1_support",
+        "d1_dist_res_pct",
+        "d1_dist_sup_pct",
+        "ai_stop_loss",
+        "ai_rr_theoretical",
         "funda_score",
         "funda_risk",
         "funda_upside",
+        "target_price",
+        "current_price",
+        "analyst_count",
+        "quality_score",
+        "growth_score",
+        "valuation_score",
+        "health_score",
+        "consensus_score",
         "symbol_news_count_7d",
         "symbol_news_count_30d",
         "symbol_news_impact_7d",
@@ -2743,94 +3259,211 @@ elif page == "Vue consolidee Multi-Agents":
         st.warning("Aucune vue consolidee disponible. Verifiez les bases DuckDB AG2/AG3/AG4.")
         st.stop()
 
+    matrix_df = _build_multi_agent_matrix(consolidated, df_port)
+    use_matrix = matrix_df is not None and not matrix_df.empty
+    view_df = matrix_df if use_matrix else consolidated
+
     tab_global, tab_symbol = st.tabs(["Vue globale", "Vue par valeur"])
 
     with tab_global:
-        avg_conv = float(consolidated["conviction_score"].mean()) if "conviction_score" in consolidated.columns else 0.0
-        bullish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("BUY").sum())
-        bearish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("SELL").sum())
-        hot = int((consolidated.get("conviction_score", pd.Series(dtype=float)) >= 70).sum())
-        at_risk = int((consolidated.get("conviction_score", pd.Series(dtype=float)) < 40).sum())
+        if use_matrix:
+            total_values = len(view_df)
+            enter_count = int(view_df.get("matrix_action", pd.Series(dtype=str)).astype(str).eq("Entrer / Renforcer").sum())
+            watch_count = int(view_df.get("matrix_action", pd.Series(dtype=str)).astype(str).eq("Surveiller").sum())
+            exit_count = int(view_df.get("matrix_action", pd.Series(dtype=str)).astype(str).eq("Reduire / Sortir").sum())
+            avg_ev = float(pd.to_numeric(view_df.get("ev_r", pd.Series(dtype=float)), errors="coerce").fillna(0).mean()) if total_values else 0.0
+            grade_a = int(view_df.get("setup_grade", pd.Series(dtype=str)).astype(str).eq("A").sum())
+            options_ok_series = view_df.get("options_ok", pd.Series(False, index=view_df.index)).fillna(False).astype(bool)
+            opt_missing = int((~options_ok_series).sum())
 
-        g1, g2, g3, g4, g5 = st.columns(5)
-        g1.metric("Valeurs suivies", len(consolidated))
-        g2.metric("Conviction moyenne", f"{avg_conv:.1f}/100")
-        g3.metric("Biais BUY", bullish)
-        g4.metric("Biais SELL", bearish)
-        g5.metric("Alerte (<40)", at_risk, delta=f"{hot} >= 70")
+            g1, g2, g3, g4, g5, g6 = st.columns(6)
+            g1.metric("Valeurs suivies", total_values)
+            g2.metric("Entrer / Renforcer", enter_count)
+            g3.metric("Surveiller", watch_count)
+            g4.metric("Reduire / Sortir", exit_count)
+            g5.metric("EV(R) moyen", f"{avg_ev:.2f}")
+            g6.metric("Setups grade A", grade_a, delta=f"Options indispo: {opt_missing}")
 
-        plot_df = consolidated.copy()
-        if "sector" not in plot_df.columns:
-            plot_df["sector"] = "N/A"
-        plot_df["bubble_size"] = (
-            plot_df.get("symbol_news_count_30d", pd.Series(0, index=plot_df.index))
-            + plot_df.get("macro_news_count_30d", pd.Series(0, index=plot_df.index))
-        ).clip(lower=1)
+            st.caption(
+                "Legende matrice: Axe X = Score RISQUE (1 faible -> 5 eleve), "
+                "Axe Y = Score REWARD (1 faible -> 5 fort), couleur = grade setup (A/B/C), "
+                "taille = valeur absolue EV(R), forme = action recommandee."
+            )
 
-        fig = px.scatter(
-            plot_df,
-            x="funda_risk",
-            y="conviction_score",
-            color="sector",
-            size="bubble_size",
-            hover_name="symbol",
-            hover_data={
-                "name": True,
-                "tech_action": True,
-                "funda_score": ":.1f",
-                "funda_upside": ":.1f",
-                "symbol_news_impact_7d": ":.1f",
-                "macro_impact_30d": ":.1f",
-                "bubble_size": False,
-            },
-            labels={"funda_risk": "Risque fondamental", "conviction_score": "Conviction consolidee"},
-            title="Carte globale conviction vs risque",
-        )
-        fig.add_hline(y=70, line_dash="dot", line_color="#28a745")
-        fig.add_hline(y=40, line_dash="dot", line_color="#dc3545")
-        fig.add_vline(x=60, line_dash="dot", line_color="#dc3545")
-        fig.update_layout(height=520)
-        st.plotly_chart(fig, use_container_width=True)
+            plot_df = view_df.copy()
+            plot_df["bubble_size"] = (plot_df.get("ev_r", pd.Series(0.0, index=plot_df.index)).abs() * 24.0 + 10.0).clip(lower=10, upper=60)
+            plot_df["p_win_pct"] = plot_df.get("p_win", pd.Series(0.0, index=plot_df.index)) * 100.0
 
-        st.markdown("#### Priorisation globale")
-        table_cols = [
-            "symbol",
-            "name",
-            "sector",
-            "tech_action",
-            "funda_score",
-            "funda_risk",
-            "funda_upside",
-            "symbol_news_impact_7d",
-            "macro_impact_30d",
-            "conviction_score",
-            "conclusion",
-        ]
-        show_cols = [c for c in table_cols if c in consolidated.columns]
-        render_interactive_table(
-            consolidated[show_cols].rename(
-                columns={
-                    "symbol": "Symbole",
-                    "name": "Nom",
-                    "sector": "Secteur",
-                    "tech_action": "Signal Tech",
-                    "funda_score": "Score Funda",
-                    "funda_risk": "Risque",
-                    "funda_upside": "Upside %",
-                    "symbol_news_impact_7d": "Impact News 7j",
-                    "macro_impact_30d": "Impact Macro 30j",
-                    "conviction_score": "Conviction",
-                    "conclusion": "Conclusion",
-                }
-            ),
-            key_suffix="multi_agents_global",
-            height=460,
-        )
+            fig_rr = px.scatter(
+                plot_df,
+                x="risk_score_1_5",
+                y="reward_score_1_5",
+                color="setup_grade",
+                symbol="matrix_action",
+                size="bubble_size",
+                hover_name="symbol",
+                hover_data={
+                    "name": True,
+                    "sector": True,
+                    "r_multiple": ":.2f",
+                    "ev_r": ":.2f",
+                    "p_win_pct": ":.1f",
+                    "reward_pct": ":.2f",
+                    "risk_pct": ":.2f",
+                    "spreadPct": ":.2f",
+                    "iv_atm": ":.3f",
+                    "days_to_earnings": ":.1f",
+                    "bubble_size": False,
+                },
+                color_discrete_map={"A": "#28a745", "B": "#ffc107", "C": "#dc3545"},
+                labels={
+                    "risk_score_1_5": "Risque (1-5)",
+                    "reward_score_1_5": "Reward (1-5)",
+                    "setup_grade": "Probabilite",
+                    "matrix_action": "Decision",
+                },
+                title="Matrice Risk / Reward / Probabilite",
+            )
+            fig_rr.add_vline(x=3, line_dash="dot", line_color="#dc3545")
+            fig_rr.add_hline(y=3, line_dash="dot", line_color="#28a745")
+            fig_rr.update_xaxes(range=[0.7, 5.3], dtick=1)
+            fig_rr.update_yaxes(range=[0.7, 5.3], dtick=1)
+            fig_rr.update_layout(height=540)
+            st.plotly_chart(fig_rr, use_container_width=True)
+
+            st.markdown("#### Priorisation matrice")
+            matrix_cols = [
+                "symbol",
+                "name",
+                "sector",
+                "matrix_action",
+                "setup_grade",
+                "risk_score_1_5",
+                "reward_score_1_5",
+                "r_multiple",
+                "ev_r",
+                "p_win",
+                "reward_pct",
+                "risk_pct",
+                "spreadPct",
+                "iv_atm",
+                "days_to_earnings",
+                "options_note",
+            ]
+            show_cols = [c for c in matrix_cols if c in view_df.columns]
+            table_show = view_df[show_cols].copy()
+            if "p_win" in table_show.columns:
+                table_show["p_win"] = (pd.to_numeric(table_show["p_win"], errors="coerce").fillna(0.0) * 100.0).round(1)
+            render_interactive_table(
+                table_show.rename(
+                    columns={
+                        "symbol": "Symbole",
+                        "name": "Nom",
+                        "sector": "Secteur",
+                        "matrix_action": "Decision",
+                        "setup_grade": "Grade",
+                        "risk_score_1_5": "Risque (1-5)",
+                        "reward_score_1_5": "Reward (1-5)",
+                        "r_multiple": "R",
+                        "ev_r": "EV(R)",
+                        "p_win": "Prob. win %",
+                        "reward_pct": "Reward %",
+                        "risk_pct": "Risk %",
+                        "spreadPct": "Spread %",
+                        "iv_atm": "IV ATM",
+                        "days_to_earnings": "Jours earnings",
+                        "options_note": "Note options",
+                    }
+                ),
+                key_suffix="multi_agents_matrix_global",
+                height=460,
+            )
+        else:
+            avg_conv = float(consolidated["conviction_score"].mean()) if "conviction_score" in consolidated.columns else 0.0
+            bullish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("BUY").sum())
+            bearish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("SELL").sum())
+            hot = int((consolidated.get("conviction_score", pd.Series(dtype=float)) >= 70).sum())
+            at_risk = int((consolidated.get("conviction_score", pd.Series(dtype=float)) < 40).sum())
+
+            g1, g2, g3, g4, g5 = st.columns(5)
+            g1.metric("Valeurs suivies", len(consolidated))
+            g2.metric("Conviction moyenne", f"{avg_conv:.1f}/100")
+            g3.metric("Biais BUY", bullish)
+            g4.metric("Biais SELL", bearish)
+            g5.metric("Alerte (<40)", at_risk, delta=f"{hot} >= 70")
+
+            plot_df = consolidated.copy()
+            if "sector" not in plot_df.columns:
+                plot_df["sector"] = "N/A"
+            plot_df["bubble_size"] = (
+                plot_df.get("symbol_news_count_30d", pd.Series(0, index=plot_df.index))
+                + plot_df.get("macro_news_count_30d", pd.Series(0, index=plot_df.index))
+            ).clip(lower=1)
+
+            fig = px.scatter(
+                plot_df,
+                x="funda_risk",
+                y="conviction_score",
+                color="sector",
+                size="bubble_size",
+                hover_name="symbol",
+                hover_data={
+                    "name": True,
+                    "tech_action": True,
+                    "funda_score": ":.1f",
+                    "funda_upside": ":.1f",
+                    "symbol_news_impact_7d": ":.1f",
+                    "macro_impact_30d": ":.1f",
+                    "bubble_size": False,
+                },
+                labels={"funda_risk": "Risque fondamental", "conviction_score": "Conviction consolidee"},
+                title="Carte globale conviction vs risque",
+            )
+            fig.add_hline(y=70, line_dash="dot", line_color="#28a745")
+            fig.add_hline(y=40, line_dash="dot", line_color="#dc3545")
+            fig.add_vline(x=60, line_dash="dot", line_color="#dc3545")
+            fig.update_layout(height=520)
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.markdown("#### Priorisation globale")
+            table_cols = [
+                "symbol",
+                "name",
+                "sector",
+                "tech_action",
+                "funda_score",
+                "funda_risk",
+                "funda_upside",
+                "symbol_news_impact_7d",
+                "macro_impact_30d",
+                "conviction_score",
+                "conclusion",
+            ]
+            show_cols = [c for c in table_cols if c in consolidated.columns]
+            render_interactive_table(
+                consolidated[show_cols].rename(
+                    columns={
+                        "symbol": "Symbole",
+                        "name": "Nom",
+                        "sector": "Secteur",
+                        "tech_action": "Signal Tech",
+                        "funda_score": "Score Funda",
+                        "funda_risk": "Risque",
+                        "funda_upside": "Upside %",
+                        "symbol_news_impact_7d": "Impact News 7j",
+                        "macro_impact_30d": "Impact Macro 30j",
+                        "conviction_score": "Conviction",
+                        "conclusion": "Conclusion",
+                    }
+                ),
+                key_suffix="multi_agents_global",
+                height=460,
+            )
 
     with tab_symbol:
         labels = []
         label_to_symbol = {}
-        for _, row in consolidated.iterrows():
+        for _, row in view_df.iterrows():
             sym = str(row.get("symbol", "")).strip()
             if not sym:
                 continue
@@ -2844,23 +3477,85 @@ elif page == "Vue consolidee Multi-Agents":
         else:
             selected_label = st.selectbox("Selectionner une valeur", labels, key="multi_agents_symbol")
             selected_symbol = label_to_symbol[selected_label]
-            row = consolidated[consolidated["symbol"] == selected_symbol].iloc[0]
+            row = view_df[view_df["symbol"] == selected_symbol].iloc[0]
 
-            s1, s2, s3, s4, s5, s6 = st.columns(6)
-            s1.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100", delta=str(row.get("conclusion", "")))
-            s2.metric("Tech", str(row.get("tech_action", "N/A")))
-            s3.metric("Funda", f"{safe_float(row.get('funda_score', 0)):.0f}/100")
-            s4.metric("Risque", f"{safe_float(row.get('funda_risk', 0)):.0f}/100")
-            s5.metric("Upside", f"{safe_float(row.get('funda_upside', 0)):.1f}%")
-            s6.metric("News 7j", f"{safe_float(row.get('symbol_news_impact_7d', 0)):.1f}")
+            if use_matrix:
+                s1, s2, s3, s4, s5, s6, s7, s8 = st.columns(8)
+                s1.metric("Decision", str(row.get("matrix_action", "N/A")))
+                s2.metric("Grade", str(row.get("setup_grade", "N/A")))
+                s3.metric("Risque", f"{safe_float(row.get('risk_score_1_5', 0)):.0f}/5")
+                s4.metric("Reward", f"{safe_float(row.get('reward_score_1_5', 0)):.0f}/5")
+                s5.metric("R", f"{safe_float(row.get('r_multiple', 0)):.2f}")
+                s6.metric("EV(R)", f"{safe_float(row.get('ev_r', 0)):.2f}")
+                s7.metric("Prob. win", f"{safe_float(row.get('p_win', 0) * 100):.1f}%")
+                s8.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100")
 
-            st.markdown("#### Conclusion de synthese")
-            st.write(
-                f"{selected_symbol}: {row.get('conclusion', '')}. "
-                f"Macro 30j={safe_float(row.get('macro_impact_30d', 0)):.1f}, "
-                f"News symbole 7j={safe_float(row.get('symbol_news_impact_7d', 0)):.1f}, "
-                f"themes macro dominants={row.get('macro_themes', '') or 'N/A'}."
-            )
+                st.markdown("#### Lecture mecanique")
+                st.write(
+                    f"{selected_symbol}: entree={safe_float(row.get('entry_price', 0)):.2f}, "
+                    f"stop={safe_float(row.get('stop_price', 0)):.2f}, "
+                    f"tp={safe_float(row.get('tp_price', 0)):.2f}, "
+                    f"reward={safe_float(row.get('reward_pct', 0)):.2f}%, "
+                    f"risk={safe_float(row.get('risk_pct', 0)):.2f}%, "
+                    f"R={safe_float(row.get('r_multiple', 0)):.2f}, "
+                    f"EV(R)={safe_float(row.get('ev_r', 0)):.2f}."
+                )
+
+                rd_left, rd_right = st.columns(2)
+                with rd_left:
+                    st.markdown("#### Decomposition risque")
+                    risk_parts = pd.DataFrame(
+                        [
+                            {"Composant": "Funda risk", "Score": safe_float(row.get("funda_risk", 0))},
+                            {"Composant": "Volatilite (ATR%)", "Score": safe_float(row.get("vol_risk_score", 0))},
+                            {"Composant": "Liquidite (spread/slippage)", "Score": safe_float(row.get("liquidity_risk_score", 0))},
+                            {"Composant": "Event risk (earnings)", "Score": safe_float(row.get("event_risk_score", 0))},
+                            {"Composant": "News pressure", "Score": safe_float(row.get("news_risk_score", 0))},
+                            {"Composant": "Concentration portefeuille", "Score": safe_float(row.get("concentration_risk_score", 0))},
+                            {"Composant": "Options IV risk", "Score": safe_float(row.get("options_risk_score", 0))},
+                        ]
+                    )
+                    fig_risk = px.bar(
+                        risk_parts.sort_values("Score", ascending=True),
+                        x="Score",
+                        y="Composant",
+                        orientation="h",
+                        title="Composants du score risque (0-100)",
+                        color="Score",
+                        color_continuous_scale=["#28a745", "#ffc107", "#dc3545"],
+                    )
+                    fig_risk.update_layout(height=320, margin=dict(t=40, b=20, l=20, r=20), coloraxis_showscale=False)
+                    st.plotly_chart(fig_risk, use_container_width=True)
+
+                with rd_right:
+                    st.markdown("#### Donnees marche externes")
+                    st.write(
+                        f"Spread: {safe_float(row.get('spreadPct', 0)):.2f}% | "
+                        f"Slippage proxy: {safe_float(row.get('slippageProxyPct', 0)):.2f}% | "
+                        f"IV ATM: {safe_float(row.get('iv_atm', 0)):.3f} | "
+                        f"Jours avant earnings: {safe_float(row.get('days_to_earnings', 0)):.1f}"
+                    )
+                    if not bool(row.get("options_ok", False)):
+                        note = str(row.get("options_note", "") or "Aucune option Yahoo disponible (cas courant sur titres FR).")
+                        st.info(note)
+                    elif str(row.get("options_warning", "")).strip():
+                        st.caption(f"Options warning: {row.get('options_warning')}")
+            else:
+                s1, s2, s3, s4, s5, s6 = st.columns(6)
+                s1.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100", delta=str(row.get("conclusion", "")))
+                s2.metric("Tech", str(row.get("tech_action", "N/A")))
+                s3.metric("Funda", f"{safe_float(row.get('funda_score', 0)):.0f}/100")
+                s4.metric("Risque", f"{safe_float(row.get('funda_risk', 0)):.0f}/100")
+                s5.metric("Upside", f"{safe_float(row.get('funda_upside', 0)):.1f}%")
+                s6.metric("News 7j", f"{safe_float(row.get('symbol_news_impact_7d', 0)):.1f}")
+
+                st.markdown("#### Conclusion de synthese")
+                st.write(
+                    f"{selected_symbol}: {row.get('conclusion', '')}. "
+                    f"Macro 30j={safe_float(row.get('macro_impact_30d', 0)):.1f}, "
+                    f"News symbole 7j={safe_float(row.get('symbol_news_impact_7d', 0)):.1f}, "
+                    f"themes macro dominants={row.get('macro_themes', '') or 'N/A'}."
+                )
 
             st.divider()
             c_left, c_right = st.columns(2)
