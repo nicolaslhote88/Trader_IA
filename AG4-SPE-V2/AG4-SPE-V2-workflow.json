@@ -1,0 +1,1113 @@
+{
+  "name": "AG4_Spé-V2",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 5 9,12,15 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1952,
+        -192
+      ],
+      "id": "f8a0f0d6-faf7-4c9f-bca1-d7212bd2bcd1",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1952,
+        -16
+      ],
+      "id": "669d6295-6968-4436-b5c7-3f5f6d1b5dce",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef table_exists(con, table_name):\n    row = con.execute(\n        \"\"\"\n        SELECT COUNT(*)\n        FROM information_schema.tables\n        WHERE table_name = ?\n        \"\"\",\n        [table_name],\n    ).fetchone()\n    return bool(row and int(row[0]) > 0)\n\n\nSCHEMA = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS universe_symbols (\n      symbol VARCHAR PRIMARY KEY,\n      name VARCHAR,\n      isin VARCHAR,\n      asset_class VARCHAR,\n      exchange VARCHAR,\n      currency VARCHAR,\n      country VARCHAR,\n      enabled BOOLEAN DEFAULT TRUE,\n      boursorama_ref VARCHAR,\n      notes_json VARCHAR,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS news_history (\n      news_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      company_name VARCHAR,\n      source VARCHAR,\n      boursorama_ref VARCHAR,\n      listing_url VARCHAR,\n      url VARCHAR,\n      canonical_url VARCHAR,\n      title VARCHAR,\n      published_at TIMESTAMP,\n      published_at_raw VARCHAR,\n      snippet VARCHAR,\n      text VARCHAR,\n      summary VARCHAR,\n      category VARCHAR,\n      impact_score INTEGER,\n      sentiment VARCHAR,\n      is_relevant BOOLEAN,\n      relevance_reason VARCHAR,\n      action VARCHAR,\n      reason VARCHAR,\n      status VARCHAR,\n      first_seen_at TIMESTAMP,\n      last_seen_at TIMESTAMP,\n      analyzed_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS news_errors (\n      error_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR,\n      stage VARCHAR,\n      symbol VARCHAR,\n      company_name VARCHAR,\n      url VARCHAR,\n      http_code INTEGER,\n      message VARCHAR,\n      raw_error VARCHAR,\n      occurred_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      articles_total INTEGER DEFAULT 0,\n      items_analyzed INTEGER DEFAULT 0,\n      items_skipped INTEGER DEFAULT 0,\n      errors_logged INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.0.0'\n    )\n    \"\"\",\n]\n\n\nwith db_con() as con:\n    for stmt in SCHEMA:\n        con.execute(stmt)\n\n    rows = []\n\n    if table_exists(con, \"universe_symbols\"):\n        rows = con.execute(\n            \"\"\"\n            SELECT\n              symbol,\n              COALESCE(name, symbol) AS name,\n              isin,\n              COALESCE(asset_class, 'Equity') AS asset_class,\n              COALESCE(exchange, 'Euronext Paris') AS exchange,\n              COALESCE(currency, 'EUR') AS currency,\n              country,\n              COALESCE(enabled, TRUE) AS enabled,\n              boursorama_ref,\n              notes_json\n            FROM universe_symbols\n            WHERE COALESCE(enabled, TRUE) = TRUE\n            ORDER BY symbol\n            \"\"\"\n        ).fetchall()\n\n    # Fallback for AG2 schema if universe_symbols is still empty.\n    if len(rows) == 0 and table_exists(con, \"universe\"):\n        rows = con.execute(\n            \"\"\"\n            SELECT\n              symbol,\n              COALESCE(name, symbol) AS name,\n              isin,\n              COALESCE(asset_class, 'Equity') AS asset_class,\n              COALESCE(exchange, 'Euronext Paris') AS exchange,\n              COALESCE(currency, 'EUR') AS currency,\n              country,\n              COALESCE(enabled, TRUE) AS enabled,\n              boursorama_ref,\n              NULL AS notes_json\n            FROM universe\n            WHERE COALESCE(enabled, TRUE) = TRUE\n            ORDER BY symbol\n            \"\"\"\n        ).fetchall()\n\nout = []\nfor row in rows:\n    out.append(\n        {\n            \"json\": {\n                \"symbol\": str(row[0] or \"\").strip().upper(),\n                \"companyName\": str(row[1] or \"\").strip(),\n                \"isin\": str(row[2] or \"\").strip(),\n                \"assetClass\": str(row[3] or \"\").strip(),\n                \"exchange\": str(row[4] or \"\").strip(),\n                \"currency\": str(row[5] or \"\").strip(),\n                \"country\": str(row[6] or \"\").strip(),\n                \"enabled\": bool(row[7]) if row[7] is not None else True,\n                \"boursoramaRef\": str(row[8] or \"\").strip(),\n                \"notesJson\": str(row[9] or \"\").strip(),\n                \"sourceUniverse\": \"duckdb\",\n                \"db_path\": DB_PATH,\n            }\n        }\n    )\n\nreturn out\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1728,
+        -96
+      ],
+      "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
+      "name": "S00 - DuckDB Prepare + Load Universe"
+    },
+    {
+      "parameters": {
+        "jsCode": "const BATCH_SIZE = 20;\nconst ROTATION_KEY = \"ag4_spe_v2_last_symbol_index\";\n\nfunction safeJsonParse(raw) {\n  if (!raw) return null;\n  if (typeof raw === \"object\") return raw;\n  if (typeof raw !== \"string\") return null;\n  try {\n    return JSON.parse(raw);\n  } catch {\n    return null;\n  }\n}\n\nfunction normalizeRef(v) {\n  return String(v || \"\").trim().toUpperCase();\n}\n\nconst rows = $input.all().map((i) => i.json || {});\nconst allCandidates = [];\n\nfor (const r of rows) {\n  const enabled = r.enabled !== false && String(r.enabled || \"\").toLowerCase() !== \"false\";\n  if (!enabled) continue;\n\n  const symbol = String(r.symbol || r.Symbol || \"\").trim().toUpperCase();\n  if (!symbol) continue;\n\n  const notes = safeJsonParse(r.notesJson || r.Notes || null);\n  const boursoramaRef = normalizeRef(\n    r.boursoramaRef || r.BoursoramaRef || notes?.boursoramaRef || notes?.boursoramaCode || \"\"\n  );\n  if (!boursoramaRef) continue;\n\n  const coursUrl = `https://www.boursorama.com/cours/${boursoramaRef}/`;\n  const actualitesUrl = `https://www.boursorama.com/cours/actualites/${boursoramaRef}/`;\n\n  allCandidates.push({\n    json: {\n      queueId: `${symbol}|boursorama|actualites`,\n      symbol,\n      companyName: String(r.companyName || r.Name || symbol),\n      isin: r.isin || null,\n      assetClass: r.assetClass || null,\n      exchange: r.exchange || null,\n      currency: r.currency || null,\n      country: r.country || null,\n      boursoramaRef,\n      coursUrl,\n      actualitesUrl,\n      source: \"boursorama\",\n      enabled: true,\n      db_path: r.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n    },\n  });\n}\n\nconst staticData = $getWorkflowStaticData(\"global\");\nlet start = Number(staticData[ROTATION_KEY] || 0);\nconst totalItems = allCandidates.length;\n\nif (!Number.isFinite(start) || start < 0 || start >= totalItems) {\n  start = 0;\n}\n\nif (totalItems === 0) {\n  staticData[ROTATION_KEY] = 0;\n  return [];\n}\n\nconst end = start + BATCH_SIZE;\nconst batch = allCandidates.slice(start, end);\n\nstaticData[ROTATION_KEY] = end >= totalItems ? 0 : end;\n\nbatch.forEach((item, idx) => {\n  item.json._batchInfo = {\n    batchIndex: idx + 1,\n    globalIndex: start + idx + 1,\n    totalItems,\n    nextStart: staticData[ROTATION_KEY],\n  };\n});\n\nreturn batch;\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1504,
+        -96
+      ],
+      "id": "3e1f6147-0f0f-4256-aab3-48af94afcc51",
+      "name": "S01 - Build Symbol Queue"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nWORKFLOW_VERSION = \"2.0.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\ndb_path = DEFAULT_DB_PATH\nif len(items) > 0:\n    db_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nrun_id = f\"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\"\n\nwith db_con(db_path) as con:\n    if len(items) == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, len(items), WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1280,
+        -96
+      ],
+      "id": "34c2a416-4c86-4f03-a94e-df5ae6a3f91d",
+      "name": "S02 - Start Run"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -1072,
+        -96
+      ],
+      "id": "73358bb3-2807-42f2-a72e-98954b35dfdd",
+      "name": "S03 - Split Symbols"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.actualitesUrl}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "fr-FR,fr;q=0.9,en;q=0.8"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text",
+              "outputPropertyName": "listingHtml"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        -848,
+        16
+      ],
+      "id": "3d6f7c6a-6a3b-4c0f-a53d-31b7d2da53cc",
+      "name": "S04 - HTTP Listing Page",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -640,
+        -32
+      ],
+      "id": "34ec95df-6b2c-4752-b1c0-a73de9f6a428",
+      "name": "S04M - Merge Symbol + Listing"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "status200",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -432,
+        -32
+      ],
+      "id": "8938cc57-42fb-4ddc-a2ee-bfe2c42986b4",
+      "name": "S05 - IF Listing 200?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require(\"crypto\");\n\nfunction hash(s) {\n  return crypto.createHash(\"sha1\").update(String(s), \"utf8\").digest(\"hex\");\n}\n\nfunction compactJson(obj) {\n  try {\n    return JSON.stringify(obj);\n  } catch {\n    return String(obj);\n  }\n}\n\nconst j = $json || {};\nconst nowIso = new Date().toISOString();\n\nconst stage = j._errorStage || (j.articleUrl ? \"article_fetch\" : \"listing_fetch\");\nconst url = j.articleUrl || j.articleCanonicalUrl || j.actualitesUrl || j.url || \"\";\nconst httpCode = Number.isFinite(Number(j.statusCode)) ? Number(j.statusCode) : null;\n\nconst message =\n  j.error?.message ||\n  j.errorMessage ||\n  j.notes ||\n  (httpCode && httpCode !== 200 ? `HTTP_${httpCode}` : \"unknown_error\");\n\nconst signature = [\n  j.run_id || \"no_run\",\n  stage,\n  j.symbol || \"no_symbol\",\n  url || \"no_url\",\n  httpCode || \"no_code\",\n  String(message).slice(0, 120),\n  nowIso.slice(0, 16),\n].join(\"|\");\n\nreturn [\n  {\n    json: {\n      errorId: hash(signature),\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      stage,\n      symbol: j.symbol || \"\",\n      companyName: j.companyName || \"\",\n      url,\n      httpCode,\n      message: String(message),\n      rawError: compactJson({\n        statusCode: j.statusCode,\n        error: j.error || null,\n        responseHeaders: j.headers || null,\n      }),\n      occurredAt: nowIso,\n    },\n  },\n];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        224
+      ],
+      "id": "6bc3533d-96df-4f17-a8ec-0076dcd325ec",
+      "name": "S05E - Build Listing Error Row"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import date, datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v)\n\n\ndef to_int(v, d=None):\n    try:\n        if v is None or v == \"\":\n            return d\n        return int(float(v))\n    except Exception:\n        return d\n\n\ndef parse_ts(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        if isinstance(v, date) and not isinstance(v, datetime):\n            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)\n        return v\n    s = str(v).strip()\n    if not s:\n        return None\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n    try:\n        return datetime.fromisoformat(s)\n    except Exception:\n        return None\n\n\nitems = _items or []\nif len(items) == 0:\n    return []\n\ndb_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for it in items:\n        j = dict(it.get(\"json\", {}) or {})\n        error_id = to_text(j.get(\"errorId\", \"\")).strip()\n        if not error_id:\n            continue\n\n        run_id = to_text(j.get(\"run_id\", \"\"))\n        stage = to_text(j.get(\"stage\", \"unknown\"))\n        symbol = to_text(j.get(\"symbol\", \"\"))\n        company_name = to_text(j.get(\"companyName\", \"\"))\n        url = to_text(j.get(\"url\", \"\"))\n        http_code = to_int(j.get(\"httpCode\"), None)\n        message = to_text(j.get(\"message\", \"unknown_error\"))\n        raw_error = to_text(j.get(\"rawError\", \"\"))\n        occurred_at = parse_ts(j.get(\"occurredAt\")) or datetime.now(timezone.utc)\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO news_errors (\n              error_id, run_id, stage, symbol, company_name, url,\n              http_code, message, raw_error, occurred_at, updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                error_id,\n                run_id,\n                stage,\n                symbol,\n                company_name,\n                url,\n                http_code,\n                message,\n                raw_error,\n                occurred_at,\n            ],\n        )\n\nreturn items\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        224
+      ],
+      "id": "f0db3665-fda8-4322-9ed3-ec08dcff9c40",
+      "name": "S23L - Write Listing Errors DuckDB"
+    },
+    {
+      "parameters": {
+        "jsCode": "function htmlEntityDecode(str) {\n  if (!str) return \"\";\n  return String(str)\n    .replace(/&nbsp;/gi, \" \")\n    .replace(/&amp;/gi, \"&\")\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;/gi, \"'\")\n    .replace(/&#x27;/gi, \"'\")\n    .replace(/&lt;/gi, \"<\")\n    .replace(/&gt;/gi, \">\")\n    .replace(/&#(\\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))\n    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));\n}\n\nfunction stripTags(html) {\n  if (!html) return \"\";\n  let s = String(html)\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \")\n    .replace(/<\\/?[^>]+>/g, \" \");\n  s = htmlEntityDecode(s);\n  return s.replace(/\\u00A0/g, \" \").replace(/\\s+/g, \" \").trim();\n}\n\nfunction toAbsolute(url) {\n  if (!url) return null;\n  const u = String(url).trim();\n  if (!u) return null;\n  if (u.startsWith(\"http://\") || u.startsWith(\"https://\")) return u;\n  if (u.startsWith(\"//\")) return \"https:\" + u;\n  if (u.startsWith(\"/\")) return \"https://www.boursorama.com\" + u;\n  return \"https://www.boursorama.com/\" + u;\n}\n\nfunction canonicalize(url) {\n  if (!url) return null;\n  return String(url).split(\"#\")[0].split(\"?\")[0];\n}\n\nfunction decodeDataRel(b64) {\n  try {\n    return Buffer.from(String(b64), \"base64\").toString(\"utf8\") || null;\n  } catch {\n    return null;\n  }\n}\n\nfunction isBoursoramaArticle(url) {\n  if (!url) return false;\n  const u = canonicalize(url);\n  return (\n    /^https:\\/\\/www\\.boursorama\\.com\\/bourse\\/actualites\\/.+-[0-9a-f]{32}$/i.test(u) ||\n    /^https:\\/\\/www\\.boursorama\\.com\\/actualites\\/.+-[0-9a-f]{32}$/i.test(u)\n  );\n}\n\nfunction extractFromLiBlock(blockHtml) {\n  const block = String(blockHtml);\n  let relUrl = null;\n\n  const hrefMatch = block.match(/<a\\b[^>]*href=\"([^\"]+)\"/i);\n  if (hrefMatch?.[1]) relUrl = hrefMatch[1];\n\n  if (!relUrl) {\n    const relMatches = [...block.matchAll(/\\bdata-rel=\"([^\"]+)\"/gi)].map((m) => m[1]);\n    for (const b64 of relMatches) {\n      const decoded = decodeDataRel(b64);\n      if (decoded && decoded.includes(\"/actualites/\")) {\n        relUrl = decoded;\n        break;\n      }\n    }\n  }\n\n  const articleUrl = toAbsolute(relUrl);\n  const articleCanonicalUrl = canonicalize(articleUrl);\n\n  let title = block.match(/\\btitle=\"([^\"]+)\"/i)?.[1] || null;\n  if (!title) {\n    title = block.match(/c-list-details-news__subject[^>]*>([\\s\\S]*?)<\\/(?:a|span)>/i)?.[1] || null;\n  }\n  title = title ? stripTags(title) : null;\n\n  const publishedAtGuess = stripTags(block.match(/c-source__time[^>]*>([^<]+)</i)?.[1] || \"\") || null;\n  const snippetGuess =\n    stripTags(\n      block.match(\n        /<p[^>]*class=\"[^\"]*c-list-details-news__content[^\"]*\"[^>]*>([\\s\\S]*?)<\\/p>/i\n      )?.[1] || \"\"\n    ) || null;\n\n  return {\n    articleUrl,\n    articleCanonicalUrl,\n    articleTitleGuess: title,\n    publishedAtGuess,\n    snippetGuess,\n  };\n}\n\nconst input = $input.first().json;\nconst html = input.listingHtml || input.body || input.html || input.response || \"\";\nconst actualitesUrl = input.actualitesUrl ? canonicalize(input.actualitesUrl) : null;\n\nconst dropped = {\n  null_url: 0,\n  not_article: 0,\n  is_listing: 0,\n  duplicate: 0,\n};\n\nconst articles_raw = [];\nconst seen = new Set();\n\nconst liRe = /<li\\b[^>]*class=\"[^\"]*c-list-details-news__line[^\"]*\"[^>]*>([\\s\\S]*?)<\\/li>/gi;\nconst liBlocks = [...html.matchAll(liRe)].map((m) => m[1]);\n\nlet extractionMethod = \"li_blocks\";\n\nif (liBlocks.length === 0) {\n  extractionMethod = \"fallback_anchors\";\n  const re = /<a[^>]+href=\"([^\"]+)\"[^>]*>([\\s\\S]*?)<\\/a>/gsi;\n  let m;\n  while ((m = re.exec(html)) !== null) {\n    const articleUrl = toAbsolute(m[1]);\n    const articleCanonicalUrl = canonicalize(articleUrl);\n    const title = stripTags(m[2]) || null;\n\n    if (!articleUrl) {\n      dropped.null_url++;\n      continue;\n    }\n    if (actualitesUrl && articleCanonicalUrl === actualitesUrl) {\n      dropped.is_listing++;\n      continue;\n    }\n    if (!isBoursoramaArticle(articleUrl)) {\n      dropped.not_article++;\n      continue;\n    }\n    if (seen.has(articleCanonicalUrl)) {\n      dropped.duplicate++;\n      continue;\n    }\n\n    seen.add(articleCanonicalUrl);\n    articles_raw.push({\n      articleUrl,\n      articleCanonicalUrl,\n      articleTitleGuess: title,\n      publishedAtGuess: null,\n      snippetGuess: null,\n    });\n  }\n} else {\n  for (const block of liBlocks) {\n    const parsed = extractFromLiBlock(block);\n    if (!parsed.articleUrl) {\n      dropped.null_url++;\n      continue;\n    }\n    if (actualitesUrl && parsed.articleCanonicalUrl === actualitesUrl) {\n      dropped.is_listing++;\n      continue;\n    }\n    if (!isBoursoramaArticle(parsed.articleUrl)) {\n      dropped.not_article++;\n      continue;\n    }\n    if (seen.has(parsed.articleCanonicalUrl)) {\n      dropped.duplicate++;\n      continue;\n    }\n    seen.add(parsed.articleCanonicalUrl);\n    articles_raw.push(parsed);\n  }\n}\n\nreturn [\n  {\n    json: {\n      ...input,\n      extractionMethod,\n      candidates_total: liBlocks.length,\n      filtered_total: articles_raw.length,\n      dropped_reason_counts: dropped,\n      articles_raw,\n      articles_raw_count: articles_raw.length,\n    },\n  },\n];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        -32
+      ],
+      "id": "be1590be-2fef-4f41-9f26-ad70c58d11f2",
+      "name": "S06 - Extract Articles"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require(\"crypto\");\n\nconst LIMIT = 10;\n\nfunction sha1(s) {\n  return crypto.createHash(\"sha1\").update(String(s), \"utf8\").digest(\"hex\");\n}\n\nfunction parseListingDate(raw) {\n  if (!raw) return null;\n  const s = String(raw).trim();\n\n  const fr = s.match(/(\\d{1,2})[./-](\\d{1,2})[./-](\\d{2,4})/);\n  if (fr) {\n    let year = Number(fr[3]);\n    if (year < 100) year += 2000;\n    const month = Number(fr[2]) - 1;\n    const day = Number(fr[1]);\n    const d = new Date(Date.UTC(year, month, day, 0, 0, 0));\n    if (!isNaN(d.getTime())) return d.toISOString();\n  }\n\n  const iso = new Date(s);\n  if (!isNaN(iso.getTime())) return iso.toISOString();\n  return null;\n}\n\nfunction canonical(url) {\n  return String(url || \"\").split(\"#\")[0].split(\"?\")[0];\n}\n\nconst item = $input.first().json;\nconst raw = Array.isArray(item.articles_raw) ? item.articles_raw : [];\nconst symbol = String(item.symbol || \"\").toUpperCase();\n\nconst uniq = new Map();\n\nfor (const a of raw) {\n  const articleCanonicalUrl = canonical(a.articleCanonicalUrl || a.articleUrl || \"\");\n  if (!articleCanonicalUrl) continue;\n\n  const newsId = sha1(`${symbol}|${articleCanonicalUrl}`);\n  if (uniq.has(newsId)) continue;\n\n  const publishedAtGuess = parseListingDate(a.publishedAtGuess);\n\n  uniq.set(newsId, {\n    newsId,\n    articleUrl: a.articleUrl || articleCanonicalUrl,\n    articleCanonicalUrl,\n    articleTitleGuess: a.articleTitleGuess || null,\n    publishedAtGuess,\n    publishedAtTs: publishedAtGuess ? new Date(publishedAtGuess).getTime() : null,\n    snippetGuess: a.snippetGuess || null,\n  });\n}\n\nconst articles = Array.from(uniq.values())\n  .sort((a, b) => {\n    const x = a.publishedAtTs ?? -1;\n    const y = b.publishedAtTs ?? -1;\n    return y - x;\n  })\n  .slice(0, LIMIT)\n  .map((a, idx) => {\n    const { publishedAtTs, ...rest } = a;\n    return { ...rest, articleOrder: idx + 1 };\n  });\n\nreturn [\n  {\n    json: {\n      ...item,\n      articles,\n      articles_count: articles.length,\n      articles_limit: LIMIT,\n    },\n  },\n];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -16,
+        -32
+      ],
+      "id": "c10fbcf2-3965-4e31-89d8-cb651ad54baf",
+      "name": "S07 - Normalize + Dedupe + Limit"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "hasArticles",
+              "leftValue": "={{ $json.articles_count }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        192,
+        -32
+      ],
+      "id": "6f3a0de4-769f-4cd8-8f7c-92db8e0f1490",
+      "name": "S08 - IF Has Articles?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const out = [];\n\nfor (const it of $input.all()) {\n  const base = it.json || {};\n  const articles = Array.isArray(base.articles) ? base.articles : [];\n\n  const baseCtx = { ...base };\n  delete baseCtx.articles;\n  delete baseCtx.articles_raw;\n  delete baseCtx.listingHtml;\n\n  let first = true;\n  for (const article of articles) {\n    const articleUrl = article.articleUrl || article.articleCanonicalUrl || null;\n    if (!articleUrl) continue;\n\n    const articleCanonicalUrl =\n      article.articleCanonicalUrl || String(articleUrl).split(\"#\")[0].split(\"?\")[0];\n\n    out.push({\n      json: {\n        ...baseCtx,\n        newsId: article.newsId || null,\n        articleUrl,\n        articleCanonicalUrl,\n        url: articleUrl,\n        canonicalUrl: articleCanonicalUrl,\n        articleTitleGuess: article.articleTitleGuess || null,\n        publishedAtGuess: article.publishedAtGuess || null,\n        snippetGuess: article.snippetGuess || null,\n        _articlesLoopReset: first === true,\n        _status: \"HAS_ARTICLE\",\n      },\n    });\n\n    first = false;\n  }\n}\n\nreturn out;\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        -32
+      ],
+      "id": "2b36f448-01dc-4359-b81f-47ef7ef973ef",
+      "name": "S09 - Explode Articles"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": "={{ $json._articlesLoopReset }}"
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        608,
+        -32
+      ],
+      "id": "db2d3cd7-1fb0-4765-bd9f-3f56466de7d6",
+      "name": "S10 - Split Articles"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport hashlib\nimport time\nfrom contextlib import contextmanager\nfrom datetime import date, datetime\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_iso(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        return v.isoformat()\n    return str(v)\n\n\ndef bool_or_default(v, default=False):\n    if isinstance(v, bool):\n        return v\n    if v is None:\n        return default\n    s = str(v).strip().lower()\n    if s in (\"1\", \"true\", \"yes\", \"y\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\"):\n        return False\n    return default\n\n\ndef build_news_id(symbol, canonical_url):\n    seed = f\"{str(symbol or '').upper()}|{str(canonical_url or '')}\"\n    return hashlib.sha1(seed.encode(\"utf-8\")).hexdigest()\n\n\nitems = _items or []\nif len(items) == 0:\n    return []\n\ndb_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nquery = \"\"\"\nSELECT\n  news_id,\n  title,\n  published_at,\n  snippet,\n  text,\n  summary,\n  category,\n  impact_score,\n  sentiment,\n  is_relevant,\n  relevance_reason,\n  first_seen_at,\n  analyzed_at,\n  reason,\n  status\nFROM news_history\nWHERE news_id = ?\nLIMIT 1\n\"\"\"\n\nout = []\nwith db_con(db_path) as con:\n    for it in items:\n        j = dict(it.get(\"json\", {}) or {})\n\n        symbol = str(j.get(\"symbol\", \"\") or \"\").upper()\n        canonical_url = str(j.get(\"articleCanonicalUrl\", \"\") or j.get(\"canonicalUrl\", \"\") or \"\")\n        news_id = str(j.get(\"newsId\", \"\") or \"\").strip()\n        if not news_id and canonical_url:\n            news_id = build_news_id(symbol, canonical_url)\n            j[\"newsId\"] = news_id\n\n        existing = None\n        if news_id:\n            existing = con.execute(query, [news_id]).fetchone()\n\n        if existing:\n            j[\"_action\"] = \"skip\"\n            j[\"_reason\"] = \"duplicate_known\"\n            j[\"_articlesLoopReset\"] = False\n            j[\"title\"] = j.get(\"articleTitleGuess\") or existing[1] or j.get(\"title\") or \"\"\n            j[\"publishedAt\"] = j.get(\"publishedAtGuess\") or to_iso(existing[2]) or j.get(\"publishedAt\") or None\n            j[\"snippet\"] = existing[3] or j.get(\"snippetGuess\") or \"\"\n            j[\"text\"] = existing[4] or j.get(\"text\") or \"\"\n            j[\"summary\"] = existing[5] or \"\"\n            j[\"category\"] = existing[6] or \"Noise\"\n            j[\"impactScore\"] = int(existing[7]) if existing[7] is not None else 0\n            j[\"sentiment\"] = existing[8] or \"Neutral\"\n            j[\"isRelevant\"] = bool_or_default(existing[9], True)\n            j[\"relevanceReason\"] = existing[10] or \"Duplicate entry already analyzed\"\n            j[\"firstSeenAt\"] = to_iso(existing[11]) or j.get(\"firstSeenAt\")\n            j[\"analyzedAt\"] = to_iso(existing[12]) or j.get(\"analyzedAt\")\n            j[\"status\"] = existing[14] or \"SKIPPED_DUPLICATE\"\n        else:\n            j[\"_action\"] = \"analyze\"\n            j[\"_reason\"] = \"new_item\"\n            j[\"_articlesLoopReset\"] = False\n            if not j.get(\"publishedAt\"):\n                j[\"publishedAt\"] = j.get(\"publishedAtGuess\") or None\n            if not j.get(\"snippet\"):\n                j[\"snippet\"] = j.get(\"snippetGuess\") or \"\"\n\n        out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        -32
+      ],
+      "id": "ed654f58-ed66-473f-990e-27169f86ff96",
+      "name": "S11 - Route New vs Seen"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "analyze",
+                    "leftValue": "={{ $json._action }}",
+                    "rightValue": "analyze",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "skip",
+                    "leftValue": "={{ $json._action }}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        1024,
+        -32
+      ],
+      "id": "0be2ec6f-f5ca-428e-9cd6-c9976ca2dd73",
+      "name": "S12 - Router Analyze vs Skip"
+    },
+    {
+      "parameters": {
+        "amount": "={{ Math.floor(Math.random() * (5 - 2 + 1)) + 2 }}"
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1232,
+        -128
+      ],
+      "id": "869fdc69-b2b3-4b3a-abf6-b0b4f3ed9f52",
+      "name": "S13 - Wait Article",
+      "webhookId": "88cbf6c7-7dcf-4da3-b0ca-5f307ce24395"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.articleUrl}}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            },
+            {
+              "name": "Accept",
+              "value": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+            },
+            {
+              "name": "Accept-Language",
+              "value": "fr-FR,fr;q=0.9,en;q=0.8"
+            },
+            {
+              "name": "Cache-Control",
+              "value": "no-cache"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "responseFormat": "text",
+              "outputPropertyName": "articleHtml"
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1440,
+        -128
+      ],
+      "id": "0ca3f374-fd86-4533-a65e-8d7784ec4d93",
+      "name": "S14 - HTTP Article Page",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1648,
+        -176
+      ],
+      "id": "4d99e026-e09a-4d5e-a9d6-05018ccce237",
+      "name": "S14M - Merge Article + Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "status200",
+              "leftValue": "={{ $json.statusCode }}",
+              "rightValue": 200,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1856,
+        -176
+      ],
+      "id": "c8c7a52c-a8d3-4a34-9f88-c00be48a3ff0",
+      "name": "S15 - IF Article 200?"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require(\"crypto\");\n\nfunction hash(s) {\n  return crypto.createHash(\"sha1\").update(String(s), \"utf8\").digest(\"hex\");\n}\n\nfunction compactJson(obj) {\n  try {\n    return JSON.stringify(obj);\n  } catch {\n    return String(obj);\n  }\n}\n\nconst j = $json || {};\nconst nowIso = new Date().toISOString();\n\nconst stage = j._errorStage || (j.articleUrl ? \"article_fetch\" : \"listing_fetch\");\nconst url = j.articleUrl || j.articleCanonicalUrl || j.actualitesUrl || j.url || \"\";\nconst httpCode = Number.isFinite(Number(j.statusCode)) ? Number(j.statusCode) : null;\n\nconst message =\n  j.error?.message ||\n  j.errorMessage ||\n  j.notes ||\n  (httpCode && httpCode !== 200 ? `HTTP_${httpCode}` : \"unknown_error\");\n\nconst signature = [\n  j.run_id || \"no_run\",\n  stage,\n  j.symbol || \"no_symbol\",\n  url || \"no_url\",\n  httpCode || \"no_code\",\n  String(message).slice(0, 120),\n  nowIso.slice(0, 16),\n].join(\"|\");\n\nreturn [\n  {\n    json: {\n      errorId: hash(signature),\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      stage,\n      symbol: j.symbol || \"\",\n      companyName: j.companyName || \"\",\n      url,\n      httpCode,\n      message: String(message),\n      rawError: compactJson({\n        statusCode: j.statusCode,\n        error: j.error || null,\n        responseHeaders: j.headers || null,\n      }),\n      occurredAt: nowIso,\n    },\n  },\n];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        -16
+      ],
+      "id": "6bfefea8-7ce9-4247-8e14-f45bf2ce92ec",
+      "name": "S15E - Build Article Error Row"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import date, datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v)\n\n\ndef to_int(v, d=None):\n    try:\n        if v is None or v == \"\":\n            return d\n        return int(float(v))\n    except Exception:\n        return d\n\n\ndef parse_ts(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        if isinstance(v, date) and not isinstance(v, datetime):\n            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)\n        return v\n    s = str(v).strip()\n    if not s:\n        return None\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n    try:\n        return datetime.fromisoformat(s)\n    except Exception:\n        return None\n\n\nitems = _items or []\nif len(items) == 0:\n    return []\n\ndb_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for it in items:\n        j = dict(it.get(\"json\", {}) or {})\n        error_id = to_text(j.get(\"errorId\", \"\")).strip()\n        if not error_id:\n            continue\n\n        run_id = to_text(j.get(\"run_id\", \"\"))\n        stage = to_text(j.get(\"stage\", \"unknown\"))\n        symbol = to_text(j.get(\"symbol\", \"\"))\n        company_name = to_text(j.get(\"companyName\", \"\"))\n        url = to_text(j.get(\"url\", \"\"))\n        http_code = to_int(j.get(\"httpCode\"), None)\n        message = to_text(j.get(\"message\", \"unknown_error\"))\n        raw_error = to_text(j.get(\"rawError\", \"\"))\n        occurred_at = parse_ts(j.get(\"occurredAt\")) or datetime.now(timezone.utc)\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO news_errors (\n              error_id, run_id, stage, symbol, company_name, url,\n              http_code, message, raw_error, occurred_at, updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                error_id,\n                run_id,\n                stage,\n                symbol,\n                company_name,\n                url,\n                http_code,\n                message,\n                raw_error,\n                occurred_at,\n            ],\n        )\n\nreturn items\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        -16
+      ],
+      "id": "af8f0f20-07ba-4f58-ac14-efcad758f5a7",
+      "name": "S23A - Write Article Errors DuckDB"
+    },
+    {
+      "parameters": {
+        "jsCode": "const MAX_TEXT_CHARS = 50000;\nconst MAX_SNIPPET_CHARS = 1200;\n\nfunction htmlEntityDecode(str) {\n  if (!str) return \"\";\n  return String(str)\n    .replace(/&nbsp;/gi, \" \")\n    .replace(/&amp;/gi, \"&\")\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;/gi, \"'\")\n    .replace(/&lt;/gi, \"<\")\n    .replace(/&gt;/gi, \">\");\n}\n\nfunction stripTags(html) {\n  if (!html) return \"\";\n  let s = String(html)\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \")\n    .replace(/<\\/?[^>]+>/g, \" \");\n  s = htmlEntityDecode(s);\n  return s.replace(/\\u00A0/g, \" \").replace(/\\s+/g, \" \").trim();\n}\n\nfunction getMetaContent(html, key, mode) {\n  if (!html || !key) return null;\n  const escaped = key.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n  const re = new RegExp(`<meta[^>]+${mode}\\\\s*=\\\\s*[\"']${escaped}[\"'][^>]*>`, \"i\");\n  const m = html.match(re);\n  if (!m) return null;\n  const content = m[0].match(/content\\s*=\\s*[\"']([^\"']+)[\"']/i);\n  return content ? stripTags(content[1]) : null;\n}\n\nfunction getFirst(html, re) {\n  const m = html && html.match(re);\n  if (!m) return null;\n  return stripTags(m[1]) || null;\n}\n\nfunction extractParagraphs(htmlBlock) {\n  if (!htmlBlock) return \"\";\n  const out = [];\n  const re = /<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;\n  let m;\n  while ((m = re.exec(htmlBlock)) !== null) {\n    const t = stripTags(m[1]);\n    if (t && t.length >= 20) out.push(t);\n  }\n  return out.join(\"\\n\\n\").trim();\n}\n\nfunction extractMainBlock(html) {\n  if (!html) return \"\";\n  const article = html.match(/<article\\b[^>]*>([\\s\\S]*?)<\\/article>/i);\n  if (article?.[1]) return article[1];\n  const main = html.match(/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/i);\n  if (main?.[1]) return main[1];\n  const body = html.match(/<body\\b[^>]*>([\\s\\S]*?)<\\/body>/i);\n  if (body?.[1]) return body[1];\n  return html;\n}\n\nfunction normalizeDate(raw) {\n  if (!raw) return null;\n  const s = String(raw).trim();\n\n  const fr = s.match(/(\\d{1,2})[./-](\\d{1,2})[./-](\\d{2,4})/);\n  if (fr) {\n    let y = Number(fr[3]);\n    if (y < 100) y += 2000;\n    const d = new Date(Date.UTC(y, Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));\n    if (!isNaN(d.getTime())) return d.toISOString();\n  }\n\n  const iso = new Date(s);\n  if (!isNaN(iso.getTime())) return iso.toISOString();\n  return null;\n}\n\nfunction truncate(str, maxLen) {\n  const s = String(str || \"\");\n  if (s.length <= maxLen) return s;\n  return `${s.slice(0, maxLen)}\\n\\n[TRUNCATED ${s.length} -> ${maxLen}]`;\n}\n\nreturn $input.all().map((item) => {\n  const j = { ...(item.json || {}) };\n  const html = j.articleHtml || j.body || j.data || j.html || j.response || \"\";\n\n  const h1 = getFirst(html, /<h1\\b[^>]*>([\\s\\S]*?)<\\/h1>/i);\n  const ogTitle = getMetaContent(html, \"og:title\", \"property\");\n  const docTitle = getFirst(html, /<title\\b[^>]*>([\\s\\S]*?)<\\/title>/i);\n  const title = h1 || ogTitle || j.articleTitleGuess || j.title || docTitle || null;\n\n  const timeDt = (html.match(/<time\\b[^>]*datetime\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/i) || [])[1];\n  const metaPub = getMetaContent(html, \"article:published_time\", \"property\");\n  const metaDate = getMetaContent(html, \"date\", \"name\");\n  const publishedAt = normalizeDate(timeDt || metaPub || metaDate || j.publishedAt || j.publishedAtGuess);\n\n  const metaDesc = getMetaContent(html, \"description\", \"name\");\n  const ogDesc = getMetaContent(html, \"og:description\", \"property\");\n\n  const main = extractMainBlock(html);\n  let text = extractParagraphs(main);\n  if (!text) text = stripTags(main).slice(0, 20000);\n  text = truncate(text, MAX_TEXT_CHARS);\n\n  let snippet = metaDesc || ogDesc || j.snippet || j.snippetGuess || (text ? text.slice(0, 280) : \"\");\n  snippet = truncate(snippet, MAX_SNIPPET_CHARS);\n\n  return {\n    json: {\n      ...j,\n      title,\n      articleTitle: title,\n      publishedAt: publishedAt || j.publishedAt || null,\n      snippet,\n      text,\n      parseMethod: \"html_regex_v3\",\n      parsedAt: new Date().toISOString(),\n      _articlesLoopReset: false,\n    },\n  };\n});\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2064,
+        -176
+      ],
+      "id": "30f10254-1e03-4448-938d-0b6f0368fdd8",
+      "name": "S16 - Parse Article"
+    },
+    {
+      "parameters": {
+        "jsCode": "const LOOKBACK_DAYS = 120;\nconst MAX_TEXT_LEN = 12000;\n\nconst cutoff = new Date();\ncutoff.setDate(cutoff.getDate() - LOOKBACK_DAYS);\n\nfunction parseDate(v) {\n  if (!v) return null;\n  const d = new Date(v);\n  return isNaN(d.getTime()) ? null : d;\n}\n\nreturn $input.all().map((item) => {\n  const j = item.json || {};\n\n  let runAI = true;\n  let filterReason = \"date_ok_or_missing\";\n\n  const p = parseDate(j.publishedAt);\n  if (p && p < cutoff) {\n    runAI = false;\n    filterReason = `too_old:${j.publishedAt}`;\n  }\n\n  const contentRaw = String(j.text || j.snippet || \"\");\n  let content = contentRaw.slice(0, MAX_TEXT_LEN);\n  if (contentRaw.length > MAX_TEXT_LEN) {\n    content += \"\\n...[CONTENT TRUNCATED]...\";\n  }\n\n  const payload = {\n    symbol: j.symbol || \"UNKNOWN\",\n    targetCompany: j.companyName || j.symbol || \"Unknown\",\n    title: j.title || j.articleTitle || \"No title\",\n    date: j.publishedAt || \"unknown\",\n    url: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n    content,\n  };\n\n  return {\n    json: {\n      ...j,\n      llmInput: JSON.stringify(payload),\n      _runAI: runAI,\n      _filterReason: filterReason,\n      _articlesLoopReset: false,\n    },\n  };\n});\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2272,
+        -176
+      ],
+      "id": "2f75a97b-a6cd-43ff-9f45-042b4d11f4c6",
+      "name": "S17 - Prepare LLM Input"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "runai",
+              "leftValue": "={{ $json._runAI }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        2480,
+        -176
+      ],
+      "id": "f385ab13-b63f-44bb-a8eb-c9ca0ec21280",
+      "name": "S18 - IF Run AI?"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un analyste buy-side. Analyse strictement l'impact d'une news sur l'action cible (symbol/company). Reponds uniquement en JSON valide selon le schema impose."
+            },
+            {
+              "content": "=Analyse cette news specifique a la valeur cible:\n{{ $json.llmInput }}\n\nSi non pertinente pour la societe cible, mets isRelevant=false et impactScore=0."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "specific_stock_news_v2",
+              "schema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"isRelevant\": { \"type\": \"boolean\" },\n    \"relevanceReason\": { \"type\": \"string\" },\n    \"impactScore\": { \"type\": \"integer\", \"minimum\": -10, \"maximum\": 10 },\n    \"sentiment\": { \"type\": \"string\", \"enum\": [\"Bullish\", \"Bearish\", \"Neutral\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"Earnings\", \"M&A\", \"Contract/Product\", \"Management\", \"Analyst Rating\", \"Macro/Sector\", \"Legal/Reg\", \"Noise\"] },\n    \"summary\": { \"type\": \"string\" }\n  },\n  \"required\": [\"isRelevant\", \"relevanceReason\", \"impactScore\", \"sentiment\", \"category\", \"summary\"]\n}",
+              "strict": true
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        2704,
+        -256
+      ],
+      "id": "31f66369-d4ed-4865-84c4-e78944f4f7d9",
+      "name": "S19 - Analyze with OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2928,
+        -176
+      ],
+      "id": "3f6a478c-f4ef-4f8d-a988-257d813f6ea2",
+      "name": "S19M - Merge AI + Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeParse(value) {\n  try {\n    if (typeof value === \"object\" && value !== null) return value;\n    return JSON.parse(value);\n  } catch {\n    return {};\n  }\n}\n\nfunction clampScore(v, lo, hi, dflt) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return dflt;\n  return Math.max(lo, Math.min(hi, Math.round(n)));\n}\n\nfunction cleanSentiment(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Bullish\", \"Bearish\", \"Neutral\"].includes(s)) return s;\n  return \"Neutral\";\n}\n\nconst j = $json || {};\nconst raw = j.output?.[0]?.content?.[0]?.text || j.content || \"{}\";\nconst ai = safeParse(raw);\nconst nowIso = new Date().toISOString();\n\nconst isRelevant = typeof ai.isRelevant === \"boolean\" ? ai.isRelevant : true;\nconst impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;\n\nreturn [\n  {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || null,\n      snippet: j.snippet || \"\",\n      text: j.text || \"\",\n      summary: String(ai.summary || \"\").trim(),\n      category: String(ai.category || \"Noise\").trim(),\n      impactScore,\n      sentiment: cleanSentiment(ai.sentiment),\n      isRelevant,\n      relevanceReason: String(ai.relevanceReason || \"\").trim(),\n      action: \"analyze\",\n      reason: j._reason || \"new_item\",\n      status: \"ANALYZED\",\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n    },\n  },\n];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3152,
+        -176
+      ],
+      "id": "783d68f2-1df2-40df-a8cb-b1d7dbb51807",
+      "name": "S20 - Parse LLM Output"
+    },
+    {
+      "parameters": {
+        "jsCode": "function toBool(v, fallback = true) {\n  if (typeof v === \"boolean\") return v;\n  if (v == null) return fallback;\n  const s = String(v).trim().toLowerCase();\n  if ([\"1\", \"true\", \"yes\", \"y\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\"].includes(s)) return false;\n  return fallback;\n}\n\nfunction pickReason(j) {\n  if (j._reason) return String(j._reason);\n  if (j._filterReason) return String(j._filterReason);\n  if (j.statusCode && Number(j.statusCode) !== 200) return \"article_http_error\";\n  return \"skipped\";\n}\n\nfunction pickStatus(reason) {\n  if (reason === \"duplicate_known\") return \"SKIPPED_DUPLICATE\";\n  if (String(reason).startsWith(\"too_old\")) return \"SKIPPED_TOO_OLD\";\n  if (reason === \"article_http_error\") return \"ARTICLE_HTTP_ERROR\";\n  return \"SKIPPED\";\n}\n\nconst j = $json || {};\nconst nowIso = new Date().toISOString();\n\nconst reason = pickReason(j);\n\nreturn [\n  {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || j.publishedAtGuess || null,\n      snippet: j.snippet || j.snippetGuess || \"\",\n      text: j.text || \"\",\n      summary: j.summary || \"\",\n      category: j.category || \"Noise\",\n      impactScore: Number.isFinite(Number(j.impactScore)) ? Number(j.impactScore) : 0,\n      sentiment: j.sentiment || \"Neutral\",\n      isRelevant: toBool(j.isRelevant, true),\n      relevanceReason: j.relevanceReason || j._filterReason || \"Skipped\",\n      action: \"skip\",\n      reason,\n      status: j.status || pickStatus(reason),\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: j.analyzedAt || nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n    },\n  },\n];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3152,
+        0
+      ],
+      "id": "52b64b59-ef74-4015-b0ca-ef631748ccf2",
+      "name": "S21 - Build Skip Row"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport hashlib\nimport time\nfrom contextlib import contextmanager\nfrom datetime import date, datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_int(v, d=0):\n    try:\n        if v is None or v == \"\":\n            return d\n        return int(round(float(v)))\n    except Exception:\n        return d\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v)\n\n\ndef to_bool(v, d=True):\n    if isinstance(v, bool):\n        return v\n    if v is None:\n        return d\n    s = str(v).strip().lower()\n    if s in (\"1\", \"true\", \"yes\", \"y\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\"):\n        return False\n    return d\n\n\ndef ensure_utc(dt):\n    if dt is None:\n        return None\n    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:\n        return dt.replace(tzinfo=timezone.utc)\n    return dt.astimezone(timezone.utc)\n\n\ndef parse_ts(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        if isinstance(v, date) and not isinstance(v, datetime):\n            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)\n        return ensure_utc(v)\n\n    s = str(v).strip()\n    if not s:\n        return None\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n\n    try:\n        return ensure_utc(datetime.fromisoformat(s))\n    except Exception:\n        pass\n\n    try:\n        d = datetime.strptime(s, \"%d.%m.%Y\")\n        return ensure_utc(d)\n    except Exception:\n        return None\n\n\ndef build_news_id(symbol, canonical_url):\n    seed = f\"{str(symbol or '').upper()}|{str(canonical_url or '')}\"\n    return hashlib.sha1(seed.encode(\"utf-8\")).hexdigest()\n\n\nitems = _items or []\nif len(items) == 0:\n    return []\n\ndb_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for it in items:\n        j = dict(it.get(\"json\", {}) or {})\n\n        symbol = str(j.get(\"symbol\", \"\") or \"\").upper()\n        canonical_url = str(j.get(\"canonicalUrl\", \"\") or j.get(\"url\", \"\") or \"\")\n        news_id = str(j.get(\"newsId\", \"\") or \"\").strip()\n        if not news_id:\n            news_id = build_news_id(symbol, canonical_url)\n\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n        company_name = to_text(j.get(\"companyName\", \"\"))\n        source = to_text(j.get(\"source\", \"boursorama\"))\n        boursorama_ref = to_text(j.get(\"boursoramaRef\", \"\"))\n        listing_url = to_text(j.get(\"listingUrl\", \"\"))\n        url = to_text(j.get(\"url\", canonical_url))\n        title = to_text(j.get(\"title\", \"\"))\n        published_at_raw = to_text(j.get(\"publishedAt\", \"\"))\n        published_at = parse_ts(j.get(\"publishedAt\"))\n        snippet = to_text(j.get(\"snippet\", \"\"))\n        text = to_text(j.get(\"text\", \"\"))\n        summary = to_text(j.get(\"summary\", \"\"))\n        category = to_text(j.get(\"category\", \"Noise\"))\n        impact_score = to_int(j.get(\"impactScore\"), 0)\n        sentiment = to_text(j.get(\"sentiment\", \"Neutral\"))\n        is_relevant = to_bool(j.get(\"isRelevant\"), True)\n        relevance_reason = to_text(j.get(\"relevanceReason\", \"\"))\n        action = to_text(j.get(\"action\", \"skip\"))\n        reason = to_text(j.get(\"reason\", \"\"))\n        status = to_text(j.get(\"status\", \"\"))\n        now_utc = datetime.now(timezone.utc)\n        incoming_first_seen = parse_ts(j.get(\"firstSeenAt\")) or parse_ts(j.get(\"publishedAt\")) or now_utc\n        incoming_last_seen = parse_ts(j.get(\"lastSeenAt\")) or now_utc\n        analyzed_at = parse_ts(j.get(\"analyzedAt\")) or now_utc\n        fetched_at = parse_ts(j.get(\"fetchedAt\")) or now_utc\n\n        existing = con.execute(\n            \"SELECT first_seen_at FROM news_history WHERE news_id = ?\",\n            [news_id],\n        ).fetchone()\n        existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None\n        if existing_first_seen is not None and existing_first_seen < incoming_first_seen:\n            first_seen_at = existing_first_seen\n        else:\n            first_seen_at = incoming_first_seen\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO news_history (\n              news_id, run_id, symbol, company_name, source, boursorama_ref, listing_url,\n              url, canonical_url, title, published_at, published_at_raw, snippet, text,\n              summary, category, impact_score, sentiment, is_relevant, relevance_reason,\n              action, reason, status, first_seen_at, last_seen_at, analyzed_at, fetched_at,\n              updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                news_id,\n                run_id,\n                symbol,\n                company_name,\n                source,\n                boursorama_ref,\n                listing_url,\n                url,\n                canonical_url,\n                title,\n                published_at,\n                published_at_raw,\n                snippet,\n                text,\n                summary,\n                category,\n                impact_score,\n                sentiment,\n                is_relevant,\n                relevance_reason,\n                action,\n                reason,\n                status,\n                first_seen_at,\n                incoming_last_seen,\n                analyzed_at,\n                fetched_at,\n            ],\n        )\n\nreturn items\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3376,
+        -80
+      ],
+      "id": "596f94d7-5f40-40a4-b34f-a718f13cd994",
+      "name": "S22 - Upsert News DuckDB"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\n            \"SELECT run_id FROM run_log WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1\"\n        ).fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\", \"run_id\": \"\", \"db_path\": db_path}}]\n\n    r = con.execute(\"SELECT COALESCE(symbols_total, 0) FROM run_log WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_total = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(DISTINCT symbol) FROM news_history WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_ok = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(DISTINCT symbol) FROM news_errors WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_error = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM news_history WHERE run_id = ?\", [run_id]).fetchone()\n    articles_total = int(r[0]) if r else 0\n\n    r = con.execute(\n        \"SELECT COUNT(*) FROM news_history WHERE run_id = ? AND action = 'analyze'\",\n        [run_id],\n    ).fetchone()\n    items_analyzed = int(r[0]) if r else 0\n\n    r = con.execute(\n        \"SELECT COUNT(*) FROM news_history WHERE run_id = ? AND action = 'skip'\",\n        [run_id],\n    ).fetchone()\n    items_skipped = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM news_errors WHERE run_id = ?\", [run_id]).fetchone()\n    errors_logged = int(r[0]) if r else 0\n\n    if symbols_total == 0:\n        status = \"NO_DATA\"\n    elif articles_total > 0 and errors_logged == 0:\n        status = \"SUCCESS\"\n    elif articles_total > 0 and errors_logged > 0:\n        status = \"PARTIAL\"\n    elif articles_total == 0 and errors_logged > 0:\n        status = \"FAILED\"\n    else:\n        status = \"NO_OUTPUT\"\n\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            status = ?,\n            symbols_ok = ?,\n            symbols_error = ?,\n            articles_total = ?,\n            items_analyzed = ?,\n            items_skipped = ?,\n            errors_logged = ?,\n            error_detail = ?\n        WHERE run_id = ?\n        \"\"\",\n        [status, symbols_ok, symbols_error, articles_total, items_analyzed, items_skipped, errors_logged, None, run_id],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"db_path\": db_path,\n            \"status\": status,\n            \"symbols_total\": symbols_total,\n            \"symbols_ok\": symbols_ok,\n            \"symbols_error\": symbols_error,\n            \"articles_total\": articles_total,\n            \"items_analyzed\": items_analyzed,\n            \"items_skipped\": items_skipped,\n            \"errors_logged\": errors_logged,\n        }\n    }\n]\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -848,
+        -256
+      ],
+      "id": "0a5ecf81-f16e-49e1-aeb2-12096f68e77d",
+      "name": "S24 - Finalize Run"
+    },
+    {
+      "parameters": {
+        "content": "AG4_Spe-V2: specific stock news from Boursorama, dedupe + analysis + storage in DuckDB only.",
+        "height": 180,
+        "width": 1680,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1940,
+        -352
+      ],
+      "id": "85dd69e0-12f0-4b3a-a7f3-2fbd52a0f67d",
+      "name": "Note AG4_Spe-V2"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "S00 - DuckDB Prepare + Load Universe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "S00 - DuckDB Prepare + Load Universe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S00 - DuckDB Prepare + Load Universe": {
+      "main": [
+        [
+          {
+            "node": "S01 - Build Symbol Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S01 - Build Symbol Queue": {
+      "main": [
+        [
+          {
+            "node": "S02 - Start Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S02 - Start Run": {
+      "main": [
+        [
+          {
+            "node": "S03 - Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S03 - Split Symbols": {
+      "main": [
+        [
+          {
+            "node": "S24 - Finalize Run",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S04 - HTTP Listing Page",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S04M - Merge Symbol + Listing",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "S04 - HTTP Listing Page": {
+      "main": [
+        [
+          {
+            "node": "S04M - Merge Symbol + Listing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S04M - Merge Symbol + Listing": {
+      "main": [
+        [
+          {
+            "node": "S05 - IF Listing 200?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S05 - IF Listing 200?": {
+      "main": [
+        [
+          {
+            "node": "S06 - Extract Articles",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S05E - Build Listing Error Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S05E - Build Listing Error Row": {
+      "main": [
+        [
+          {
+            "node": "S23L - Write Listing Errors DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S23L - Write Listing Errors DuckDB": {
+      "main": [
+        [
+          {
+            "node": "S03 - Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S06 - Extract Articles": {
+      "main": [
+        [
+          {
+            "node": "S07 - Normalize + Dedupe + Limit",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S07 - Normalize + Dedupe + Limit": {
+      "main": [
+        [
+          {
+            "node": "S08 - IF Has Articles?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S08 - IF Has Articles?": {
+      "main": [
+        [
+          {
+            "node": "S09 - Explode Articles",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S03 - Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S09 - Explode Articles": {
+      "main": [
+        [
+          {
+            "node": "S10 - Split Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S10 - Split Articles": {
+      "main": [
+        [
+          {
+            "node": "S03 - Split Symbols",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S11 - Route New vs Seen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S11 - Route New vs Seen": {
+      "main": [
+        [
+          {
+            "node": "S12 - Router Analyze vs Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S12 - Router Analyze vs Skip": {
+      "main": [
+        [
+          {
+            "node": "S13 - Wait Article",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S21 - Build Skip Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S13 - Wait Article": {
+      "main": [
+        [
+          {
+            "node": "S14 - HTTP Article Page",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S14M - Merge Article + Response",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "S14 - HTTP Article Page": {
+      "main": [
+        [
+          {
+            "node": "S14M - Merge Article + Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S14M - Merge Article + Response": {
+      "main": [
+        [
+          {
+            "node": "S15 - IF Article 200?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S15 - IF Article 200?": {
+      "main": [
+        [
+          {
+            "node": "S16 - Parse Article",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S15E - Build Article Error Row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S21 - Build Skip Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S15E - Build Article Error Row": {
+      "main": [
+        [
+          {
+            "node": "S23A - Write Article Errors DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S16 - Parse Article": {
+      "main": [
+        [
+          {
+            "node": "S17 - Prepare LLM Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S17 - Prepare LLM Input": {
+      "main": [
+        [
+          {
+            "node": "S18 - IF Run AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S18 - IF Run AI?": {
+      "main": [
+        [
+          {
+            "node": "S19 - Analyze with OpenAI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S19M - Merge AI + Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "S21 - Build Skip Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S19 - Analyze with OpenAI": {
+      "main": [
+        [
+          {
+            "node": "S19M - Merge AI + Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "S19M - Merge AI + Context": {
+      "main": [
+        [
+          {
+            "node": "S20 - Parse LLM Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S20 - Parse LLM Output": {
+      "main": [
+        [
+          {
+            "node": "S22 - Upsert News DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S21 - Build Skip Row": {
+      "main": [
+        [
+          {
+            "node": "S22 - Upsert News DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S22 - Upsert News DuckDB": {
+      "main": [
+        [
+          {
+            "node": "S10 - Split Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"
+  }
+}
