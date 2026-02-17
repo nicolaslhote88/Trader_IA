@@ -460,7 +460,7 @@
               "content": "Tu es le Chief Market Strategist. Tu analyses une news pour decision portefeuille. Objectif: extraire regime de marche, theme macro, secteurs gagnants/perdants, resume actionnable. Reponds uniquement en JSON valide selon le schema."
             },
             {
-              "content": "=Analyse cette news:\n{{ $json.llmInput }}"
+              "content": "=Analyse cette news:\n{{ $json.llmInput }}\n\nRegles de normalisation obligatoires:\n- Utilise uniquement cette liste de secteurs (canonique): [Communication Services, Consumer Discretionary, Consumer Staples, Energy, Financials, Health Care, Industrials, Information Technology, Materials, Real Estate, Utilities].\n- Mappe tout synonyme vers un secteur canonique.\n- Max 5 secteurs par liste (sectors_bullish, sectors_bearish).\n- Si pas de lien macro/secteur clair -> isActionable=false, impact_score=0, urgency=low, market_regime=Neutral, macro_theme=Resultats/Micro, notes=Noise.\n- Sinon, isActionable=true."
             }
           ]
         },
@@ -470,7 +470,7 @@
             "textOptions": {
               "type": "json_schema",
               "name": "market_news_normalizer_v2",
-              "schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"market_regime\":{\"type\":\"string\",\"enum\":[\"Risk-On\",\"Risk-Off\",\"Neutral\",\"Sector Rotation\"]},\"macro_theme\":{\"type\":\"string\",\"enum\":[\"Inflation/Taux\",\"Croissance/Recession\",\"Geopolitique/Energie\",\"Tech/AI\",\"Resultats/Micro\"]},\"sectors_bullish\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"sectors_bearish\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\"strategic_summary\":{\"type\":\"string\"},\"impact_score\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"urgency\":{\"type\":\"string\",\"enum\":[\"immediate\",\"today\",\"this_week\",\"low\"]},\"notes\":{\"type\":\"string\"}},\"required\":[\"market_regime\",\"macro_theme\",\"sectors_bullish\",\"sectors_bearish\",\"strategic_summary\",\"impact_score\",\"confidence\",\"urgency\",\"notes\"]}",
+              "schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"isActionable\":{\"type\":\"boolean\"},\"market_regime\":{\"type\":\"string\",\"enum\":[\"Risk-On\",\"Risk-Off\",\"Neutral\",\"Sector Rotation\"]},\"macro_theme\":{\"type\":\"string\",\"enum\":[\"Inflation/Taux\",\"Croissance/Recession\",\"Geopolitique/Energie\",\"Tech/AI\",\"Resultats/Micro\"]},\"sectors_bullish\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"string\"}},\"sectors_bearish\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"string\"}},\"strategic_summary\":{\"type\":\"string\"},\"impact_score\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"urgency\":{\"type\":\"string\",\"enum\":[\"immediate\",\"today\",\"this_week\",\"low\"]},\"notes\":{\"type\":\"string\"}},\"required\":[\"isActionable\",\"market_regime\",\"macro_theme\",\"sectors_bullish\",\"sectors_bearish\",\"strategic_summary\",\"impact_score\",\"confidence\",\"urgency\",\"notes\"]}",
               "strict": true
             }
           }
@@ -508,7 +508,7 @@
     },
     {
       "parameters": {
-        "jsCode": "﻿// 20H2 - Parse model output + flatten final row (V2)\nfunction safeJsonParse(str) {\n  try {\n    if (typeof str === 'object' && str !== null) return str;\n    return JSON.parse(str);\n  } catch {\n    return {};\n  }\n}\n\nfunction clamp01(n, d = 0.5) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(1, v));\n}\n\nfunction clamp10(n, d = 0) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(10, Math.round(v)));\n}\n\nfunction joinList(arr) {\n  if (Array.isArray(arr)) return arr.join(', ');\n  return arr || '';\n}\n\nconst j = $json || {};\nconst llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';\nconst ai = safeJsonParse(llmRaw);\nconst now = new Date().toISOString();\n\nconst symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');\n\nreturn [{\n  json: {\n    run_id: j.run_id || '',\n    sourceTier: j.sourceTier ?? null,\n    sourceId: j.sourceId || '',\n    dedupeKey: j.dedupeKey,\n    eventKey: j.eventKey || '',\n    canonicalUrl: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n    publishedAt: j.publishedAtNormalized || j.publishedAt || now,\n    title: j.title || 'unknown',\n    source: j.source || 'unknown',\n    feedUrl: j.feedUrl || '',\n    symbols,\n    type: j.type || (symbols ? 'symbol' : 'macro'),\n    notes: ai.notes || '',\n    ImpactScore: clamp10(ai.impact_score, j.preImpactScore ?? 0),\n    confidence: clamp01(ai.confidence, 0.5),\n    urgency: ai.urgency || j.preUrgency || 'low',\n    Snippet: j.snippet || '',\n    firstSeenAt: j.seenNowAt || now,\n    Strategy: ai.strategic_summary || '',\n    Losers: joinList(ai.sectors_bearish),\n    Winners: joinList(ai.sectors_bullish),\n    Theme: ai.macro_theme || 'Resultats/Micro',\n    Regime: ai.market_regime || 'Neutral',\n    analyzedAt: now,\n    _action: 'analyze',\n    _reason: j._reason || '',\n  }\n}];\n"
+        "jsCode": "﻿// 20H2 - Parse model output + flatten final row (V2)\nfunction safeJsonParse(str) {\n  try {\n    if (typeof str === 'object' && str !== null) return str;\n    return JSON.parse(str);\n  } catch {\n    return {};\n  }\n}\n\nfunction clamp01(n, d = 0.5) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(1, v));\n}\n\nfunction clamp10(n, d = 0) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(10, Math.round(v)));\n}\n\nfunction joinList(arr) {\n  if (Array.isArray(arr)) return arr.join(', ');\n  return arr || '';\n}\n\nfunction toBool(v, d = true) {\n  if (typeof v === 'boolean') return v;\n  if (typeof v === 'number') return v !== 0;\n  if (typeof v === 'string') {\n    const s = v.trim().toLowerCase();\n    if (['true', '1', 'yes', 'y'].includes(s)) return true;\n    if (['false', '0', 'no', 'n'].includes(s)) return false;\n  }\n  return d;\n}\n\nfunction normalizeSectorList(v) {\n  const raw = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);\n  return raw\n    .map((x) => String(x || '').trim())\n    .filter(Boolean)\n    .slice(0, 5);\n}\n\nconst j = $json || {};\nconst llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';\nconst ai = safeJsonParse(llmRaw);\nconst now = new Date().toISOString();\n\nconst symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');\nconst isActionable = toBool(ai.isActionable, true);\nconst winners = normalizeSectorList(ai.sectors_bullish);\nconst losers = normalizeSectorList(ai.sectors_bearish);\nconst notes = isActionable ? (ai.notes || '') : 'Noise';\n\nreturn [{\n  json: {\n    run_id: j.run_id || '',\n    sourceTier: j.sourceTier ?? null,\n    sourceId: j.sourceId || '',\n    dedupeKey: j.dedupeKey,\n    eventKey: j.eventKey || '',\n    canonicalUrl: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n    publishedAt: j.publishedAtNormalized || j.publishedAt || now,\n    title: j.title || 'unknown',\n    source: j.source || 'unknown',\n    feedUrl: j.feedUrl || '',\n    symbols,\n    type: j.type || (symbols ? 'symbol' : 'macro'),\n    notes,\n    isActionable,\n    ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,\n    confidence: clamp01(ai.confidence, 0.5),\n    urgency: isActionable ? (ai.urgency || j.preUrgency || 'low') : 'low',\n    Snippet: j.snippet || '',\n    firstSeenAt: j.seenNowAt || now,\n    Strategy: ai.strategic_summary || '',\n    Losers: isActionable ? joinList(losers) : '',\n    Winners: isActionable ? joinList(winners) : '',\n    Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',\n    Regime: isActionable ? (ai.market_regime || 'Neutral') : 'Neutral',\n    analyzedAt: now,\n    _action: 'analyze',\n    _reason: j._reason || '',\n  }\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -606,16 +606,36 @@
           "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1351236563"
         },
         "columns": {
-          "mappingMode": "autoMapInputData",
+          "mappingMode": "defineBelow",
+          "value": {
+            "dedupeKey": "={{ $json.dedupeKey }}",
+            "canonicalUrl": "={{ $json.canonicalUrl }}",
+            "publishedAt": "={{ $json.publishedAt }}",
+            "title": "={{ $json.title }}",
+            "source": "={{ $json.source }}",
+            "feedUrl": "={{ $json.feedUrl }}",
+            "symbols": "={{ $json.symbols }}",
+            "type": "={{ $json.type }}",
+            "notes": "={{ $json.notes }}",
+            "ImpactScore": "={{ $json.ImpactScore }}",
+            "confidence": "={{ $json.confidence }}",
+            "urgency": "={{ $json.urgency }}",
+            "Snippet": "={{ $json.Snippet }}",
+            "firstSeenAt": "={{ $json.firstSeenAt }}",
+            "Strategy": "={{ $json.Strategy }}",
+            "Losers": "={{ $json.Losers }}",
+            "Winners": "={{ $json.Winners }}",
+            "Theme": "={{ $json.Theme }}",
+            "Regime": "={{ $json.Regime }}",
+            "analyzedAt": "={{ $json.analyzedAt }}"
+          },
           "matchingColumns": [
             "dedupeKey"
           ],
           "attemptToConvertTypes": false,
           "convertFieldsToString": false
         },
-        "options": {
-          "handlingExtraData": "ignoreIt"
-        }
+        "options": {}
       },
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,

@@ -25,12 +25,35 @@ function joinList(arr) {
   return arr || '';
 }
 
+function toBool(v, d = true) {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') {
+    const s = v.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y'].includes(s)) return true;
+    if (['false', '0', 'no', 'n'].includes(s)) return false;
+  }
+  return d;
+}
+
+function normalizeSectorList(v) {
+  const raw = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);
+  return raw
+    .map((x) => String(x || '').trim())
+    .filter(Boolean)
+    .slice(0, 5);
+}
+
 const j = $json || {};
 const llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';
 const ai = safeJsonParse(llmRaw);
 const now = new Date().toISOString();
 
 const symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');
+const isActionable = toBool(ai.isActionable, true);
+const winners = normalizeSectorList(ai.sectors_bullish);
+const losers = normalizeSectorList(ai.sectors_bearish);
+const notes = isActionable ? (ai.notes || '') : 'Noise';
 
 return [{
   json: {
@@ -46,17 +69,18 @@ return [{
     feedUrl: j.feedUrl || '',
     symbols,
     type: j.type || (symbols ? 'symbol' : 'macro'),
-    notes: ai.notes || '',
-    ImpactScore: clamp10(ai.impact_score, j.preImpactScore ?? 0),
+    notes,
+    isActionable,
+    ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,
     confidence: clamp01(ai.confidence, 0.5),
-    urgency: ai.urgency || j.preUrgency || 'low',
+    urgency: isActionable ? (ai.urgency || j.preUrgency || 'low') : 'low',
     Snippet: j.snippet || '',
     firstSeenAt: j.seenNowAt || now,
     Strategy: ai.strategic_summary || '',
-    Losers: joinList(ai.sectors_bearish),
-    Winners: joinList(ai.sectors_bullish),
-    Theme: ai.macro_theme || 'Resultats/Micro',
-    Regime: ai.market_regime || 'Neutral',
+    Losers: isActionable ? joinList(losers) : '',
+    Winners: isActionable ? joinList(winners) : '',
+    Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',
+    Regime: isActionable ? (ai.market_regime || 'Neutral') : 'Neutral',
     analyzedAt: now,
     _action: 'analyze',
     _reason: j._reason || '',

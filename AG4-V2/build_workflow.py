@@ -323,7 +323,20 @@ def build() -> dict:
                             ),
                         },
                         {
-                            'content': '=Analyse cette news:\n{{ $json.llmInput }}'
+                            'content': (
+                                '=Analyse cette news:\n{{ $json.llmInput }}\n\n'
+                                'Regles de normalisation obligatoires:\n'
+                                '- Utilise uniquement cette liste de secteurs (canonique): '
+                                '[Communication Services, Consumer Discretionary, Consumer Staples, Energy, '
+                                'Financials, Health Care, Industrials, Information Technology, Materials, '
+                                'Real Estate, Utilities].\n'
+                                '- Mappe tout synonyme vers un secteur canonique.\n'
+                                '- Max 5 secteurs par liste (sectors_bullish, sectors_bearish).\n'
+                                '- Si pas de lien macro/secteur clair -> '
+                                'isActionable=false, impact_score=0, urgency=low, market_regime=Neutral, '
+                                'macro_theme=Resultats/Micro, notes=Noise.\n'
+                                '- Sinon, isActionable=true.'
+                            )
                         },
                     ]
                 },
@@ -338,17 +351,18 @@ def build() -> dict:
                                 '"type":"object",'
                                 '"additionalProperties":false,'
                                 '"properties":{'
+                                '"isActionable":{"type":"boolean"},'
                                 '"market_regime":{"type":"string","enum":["Risk-On","Risk-Off","Neutral","Sector Rotation"]},'
                                 '"macro_theme":{"type":"string","enum":["Inflation/Taux","Croissance/Recession","Geopolitique/Energie","Tech/AI","Resultats/Micro"]},'
-                                '"sectors_bullish":{"type":"array","items":{"type":"string"}},'
-                                '"sectors_bearish":{"type":"array","items":{"type":"string"}},'
+                                '"sectors_bullish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
+                                '"sectors_bearish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
                                 '"strategic_summary":{"type":"string"},'
                                 '"impact_score":{"type":"integer","minimum":0,"maximum":10},'
                                 '"confidence":{"type":"number","minimum":0,"maximum":1},'
                                 '"urgency":{"type":"string","enum":["immediate","today","this_week","low"]},'
                                 '"notes":{"type":"string"}'
                                 '},'
-                                '"required":["market_regime","macro_theme","sectors_bullish","sectors_bearish","strategic_summary","impact_score","confidence","urgency","notes"]'
+                                '"required":["isActionable","market_regime","macro_theme","sectors_bullish","sectors_bearish","strategic_summary","impact_score","confidence","urgency","notes"]'
                                 '}'
                             ),
                             'strict': True,
