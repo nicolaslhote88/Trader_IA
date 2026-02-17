@@ -19,6 +19,42 @@ function cleanSentiment(v) {
   return "Neutral";
 }
 
+function cleanHorizon(v) {
+  const s = String(v || "").trim();
+  if (["Intraday", "Days", "Weeks", "Months"].includes(s)) return s;
+  return "Days";
+}
+
+function cleanUrgency(v) {
+  const s = String(v || "").trim();
+  if (["Low", "Medium", "High"].includes(s)) return s;
+  return "Low";
+}
+
+function cleanSignal(v) {
+  const s = String(v || "").trim();
+  if (["BUY", "SELL", "NEUTRAL", "WATCH"].includes(s)) return s;
+  return "WATCH";
+}
+
+function cleanDrivers(v) {
+  if (!Array.isArray(v)) return "";
+  const arr = v
+    .map((x) => String(x || "").trim())
+    .filter(Boolean)
+    .slice(0, 5);
+  return arr.join(" | ");
+}
+
+function toBool(v, d = false) {
+  if (typeof v === "boolean") return v;
+  if (v == null) return d;
+  const s = String(v).trim().toLowerCase();
+  if (["1", "true", "yes", "y"].includes(s)) return true;
+  if (["0", "false", "no", "n"].includes(s)) return false;
+  return d;
+}
+
 const j = $json || {};
 const raw = j.output?.[0]?.content?.[0]?.text || j.content || "{}";
 const ai = safeParse(raw);
@@ -26,6 +62,14 @@ const nowIso = new Date().toISOString();
 
 const isRelevant = typeof ai.isRelevant === "boolean" ? ai.isRelevant : true;
 const impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;
+const sentiment = isRelevant ? cleanSentiment(ai.sentiment) : "Neutral";
+const category = isRelevant ? String(ai.category || "Noise").trim() : "Noise";
+const suggestedSignal = isRelevant ? cleanSignal(ai.suggestedSignal) : "WATCH";
+const urgency = isRelevant ? cleanUrgency(ai.urgency) : "Low";
+const confidence = clampScore(ai.confidence, 0, 100, isRelevant ? 50 : 0);
+const horizon = cleanHorizon(ai.horizon);
+const keyDrivers = cleanDrivers(ai.keyDrivers);
+const needsFollowUp = toBool(ai.needsFollowUp, false);
 
 return [
   {
@@ -45,9 +89,15 @@ return [
       snippet: j.snippet || "",
       text: j.text || "",
       summary: String(ai.summary || "").trim(),
-      category: String(ai.category || "Noise").trim(),
+      category,
       impactScore,
-      sentiment: cleanSentiment(ai.sentiment),
+      sentiment,
+      confidence,
+      horizon,
+      urgency,
+      suggestedSignal,
+      keyDrivers,
+      needsFollowUp,
       isRelevant,
       relevanceReason: String(ai.relevanceReason || "").trim(),
       action: "analyze",
@@ -60,4 +110,3 @@ return [
     },
   },
 ];
-

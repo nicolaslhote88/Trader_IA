@@ -129,6 +129,12 @@ with db_con(db_path) as con:
         category = to_text(j.get("category", "Noise"))
         impact_score = to_int(j.get("impactScore"), 0)
         sentiment = to_text(j.get("sentiment", "Neutral"))
+        confidence_score = to_int(j.get("confidence"), 0)
+        horizon = to_text(j.get("horizon", "Days"))
+        urgency = to_text(j.get("urgency", "Low"))
+        suggested_signal = to_text(j.get("suggestedSignal", "WATCH"))
+        key_drivers = to_text(j.get("keyDrivers", ""))
+        needs_follow_up = to_bool(j.get("needsFollowUp"), False)
         is_relevant = to_bool(j.get("isRelevant"), True)
         relevance_reason = to_text(j.get("relevanceReason", ""))
         action = to_text(j.get("action", "skip"))
@@ -155,11 +161,12 @@ with db_con(db_path) as con:
             INSERT OR REPLACE INTO news_history (
               news_id, run_id, symbol, company_name, source, boursorama_ref, listing_url,
               url, canonical_url, title, published_at, published_at_raw, snippet, text,
-              summary, category, impact_score, sentiment, is_relevant, relevance_reason,
+              summary, category, impact_score, sentiment, confidence_score, horizon,
+              urgency, suggested_signal, key_drivers, needs_follow_up, is_relevant, relevance_reason,
               action, reason, status, first_seen_at, last_seen_at, analyzed_at, fetched_at,
               updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [
                 news_id,
@@ -180,6 +187,12 @@ with db_con(db_path) as con:
                 category,
                 impact_score,
                 sentiment,
+                confidence_score,
+                horizon,
+                urgency,
+                suggested_signal,
+                key_drivers,
+                needs_follow_up,
                 is_relevant,
                 relevance_reason,
                 action,
@@ -193,4 +206,3 @@ with db_con(db_path) as con:
         )
 
 return items
-

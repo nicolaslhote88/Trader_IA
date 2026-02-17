@@ -407,10 +407,10 @@ def build() -> dict:
                     "values": [
                         {
                             "role": "system",
-                            "content": "Tu es un analyste buy-side. Analyse strictement l'impact d'une news sur l'action cible (symbol/company). Reponds uniquement en JSON valide selon le schema impose.",
+                            "content": "Tu es un analyste buy-side specialise news single-stock. N'utilise QUE les informations fournies, n'invente rien. Si la correspondance entreprise est ambigue ou absente, retourne isRelevant=false. Rubric impactScore: -10 catastrophique, -7 a -4 negatif, -3 a -1 legerement negatif, 0 neutre/bruit, +1 a +3 legerement positif, +4 a +7 positif, +8 a +10 exceptionnel. Reponds uniquement en JSON valide selon le schema impose.",
                         },
                         {
-                            "content": "=Analyse cette news specifique a la valeur cible:\n{{ $json.llmInput }}\n\nSi non pertinente pour la societe cible, mets isRelevant=false et impactScore=0."
+                            "content": "=TARGET:\n- symbol: {{ $json.symbol }}\n- name: {{ $json.company_name }}\n- isin: {{ $json.isin }}\n\nNEWS:\n{{ $json.llmInput }}\n\nRegles:\n- Si la news ne concerne pas explicitement TARGET -> isRelevant=false, impactScore=0, sentiment=Neutral, category=Noise.\n- Si ambigu / doute -> isRelevant=false."
                         },
                     ]
                 },
@@ -420,7 +420,7 @@ def build() -> dict:
                         "textOptions": {
                             "type": "json_schema",
                             "name": "specific_stock_news_v2",
-                            "schema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"isRelevant\": { \"type\": \"boolean\" },\n    \"relevanceReason\": { \"type\": \"string\" },\n    \"impactScore\": { \"type\": \"integer\", \"minimum\": -10, \"maximum\": 10 },\n    \"sentiment\": { \"type\": \"string\", \"enum\": [\"Bullish\", \"Bearish\", \"Neutral\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"Earnings\", \"M&A\", \"Contract/Product\", \"Management\", \"Analyst Rating\", \"Macro/Sector\", \"Legal/Reg\", \"Noise\"] },\n    \"summary\": { \"type\": \"string\" }\n  },\n  \"required\": [\"isRelevant\", \"relevanceReason\", \"impactScore\", \"sentiment\", \"category\", \"summary\"]\n}",
+                            "schema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"isRelevant\": { \"type\": \"boolean\" },\n    \"relevanceReason\": { \"type\": \"string\" },\n    \"impactScore\": { \"type\": \"integer\", \"minimum\": -10, \"maximum\": 10 },\n    \"sentiment\": { \"type\": \"string\", \"enum\": [\"Bullish\", \"Bearish\", \"Neutral\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"Earnings\", \"M&A\", \"Contract/Product\", \"Management\", \"Analyst Rating\", \"Macro/Sector\", \"Legal/Reg\", \"Noise\"] },\n    \"summary\": { \"type\": \"string\" },\n    \"confidence\": { \"type\": \"integer\", \"minimum\": 0, \"maximum\": 100 },\n    \"horizon\": { \"type\": \"string\", \"enum\": [\"Intraday\", \"Days\", \"Weeks\", \"Months\"] },\n    \"urgency\": { \"type\": \"string\", \"enum\": [\"Low\", \"Medium\", \"High\"] },\n    \"suggestedSignal\": { \"type\": \"string\", \"enum\": [\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"] },\n    \"keyDrivers\": { \"type\": \"array\", \"items\": { \"type\": \"string\" }, \"minItems\": 2, \"maxItems\": 5 },\n    \"needsFollowUp\": { \"type\": \"boolean\" }\n  },\n  \"required\": [\"isRelevant\", \"relevanceReason\", \"impactScore\", \"sentiment\", \"category\", \"summary\", \"confidence\", \"horizon\", \"urgency\", \"suggestedSignal\", \"keyDrivers\", \"needsFollowUp\"]\n}",
                             "strict": True,
                         }
                     }

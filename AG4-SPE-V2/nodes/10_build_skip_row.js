@@ -47,6 +47,12 @@ return [
       category: j.category || "Noise",
       impactScore: Number.isFinite(Number(j.impactScore)) ? Number(j.impactScore) : 0,
       sentiment: j.sentiment || "Neutral",
+      confidence: Number.isFinite(Number(j.confidence)) ? Number(j.confidence) : 0,
+      horizon: j.horizon || "Days",
+      urgency: j.urgency || "Low",
+      suggestedSignal: j.suggestedSignal || "WATCH",
+      keyDrivers: j.keyDrivers || "",
+      needsFollowUp: toBool(j.needsFollowUp, false),
       isRelevant: toBool(j.isRelevant, true),
       relevanceReason: j.relevanceReason || j._filterReason || "Skipped",
       action: "skip",
@@ -59,4 +65,3 @@ return [
     },
   },
 ];
-

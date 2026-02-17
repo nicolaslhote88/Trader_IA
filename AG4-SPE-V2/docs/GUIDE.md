@@ -16,6 +16,15 @@ Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base dur
 8. Filtre age news + analyse IA (JSON schema strict).
 9. Upsert dans `news_history`, erreurs dans `news_errors`, stats de run dans `run_log`.
 
+Le schema IA inclut:
+- `impactScore` (-10..10)
+- `confidence` (0..100)
+- `horizon` (`Intraday|Days|Weeks|Months`)
+- `urgency` (`Low|Medium|High`)
+- `suggestedSignal` (`BUY|SELL|NEUTRAL|WATCH`)
+- `keyDrivers` (2..5)
+- `needsFollowUp` (boolean)
+
 ## Tables DuckDB
 - `universe_symbols`
 - `news_history`

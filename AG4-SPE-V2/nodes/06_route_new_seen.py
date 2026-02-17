@@ -74,6 +74,12 @@ SELECT
   category,
   impact_score,
   sentiment,
+  confidence_score,
+  horizon,
+  urgency,
+  suggested_signal,
+  key_drivers,
+  needs_follow_up,
   is_relevant,
   relevance_reason,
   first_seen_at,
@@ -113,11 +119,17 @@ with db_con(db_path) as con:
             j["category"] = existing[6] or "Noise"
             j["impactScore"] = int(existing[7]) if existing[7] is not None else 0
             j["sentiment"] = existing[8] or "Neutral"
-            j["isRelevant"] = bool_or_default(existing[9], True)
-            j["relevanceReason"] = existing[10] or "Duplicate entry already analyzed"
-            j["firstSeenAt"] = to_iso(existing[11]) or j.get("firstSeenAt")
-            j["analyzedAt"] = to_iso(existing[12]) or j.get("analyzedAt")
-            j["status"] = existing[14] or "SKIPPED_DUPLICATE"
+            j["confidence"] = int(existing[9]) if existing[9] is not None else 0
+            j["horizon"] = existing[10] or "Days"
+            j["urgency"] = existing[11] or "Low"
+            j["suggestedSignal"] = existing[12] or "WATCH"
+            j["keyDrivers"] = existing[13] or ""
+            j["needsFollowUp"] = bool_or_default(existing[14], False)
+            j["isRelevant"] = bool_or_default(existing[15], True)
+            j["relevanceReason"] = existing[16] or "Duplicate entry already analyzed"
+            j["firstSeenAt"] = to_iso(existing[17]) or j.get("firstSeenAt")
+            j["analyzedAt"] = to_iso(existing[18]) or j.get("analyzedAt")
+            j["status"] = existing[20] or "SKIPPED_DUPLICATE"
         else:
             j["_action"] = "analyze"
             j["_reason"] = "new_item"
@@ -130,4 +142,3 @@ with db_con(db_path) as con:
         out.append({"json": j, "pairedItem": it.get("pairedItem")})
 
 return out
-

@@ -65,6 +65,12 @@ SCHEMA = [
       category VARCHAR,
       impact_score INTEGER,
       sentiment VARCHAR,
+      confidence_score INTEGER,
+      horizon VARCHAR,
+      urgency VARCHAR,
+      suggested_signal VARCHAR,
+      key_drivers VARCHAR,
+      needs_follow_up BOOLEAN,
       is_relevant BOOLEAN,
       relevance_reason VARCHAR,
       action VARCHAR,
@@ -117,6 +123,14 @@ SCHEMA = [
 with db_con() as con:
     for stmt in SCHEMA:
         con.execute(stmt)
+
+    # Lightweight migrations for existing DB files.
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS confidence_score INTEGER")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS horizon VARCHAR")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS urgency VARCHAR")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS suggested_signal VARCHAR")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS key_drivers VARCHAR")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS needs_follow_up BOOLEAN")
 
 out = []
 for it in (_items or []):

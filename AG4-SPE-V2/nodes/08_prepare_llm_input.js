@@ -29,17 +29,19 @@ return $input.all().map((item) => {
   }
 
   const payload = {
-    symbol: j.symbol || "UNKNOWN",
-    targetCompany: j.companyName || j.symbol || "Unknown",
+    source: j.source || "boursorama",
     title: j.title || j.articleTitle || "No title",
     date: j.publishedAt || "unknown",
     url: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || "",
+    snippet: String(j.snippet || "").slice(0, 800),
     content,
   };
 
   return {
     json: {
       ...j,
+      company_name: j.companyName || j.company_name || j.symbol || "Unknown",
+      isin: j.isin || null,
       llmInput: JSON.stringify(payload),
       _runAI: runAI,
       _filterReason: filterReason,
@@ -47,4 +49,3 @@ return $input.all().map((item) => {
     },
   };
 });
-
