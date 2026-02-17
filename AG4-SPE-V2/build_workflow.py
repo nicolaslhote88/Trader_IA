@@ -194,9 +194,9 @@ def build() -> dict:
                     "conditions": [
                         {
                             "id": "hasArticles",
-                            "leftValue": "={{ $json.articles_count }}",
-                            "rightValue": 0,
-                            "operator": {"type": "number", "operation": "larger"},
+                            "leftValue": "={{ $json.hasArticles }}",
+                            "rightValue": True,
+                            "operator": {"type": "boolean", "operation": "equals"},
                         }
                     ],
                     "combinator": "and",

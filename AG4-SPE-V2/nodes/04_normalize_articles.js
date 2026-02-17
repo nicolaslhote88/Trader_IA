@@ -29,52 +29,56 @@ function canonical(url) {
   return String(url || "").split("#")[0].split("?")[0];
 }
 
-const item = $input.first().json;
-const raw = Array.isArray(item.articles_raw) ? item.articles_raw : [];
-const symbol = String(item.symbol || "").toUpperCase();
+return $input.all().map((inItem) => {
+  const item = inItem.json || {};
+  const raw = Array.isArray(item.articles_raw) ? item.articles_raw : [];
+  const symbol = String(item.symbol || "").toUpperCase();
 
-const uniq = new Map();
+  const uniq = new Map();
 
-for (const a of raw) {
-  const articleCanonicalUrl = canonical(a.articleCanonicalUrl || a.articleUrl || "");
-  if (!articleCanonicalUrl) continue;
+  for (const a of raw) {
+    const articleCanonicalUrl = canonical(a.articleCanonicalUrl || a.articleUrl || "");
+    if (!articleCanonicalUrl) continue;
 
-  const newsId = sha1(`${symbol}|${articleCanonicalUrl}`);
-  if (uniq.has(newsId)) continue;
+    const newsId = sha1(`${symbol}|${articleCanonicalUrl}`);
+    if (uniq.has(newsId)) continue;
 
-  const publishedAtGuess = parseListingDate(a.publishedAtGuess);
+    const publishedAtGuess = parseListingDate(a.publishedAtGuess);
 
-  uniq.set(newsId, {
-    newsId,
-    articleUrl: a.articleUrl || articleCanonicalUrl,
-    articleCanonicalUrl,
-    articleTitleGuess: a.articleTitleGuess || null,
-    publishedAtGuess,
-    publishedAtTs: publishedAtGuess ? new Date(publishedAtGuess).getTime() : null,
-    snippetGuess: a.snippetGuess || null,
-  });
-}
+    uniq.set(newsId, {
+      newsId,
+      articleUrl: a.articleUrl || articleCanonicalUrl,
+      articleCanonicalUrl,
+      articleTitleGuess: a.articleTitleGuess || null,
+      publishedAtGuess,
+      publishedAtTs: publishedAtGuess ? new Date(publishedAtGuess).getTime() : null,
+      snippetGuess: a.snippetGuess || null,
+    });
+  }
 
-const articles = Array.from(uniq.values())
-  .sort((a, b) => {
-    const x = a.publishedAtTs ?? -1;
-    const y = b.publishedAtTs ?? -1;
-    return y - x;
-  })
-  .slice(0, LIMIT)
-  .map((a, idx) => {
-    const { publishedAtTs, ...rest } = a;
-    return { ...rest, articleOrder: idx + 1 };
-  });
+  const articles = Array.from(uniq.values())
+    .sort((a, b) => {
+      const x = a.publishedAtTs ?? -1;
+      const y = b.publishedAtTs ?? -1;
+      return y - x;
+    })
+    .slice(0, LIMIT)
+    .map((a, idx) => {
+      const { publishedAtTs, ...rest } = a;
+      return { ...rest, articleOrder: idx + 1 };
+    });
 
-return [
-  {
+  const hasArticles = articles.length > 0;
+
+  return {
     json: {
       ...item,
       articles,
       articles_count: articles.length,
+      hasArticles,
+      _articlesStatus: hasArticles ? "HAS_ARTICLES" : "NO_ARTICLES",
       articles_limit: LIMIT,
     },
-  },
-];
-
+    pairedItem: inItem.pairedItem,
+  };
+});
