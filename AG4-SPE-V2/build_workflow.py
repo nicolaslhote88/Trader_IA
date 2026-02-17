@@ -63,10 +63,10 @@ def build() -> dict:
             },
         },
         {
-            "parameters": {"jsCode": load_code("01_build_symbol_queue.js")},
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("01_build_symbol_queue.py")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [-1504, -96],
+            "position": [-1280, -96],
             "id": "3e1f6147-0f0f-4256-aab3-48af94afcc51",
             "name": "S01 - Build Symbol Queue",
         },
@@ -74,7 +74,7 @@ def build() -> dict:
             "parameters": {"language": "pythonNative", "pythonCode": load_code("00_duckdb_prepare.py")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [-1280, -96],
+            "position": [-1504, -96],
             "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
             "name": "S00B - DuckDB Init Schema",
         },
@@ -574,9 +574,9 @@ def build() -> dict:
     connections = {
         "Schedule Trigger": {"main": [[{"node": "S00A - Load Universe (Google Sheets)", "type": "main", "index": 0}]]},
         "Manual Trigger": {"main": [[{"node": "S00A - Load Universe (Google Sheets)", "type": "main", "index": 0}]]},
-        "S00A - Load Universe (Google Sheets)": {"main": [[{"node": "S01 - Build Symbol Queue", "type": "main", "index": 0}]]},
-        "S01 - Build Symbol Queue": {"main": [[{"node": "S00B - DuckDB Init Schema", "type": "main", "index": 0}]]},
-        "S00B - DuckDB Init Schema": {"main": [[{"node": "S02 - Start Run", "type": "main", "index": 0}]]},
+        "S00A - Load Universe (Google Sheets)": {"main": [[{"node": "S00B - DuckDB Init Schema", "type": "main", "index": 0}]]},
+        "S00B - DuckDB Init Schema": {"main": [[{"node": "S01 - Build Symbol Queue", "type": "main", "index": 0}]]},
+        "S01 - Build Symbol Queue": {"main": [[{"node": "S02 - Start Run", "type": "main", "index": 0}]]},
         "S02 - Start Run": {"main": [[{"node": "S03 - Split Symbols", "type": "main", "index": 0}]]},
         "S03 - Split Symbols": {
             "main": [

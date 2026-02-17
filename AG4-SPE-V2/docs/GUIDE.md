@@ -8,7 +8,7 @@ Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base dur
 ## Architecture
 1. Chargement de l'univers depuis Google Sheets (onglet `Universe`).
 2. Init DuckDB + creation schema (`universe_symbols`, `news_history`, `news_errors`, `run_log`).
-3. Queue rotative (batch 20 symboles par run).
+3. Queue rotative (batch 20 symboles par run) avec persistance d'offset dans DuckDB (`workflow_state`).
 4. Scraping de la page `cours/actualites/<ref>/` pour chaque symbole.
 5. Extraction + normalisation des URLs article.
 6. Dedupe via DuckDB (`news_id = sha1(symbol|canonical_url)`).
@@ -37,6 +37,7 @@ Le suivi vectoriel inclut dans `news_history`:
 - `news_history`
 - `news_errors`
 - `run_log`
+- `workflow_state`
 
 DB par defaut: `/files/duckdb/ag4_spe_v2.duckdb`
 

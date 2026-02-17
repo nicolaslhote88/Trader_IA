@@ -122,6 +122,13 @@ SCHEMA = [
       version VARCHAR DEFAULT '2.0.0'
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS workflow_state (
+      state_key VARCHAR PRIMARY KEY,
+      state_value VARCHAR,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
 ]
 
 
