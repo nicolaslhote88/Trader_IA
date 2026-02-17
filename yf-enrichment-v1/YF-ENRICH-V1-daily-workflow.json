@@ -1,0 +1,108 @@
+{
+  "name": "YF-ENRICH-V1 - Daily DuckDB Refresh",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 6 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -520,
+        -100
+      ],
+      "id": "8d6beff0-c3e8-41d0-87b8-2db9ff312001",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        60
+      ],
+      "id": "9c7cf1f4-b03d-41b2-a2e1-8c3cfab8b002",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "command": "sh -c 'SCRIPT=/workspace/yf-enrichment-v1/daily_enrichment.py; if [ ! -f \"$SCRIPT\" ]; then SCRIPT=/files/yf-enrichment-v1/daily_enrichment.py; fi; if [ ! -f \"$SCRIPT\" ]; then echo \"daily_enrichment.py not found (checked /workspace and /files)\"; exit 1; fi; python \"$SCRIPT\" --yf-enrich-db-path \"${YF_ENRICH_DB_PATH:-/files/duckdb/yf_enrichment_v1.duckdb}\" --ag2-db-path \"${AG2_DUCKDB_PATH:-/files/duckdb/ag2_v2.duckdb}\" --yf-api-url \"${YFINANCE_API_URL:-http://yfinance-api:8080}\" --target-days \"${YF_ENRICH_OPTIONS_TARGET_DAYS:-30}\" --quote-chunk-size \"${YF_ENRICH_QUOTE_CHUNK:-80}\" --timeout-sec \"${YF_ENRICH_TIMEOUT_SEC:-14}\"'",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        -20
+      ],
+      "id": "fd2d5da6-568d-4b9a-93e0-cc2e0cc26003",
+      "name": "Run Daily Enrichment",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 20000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first()?.json || {};\nconst out = {\n  at: new Date().toISOString(),\n  status: Number(r.exitCode) === 0 ? 'OK' : 'ERROR',\n  exitCode: r.exitCode,\n  stdout: r.stdout || '',\n  stderr: r.stderr || '',\n};\nreturn [{ json: out }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        -20
+      ],
+      "id": "ea54e773-1110-4e53-9021-2d7616cdf004",
+      "name": "Build Run Summary"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Daily Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Daily Enrichment",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Daily Enrichment": {
+      "main": [
+        [
+          {
+            "node": "Build Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}
