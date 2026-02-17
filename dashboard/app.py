@@ -27,6 +27,7 @@ DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
 AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
 AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v2.duckdb")
 AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb")
+YF_ENRICH_DUCKDB_PATH = os.getenv("YF_ENRICH_DUCKDB_PATH", "/files/duckdb/yf_enrichment_v1.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
 # ============================================================
@@ -212,7 +213,7 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(ttl=30)
 def load_duckdb_data() -> dict[str, pd.DataFrame]:
-    """Charge les donnees DuckDB AG2 (technique), AG3 (fondamentale), AG4 (macro), AG4-SPE (news symbole)."""
+    """Charge les donnees DuckDB AG2/AG3/AG4/AG4-SPE + enrichissement daily YF (quote/options/calendar)."""
     result = {
         "df_universe": pd.DataFrame(),
         "df_signals": pd.DataFrame(),
@@ -228,6 +229,9 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
         "df_news_symbol_history": pd.DataFrame(),
         "df_news_symbol_latest": pd.DataFrame(),
         "df_news_symbol_runs": pd.DataFrame(),
+        "df_yf_enrichment_latest": pd.DataFrame(),
+        "df_yf_enrichment_runs": pd.DataFrame(),
+        "df_yf_enrichment_history": pd.DataFrame(),
     }
 
     max_retries = 3
@@ -471,6 +475,55 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
                     """).fetchdf()
                 except Exception:
                     result["df_news_symbol_history"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # -------------------------------
+    # YF ENRICHMENT DAILY (quote/options/calendar)
+    # -------------------------------
+    if os.path.exists(YF_ENRICH_DUCKDB_PATH):
+        conn = _connect_readonly(YF_ENRICH_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_yf_enrichment_latest"] = conn.execute("""
+                        SELECT * FROM v_latest_symbol_enrichment ORDER BY symbol
+                    """).fetchdf()
+                except Exception:
+                    try:
+                        result["df_yf_enrichment_latest"] = conn.execute("""
+                            SELECT * EXCLUDE(rn)
+                            FROM (
+                              SELECT t.*,
+                                     ROW_NUMBER() OVER (
+                                       PARTITION BY t.symbol
+                                       ORDER BY COALESCE(t.fetched_at, t.created_at) DESC, t.created_at DESC
+                                     ) AS rn
+                              FROM yf_symbol_enrichment_history t
+                            )
+                            WHERE rn = 1
+                            ORDER BY symbol
+                        """).fetchdf()
+                    except Exception:
+                        result["df_yf_enrichment_latest"] = pd.DataFrame()
+
+                try:
+                    result["df_yf_enrichment_runs"] = conn.execute("""
+                        SELECT * FROM run_log ORDER BY started_at DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_yf_enrichment_runs"] = pd.DataFrame()
+
+                try:
+                    result["df_yf_enrichment_history"] = conn.execute("""
+                        SELECT * FROM yf_symbol_enrichment_history
+                        ORDER BY COALESCE(fetched_at, created_at) DESC, symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_yf_enrichment_history"] = pd.DataFrame()
             finally:
                 try:
                     conn.close()
@@ -948,8 +1001,9 @@ def _grade_from_prob(prob_score: float) -> str:
 def _build_multi_agent_matrix(
     consolidated: pd.DataFrame,
     df_portfolio: pd.DataFrame,
+    df_yf_enrichment_latest: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Build mechanical Risk/Reward matrix from AG2+AG3+AG4 with yfinance enrichments."""
+    """Build mechanical Risk/Reward matrix from AG2+AG3+AG4 with daily YF enrichment DuckDB."""
     if consolidated is None or consolidated.empty:
         return pd.DataFrame()
 
@@ -959,35 +1013,89 @@ def _build_multi_agent_matrix(
     if base.empty:
         return pd.DataFrame()
 
-    symbols = base["symbol"].drop_duplicates().tolist()
+    enrich = normalize_cols(df_yf_enrichment_latest.copy()) if df_yf_enrichment_latest is not None and not df_yf_enrichment_latest.empty else pd.DataFrame()
+    if not enrich.empty and "symbol" in enrich.columns:
+        enrich["symbol"] = enrich["symbol"].astype(str).str.strip().str.upper()
+        enrich = enrich[enrich["symbol"] != ""]
 
-    quote_df = fetch_yfinance_quote_batch(tuple(symbols), qty=100.0, side="BUY")
-    if quote_df is not None and not quote_df.empty and "symbol" in quote_df.columns:
-        keep_quote = [
+        col_map = {
+            "regular_market_price": "regularMarketPrice",
+            "bid_size": "bidSize",
+            "ask_size": "askSize",
+            "spread_pct": "spreadPct",
+            "spread_abs": "spreadAbs",
+            "slippage_proxy_pct": "slippageProxyPct",
+            "market_state": "marketState",
+            "exchange_data_delayed_by": "exchangeDataDelayedBy",
+            "iv_atm": "iv_atm",
+            "iv_atm_call": "iv_atm_call",
+            "iv_atm_put": "iv_atm_put",
+            "skew_put_minus_call_5pct": "iv_skew_put_minus_call_5pct",
+            "put_call_oi_ratio": "put_call_oi_ratio",
+            "put_call_volume_ratio": "put_call_volume_ratio",
+            "days_to_expiration": "days_to_expiration",
+            "expiration_selected": "expiration_selected",
+            "options_ok": "options_ok",
+            "options_error": "options_error",
+            "options_warning": "options_warning",
+            "next_earnings_date": "next_earnings_date",
+            "days_to_earnings": "days_to_earnings",
+            "calendar_ok": "calendar_ok",
+            "calendar_error": "calendar_error",
+            "fetched_at": "yf_fetched_at",
+        }
+        for src, dst in col_map.items():
+            if src in enrich.columns and dst not in enrich.columns:
+                enrich[dst] = enrich[src]
+
+        if "yf_fetched_at" in enrich.columns:
+            enrich["yf_fetched_at"] = pd.to_datetime(enrich["yf_fetched_at"], errors="coerce", utc=True)
+            enrich["yf_age_h"] = (pd.Timestamp.now(tz="UTC") - enrich["yf_fetched_at"]).dt.total_seconds() / 3600.0
+        else:
+            enrich["yf_age_h"] = pd.NA
+
+        keep_enrich = [
             "symbol",
             "regularMarketPrice",
             "bid",
             "ask",
             "bidSize",
             "askSize",
+            "spreadAbs",
             "spreadPct",
             "slippageProxyPct",
             "marketState",
             "exchangeDataDelayedBy",
+            "iv_atm",
+            "iv_atm_call",
+            "iv_atm_put",
+            "iv_skew_put_minus_call_5pct",
+            "put_call_oi_ratio",
+            "put_call_volume_ratio",
+            "days_to_expiration",
+            "expiration_selected",
+            "options_ok",
+            "options_error",
+            "options_warning",
+            "next_earnings_date",
+            "days_to_earnings",
+            "calendar_ok",
+            "calendar_error",
+            "yf_fetched_at",
+            "yf_age_h",
         ]
-        keep_quote = [c for c in keep_quote if c in quote_df.columns]
-        base = base.merge(quote_df[keep_quote].drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
-
-    opt_rows = [fetch_yfinance_options_snapshot(sym, target_days=30) for sym in symbols]
-    cal_rows = [fetch_yfinance_calendar_snapshot(sym) for sym in symbols]
-    if opt_rows:
-        df_opt = pd.DataFrame(opt_rows)
-        if "symbol" in df_opt.columns:
-            base = base.merge(df_opt.drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
-    if cal_rows:
-        df_cal = pd.DataFrame(cal_rows)
-        if "symbol" in df_cal.columns:
-            base = base.merge(df_cal.drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
+        keep_enrich = [c for c in keep_enrich if c in enrich.columns]
+        base = base.merge(enrich[keep_enrich].drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
+    else:
+        base["options_ok"] = False
+        base["options_error"] = "MISSING_ENRICHMENT_DATA"
+        base["options_warning"] = ""
+        base["days_to_earnings"] = pd.NA
+        base["iv_atm"] = pd.NA
+        base["spreadPct"] = pd.NA
+        base["slippageProxyPct"] = pd.NA
+        base["regularMarketPrice"] = pd.NA
+        base["yf_age_h"] = pd.NA
 
     sym_w_map, sec_w_map = _portfolio_exposure_maps(df_portfolio)
 
@@ -1073,13 +1181,24 @@ def _build_multi_agent_matrix(
         concentration_risk = min(100.0, max(0.0, sector_weight * 1.3 + symbol_weight * 1.1))
 
         iv_atm = pd.to_numeric(pd.Series([r.get("iv_atm", pd.NA)]), errors="coerce").iloc[0]
-        options_ok = bool(r.get("options_ok", False))
+        options_raw = str(r.get("options_ok", "")).strip().lower()
+        options_ok = options_raw in ("1", "true", "yes", "y")
         if options_ok and pd.notna(iv_atm) and float(iv_atm) > 0:
             iv_val = float(iv_atm)
             iv_as_pct = iv_val * 100.0 if iv_val <= 3 else iv_val
             options_risk = min(100.0, max(0.0, iv_as_pct * 1.8))
         else:
             options_risk = 45.0
+
+        yf_age_h = pd.to_numeric(pd.Series([r.get("yf_age_h", pd.NA)]), errors="coerce").iloc[0]
+        stale_penalty = 0.0
+        if pd.notna(yf_age_h):
+            if float(yf_age_h) > 72:
+                stale_penalty = 12.0
+            elif float(yf_age_h) > 36:
+                stale_penalty = 6.0
+            elif float(yf_age_h) > 24:
+                stale_penalty = 3.0
 
         risk_score_100 = (
             0.30 * funda_risk
@@ -1089,6 +1208,7 @@ def _build_multi_agent_matrix(
             + 0.10 * news_risk
             + 0.09 * concentration_risk
             + 0.05 * options_risk
+            + stale_penalty
         )
         risk_score_100 = max(0.0, min(100.0, risk_score_100))
 
@@ -1162,6 +1282,7 @@ def _build_multi_agent_matrix(
                 "options_ok": options_ok,
                 "options_error": str(r.get("options_error", "") or ""),
                 "options_warning": str(r.get("options_warning", "") or ""),
+                "has_enrichment": bool(pd.notna(r.get("yf_fetched_at"))) if "yf_fetched_at" in r.index else False,
                 "entry_price": entry,
                 "stop_price": stop,
                 "tp_price": tp,
@@ -3259,7 +3380,11 @@ elif page == "Vue consolidee Multi-Agents":
         st.warning("Aucune vue consolidee disponible. Verifiez les bases DuckDB AG2/AG3/AG4.")
         st.stop()
 
-    matrix_df = _build_multi_agent_matrix(consolidated, df_port)
+    matrix_df = _build_multi_agent_matrix(
+        consolidated,
+        df_port,
+        duckdb_data.get("df_yf_enrichment_latest", pd.DataFrame()),
+    )
     use_matrix = matrix_df is not None and not matrix_df.empty
     view_df = matrix_df if use_matrix else consolidated
 
@@ -3275,6 +3400,11 @@ elif page == "Vue consolidee Multi-Agents":
             grade_a = int(view_df.get("setup_grade", pd.Series(dtype=str)).astype(str).eq("A").sum())
             options_ok_series = view_df.get("options_ok", pd.Series(False, index=view_df.index)).fillna(False).astype(bool)
             opt_missing = int((~options_ok_series).sum())
+            enrich_cov = (
+                float(view_df.get("has_enrichment", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).mean()) * 100.0
+                if total_values
+                else 0.0
+            )
 
             g1, g2, g3, g4, g5, g6 = st.columns(6)
             g1.metric("Valeurs suivies", total_values)
@@ -3283,6 +3413,10 @@ elif page == "Vue consolidee Multi-Agents":
             g4.metric("Reduire / Sortir", exit_count)
             g5.metric("EV(R) moyen", f"{avg_ev:.2f}")
             g6.metric("Setups grade A", grade_a, delta=f"Options indispo: {opt_missing}")
+            if enrich_cov < 85:
+                st.warning(f"Couverture enrichissement YF insuffisante: {enrich_cov:.1f}% des symboles ont une ligne daily.")
+            else:
+                st.caption(f"Couverture enrichissement YF: {enrich_cov:.1f}%")
 
             st.caption(
                 "Legende matrice: Axe X = Score RISQUE (1 faible -> 5 eleve), "
