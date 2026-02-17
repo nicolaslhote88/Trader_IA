@@ -25,6 +25,8 @@ SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
 DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
 AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
+AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v2.duckdb")
+AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
 # ============================================================
@@ -120,11 +122,9 @@ def validate_configuration() -> bool:
         missing.append("GOOGLE_APPLICATION_CREDENTIALS")
 
     if missing:
-        st.error(f"Configuration manquante: {', '.join(missing)}")
         return False
 
     if not os.path.exists(CREDENTIALS_FILE):
-        st.error(f"Fichier de credentials introuvable: {CREDENTIALS_FILE}")
         return False
 
     return True
@@ -165,12 +165,6 @@ def load_data() -> dict[str, pd.DataFrame]:
         "Alerts": "Alerts",
         "Backfill_Queue": "Backfill_Queue",
         "Universe": "Universe",
-        "News_History": "News_History",
-        "AG3_Triage_History": "AG3_Triage_History",
-        "Technical_Analysis": "AG2 - étape 1 - sortie",
-        "Research_Notes": "Research_Notes",
-        "Analyst_Consensus": "research_analyst_consensus",
-        "news_raw_Symbol": "news_raw_Symbol",
     }
 
     data = {}
@@ -218,8 +212,9 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(ttl=30)
 def load_duckdb_data() -> dict[str, pd.DataFrame]:
-    """Charge les donnees DuckDB AG2 (technique) + AG3 (fondamentale)."""
+    """Charge les donnees DuckDB AG2 (technique), AG3 (fondamentale), AG4 (macro), AG4-SPE (news symbole)."""
     result = {
+        "df_universe": pd.DataFrame(),
         "df_signals": pd.DataFrame(),
         "df_runs": pd.DataFrame(),
         "df_signals_all": pd.DataFrame(),
@@ -228,6 +223,11 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
         "df_funda_history": pd.DataFrame(),
         "df_funda_consensus": pd.DataFrame(),
         "df_funda_metrics": pd.DataFrame(),
+        "df_news_macro_history": pd.DataFrame(),
+        "df_news_macro_runs": pd.DataFrame(),
+        "df_news_symbol_history": pd.DataFrame(),
+        "df_news_symbol_latest": pd.DataFrame(),
+        "df_news_symbol_runs": pd.DataFrame(),
     }
 
     max_retries = 3
@@ -255,6 +255,13 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
         conn = _connect_readonly(DUCKDB_PATH)
         if conn is not None:
             try:
+                try:
+                    result["df_universe"] = conn.execute("""
+                        SELECT * FROM universe ORDER BY symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_universe"] = pd.DataFrame()
+
                 try:
                     result["df_signals"] = conn.execute("""
                         SELECT ts.*
@@ -370,6 +377,100 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
                     """).fetchdf()
                 except Exception:
                     result["df_funda_metrics"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # -------------------------------
+    # AG4-V2 (News Macro)
+    # -------------------------------
+    if os.path.exists(AG4_DUCKDB_PATH):
+        conn = _connect_readonly(AG4_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_news_macro_history"] = conn.execute("""
+                        SELECT *
+                        FROM news_history
+                        WHERE COALESCE(type, 'macro') = 'macro'
+                        ORDER BY COALESCE(published_at, analyzed_at, last_seen_at, updated_at) DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_news_macro_history"] = pd.DataFrame()
+
+                try:
+                    result["df_news_macro_runs"] = conn.execute("""
+                        SELECT * FROM run_log ORDER BY started_at DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_news_macro_runs"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # -------------------------------
+    # AG4-SPE-V2 (News Symbole)
+    # -------------------------------
+    if os.path.exists(AG4_SPE_DUCKDB_PATH):
+        conn = _connect_readonly(AG4_SPE_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_news_symbol_history"] = conn.execute("""
+                        SELECT *
+                        FROM news_history
+                        ORDER BY COALESCE(published_at, analyzed_at, fetched_at, updated_at) DESC, symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_news_symbol_history"] = pd.DataFrame()
+
+                try:
+                    result["df_news_symbol_latest"] = conn.execute("""
+                        SELECT * EXCLUDE(rn)
+                        FROM (
+                          SELECT n.*,
+                                 ROW_NUMBER() OVER (
+                                   PARTITION BY n.symbol
+                                   ORDER BY COALESCE(n.published_at, n.analyzed_at, n.fetched_at, n.updated_at, n.created_at) DESC
+                                 ) AS rn
+                          FROM news_history n
+                        )
+                        WHERE rn = 1
+                        ORDER BY symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_news_symbol_latest"] = pd.DataFrame()
+
+                try:
+                    result["df_news_symbol_runs"] = conn.execute("""
+                        SELECT * FROM run_log ORDER BY started_at DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_news_symbol_runs"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # Fallback: si AG4-SPE vide, reutiliser les news "type=symbol" depuis AG4-V2.
+    if result["df_news_symbol_history"].empty and os.path.exists(AG4_DUCKDB_PATH):
+        conn = _connect_readonly(AG4_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_news_symbol_history"] = conn.execute("""
+                        SELECT *
+                        FROM news_history
+                        WHERE COALESCE(type, '') = 'symbol'
+                        ORDER BY COALESCE(published_at, analyzed_at, last_seen_at, updated_at) DESC
+                    """).fetchdf()
+                except Exception:
+                    result["df_news_symbol_history"] = pd.DataFrame()
             finally:
                 try:
                     conn.close()
@@ -1146,6 +1247,383 @@ def _estimate_scenario_probabilities(score: float, risk: float, upside_pct: floa
     return {"baissier": bear, "central": base, "haussier": bull}
 
 
+def _normalize_macro_news_df(df_macro: pd.DataFrame) -> pd.DataFrame:
+    cols = ["publishedat", "impactscore", "winners", "losers", "theme", "regime", "title", "snippet", "notes", "source", "action", "reason"]
+    if df_macro is None or df_macro.empty:
+        return pd.DataFrame(columns=cols)
+
+    wk = normalize_cols(df_macro.copy())
+    ts_col = _first_existing_column(
+        wk,
+        ["published_at", "publishedat", "analyzed_at", "analyzedat", "last_seen_at", "updated_at", "updatedat", "created_at"],
+    )
+    impact_col = _first_existing_column(wk, ["impact_score", "impactscore"])
+
+    wk["publishedat"] = pd.to_datetime(wk[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
+    wk["impactscore"] = safe_float_series(wk[impact_col]) if impact_col else 0.0
+
+    for c in ["winners", "losers", "theme", "regime", "title", "snippet", "notes", "source", "action", "reason"]:
+        if c not in wk.columns:
+            wk[c] = ""
+        wk[c] = wk[c].fillna("").astype(str)
+
+    keep = [c for c in cols if c in wk.columns]
+    out = wk[keep].copy()
+    if "publishedat" in out.columns:
+        out = out.sort_values("publishedat", ascending=False, na_position="last")
+    return out
+
+
+def _normalize_symbol_news_df(df_symbol_news: pd.DataFrame) -> pd.DataFrame:
+    cols = [
+        "symbol",
+        "publishedat",
+        "impactscore",
+        "companyname",
+        "title",
+        "summary",
+        "snippet",
+        "sentiment",
+        "urgency",
+        "confidence",
+        "action",
+        "reason",
+    ]
+    if df_symbol_news is None or df_symbol_news.empty:
+        return pd.DataFrame(columns=cols)
+
+    wk = normalize_cols(df_symbol_news.copy())
+    symbol_col = _first_existing_column(wk, ["symbol", "ticker", "symbols"])
+    ts_col = _first_existing_column(
+        wk,
+        ["published_at", "publishedat", "analyzed_at", "analyzedat", "fetched_at", "fetchedat", "updated_at", "updatedat", "created_at"],
+    )
+    impact_col = _first_existing_column(wk, ["impact_score", "impactscore"])
+    company_col = _first_existing_column(wk, ["company_name", "companyname", "name"])
+    conf_col = _first_existing_column(wk, ["confidence_score", "confidence"])
+
+    if symbol_col:
+        raw_symbol = wk[symbol_col].astype(str)
+        if symbol_col == "symbols":
+            raw_symbol = raw_symbol.str.replace(r"[\[\]'\" ]", "", regex=True).str.split(",").str[0]
+        wk["symbol"] = raw_symbol.str.strip().str.upper()
+    else:
+        wk["symbol"] = ""
+    wk["publishedat"] = pd.to_datetime(wk[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
+    wk["impactscore"] = safe_float_series(wk[impact_col]) if impact_col else 0.0
+    wk["companyname"] = wk[company_col].fillna("").astype(str) if company_col else ""
+    wk["confidence"] = safe_float_series(wk[conf_col]) if conf_col else 0.0
+
+    for c in ["title", "summary", "snippet", "sentiment", "urgency", "action", "reason"]:
+        if c not in wk.columns:
+            wk[c] = ""
+        wk[c] = wk[c].fillna("").astype(str)
+
+    out = wk[[c for c in cols if c in wk.columns]].copy()
+    out = out[out["symbol"] != ""]
+    if "publishedat" in out.columns:
+        out = out.sort_values("publishedat", ascending=False, na_position="last")
+    return out
+
+
+def _load_fundamentals_for_dashboard(duckdb_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    df = duckdb_data.get("df_funda_latest", pd.DataFrame())
+    if df is None or df.empty:
+        hist = duckdb_data.get("df_funda_history", pd.DataFrame())
+        if hist is None or hist.empty:
+            return pd.DataFrame()
+        wk = normalize_cols(hist.copy())
+        if "symbol" not in wk.columns:
+            return pd.DataFrame()
+        ts_col = _first_existing_column(wk, ["updated_at", "fetched_at", "created_at"])
+        if ts_col:
+            wk[ts_col] = pd.to_datetime(wk[ts_col], errors="coerce", utc=True)
+            wk = wk.dropna(subset=[ts_col]).sort_values(ts_col, ascending=False)
+        wk["symbol"] = wk["symbol"].astype(str).str.strip().str.upper()
+        df = wk.drop_duplicates(subset=["symbol"], keep="first")
+    else:
+        df = normalize_cols(df.copy())
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+
+    ren = {
+        "updated_at": "updatedat",
+        "fetched_at": "fetchedat",
+        "current_price": "lastprice",
+        "next_steps": "nextsteps",
+    }
+    for src, dst in ren.items():
+        if src in df.columns and dst not in df.columns:
+            df[dst] = df[src]
+    return df
+
+
+def _clean_context_token(v: object) -> str:
+    s = str(v or "").strip().lower()
+    if s in ("", "n/a", "na", "nan", "none", "unknown", "indefini", "indefinie", "indef"):
+        return ""
+    return s
+
+
+def _synthesis_conclusion(score: float, tech_action: str) -> str:
+    action = str(tech_action or "").upper().strip()
+    if score >= 75 and action == "BUY":
+        return "Conviction forte haussiere"
+    if score >= 65:
+        return "Biais positif (selectionnable)"
+    if score >= 50:
+        return "Neutre / Watch"
+    if score >= 35:
+        return "Prudence (risque eleve)"
+    return "Defensif / a eviter"
+
+
+def _prepare_multi_agent_view(
+    df_universe: pd.DataFrame,
+    df_tech_latest: pd.DataFrame,
+    df_funda_latest: pd.DataFrame,
+    df_macro_news: pd.DataFrame,
+    df_symbol_news: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    # Universe
+    u = normalize_cols(df_universe.copy()) if df_universe is not None and not df_universe.empty else pd.DataFrame()
+    if "symbol" in u.columns:
+        u["symbol"] = u["symbol"].astype(str).str.strip().str.upper()
+        u = u[u["symbol"] != ""]
+
+    # Tech latest
+    tech = normalize_cols(df_tech_latest.copy()) if df_tech_latest is not None and not df_tech_latest.empty else pd.DataFrame()
+    if "symbol" in tech.columns:
+        tech["symbol"] = tech["symbol"].astype(str).str.strip().str.upper()
+    action_col = _first_existing_column(tech, ["d1_action", "action", "signal"]) if not tech.empty else None
+    conf_col = _first_existing_column(tech, ["d1_confidence", "confidence", "d1_score"]) if not tech.empty else None
+    ts_col_tech = _first_existing_column(tech, ["workflow_date", "d1_date", "updated_at", "created_at"]) if not tech.empty else None
+    if ts_col_tech:
+        tech["last_tech_date"] = pd.to_datetime(tech[ts_col_tech], errors="coerce", utc=True)
+    else:
+        tech["last_tech_date"] = pd.NaT
+    if action_col:
+        tech["tech_action"] = tech[action_col].fillna("").astype(str).str.upper().str.strip()
+    else:
+        tech["tech_action"] = ""
+    tech["tech_confidence"] = safe_float_series(tech[conf_col]) if conf_col else 0.0
+    keep_tech = [c for c in ["symbol", "tech_action", "tech_confidence", "d1_rsi14", "d1_macd_hist", "last_tech_date"] if c in tech.columns]
+    tech = tech[keep_tech].drop_duplicates(subset=["symbol"], keep="first") if "symbol" in keep_tech else pd.DataFrame()
+
+    # Funda latest
+    funda = normalize_cols(df_funda_latest.copy()) if df_funda_latest is not None and not df_funda_latest.empty else pd.DataFrame()
+    if "symbol" in funda.columns:
+        funda["symbol"] = funda["symbol"].astype(str).str.strip().str.upper()
+    ts_col_funda = _first_existing_column(funda, ["updated_at", "fetched_at", "created_at", "updatedat"]) if not funda.empty else None
+    if ts_col_funda:
+        funda["last_funda_date"] = pd.to_datetime(funda[ts_col_funda], errors="coerce", utc=True)
+    else:
+        funda["last_funda_date"] = pd.NaT
+    score_col = _first_existing_column(funda, ["score", "funda_conf"]) if not funda.empty else None
+    risk_col = _first_existing_column(funda, ["risk_score"]) if not funda.empty else None
+    upside_col = _first_existing_column(funda, ["upside_pct"]) if not funda.empty else None
+    horizon_col = _first_existing_column(funda, ["horizon"]) if not funda.empty else None
+    funda["funda_score"] = safe_float_series(funda[score_col]) if score_col else 50.0
+    funda["funda_risk"] = safe_float_series(funda[risk_col]) if risk_col else 50.0
+    funda["funda_upside"] = safe_float_series(funda[upside_col]) if upside_col else 0.0
+    funda["funda_horizon"] = funda[horizon_col].fillna("").astype(str) if horizon_col else ""
+    if "name" in funda.columns:
+        funda["funda_name"] = funda["name"].fillna("").astype(str)
+    if "sector" in funda.columns:
+        funda["funda_sector"] = funda["sector"].fillna("").astype(str)
+    if "industry" in funda.columns:
+        funda["funda_industry"] = funda["industry"].fillna("").astype(str)
+    keep_funda = [c for c in ["symbol", "funda_name", "funda_sector", "funda_industry", "funda_score", "funda_risk", "funda_upside", "funda_horizon", "recommendation", "last_funda_date"] if c in funda.columns]
+    funda = funda[keep_funda].drop_duplicates(subset=["symbol"], keep="first") if "symbol" in keep_funda else pd.DataFrame()
+
+    # News
+    macro = _normalize_macro_news_df(df_macro_news)
+    sym_news = _normalize_symbol_news_df(df_symbol_news)
+
+    symbol_pool: set[str] = set()
+    for df, col in [(u, "symbol"), (tech, "symbol"), (funda, "symbol"), (sym_news, "symbol")]:
+        if df is not None and not df.empty and col in df.columns:
+            vals = df[col].dropna().astype(str).str.strip().str.upper()
+            symbol_pool.update([v for v in vals.tolist() if v])
+
+    base = pd.DataFrame({"symbol": sorted(symbol_pool)})
+    if base.empty:
+        return pd.DataFrame(), macro, sym_news
+
+    if not u.empty and "symbol" in u.columns:
+        cols_u = [c for c in ["symbol", "name", "sector", "industry"] if c in u.columns]
+        base = base.merge(u[cols_u].drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
+
+    for c in ["name", "sector", "industry"]:
+        if c not in base.columns:
+            base[c] = ""
+        base[c] = base[c].fillna("").astype(str)
+
+    if not tech.empty:
+        base = base.merge(tech, on="symbol", how="left")
+    if not funda.empty:
+        base = base.merge(funda, on="symbol", how="left")
+        for src, dst in [("funda_name", "name"), ("funda_sector", "sector"), ("funda_industry", "industry")]:
+            if src in base.columns:
+                current = base[dst].fillna("").astype(str) if dst in base.columns else pd.Series("", index=base.index, dtype=object)
+                fallback = base[src].fillna("").astype(str)
+                base[dst] = current.where(current.str.strip() != "", fallback)
+                base = base.drop(columns=[src])
+
+    # Aggregate symbol news by recency.
+    sym_agg = pd.DataFrame(columns=["symbol", "symbol_news_last_date", "symbol_news_count_7d", "symbol_news_count_30d", "symbol_news_impact_7d", "symbol_news_impact_30d"])
+    if not sym_news.empty and "symbol" in sym_news.columns and "publishedat" in sym_news.columns:
+        cut7 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7)
+        cut30 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=30)
+        wk = sym_news.copy()
+        wk["is_7d"] = wk["publishedat"] >= cut7
+        wk["is_30d"] = wk["publishedat"] >= cut30
+        wk["impact_7d"] = wk["impactscore"].where(wk["is_7d"], 0.0)
+        wk["impact_30d"] = wk["impactscore"].where(wk["is_30d"], 0.0)
+        sym_agg = (
+            wk.groupby("symbol", as_index=False)
+            .agg(
+                symbol_news_last_date=("publishedat", "max"),
+                symbol_news_count_7d=("is_7d", "sum"),
+                symbol_news_count_30d=("is_30d", "sum"),
+                symbol_news_impact_7d=("impact_7d", "sum"),
+                symbol_news_impact_30d=("impact_30d", "sum"),
+            )
+        )
+
+    base = base.merge(sym_agg, on="symbol", how="left")
+
+    # Aggregate macro context by sector/industry matching.
+    base["sector_token"] = base["sector"].map(_clean_context_token)
+    base["industry_token"] = base["industry"].map(_clean_context_token)
+
+    macro_map_rows = []
+    if not macro.empty:
+        cut30 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=30)
+        macro_recent = macro[macro["publishedat"] >= cut30].copy() if "publishedat" in macro.columns else macro.copy()
+        if not macro_recent.empty:
+            text_cols = [c for c in ["theme", "title", "snippet", "notes", "winners", "losers", "regime", "source"] if c in macro_recent.columns]
+            if text_cols:
+                macro_recent["_ctx"] = macro_recent[text_cols].fillna("").astype(str).agg(" ".join, axis=1).str.lower()
+            else:
+                macro_recent["_ctx"] = ""
+        else:
+            macro_recent["_ctx"] = ""
+    else:
+        macro_recent = pd.DataFrame(columns=["publishedat", "impactscore", "_ctx", "theme"])
+
+    for sec, ind in base[["sector_token", "industry_token"]].drop_duplicates().itertuples(index=False):
+        if macro_recent.empty or (not sec and not ind):
+            macro_map_rows.append(
+                {
+                    "sector_token": sec,
+                    "industry_token": ind,
+                    "macro_news_count_30d": 0,
+                    "macro_impact_30d": 0.0,
+                    "macro_last_date": pd.NaT,
+                    "macro_themes": "",
+                }
+            )
+            continue
+
+        mask = pd.Series(False, index=macro_recent.index)
+        if sec:
+            mask = mask | macro_recent["_ctx"].str.contains(re.escape(sec), regex=True, na=False)
+        if ind and ind != sec:
+            mask = mask | macro_recent["_ctx"].str.contains(re.escape(ind), regex=True, na=False)
+
+        matched = macro_recent[mask]
+        if matched.empty:
+            macro_map_rows.append(
+                {
+                    "sector_token": sec,
+                    "industry_token": ind,
+                    "macro_news_count_30d": 0,
+                    "macro_impact_30d": 0.0,
+                    "macro_last_date": pd.NaT,
+                    "macro_themes": "",
+                }
+            )
+            continue
+
+        themes = (
+            matched.get("theme", pd.Series(dtype=str))
+            .fillna("")
+            .astype(str)
+            .str.strip()
+            .replace("", pd.NA)
+            .dropna()
+            .value_counts()
+            .head(2)
+            .index
+            .tolist()
+        )
+        macro_map_rows.append(
+            {
+                "sector_token": sec,
+                "industry_token": ind,
+                "macro_news_count_30d": int(len(matched)),
+                "macro_impact_30d": float(matched["impactscore"].sum()) if "impactscore" in matched.columns else 0.0,
+                "macro_last_date": matched["publishedat"].max() if "publishedat" in matched.columns else pd.NaT,
+                "macro_themes": ", ".join(themes),
+            }
+        )
+
+    macro_map = pd.DataFrame(macro_map_rows)
+    if not macro_map.empty:
+        base = base.merge(macro_map, on=["sector_token", "industry_token"], how="left")
+
+    # Fill defaults.
+    for c in [
+        "tech_action",
+        "funda_horizon",
+        "recommendation",
+        "macro_themes",
+    ]:
+        if c not in base.columns:
+            base[c] = ""
+        base[c] = base[c].fillna("").astype(str)
+
+    for c in [
+        "tech_confidence",
+        "funda_score",
+        "funda_risk",
+        "funda_upside",
+        "symbol_news_count_7d",
+        "symbol_news_count_30d",
+        "symbol_news_impact_7d",
+        "symbol_news_impact_30d",
+        "macro_news_count_30d",
+        "macro_impact_30d",
+    ]:
+        if c not in base.columns:
+            base[c] = 0.0
+        base[c] = pd.to_numeric(base[c], errors="coerce").fillna(0.0)
+
+    if "symbol_news_last_date" not in base.columns:
+        base["symbol_news_last_date"] = pd.NaT
+    if "macro_last_date" not in base.columns:
+        base["macro_last_date"] = pd.NaT
+
+    # Composite score and conclusion.
+    action_upper = base["tech_action"].str.upper()
+    tech_component = action_upper.map({"BUY": 18.0, "SELL": -18.0}).fillna(0.0)
+    funda_component = ((base["funda_score"] - 50.0) / 50.0) * 22.0
+    risk_penalty = (base["funda_risk"] - 55.0).clip(lower=0) * 0.35
+    symbol_news_component = (base["symbol_news_impact_7d"].clip(-8, 8) * 1.7) + (base["symbol_news_count_7d"].clip(0, 6) * 0.8)
+    macro_component = base["macro_impact_30d"].clip(-10, 10) * 1.2
+
+    base["conviction_score"] = (50.0 + tech_component + funda_component + symbol_news_component + macro_component - risk_penalty).clip(0, 100).round(1)
+    base["conclusion"] = base.apply(
+        lambda r: _synthesis_conclusion(float(r.get("conviction_score", 50.0)), str(r.get("tech_action", ""))),
+        axis=1,
+    )
+    base["last_news_date"] = base["symbol_news_last_date"].combine_first(base["macro_last_date"])
+
+    base = base.sort_values("conviction_score", ascending=False, na_position="last").reset_index(drop=True)
+    return base, macro, sym_news
+
+
 # ============================================================
 # MAIN APP
 # ============================================================
@@ -1156,6 +1634,7 @@ page = st.sidebar.radio(
     [
         "📊 Dashboard Trading",
         "🛠️ System Health (Monitoring)",
+        "🧭 Vue consolidee Multi-Agents",
         "📈 Analyse Technique V2",
         "📚 Analyse Fondamentale V2",
     ],
@@ -1163,7 +1642,7 @@ page = st.sidebar.radio(
 
 data_dict = load_data()
 if not data_dict:
-    st.warning("Donnees Google Sheets indisponibles. Seules les pages d'analyse V2 (Technique/Fondamentale) peuvent fonctionner.")
+    st.warning("Donnees Google Sheets indisponibles. Les vues basees DuckDB (System Health, Vue consolidee, Analyse V2) restent disponibles.")
 
 # Load DuckDB data (non-blocking)
 duckdb_data = load_duckdb_data()
@@ -1173,6 +1652,8 @@ duckdb_data = load_duckdb_data()
 # ------------------------------------------------------------
 
 df_univ = data_dict.get("Universe", pd.DataFrame()) if data_dict else pd.DataFrame()
+if (df_univ is None or df_univ.empty) and duckdb_data:
+    df_univ = duckdb_data.get("df_universe", pd.DataFrame())
 df_port = enrich_df_with_name(data_dict.get("Portefeuille", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
 df_perf = data_dict.get("Performance", pd.DataFrame()) if data_dict else pd.DataFrame()
 df_trans = enrich_df_with_name(data_dict.get("Transactions", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
@@ -1573,9 +2054,10 @@ if page == "📊 Dashboard Trading":
 
     # TAB 4: MARCHE & RECHERCHE
     with t4:
-        df_news = data_dict.get("News_History", pd.DataFrame())
-        df_news_sym = data_dict.get("news_raw_Symbol", pd.DataFrame())
-        df_res = enrich_df_with_name(data_dict.get("AG3_Triage_History", pd.DataFrame()), df_univ)
+        df_news = _normalize_macro_news_df(duckdb_data.get("df_news_macro_history", pd.DataFrame()))
+        df_news_sym = _normalize_symbol_news_df(duckdb_data.get("df_news_symbol_history", pd.DataFrame()))
+        df_res = _load_fundamentals_for_dashboard(duckdb_data)
+        df_res = enrich_df_with_name(df_res, df_univ)
 
         st_macro, st_research = st.tabs(["🌍 Macro & Buzz", "🔬 Recherche"])
 
@@ -1770,10 +2252,6 @@ if page == "📊 Dashboard Trading":
 # ============================================================
 
 elif page == "🛠️ System Health (Monitoring)":
-    if not data_dict:
-        st.error("Donnees Google Sheets requises pour cette page.")
-        st.stop()
-
     st.title("🛠️ Tour de Contrôle")
 
     if st.button("🔄 Rafraîchir"):
@@ -1781,20 +2259,41 @@ elif page == "🛠️ System Health (Monitoring)":
         load_duckdb_data.clear()
         st.rerun()
 
-    df_univ2 = data_dict.get("Universe", pd.DataFrame())
-    df_news_hist = data_dict.get("news_raw_Symbol", pd.DataFrame())
+    df_univ2 = df_univ.copy() if df_univ is not None else pd.DataFrame()
+    df_news_hist = _normalize_symbol_news_df(duckdb_data.get("df_news_symbol_history", pd.DataFrame()))
 
-    # Proxy confiance si présent
-    df_funda_hist = data_dict.get("AG3_Triage_History", pd.DataFrame())
+    # Fondamentale AG3 depuis DuckDB (history + latest consensus)
+    df_funda_hist = normalize_cols(duckdb_data.get("df_funda_history", pd.DataFrame()).copy())
+    df_research_notes = df_funda_hist.copy()
+    df_consensus = normalize_cols(duckdb_data.get("df_funda_consensus", pd.DataFrame()).copy())
 
-    # Split fondamental IA
-    df_research_notes = data_dict.get("Research_Notes", pd.DataFrame())
+    # Technique AG2 depuis DuckDB
+    df_tech_hist = normalize_cols(duckdb_data.get("df_signals_all", pd.DataFrame()).copy())
 
-    # Split fondamental Consensus
-    df_consensus = data_dict.get("Analyst_Consensus", pd.DataFrame())
+    # Homogeneisation colonnes pour reutiliser la logique existante.
+    if df_funda_hist is not None and not df_funda_hist.empty:
+        if "updated_at" in df_funda_hist.columns and "updatedat" not in df_funda_hist.columns:
+            df_funda_hist["updatedat"] = df_funda_hist["updated_at"]
+        if "fetched_at" in df_funda_hist.columns and "fetchedat" not in df_funda_hist.columns:
+            df_funda_hist["fetchedat"] = df_funda_hist["fetched_at"]
 
-    # Technique H1/D1
-    df_tech_hist = data_dict.get("Technical_Analysis", pd.DataFrame())
+    if df_research_notes is not None and not df_research_notes.empty:
+        if "updated_at" in df_research_notes.columns and "updatedat" not in df_research_notes.columns:
+            df_research_notes["updatedat"] = df_research_notes["updated_at"]
+        if "fetched_at" in df_research_notes.columns and "fetchedat" not in df_research_notes.columns:
+            df_research_notes["fetchedat"] = df_research_notes["fetched_at"]
+
+    if df_consensus is not None and not df_consensus.empty:
+        if "updated_at" in df_consensus.columns and "updatedat" not in df_consensus.columns:
+            df_consensus["updatedat"] = df_consensus["updated_at"]
+        if "recommendation_mean" in df_consensus.columns and "mediannote" not in df_consensus.columns:
+            df_consensus["mediannote"] = df_consensus["recommendation_mean"]
+        if "recommendation" in df_consensus.columns and "consensus_view" not in df_consensus.columns:
+            df_consensus["consensus_view"] = df_consensus["recommendation"]
+
+    if df_tech_hist is not None and not df_tech_hist.empty:
+        if "workflow_date" in df_tech_hist.columns and "date" not in df_tech_hist.columns:
+            df_tech_hist["date"] = df_tech_hist["workflow_date"]
 
     if df_univ2 is None or df_univ2.empty:
         st.warning("Univers vide.")
@@ -2234,7 +2733,216 @@ elif page == "🛠️ System Health (Monitoring)":
 
 
 # ============================================================
-# PAGE 3: ANALYSE TECHNIQUE V2
+# PAGE 3: VUE CONSOLIDEE MULTI-AGENTS
+# ============================================================
+
+elif page == "🧭 Vue consolidee Multi-Agents":
+    st.title("🧭 Vue consolidee AG2 + AG3 + AG4")
+
+    if st.button("🔄 Rafraichir", key="refresh_multi_agents"):
+        load_data.clear()
+        load_duckdb_data.clear()
+        st.rerun()
+
+    df_funda_for_view = _load_fundamentals_for_dashboard(duckdb_data)
+    consolidated, macro_news_norm, symbol_news_norm = _prepare_multi_agent_view(
+        df_universe=df_univ,
+        df_tech_latest=duckdb_data.get("df_signals", pd.DataFrame()),
+        df_funda_latest=df_funda_for_view,
+        df_macro_news=duckdb_data.get("df_news_macro_history", pd.DataFrame()),
+        df_symbol_news=duckdb_data.get("df_news_symbol_history", pd.DataFrame()),
+    )
+
+    if consolidated is None or consolidated.empty:
+        st.warning("Aucune vue consolidee disponible. Verifiez les bases DuckDB AG2/AG3/AG4.")
+        st.stop()
+
+    tab_global, tab_symbol = st.tabs(["Vue globale", "Vue par valeur"])
+
+    with tab_global:
+        avg_conv = float(consolidated["conviction_score"].mean()) if "conviction_score" in consolidated.columns else 0.0
+        bullish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("BUY").sum())
+        bearish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("SELL").sum())
+        hot = int((consolidated.get("conviction_score", pd.Series(dtype=float)) >= 70).sum())
+        at_risk = int((consolidated.get("conviction_score", pd.Series(dtype=float)) < 40).sum())
+
+        g1, g2, g3, g4, g5 = st.columns(5)
+        g1.metric("Valeurs suivies", len(consolidated))
+        g2.metric("Conviction moyenne", f"{avg_conv:.1f}/100")
+        g3.metric("Biais BUY", bullish)
+        g4.metric("Biais SELL", bearish)
+        g5.metric("Alerte (<40)", at_risk, delta=f"{hot} >= 70")
+
+        plot_df = consolidated.copy()
+        if "sector" not in plot_df.columns:
+            plot_df["sector"] = "N/A"
+        plot_df["bubble_size"] = (
+            plot_df.get("symbol_news_count_30d", pd.Series(0, index=plot_df.index))
+            + plot_df.get("macro_news_count_30d", pd.Series(0, index=plot_df.index))
+        ).clip(lower=1)
+
+        fig = px.scatter(
+            plot_df,
+            x="funda_risk",
+            y="conviction_score",
+            color="sector",
+            size="bubble_size",
+            hover_name="symbol",
+            hover_data={
+                "name": True,
+                "tech_action": True,
+                "funda_score": ":.1f",
+                "funda_upside": ":.1f",
+                "symbol_news_impact_7d": ":.1f",
+                "macro_impact_30d": ":.1f",
+                "bubble_size": False,
+            },
+            labels={"funda_risk": "Risque fondamental", "conviction_score": "Conviction consolidee"},
+            title="Carte globale conviction vs risque",
+        )
+        fig.add_hline(y=70, line_dash="dot", line_color="#28a745")
+        fig.add_hline(y=40, line_dash="dot", line_color="#dc3545")
+        fig.add_vline(x=60, line_dash="dot", line_color="#dc3545")
+        fig.update_layout(height=520)
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("#### Priorisation globale")
+        table_cols = [
+            "symbol",
+            "name",
+            "sector",
+            "tech_action",
+            "funda_score",
+            "funda_risk",
+            "funda_upside",
+            "symbol_news_impact_7d",
+            "macro_impact_30d",
+            "conviction_score",
+            "conclusion",
+        ]
+        show_cols = [c for c in table_cols if c in consolidated.columns]
+        render_interactive_table(
+            consolidated[show_cols].rename(
+                columns={
+                    "symbol": "Symbole",
+                    "name": "Nom",
+                    "sector": "Secteur",
+                    "tech_action": "Signal Tech",
+                    "funda_score": "Score Funda",
+                    "funda_risk": "Risque",
+                    "funda_upside": "Upside %",
+                    "symbol_news_impact_7d": "Impact News 7j",
+                    "macro_impact_30d": "Impact Macro 30j",
+                    "conviction_score": "Conviction",
+                    "conclusion": "Conclusion",
+                }
+            ),
+            key_suffix="multi_agents_global",
+            height=460,
+        )
+
+    with tab_symbol:
+        labels = []
+        label_to_symbol = {}
+        for _, row in consolidated.iterrows():
+            sym = str(row.get("symbol", "")).strip()
+            if not sym:
+                continue
+            name = str(row.get("name", "")).strip()
+            lbl = f"{sym} - {name}" if name else sym
+            labels.append(lbl)
+            label_to_symbol[lbl] = sym
+
+        if not labels:
+            st.info("Aucune valeur disponible.")
+        else:
+            selected_label = st.selectbox("Selectionner une valeur", labels, key="multi_agents_symbol")
+            selected_symbol = label_to_symbol[selected_label]
+            row = consolidated[consolidated["symbol"] == selected_symbol].iloc[0]
+
+            s1, s2, s3, s4, s5, s6 = st.columns(6)
+            s1.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100", delta=str(row.get("conclusion", "")))
+            s2.metric("Tech", str(row.get("tech_action", "N/A")))
+            s3.metric("Funda", f"{safe_float(row.get('funda_score', 0)):.0f}/100")
+            s4.metric("Risque", f"{safe_float(row.get('funda_risk', 0)):.0f}/100")
+            s5.metric("Upside", f"{safe_float(row.get('funda_upside', 0)):.1f}%")
+            s6.metric("News 7j", f"{safe_float(row.get('symbol_news_impact_7d', 0)):.1f}")
+
+            st.markdown("#### Conclusion de synthese")
+            st.write(
+                f"{selected_symbol}: {row.get('conclusion', '')}. "
+                f"Macro 30j={safe_float(row.get('macro_impact_30d', 0)):.1f}, "
+                f"News symbole 7j={safe_float(row.get('symbol_news_impact_7d', 0)):.1f}, "
+                f"themes macro dominants={row.get('macro_themes', '') or 'N/A'}."
+            )
+
+            st.divider()
+            c_left, c_right = st.columns(2)
+
+            with c_left:
+                st.markdown("#### News macro reliees (30j)")
+                sec = _clean_context_token(row.get("sector", ""))
+                ind = _clean_context_token(row.get("industry", ""))
+                macro_show = macro_news_norm.copy()
+                if not macro_show.empty:
+                    text_cols = [c for c in ["theme", "title", "snippet", "notes", "winners", "losers", "regime"] if c in macro_show.columns]
+                    macro_show["_ctx"] = macro_show[text_cols].fillna("").astype(str).agg(" ".join, axis=1).str.lower() if text_cols else ""
+                    mask = pd.Series(False, index=macro_show.index)
+                    if sec:
+                        mask = mask | macro_show["_ctx"].str.contains(re.escape(sec), regex=True, na=False)
+                    if ind and ind != sec:
+                        mask = mask | macro_show["_ctx"].str.contains(re.escape(ind), regex=True, na=False)
+                    cut30 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=30)
+                    macro_show = macro_show[(macro_show["publishedat"] >= cut30) & mask].copy()
+                if macro_show.empty:
+                    st.caption("Aucune news macro reliee sur 30 jours.")
+                else:
+                    cols = [c for c in ["publishedat", "theme", "title", "impactscore", "regime", "winners", "losers"] if c in macro_show.columns]
+                    render_interactive_table(
+                        macro_show[cols].rename(
+                            columns={
+                                "publishedat": "Date",
+                                "theme": "Theme",
+                                "title": "Titre",
+                                "impactscore": "Impact",
+                                "regime": "Regime",
+                                "winners": "Winners",
+                                "losers": "Losers",
+                            }
+                        ),
+                        key_suffix=f"macro_symbol_{selected_symbol}",
+                        height=320,
+                    )
+
+            with c_right:
+                st.markdown("#### News specifiques symbole (30j)")
+                sym_show = symbol_news_norm.copy()
+                if not sym_show.empty:
+                    cut30 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=30)
+                    sym_show = sym_show[(sym_show["symbol"] == selected_symbol) & (sym_show["publishedat"] >= cut30)].copy()
+                if sym_show.empty:
+                    st.caption("Aucune news specifique sur 30 jours.")
+                else:
+                    cols = [c for c in ["publishedat", "title", "impactscore", "sentiment", "urgency", "confidence", "summary"] if c in sym_show.columns]
+                    render_interactive_table(
+                        sym_show[cols].rename(
+                            columns={
+                                "publishedat": "Date",
+                                "title": "Titre",
+                                "impactscore": "Impact",
+                                "sentiment": "Sentiment",
+                                "urgency": "Urgence",
+                                "confidence": "Confiance",
+                                "summary": "Resume",
+                            }
+                        ),
+                        key_suffix=f"symbol_news_{selected_symbol}",
+                        height=320,
+                    )
+
+
+# ============================================================
+# PAGE 4: ANALYSE TECHNIQUE V2
 # ============================================================
 
 elif page == "📈 Analyse Technique V2":
