@@ -847,6 +847,42 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _append_current_efficiency_point(
+    eff_df: pd.DataFrame,
+    *,
+    total_value: float,
+    cash_value: float,
+    invested_value: float,
+) -> pd.DataFrame:
+    cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
+    now_ts = pd.Timestamp.now()
+    cur = pd.DataFrame(
+        [
+            {
+                "timestamp": now_ts,
+                "total_value": float(total_value),
+                "cash_value": float(cash_value),
+                "equity_value": float(invested_value),
+                "invested_value": float(invested_value),
+            }
+        ]
+    )
+
+    if eff_df is None or eff_df.empty:
+        return cur[cols]
+
+    base = eff_df.copy()
+    for c in cols:
+        if c not in base.columns:
+            base[c] = pd.NA
+
+    out = pd.concat([base[cols], cur[cols]], ignore_index=True)
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
+    out = out.drop_duplicates(subset=["timestamp"], keep="last")
+    return out.reset_index(drop=True)
+
+
 def _prepare_transactions(df_trans: pd.DataFrame) -> pd.DataFrame:
     cols = [
         "timestamp",
@@ -1899,11 +1935,18 @@ if page == "📊 Dashboard Trading":
             if perf_ts.empty:
                 st.info("Donnees insuffisantes pour l'efficacite du capital.")
             else:
-                eff = perf_ts.copy()
+                eff = _append_current_efficiency_point(
+                    perf_ts.copy(),
+                    total_value=total_val,
+                    cash_value=cash,
+                    invested_value=invest,
+                )
                 eff["total_value"] = eff["total_value"].replace(0, pd.NA)
                 eff["cash_pct"] = (eff["cash_value"] / eff["total_value"] * 100).fillna(0.0).clip(lower=0, upper=100)
                 eff["invested_pct"] = (eff["invested_value"] / eff["total_value"] * 100).fillna(0.0).clip(lower=0, upper=100)
                 eff["roi_pct"] = ((eff["total_value"] / init_cap) - 1.0) * 100 if init_cap else 0.0
+                inv_base = eff["invested_value"].replace(0, pd.NA)
+                eff["roic_pct"] = ((eff["total_value"] - init_cap) / inv_base) * 100
                 eff = eff.fillna(0.0)
 
                 fig_eff = go.Figure()
@@ -1937,18 +1980,27 @@ if page == "📊 Dashboard Trading":
                         line=dict(width=2.5, color="#ff9d00"),
                     )
                 )
+                fig_eff.add_trace(
+                    go.Scatter(
+                        x=eff["timestamp"],
+                        y=eff["roic_pct"],
+                        mode="lines",
+                        name="ROIC",
+                        yaxis="y2",
+                        line=dict(width=2.3, color="#00d084", dash="dot"),
+                    )
+                )
                 fig_eff.update_layout(
-                    title="Exposition capital vs performance",
+                    title="Exposition capital vs performance (ROI + ROIC)",
                     height=380,
                     margin=dict(t=50, b=20, l=20, r=20),
                     yaxis=dict(title="Allocation (%)", range=[0, 100]),
-                    yaxis2=dict(title="ROI (%)", overlaying="y", side="right", showgrid=False),
+                    yaxis2=dict(title="ROI / ROIC (%)", overlaying="y", side="right", showgrid=False),
                 )
                 st.plotly_chart(fig_eff, use_container_width=True)
 
-                avg_invested = float(eff["invested_value"].mean()) if "invested_value" in eff.columns else 0.0
                 roi_global_pct = (total_gain / init_cap * 100) if init_cap else 0.0
-                roic_pct = (total_gain / avg_invested * 100) if avg_invested > 0 else 0.0
+                roic_pct = (total_gain / invest * 100) if invest > 0 else 0.0
                 gauge_axis = max(20.0, abs(roi_global_pct), abs(roic_pct)) * 1.25
 
                 g1, g2 = st.columns(2)
@@ -1963,14 +2015,15 @@ if page == "📊 Dashboard Trading":
                         use_container_width=True,
                     )
                 st.caption(
-                    f"Montant moyen investi: {avg_invested:,.2f} EUR | "
-                    "ROIC = Gains / montant moyen investi"
+                    "ROI = (Valeur totale - Capital initial) / Capital initial. "
+                    f"ROIC = (Valeur totale - Capital initial) / Capital investi a date ({invest:,.2f} EUR). "
+                    "La courbe est ancree avec un point courant portefeuille pour aligner la derniere valeur avec les KPI."
                 )
 
         with v_quality:
             quality_df = _build_trade_quality_dataframe(tx_norm)
             hist_df = quality_df.dropna(subset=["trade_return_pct"]) if not quality_df.empty else pd.DataFrame()
-            scat_df = quality_df.dropna(subset=["duration_days", "trade_return_pct"]) if not quality_df.empty else pd.DataFrame()
+            dur_df = quality_df.dropna(subset=["duration_days"]) if not quality_df.empty else pd.DataFrame()
 
             if hist_df.empty:
                 st.info("Pas assez de trades closes pour analyser la distribution des returns.")
@@ -1985,22 +2038,50 @@ if page == "📊 Dashboard Trading":
                 fig_hist.update_layout(height=340, margin=dict(t=50, b=20, l=20, r=20))
                 st.plotly_chart(fig_hist, use_container_width=True)
 
-            if scat_df.empty:
-                st.info("Pas assez d'historique pour le nuage Duree vs ROI.")
+            if dur_df.empty:
+                st.info("Pas assez d'historique pour la distribution des durees de detention.")
             else:
-                fig_scatter = px.scatter(
-                    scat_df,
-                    x="duration_days",
-                    y="trade_return_pct",
-                    color="agent_label",
-                    hover_data=["symbol", "realized_pnl"],
-                    title="Duree de detention vs ROI",
+                bins = [-0.001, 1, 3, 7, 14, 21, 30, 45, 60, 90, 120, 180, 365, float("inf")]
+                labels = [
+                    "<=1j", "2-3j", "4-7j", "8-14j", "15-21j", "22-30j",
+                    "31-45j", "46-60j", "61-90j", "91-120j", "121-180j", "181-365j", ">365j",
+                ]
+                dur_work = dur_df.copy()
+                dur_work["duration_bucket"] = pd.cut(
+                    dur_work["duration_days"].astype(float),
+                    bins=bins,
+                    labels=labels,
+                    include_lowest=True,
                 )
-                fig_scatter.add_hline(y=0, line_dash="dash", line_color="#999")
-                fig_scatter.update_layout(height=360, margin=dict(t=50, b=20, l=20, r=20))
-                st.plotly_chart(fig_scatter, use_container_width=True)
+                dist = (
+                    dur_work.groupby("duration_bucket", observed=False)
+                    .size()
+                    .reindex(labels, fill_value=0)
+                    .reset_index(name="count")
+                )
+                fig_dur = px.bar(
+                    dist,
+                    x="duration_bucket",
+                    y="count",
+                    text="count",
+                    title="Distribution des durees de detention (classes)",
+                    labels={"duration_bucket": "Classe de duree", "count": "Nombre de positions closes"},
+                )
+                fig_dur.update_layout(height=360, margin=dict(t=50, b=20, l=20, r=20))
+                st.plotly_chart(fig_dur, use_container_width=True)
+                st.caption("Objectif: visualiser la forme de distribution des durees de detention (profil court, swing, long).")
 
         with v_risk:
+            st.markdown(
+                "Lecture rapide: le drawdown mesure l'ecart (%) entre la valeur du portefeuille et son plus-haut historique."
+            )
+            st.markdown(
+                "- `0%` : nouveau plus-haut.\n"
+                "- valeur negative : perte temporaire depuis le dernier pic.\n"
+                "- `Max Drawdown` : pire creux observe sur la periode."
+            )
+
+            cards = _compute_risk_scorecards(perf_ts, tx_norm)
             underwater = _build_underwater_dataframe(perf_ts)
             if underwater.empty:
                 st.info("Pas d'historique suffisant pour le drawdown.")
@@ -2013,25 +2094,55 @@ if page == "📊 Dashboard Trading":
                         mode="lines",
                         fill="tozeroy",
                         line=dict(color="#dc3545", width=2),
-                        name="Drawdown %",
+                        name="Drawdown",
+                        hovertemplate="%{x|%Y-%m-%d}<br>Drawdown: %{y:.2f}%<extra></extra>",
                     )
                 )
+                fig_dd.add_hline(
+                    y=float(cards.get("max_drawdown_pct", 0.0)),
+                    line_dash="dot",
+                    line_color="#ff9d00",
+                    annotation_text=f"Max DD: {float(cards.get('max_drawdown_pct', 0.0)):.2f}%",
+                    annotation_position="bottom right",
+                )
                 fig_dd.update_layout(
-                    title="Underwater plot (drawdown)",
-                    height=340,
+                    title="Drawdown du portefeuille (ecart au plus-haut)",
+                    height=360,
                     margin=dict(t=50, b=20, l=20, r=20),
-                    yaxis=dict(title="Drawdown %"),
+                    yaxis=dict(title="Drawdown", ticksuffix="%"),
                 )
                 st.plotly_chart(fig_dd, use_container_width=True)
 
-            cards = _compute_risk_scorecards(perf_ts, tx_norm)
+            if perf_ts is not None and not perf_ts.empty:
+                ret = (
+                    perf_ts["total_value"]
+                    .pct_change()
+                    .replace([float("inf"), float("-inf")], pd.NA)
+                    .dropna()
+                    * 100
+                )
+                if not ret.empty:
+                    fig_ret = px.histogram(
+                        ret.to_frame(name="ret"),
+                        x="ret",
+                        nbins=30,
+                        title="Distribution des variations periodiques (%)",
+                        labels={"ret": "Variation (%)"},
+                    )
+                    fig_ret.add_vline(x=0, line_dash="dash", line_color="#999")
+                    fig_ret.update_layout(height=280, margin=dict(t=45, b=20, l=20, r=20))
+                    st.plotly_chart(fig_ret, use_container_width=True)
+
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Sharpe Ratio", f"{cards['sharpe']:.2f}")
             pf_val = cards["profit_factor"]
             c2.metric("Profit Factor", "inf" if pf_val == float("inf") else f"{pf_val:.2f}")
             c3.metric("Win Rate", f"{cards['win_rate']:.1f}%")
             c4.metric("Max Drawdown", f"{cards['max_drawdown_pct']:.2f}%")
-            st.caption("Repere: Profit Factor > 1.5")
+            st.caption(
+                "Repere: Sharpe > 1 = rendement ajuste du risque correct, Profit Factor > 1.5 = robustesse des trades, "
+                "Max Drawdown proche de 0 = profondeur des creux limitee."
+            )
 
     # TAB 3: CERVEAU IA
     with t3:
@@ -2121,22 +2232,32 @@ if page == "📊 Dashboard Trading":
                 with c_chart:
                     st.subheader("🗺️ Carte des Opportunités")
                     if not df_viz.empty:
-                        if "symbol" in df_viz.columns:
+                        df_tree = df_viz.copy()
+                        if "sector" not in df_tree.columns:
+                            df_tree["sector"] = "Non defini"
+                        df_tree["sector"] = df_tree["sector"].fillna("").astype(str).str.strip().replace("", "Non defini")
+
+                        if "symbol" in df_tree.columns:
+                            df_tree["symbol"] = df_tree["symbol"].fillna("").astype(str).str.strip().str.upper()
+                            df_tree = df_tree[df_tree["symbol"] != ""].copy()
                             path = [px.Constant("Univers"), "sector", "symbol"]
                         else:
                             path = [px.Constant("Univers"), "sector"]
 
-                        fig_tree = px.treemap(
-                            df_viz,
-                            path=path,
-                            values="score_num",
-                            color="score_num",
-                            color_continuous_scale=["#d73027", "#fee08b", "#1a9850"],
-                            range_color=[30, 90],
-                            hover_data=["name"] if "name" in df_viz.columns else None,
-                            title="Taille = Score",
-                        )
-                        st.plotly_chart(fig_tree, use_container_width=True)
+                        if df_tree.empty:
+                            st.caption("Donnees insuffisantes pour la carte des opportunites.")
+                        else:
+                            fig_tree = px.treemap(
+                                df_tree,
+                                path=path,
+                                values="score_num",
+                                color="score_num",
+                                color_continuous_scale=["#d73027", "#fee08b", "#1a9850"],
+                                range_color=[30, 90],
+                                hover_data=["name"] if "name" in df_tree.columns else None,
+                                title="Taille = Score",
+                            )
+                            st.plotly_chart(fig_tree, use_container_width=True)
 
                 with c_top:
                     st.subheader("🏆 Top 3")
