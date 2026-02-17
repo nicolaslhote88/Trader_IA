@@ -981,6 +981,12 @@ def get_fundamentals(symbol: str = Query(...)):
                     continue
                 data_points += 1
 
+        max_points = sum(len(b.keys()) for b in blocks)
+        coverage_pct = 0.0
+        if max_points > 0:
+            coverage_pct = round((data_points / max_points) * 100.0, 1)
+        coverage_pct = max(0.0, min(100.0, coverage_pct))
+
         return {
             "ok": True,
             "symbol": symbol,
@@ -996,7 +1002,7 @@ def get_fundamentals(symbol: str = Query(...)):
             "dividends": dividends,
             "meta": {
                 "dataPoints": data_points,
-                "dataCoveragePctApprox": round((data_points / 46.0) * 100.0, 1),
+                "dataCoveragePctApprox": coverage_pct,
             },
         }
     except Exception as e:

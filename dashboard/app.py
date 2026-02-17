@@ -1000,56 +1000,56 @@ def _make_return_gauge(value_pct: float, title: str, axis_limit: float) -> go.Fi
 
 FUNDAMENTAL_META = {
     "score": {
-        "label": "Triage Score",
+        "label": "Score de triage",
         "desc": "Score composite de conviction fondamentale (qualite, croissance, valorisation, sante financiere, consensus).",
         "higher_is_better": True,
         "good": 75,
         "warn": 60,
     },
     "risk_score": {
-        "label": "Risk Score",
+        "label": "Score de risque",
         "desc": "Niveau de risque fondamental. Plus le score est bas, meilleur est le profil de risque.",
         "higher_is_better": False,
         "good": 35,
         "warn": 55,
     },
     "quality_score": {
-        "label": "Quality Score",
+        "label": "Qualite du business",
         "desc": "Qualite du business (marges, ROE/ROA, capacite a generer du cash).",
         "higher_is_better": True,
         "good": 70,
         "warn": 55,
     },
     "growth_score": {
-        "label": "Growth Score",
+        "label": "Croissance",
         "desc": "Dynamique de croissance des revenus et benefices.",
         "higher_is_better": True,
         "good": 65,
         "warn": 50,
     },
     "valuation_score": {
-        "label": "Valuation Score",
+        "label": "Valorisation",
         "desc": "Attractivite du prix relatif aux fondamentaux et a l'upside consensus.",
         "higher_is_better": True,
         "good": 65,
         "warn": 50,
     },
     "health_score": {
-        "label": "Financial Health",
+        "label": "Sante financiere",
         "desc": "Solidite du bilan (dette, liquidite, ratio de couverture).",
         "higher_is_better": True,
         "good": 70,
         "warn": 55,
     },
     "consensus_score": {
-        "label": "Consensus Score",
+        "label": "Consensus analystes",
         "desc": "Qualite du support sell-side (recommandation, couverture, objectif de cours).",
         "higher_is_better": True,
         "good": 60,
         "warn": 45,
     },
     "data_coverage_pct": {
-        "label": "Data Coverage",
+        "label": "Couverture de donnees",
         "desc": "Couverture des donnees disponibles. Faible couverture = confiance plus faible.",
         "higher_is_better": True,
         "good": 70,
@@ -1080,13 +1080,19 @@ def _funda_eval(key: str, value: float) -> tuple[str, str]:
 
 def _make_funda_gauge(value: float, title: str, inverse: bool = False) -> go.Figure:
     v = max(0.0, min(100.0, float(value)))
-    steps = [
-        {"range": [0, 35], "color": "rgba(220,53,69,0.25)"},
-        {"range": [35, 60], "color": "rgba(255,193,7,0.25)"},
-        {"range": [60, 100], "color": "rgba(40,167,69,0.25)"},
-    ]
     if inverse:
-        steps = list(reversed(steps))
+        # Low = good for inverse metrics (e.g., risk score)
+        steps = [
+            {"range": [0, 35], "color": "rgba(40,167,69,0.25)"},
+            {"range": [35, 60], "color": "rgba(255,193,7,0.25)"},
+            {"range": [60, 100], "color": "rgba(220,53,69,0.25)"},
+        ]
+    else:
+        steps = [
+            {"range": [0, 35], "color": "rgba(220,53,69,0.25)"},
+            {"range": [35, 60], "color": "rgba(255,193,7,0.25)"},
+            {"range": [60, 100], "color": "rgba(40,167,69,0.25)"},
+        ]
 
     fig = go.Figure(
         go.Indicator(
@@ -1116,6 +1122,28 @@ def _safe_series(df: pd.DataFrame, candidates: list[str], default: float = 0.0) 
     if col:
         return safe_float_series(df[col])
     return pd.Series(default, index=df.index, dtype=float)
+
+
+def _clamp_pct(v: float) -> float:
+    return max(0.0, min(100.0, float(v)))
+
+
+def _estimate_scenario_probabilities(score: float, risk: float, upside_pct: float) -> dict[str, int]:
+    """Heuristique locale (sans IA) pour afficher une probabilité relative des scénarios."""
+    s = max(0.0, min(100.0, float(score)))
+    r = max(0.0, min(100.0, float(risk)))
+    u = float(upside_pct)
+
+    bull_raw = max(5.0, 0.8 * s - 0.55 * r + max(u, 0.0) * 0.9 + 25.0)
+    bear_raw = max(5.0, 0.95 * r - 0.45 * s + max(-u, 0.0) * 1.1 + 18.0)
+    base_raw = max(5.0, 100.0 - abs(s - 60.0) - abs(u) * 0.45 + 10.0)
+
+    total = bull_raw + bear_raw + base_raw
+    bull = int(round((bull_raw / total) * 100))
+    bear = int(round((bear_raw / total) * 100))
+    base = 100 - bull - bear
+
+    return {"baissier": bear, "central": base, "haussier": bull}
 
 
 # ============================================================
@@ -2591,7 +2619,7 @@ elif page == "📚 Analyse Fondamentale V2":
         risk_num = _safe_series(df_ov, ["risk_score"])
         upside_num = _safe_series(df_ov, ["upside_pct"])
         analysts_num = _safe_series(df_ov, ["analyst_count"])
-        coverage_num = _safe_series(df_ov, ["data_coverage_pct"])
+        coverage_num = _safe_series(df_ov, ["data_coverage_pct"]).clip(lower=0, upper=100)
         quality_num = _safe_series(df_ov, ["quality_score"])
 
         total_symbols = len(df_ov)
@@ -2607,7 +2635,7 @@ elif page == "📚 Analyse Fondamentale V2":
         kc3.metric("Scores faibles", weak_conv)
         kc4.metric("Risque élevé", risk_high)
         kc5.metric("Score moyen", f"{avg_score:.1f}/100")
-        kc6.metric("Upside moyen", f"{avg_upside:.1f}%")
+        kc6.metric("Potentiel moyen", f"{avg_upside:.1f}%")
 
         st.divider()
 
@@ -2618,7 +2646,7 @@ elif page == "📚 Analyse Fondamentale V2":
                 pd.DataFrame({"score": score_num}),
                 x="score",
                 nbins=20,
-                title="Distribution du Triage Score",
+                title="Distribution du score de triage",
                 color_discrete_sequence=["#2ca02c"],
             )
             fig_hist.add_vline(x=75, line_dash="dot", line_color="#28a745")
@@ -2644,7 +2672,7 @@ elif page == "📚 Analyse Fondamentale V2":
                     color="horizon_txt",
                     hover_name="symbol",
                     title="Carte Conviction vs Risque",
-                    labels={"risk_num": "Risk Score (plus bas = mieux)", "score_num": "Triage Score"},
+                    labels={"risk_num": "Score de risque (plus bas = mieux)", "score_num": "Score de triage"},
                 )
                 fig_sc.add_hline(y=70, line_dash="dot", line_color="#28a745")
                 fig_sc.add_hline(y=55, line_dash="dot", line_color="#ffc107")
@@ -2704,19 +2732,19 @@ elif page == "📚 Analyse Fondamentale V2":
 
         # Tableau de synthèse
         show = pd.DataFrame()
-        show["Symbol"] = df_ov.get("symbol", pd.Series(index=df_ov.index)).fillna("").astype(str)
-        show["Name"] = df_ov.get("name", pd.Series(index=df_ov.index)).fillna("")
-        show["Sector"] = df_ov.get("sector", pd.Series(index=df_ov.index)).fillna("")
-        show["Triage"] = score_num.round(0).astype(int)
-        show["Risk"] = risk_num.round(0).astype(int)
-        show["Quality"] = quality_num.round(0).astype(int)
-        show["Upside %"] = upside_num.round(1)
+        show["Symbole"] = df_ov.get("symbol", pd.Series(index=df_ov.index)).fillna("").astype(str)
+        show["Nom"] = df_ov.get("name", pd.Series(index=df_ov.index)).fillna("")
+        show["Secteur"] = df_ov.get("sector", pd.Series(index=df_ov.index)).fillna("")
+        show["Score triage"] = score_num.round(0).astype(int)
+        show["Risque"] = risk_num.round(0).astype(int)
+        show["Qualite"] = quality_num.round(0).astype(int)
+        show["Potentiel %"] = upside_num.round(1)
         show["Analystes"] = analysts_num.round(0).astype(int)
-        show["Coverage %"] = coverage_num.round(1)
+        show["Couverture %"] = coverage_num.round(1)
         show["Horizon"] = df_ov.get("horizon", pd.Series(index=df_ov.index)).fillna("WATCH")
-        show["Verdict Score"] = score_num.map(lambda v: _funda_eval("score", float(v))[0])
-        show["Verdict Risque"] = risk_num.map(lambda v: _funda_eval("risk_score", float(v))[0])
-        show = show[show["Symbol"] != ""].sort_values("Triage", ascending=False)
+        show["Lecture score"] = score_num.map(lambda v: _funda_eval("score", float(v))[0])
+        show["Lecture risque"] = risk_num.map(lambda v: _funda_eval("risk_score", float(v))[0])
+        show = show[show["Symbole"] != ""].sort_values("Score triage", ascending=False)
 
         st.subheader("Tableau synthèse fondamentale")
         render_interactive_table(show, key_suffix="funda_v2_overview")
@@ -2759,7 +2787,7 @@ elif page == "📚 Analyse Fondamentale V2":
             val_v = safe_float(row.get("valuation_score", 0))
             health_v = safe_float(row.get("health_score", 0))
             cons_v = safe_float(row.get("consensus_score", 0))
-            cov_v = safe_float(row.get("data_coverage_pct", 0))
+            cov_v = _clamp_pct(safe_float(row.get("data_coverage_pct", 0)))
             upside_v = safe_float(row.get("upside_pct", 0))
             analysts_v = safe_float(row.get("analyst_count", 0))
 
@@ -2768,9 +2796,9 @@ elif page == "📚 Analyse Fondamentale V2":
             mc1.metric("Triage", f"{score_v:.0f}/100", delta=_funda_eval("score", score_v)[0])
             mc2.metric("Risque", f"{risk_v:.0f}/100", delta=_funda_eval("risk_score", risk_v)[0])
             mc3.metric("Horizon", str(row.get("horizon", "WATCH")))
-            mc4.metric("Upside", f"{upside_v:.1f}%")
+            mc4.metric("Potentiel", f"{upside_v:.1f}%")
             mc5.metric("Analystes", f"{analysts_v:.0f}")
-            mc6.metric("Coverage", f"{cov_v:.1f}%")
+            mc6.metric("Couverture", f"{cov_v:.1f}%")
 
             st.divider()
 
@@ -2854,7 +2882,7 @@ elif page == "📚 Analyse Fondamentale V2":
                                 x=h["ts"],
                                 y=h_risk,
                                 mode="lines+markers",
-                                name="Risk",
+                                name="Risque",
                                 line=dict(color="#dc3545", width=2),
                             )
                         )
@@ -2880,11 +2908,11 @@ elif page == "📚 Analyse Fondamentale V2":
 
                 if not c_row.empty:
                     cr = c_row.iloc[0]
-                    st.markdown(f"**Recommendation**: {cr.get('recommendation', '—')}")
-                    st.markdown(f"**Target Mean**: {safe_float(cr.get('target_mean_price', 0)):.2f}")
-                    st.markdown(f"**Target High**: {safe_float(cr.get('target_high_price', 0)):.2f}")
-                    st.markdown(f"**Target Low**: {safe_float(cr.get('target_low_price', 0)):.2f}")
-                    st.markdown(f"**Upside**: {safe_float(cr.get('upside_pct', 0)):.1f}%")
+                    st.markdown(f"**Recommandation**: {cr.get('recommendation', '—')}")
+                    st.markdown(f"**Objectif moyen**: {safe_float(cr.get('target_mean_price', 0)):.2f}")
+                    st.markdown(f"**Objectif haut**: {safe_float(cr.get('target_high_price', 0)):.2f}")
+                    st.markdown(f"**Objectif bas**: {safe_float(cr.get('target_low_price', 0)):.2f}")
+                    st.markdown(f"**Potentiel**: {safe_float(cr.get('upside_pct', 0)):.1f}%")
                     st.markdown(f"**Analystes**: {safe_float(cr.get('analyst_count', 0)):.0f}")
                 else:
                     st.caption("Pas de ligne consensus disponible.")
@@ -2894,50 +2922,74 @@ elif page == "📚 Analyse Fondamentale V2":
                 scenarios = extract_valuation_scenarios(str(row.get("valuation", "")))
                 current_px = safe_float(row.get("current_price", 0))
                 if scenarios and current_px > 0:
-                    now = datetime.now()
-                    fut = now + timedelta(days=365)
+                    hist_px = fetch_yfinance_history(selected_symbol, interval="1d", lookback_days=365)
+                    if not hist_px.empty and "close" in hist_px.columns:
+                        hist_px = hist_px.sort_values("time")
+                        anchor_dt = hist_px["time"].iloc[-1].to_pydatetime()
+                        anchor_px = safe_float(hist_px["close"].iloc[-1])
+                    else:
+                        anchor_dt = datetime.now()
+                        anchor_px = current_px
+
+                    fut = anchor_dt + timedelta(days=365)
+                    probs = _estimate_scenario_probabilities(score_v, risk_v, upside_v)
+                    bear_target = safe_float(scenarios.get("Bear", anchor_px * 0.85))
+                    base_target = safe_float(scenarios.get("Base", anchor_px))
+                    bull_target = safe_float(scenarios.get("Bull", anchor_px * 1.15))
+
                     fig_sc = go.Figure()
+                    if not hist_px.empty and "close" in hist_px.columns:
+                        fig_sc.add_trace(
+                            go.Scatter(
+                                x=hist_px["time"],
+                                y=hist_px["close"],
+                                mode="lines",
+                                name="Cours réel (1 an)",
+                                line=dict(color="#ffffff", width=2),
+                            )
+                        )
                     fig_sc.add_trace(
                         go.Scatter(
-                            x=[now, fut],
-                            y=[current_px, safe_float(scenarios.get("Bear", current_px * 0.85))],
+                            x=[anchor_dt, fut],
+                            y=[anchor_px, bear_target],
                             mode="lines+markers+text",
-                            name="Bear",
-                            text=[None, f"{safe_float(scenarios.get('Bear', 0)):.1f}"],
+                            name=f"Baissier ({probs['baissier']}%)",
+                            text=[None, f"{bear_target:.1f}"],
                             textposition="top right",
                             line=dict(color="#dc3545", dash="dash"),
                         )
                     )
                     fig_sc.add_trace(
                         go.Scatter(
-                            x=[now, fut],
-                            y=[current_px, safe_float(scenarios.get("Base", current_px))],
+                            x=[anchor_dt, fut],
+                            y=[anchor_px, base_target],
                             mode="lines+markers+text",
-                            name="Base",
-                            text=[None, f"{safe_float(scenarios.get('Base', 0)):.1f}"],
+                            name=f"Central ({probs['central']}%)",
+                            text=[None, f"{base_target:.1f}"],
                             textposition="top right",
                             line=dict(color="#ffc107", dash="dash"),
                         )
                     )
                     fig_sc.add_trace(
                         go.Scatter(
-                            x=[now, fut],
-                            y=[current_px, safe_float(scenarios.get("Bull", current_px * 1.15))],
+                            x=[anchor_dt, fut],
+                            y=[anchor_px, bull_target],
                             mode="lines+markers+text",
-                            name="Bull",
-                            text=[None, f"{safe_float(scenarios.get('Bull', 0)):.1f}"],
+                            name=f"Haussier ({probs['haussier']}%)",
+                            text=[None, f"{bull_target:.1f}"],
                             textposition="top right",
                             line=dict(color="#28a745", dash="dash"),
                         )
                     )
                     fig_sc.update_layout(
-                        height=300,
+                        height=320,
                         margin=dict(t=20, b=20, l=20, r=20),
-                        title="Cone de valorisation (12 mois)",
+                        title="Cours réel (1 an) + projections (12 mois)",
                     )
                     st.plotly_chart(fig_sc, use_container_width=True)
+                    st.caption("Probabilités indicatives calculées par heuristique locale (pas un modèle IA prédictif).")
                 else:
-                    st.caption("Scénarios Bear/Base/Bull non disponibles pour ce symbole.")
+                    st.caption("Scénarios baissier/central/haussier non disponibles pour ce symbole.")
 
             # Métriques fondamentales brutes (latest)
             if df_funda_metrics is not None and not df_funda_metrics.empty and "symbol" in df_funda_metrics.columns:
@@ -2958,11 +3010,11 @@ elif page == "📚 Analyse Fondamentale V2":
                             m[show_cols].rename(
                                 columns={
                                     "section": "Section",
-                                    "metric": "Metric",
-                                    "unit": "Unit",
+                                    "metric": "Indicateur",
+                                    "unit": "Unité",
                                     "notes": "Notes",
-                                    "as_of_date": "AsOf",
-                                    "extracted_at": "ExtractedAt",
+                                    "as_of_date": "Date référence",
+                                    "extracted_at": "Date extraction",
                                 }
                             ),
                             key_suffix=f"funda_metrics_{selected_symbol}",
