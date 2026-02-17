@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import re
 import sys
@@ -19,7 +19,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # CONFIGURATION
 # ============================================================
 
-st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="ðŸ¤–")
+st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="AI")
 
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
@@ -494,7 +494,7 @@ def _action_badge(action: object) -> str:
         return '<span class="badge-sell">SELL</span>'
     elif s == "NEUTRAL":
         return '<span class="badge-neutral-v2">NEUTRAL</span>'
-    return f'<span class="badge-neutral-v2">{s if s else "â€”"}</span>'
+    return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
 
 
 def _ai_badge(decision: object) -> str:
@@ -506,7 +506,7 @@ def _ai_badge(decision: object) -> str:
         return '<span class="badge-reject">REJECT</span>'
     elif s == "WATCH":
         return '<span class="badge-watch">WATCH</span>'
-    return f'<span class="badge-neutral-v2">{s if s else "â€”"}</span>'
+    return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
 
 
 def _status_badge(status: object) -> str:
@@ -520,7 +520,7 @@ def _status_badge(status: object) -> str:
         return '<span class="badge-failed">FAILED</span>'
     elif s == "RUNNING":
         return '<span class="badge-running">RUNNING</span>'
-    return f'<span class="badge-neutral-v2">{s if s else "â€”"}</span>'
+    return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
 
 
 def _make_rsi_gauge(rsi_val: float, title: str = "RSI") -> go.Figure:
@@ -570,9 +570,9 @@ def _sma_alignment_text(price: float, sma20: float, sma50: float, sma200: float)
     for name, val in sma_list:
         if val > 0:
             if price > val:
-                parts.append(f"> {name}({val:.2f}) âœ…")
+                parts.append(f"> {name}({val:.2f}) ✅")
             else:
-                parts.append(f"< {name}({val:.2f}) âŒ")
+                parts.append(f"< {name}({val:.2f}) X")
                 all_above = False
         else:
             parts.append(f"{name}(N/A)")
@@ -582,13 +582,13 @@ def _sma_alignment_text(price: float, sma20: float, sma50: float, sma200: float)
 
     if all_above and sma20 > 0 and sma50 > 0 and sma200 > 0:
         if price > sma20 > sma50 > sma200:
-            alignment += " â†’ **BULLISH ALIGNMENT**"
+            alignment += " → **BULLISH ALIGNMENT**"
         else:
-            alignment += " â†’ BULLISH (prix au-dessus)"
+            alignment += " → BULLISH (prix au-dessus)"
     elif price > 0 and sma200 > 0 and price < sma200:
-        alignment += " â†’ **BEARISH**"
+        alignment += " → **BEARISH**"
     else:
-        alignment += " â†’ MIXTE"
+        alignment += " → MIXTE"
 
     return alignment
 
@@ -603,38 +603,38 @@ INDICATOR_META = {
     "rsi14": {
         "label": "RSI (14)",
         "min": 0, "max": 100,
-        "zones": [(0, 30, "#28a745", "Survendu"), (30, 70, "#6c757d", "Neutre"), (70, 100, "#dc3545", "SurachetÃ©")],
-        "desc": "Mesure la vitesse des variations de prix. <30 = survendu (opportunitÃ© achat), >70 = surachetÃ© (risque correction).",
+        "zones": [(0, 30, "#28a745", "Survendu"), (30, 70, "#6c757d", "Neutre"), (70, 100, "#dc3545", "Suracheté")],
+        "desc": "Mesure la vitesse des variations de prix. <30 = survendu (opportunité achat), >70 = suracheté (risque correction).",
     },
     "macd_hist": {
         "label": "MACD Histogramme",
         "min": -2, "max": 2,
         "zones": [(-2, -0.1, "#dc3545", "Baissier"), (-0.1, 0.1, "#6c757d", "Neutre"), (0.1, 2, "#28a745", "Haussier")],
-        "desc": "DiffÃ©rence entre signal MACD et sa moyenne. Positif = momentum haussier, nÃ©gatif = momentum baissier.",
+        "desc": "Différence entre signal MACD et sa moyenne. Positif = momentum haussier, négatif = momentum baissier.",
     },
     "stoch_k": {
         "label": "Stochastique %K",
         "min": 0, "max": 100,
-        "zones": [(0, 20, "#28a745", "Survendu"), (20, 80, "#6c757d", "Neutre"), (80, 100, "#dc3545", "SurachetÃ©")],
-        "desc": "Position du prix dans son range rÃ©cent. <20 = bas du range, >80 = haut du range.",
+        "zones": [(0, 20, "#28a745", "Survendu"), (20, 80, "#6c757d", "Neutre"), (80, 100, "#dc3545", "Suracheté")],
+        "desc": "Position du prix dans son range récent. <20 = bas du range, >80 = haut du range.",
     },
     "stoch_d": {
         "label": "Stochastique %D",
         "min": 0, "max": 100,
-        "zones": [(0, 20, "#28a745", "Survendu"), (20, 80, "#6c757d", "Neutre"), (80, 100, "#dc3545", "SurachetÃ©")],
-        "desc": "Moyenne lissÃ©e de %K. Croisement %K/%D gÃ©nÃ¨re des signaux.",
+        "zones": [(0, 20, "#28a745", "Survendu"), (20, 80, "#6c757d", "Neutre"), (80, 100, "#dc3545", "Suracheté")],
+        "desc": "Moyenne lissée de %K. Croisement %K/%D génère des signaux.",
     },
     "adx": {
         "label": "ADX (Force tendance)",
         "min": 0, "max": 100,
-        "zones": [(0, 20, "#6c757d", "Pas de tendance"), (20, 40, "#ffc107", "Tendance modÃ©rÃ©e"), (40, 100, "#28a745", "Tendance forte")],
-        "desc": "Force de la tendance (pas sa direction). >25 = tendance significative, <20 = marchÃ© sans direction.",
+        "zones": [(0, 20, "#6c757d", "Pas de tendance"), (20, 40, "#ffc107", "Tendance modérée"), (40, 100, "#28a745", "Tendance forte")],
+        "desc": "Force de la tendance (pas sa direction). >25 = tendance significative, <20 = marché sans direction.",
     },
     "atr_pct": {
         "label": "ATR %",
         "min": 0, "max": 10,
-        "zones": [(0, 1, "#28a745", "Faible volatilitÃ©"), (1, 3, "#ffc107", "VolatilitÃ© normale"), (3, 10, "#dc3545", "Haute volatilitÃ©")],
-        "desc": "Average True Range en % du prix. Mesure la volatilitÃ© quotidienne moyenne.",
+        "zones": [(0, 1, "#28a745", "Faible volatilité"), (1, 3, "#ffc107", "Volatilité normale"), (3, 10, "#dc3545", "Haute volatilité")],
+        "desc": "Average True Range en % du prix. Mesure la volatilité quotidienne moyenne.",
     },
     "bb_width": {
         "label": "Bollinger Width",
@@ -643,22 +643,22 @@ INDICATOR_META = {
         "desc": "Largeur des bandes de Bollinger. Compression = explosion imminente, expansion = mouvement en cours.",
     },
     "volatility": {
-        "label": "VolatilitÃ© RSI",
+        "label": "Volatilité RSI",
         "min": 0, "max": 2,
-        "zones": [(0, 0.3, "#28a745", "Calme"), (0.3, 0.8, "#ffc107", "ModÃ©rÃ©e"), (0.8, 2, "#dc3545", "Ã‰levÃ©e")],
-        "desc": "VolatilitÃ© normalisÃ©e. Plus elle est basse, plus le prix est stable.",
+        "zones": [(0, 0.3, "#28a745", "Calme"), (0.3, 0.8, "#ffc107", "Modérée"), (0.8, 2, "#dc3545", "Élevée")],
+        "desc": "Volatilité normalisée. Plus elle est basse, plus le prix est stable.",
     },
     "obv_slope": {
         "label": "OBV Slope",
         "min": -5, "max": 5,
         "zones": [(-5, -0.5, "#dc3545", "Volume sortant"), (-0.5, 0.5, "#6c757d", "Neutre"), (0.5, 5, "#28a745", "Volume entrant")],
-        "desc": "Pente du On-Balance Volume. Positif = accumulation (acheteurs), nÃ©gatif = distribution (vendeurs).",
+        "desc": "Pente du On-Balance Volume. Positif = accumulation (acheteurs), négatif = distribution (vendeurs).",
     },
 }
 
 
 def _indicator_bar(key: str, value: float, tf_label: str = "") -> str:
-    """GÃ©nÃ¨re une barre de progression HTML colorÃ©e avec contexte pour un indicateur."""
+    """Génère une barre de progression HTML colorée avec contexte pour un indicateur."""
     meta = INDICATOR_META.get(key)
     if not meta:
         return f"<span>{value:.4f}</span>"
@@ -706,7 +706,7 @@ def _indicator_bar(key: str, value: float, tf_label: str = "") -> str:
     <div style="margin-bottom:12px;" title="{meta['desc']}">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px;">
         <span style="color:#ccc;font-size:0.85em;font-weight:600;">{meta['label']}</span>
-        <span style="color:{zone_color};font-size:0.85em;font-weight:bold;">{val_str} â€” {zone_label}</span>
+        <span style="color:{zone_color};font-size:0.85em;font-weight:bold;">{val_str} — {zone_label}</span>
       </div>
       <div style="position:relative;height:10px;background:#222;border-radius:5px;overflow:hidden;">
         {bar_segments}
@@ -727,7 +727,7 @@ def _indicator_bar(key: str, value: float, tf_label: str = "") -> str:
 
 @st.cache_data(ttl=120)
 def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int = 90) -> pd.DataFrame:
-    """RÃ©cupÃ¨re l'historique OHLCV depuis yfinance-api. Retourne un DataFrame vide si indisponible."""
+    """Récupère l'historique OHLCV depuis yfinance-api. Retourne un DataFrame vide si indisponible."""
     try:
         resp = requests.get(
             f"{YFINANCE_API_URL}/history",
@@ -750,7 +750,7 @@ def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int
 
 
 def _make_candlestick_chart(df: pd.DataFrame, title: str, sma20: float = 0, sma50: float = 0, sma200: float = 0, support: float = 0, resistance: float = 0) -> go.Figure:
-    """CrÃ©e un graphique chandelier avec SMA et niveaux S/R optionnels."""
+    """Crée un graphique chandelier avec SMA et niveaux S/R optionnels."""
     fig = go.Figure()
 
     fig.add_trace(go.Candlestick(
@@ -1266,7 +1266,7 @@ def _clamp_pct(v: float) -> float:
 
 
 def _estimate_scenario_probabilities(score: float, risk: float, upside_pct: float) -> dict[str, int]:
-    """Heuristique locale (sans IA) pour afficher une probabilitÃ© relative des scÃ©narios."""
+    """Heuristique locale (sans IA) pour afficher une probabilité relative des scénarios."""
     s = max(0.0, min(100.0, float(score)))
     r = max(0.0, min(100.0, float(risk)))
     u = float(upside_pct)
@@ -1664,7 +1664,7 @@ def _prepare_multi_agent_view(
 # MAIN APP
 # ============================================================
 
-st.sidebar.title("ðŸ¤– TradingSim AI")
+st.sidebar.title("TradingSim AI")
 page = st.sidebar.radio(
     "Navigation",
     [
@@ -1722,7 +1722,7 @@ if df_port is not None and not df_port.empty:
             try:
                 notes = safe_json_parse(meta.iloc[0].get("notes", ""))
 
-                # Robust: accepter plusieurs variantes de clÃ©s
+                # Robust: accepter plusieurs variantes de clés
                 init_cap = None
                 for k in ["initialCapitalEUR", "initialcapitaleur", "initial_capital_eur"]:
                     if k in notes:
@@ -1747,22 +1747,22 @@ if page == "Dashboard Trading":
         st.error("Donnees Google Sheets requises pour cette page.")
         st.stop()
 
-    st.title("ðŸ¤– AI Trading Executor Dashboard")
+    st.title("AI Trading Executor Dashboard")
 
-    if st.button("ðŸ”„ RafraÃ®chir"):
+    if st.button("Rafraichir"):
         load_data.clear()
         load_duckdb_data.clear()
         st.rerun()
 
     c1, c2, c3, c4, c5, c6 = st.columns(6)
-    c1.metric("Capital DÃ©part", f"{init_cap:,.0f} â‚¬")
-    c2.metric("Valeur Totale", f"{total_val:,.2f} â‚¬", delta=f"{total_val - init_cap:,.2f} â‚¬")
-    c3.metric("Cash", f"{cash:,.2f} â‚¬")
-    c4.metric("Investi", f"{invest:,.2f} â‚¬")
+    c1.metric("Capital Depart", f"{init_cap:,.0f} EUR")
+    c2.metric("Valeur Totale", f"{total_val:,.2f} EUR", delta=f"{total_val - init_cap:,.2f} EUR")
+    c3.metric("Cash", f"{cash:,.2f} EUR")
+    c4.metric("Investi", f"{invest:,.2f} EUR")
     c5.metric("ROI", f"{roi * 100:.2f} %")
     c6.metric("% Cash", f"{cash_pct:.1f} %")
 
-    t1, t2, t3, t4 = st.tabs(["ðŸ’¼ Portefeuille", "ðŸ“ˆ Performance", "ðŸ§  Cerveau IA", "ðŸŒ MarchÃ© & Recherche"])
+    t1, t2, t3, t4 = st.tabs(["Portefeuille", "Performance", "Cerveau IA", "Marche & Recherche"])
 
     # TAB 1: PORTEFEUILLE
     with t1:
@@ -1782,7 +1782,7 @@ if page == "Dashboard Trading":
                 ["sector", "industry", "name", "assetclass"],
             ] = "Cash"
 
-            st.subheader("ðŸ“Š Allocation")
+            st.subheader("📊 Allocation")
             cc1, cc2, cc3 = st.columns(3)
 
             def pie(df: pd.DataFrame, col: str) -> px.pie:
@@ -2149,7 +2149,7 @@ if page == "Dashboard Trading":
         df_sig = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
         df_alt = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
 
-        st.subheader("ðŸš¦ Signaux")
+        st.subheader("🚦 Signaux")
         if df_sig is not None and not df_sig.empty:
             if "rationale" in df_sig.columns:
                 df_sig["rationale"] = df_sig["rationale"].apply(clean_text)
@@ -2157,7 +2157,7 @@ if page == "Dashboard Trading":
         else:
             st.caption("Aucun signal.")
 
-        st.subheader("ðŸ›¡ï¸ Alertes")
+        st.subheader("Alertes")
         if df_alt is not None and not df_alt.empty:
             render_interactive_table(df_alt, key_suffix="alt")
         else:
@@ -2170,10 +2170,10 @@ if page == "Dashboard Trading":
         df_res = _load_fundamentals_for_dashboard(duckdb_data)
         df_res = enrich_df_with_name(df_res, df_univ)
 
-        st_macro, st_research = st.tabs(["ðŸŒ Macro & Buzz", "ðŸ”¬ Recherche"])
+        st_macro, st_research = st.tabs(["Macro & Buzz", "Recherche"])
 
         with st_macro:
-            st.subheader("ðŸŒ¡ï¸ MÃ©tÃ©o Secteurs (30j)")
+            st.subheader("Meteo Secteurs (30j)")
             if df_news is not None and not df_news.empty:
                 df_sec = calculate_sector_sentiment(df_news)
                 if df_sec is not None and not df_sec.empty:
@@ -2182,7 +2182,7 @@ if page == "Dashboard Trading":
                     st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
-            st.subheader("ðŸ“¢ PalmarÃ¨s Actions (30j)")
+            st.subheader("Palmares Actions (30j)")
             if df_news_sym is not None and not df_news_sym.empty:
                 df_sym = calculate_symbol_momentum(df_news_sym)
                 if df_sym is not None and not df_sym.empty:
@@ -2192,7 +2192,7 @@ if page == "Dashboard Trading":
 
         with st_research:
             if df_res is None or df_res.empty:
-                st.info("ðŸ“­ Aucune note de recherche disponible.")
+                st.info("Aucune note de recherche disponible.")
             else:
                 df_viz = df_res.copy()
 
@@ -2202,7 +2202,7 @@ if page == "Dashboard Trading":
                     df_viz["score_num"] = 0.0
 
                 if "sector" not in df_viz.columns:
-                    df_viz["sector"] = "IndÃ©fini"
+                    df_viz["sector"] = "Indefini"
                 if "name" not in df_viz.columns:
                     if "symbol" in df_viz.columns:
                         df_viz["name"] = df_viz["symbol"]
@@ -2212,9 +2212,9 @@ if page == "Dashboard Trading":
                 top_picks = df_viz[df_viz["score_num"] >= 70]
 
                 k1, k2, k3, k4 = st.columns(4)
-                k1.metric("Dossiers AnalysÃ©s", len(df_viz))
-                k2.metric("â­ Top Convictions", len(top_picks))
-                k3.metric("QualitÃ© Moyenne", f"{df_viz['score_num'].mean():.1f}/100" if len(df_viz) else "0/100")
+                k1.metric("Dossiers Analyses", len(df_viz))
+                k2.metric("Top Convictions", len(top_picks))
+                k3.metric("Qualite Moyenne", f"{df_viz['score_num'].mean():.1f}/100" if len(df_viz) else "0/100")
 
                 if len(df_viz) and "sector" in df_viz.columns:
                     try:
@@ -2230,7 +2230,7 @@ if page == "Dashboard Trading":
                 c_chart, c_top = st.columns([2, 1])
 
                 with c_chart:
-                    st.subheader("ðŸ—ºï¸ Carte des OpportunitÃ©s")
+                    st.subheader("Carte des Opportunites")
                     if not df_viz.empty:
                         df_tree = df_viz.copy()
                         if "sector" not in df_tree.columns:
@@ -2260,18 +2260,18 @@ if page == "Dashboard Trading":
                             st.plotly_chart(fig_tree, use_container_width=True)
 
                 with c_top:
-                    st.subheader("ðŸ† Top 3")
+                    st.subheader("Top 3")
                     if "symbol" in df_viz.columns:
                         for _, row in df_viz.sort_values("score_num", ascending=False).head(3).iterrows():
                             with st.container(border=True):
-                                st.markdown(f"**{row.get('symbol','')}** â€” {row.get('score_num',0):.0f}/100")
+                                st.markdown(f"**{row.get('symbol','')}** — {row.get('score_num',0):.0f}/100")
                                 st.caption(f"{row.get('name','')}")
-                                if st.button(f"ðŸ” Voir {row.get('symbol','')}", key=f"btn_{row.get('symbol','NA')}"):
+                                if st.button(f"Voir {row.get('symbol','')}", key=f"btn_{row.get('symbol','NA')}"):
                                     st.session_state["filter_res"] = row.get("symbol", "")
 
                 st.divider()
 
-                st.subheader("ðŸ”¬ Analyse DÃ©taillÃ©e & ScÃ©narios")
+                st.subheader("🔬 Analyse Détaillée & Scénarios")
 
                 def_sym = 0
                 sym_options = sorted(df_viz["symbol"].unique().tolist()) if "symbol" in df_viz.columns else []
@@ -2279,7 +2279,7 @@ if page == "Dashboard Trading":
                     def_sym = sym_options.index(st.session_state["filter_res"])
 
                 sel_sym = st.selectbox(
-                    "SÃ©lectionner une action pour voir les scÃ©narios :",
+                    "Sélectionner une action pour voir les scénarios :",
                     [""] + sym_options,
                     index=(def_sym + 1) if def_sym else 0,
                 )
@@ -2294,7 +2294,7 @@ if page == "Dashboard Trading":
 
                     with c_d1:
                         st.markdown(f"### {row_det.get('symbol','')}")
-                        st.info(f"**ThÃ¨se:** {clean_research_text(row_det.get('why',''))[:400]}...")
+                        st.info(f"**Thèse:** {clean_research_text(row_det.get('why',''))[:400]}...")
                         st.error(f"**Risques:** {clean_research_text(row_det.get('risks',''))[:300]}...")
 
                     with c_d2:
@@ -2338,21 +2338,21 @@ if page == "Dashboard Trading":
                                         mode="lines+markers+text",
                                         name=f"{k} Case",
                                         line=dict(color=colors.get(k, "white"), dash="dash"),
-                                        text=[None, f"{v:.1f}â‚¬"],
+                                        text=[None, f"{v:.1f}€"],
                                         textposition="top right",
                                     )
                                 )
 
                             fig_scen.update_layout(
-                                title="CÃ´ne de Valorisation (12 mois)",
+                                title="Cône de Valorisation (12 mois)",
                                 height=350,
                                 margin=dict(l=0, r=0, t=30, b=0),
                             )
                             st.plotly_chart(fig_scen, use_container_width=True)
                         else:
-                            st.warning(f"Pas de scÃ©narios extraits ou prix indisponible. (Scenarios trouvÃ©s : {scenarios})")
+                            st.warning(f"Pas de scénarios extraits ou prix indisponible. (Scenarios trouvés : {scenarios})")
 
-                st.markdown("#### Liste ComplÃ¨te")
+                st.markdown("#### Liste Complète")
                 cols_res = ["updatedat", "score", "symbol", "name", "why", "risks", "nextsteps"]
                 cols_final = [c for c in cols_res if c in df_viz.columns]
 
@@ -2365,7 +2365,7 @@ if page == "Dashboard Trading":
                         )
                     render_interactive_table(df_list, key_suffix="res_list")
                 else:
-                    st.info("Aucune colonne exploitable pour afficher la liste complÃ¨te.")
+                    st.info("Aucune colonne exploitable pour afficher la liste complète.")
 
 
 # ============================================================
@@ -2373,23 +2373,21 @@ if page == "Dashboard Trading":
 # ============================================================
 
 elif page == "System Health (Monitoring)":
-    st.title("🛠️ Data Freshness & Workflow Health")
-    st.caption(
-        "Objectif: verifier la fraicheur des donnees par symbole (AG2/AG3/AG4) et detecter les defaillances de sources/workflows."
-    )
+    st.title("System Health - Fraicheur des donnees")
+    st.caption("Controle par symbole (AG2/AG3/AG4-SPE) + controle macro global (AG4) + verification des derniers runs.")
 
-    if st.button("🔄 Rafraichir", key="refresh_system_health"):
+    if st.button("Rafraichir", key="refresh_system_health"):
         load_data.clear()
         load_duckdb_data.clear()
         st.rerun()
 
-    # Source tables
+    # Sources
     tech_latest = normalize_cols(duckdb_data.get("df_signals", pd.DataFrame()).copy())
     funda_latest = _load_fundamentals_for_dashboard(duckdb_data)
-    macro_news = normalize_cols(duckdb_data.get("df_news_macro_history", pd.DataFrame()).copy())
-    symbol_news = normalize_cols(duckdb_data.get("df_news_symbol_history", pd.DataFrame()).copy())
+    symbol_news = _normalize_symbol_news_df(duckdb_data.get("df_news_symbol_history", pd.DataFrame()))
+    macro_news = _normalize_macro_news_df(duckdb_data.get("df_news_macro_history", pd.DataFrame()))
 
-    # Universe fallback: si absent, reconstruire depuis les donnees disponibles.
+    # Base symboles
     universe = normalize_cols(df_univ.copy()) if df_univ is not None and not df_univ.empty else pd.DataFrame()
     if "symbol" in universe.columns:
         universe["symbol"] = universe["symbol"].astype(str).str.strip().str.upper()
@@ -2402,129 +2400,239 @@ elif page == "System Health (Monitoring)":
                 vals = df[col].dropna().astype(str).str.strip().str.upper()
                 symbol_pool.update([v for v in vals.tolist() if v])
         universe = pd.DataFrame({"symbol": sorted(symbol_pool)})
-        universe["name"] = ""
-        universe["sector"] = ""
-        universe["industry"] = ""
 
     if universe.empty:
-        st.warning("Aucune donnee disponible pour etablir le monitoring de fraicheur.")
+        st.warning("Aucune donnee disponible pour etablir la page de health-check.")
         st.stop()
 
-    # Consolidation multi-agents (fournit notamment macro_last_date mappee au secteur/industrie).
-    health_df, _, _ = _prepare_multi_agent_view(
-        df_universe=universe,
-        df_tech_latest=tech_latest,
-        df_funda_latest=funda_latest,
-        df_macro_news=macro_news,
-        df_symbol_news=symbol_news,
-    )
+    if "name" not in universe.columns:
+        universe["name"] = ""
+    if "sector" not in universe.columns:
+        universe["sector"] = ""
+    if "industry" not in universe.columns:
+        universe["industry"] = ""
 
-    if health_df is None or health_df.empty:
-        st.warning("Impossible de construire la vue de health-check.")
-        st.stop()
+    health_df = universe[["symbol", "name", "sector", "industry"]].drop_duplicates(subset=["symbol"]).copy()
 
-    for c in ["name", "sector", "industry"]:
-        if c not in health_df.columns:
-            health_df[c] = ""
-        health_df[c] = health_df[c].fillna("").astype(str)
+    # Dates AG2 (technique)
+    if tech_latest is not None and not tech_latest.empty and "symbol" in tech_latest.columns:
+        tk = tech_latest.copy()
+        tk["symbol"] = tk["symbol"].astype(str).str.strip().str.upper()
+        tech_ts_col = _first_existing_column(tk, ["workflow_date", "d1_date", "h1_date", "updated_at", "created_at"])
+        if tech_ts_col:
+            tk["last_tech_date"] = pd.to_datetime(tk[tech_ts_col], errors="coerce", utc=True)
+            tk = tk.sort_values("last_tech_date", ascending=False)
+            tk = tk.drop_duplicates(subset=["symbol"], keep="first")
+            health_df = health_df.merge(tk[["symbol", "last_tech_date"]], on="symbol", how="left")
 
-    ts_cols = {
-        "last_tech_date": "tech_age_days",
-        "last_funda_date": "funda_age_days",
-        "symbol_news_last_date": "news_age_days",
-        "macro_last_date": "macro_age_days",
-    }
+    # Dates AG3 (fondamentale)
+    if funda_latest is not None and not funda_latest.empty and "symbol" in funda_latest.columns:
+        fd = normalize_cols(funda_latest.copy())
+        fd["symbol"] = fd["symbol"].astype(str).str.strip().str.upper()
+        funda_ts_col = _first_existing_column(fd, ["updated_at", "fetched_at", "created_at", "updatedat", "fetchedat"])
+        if funda_ts_col:
+            fd["last_funda_date"] = pd.to_datetime(fd[funda_ts_col], errors="coerce", utc=True)
+            fd = fd.sort_values("last_funda_date", ascending=False)
+            fd = fd.drop_duplicates(subset=["symbol"], keep="first")
+            health_df = health_df.merge(fd[["symbol", "last_funda_date"]], on="symbol", how="left")
+
+    # Dates AG4-SPE (news symbole)
+    if symbol_news is not None and not symbol_news.empty and "symbol" in symbol_news.columns:
+        ns = symbol_news.copy()
+        ns["symbol"] = ns["symbol"].astype(str).str.strip().str.upper()
+        if "publishedat" in ns.columns:
+            ns["publishedat"] = pd.to_datetime(ns["publishedat"], errors="coerce", utc=True)
+            ns = ns.sort_values("publishedat", ascending=False)
+            ns = ns.drop_duplicates(subset=["symbol"], keep="first")
+            health_df = health_df.merge(
+                ns[["symbol", "publishedat"]].rename(columns={"publishedat": "last_news_date"}),
+                on="symbol",
+                how="left",
+            )
+
+    # Macro AG4 (global, non liee aux symboles)
+    macro_last_date = pd.NaT
+    if macro_news is not None and not macro_news.empty and "publishedat" in macro_news.columns:
+        macro_news["publishedat"] = pd.to_datetime(macro_news["publishedat"], errors="coerce", utc=True)
+        macro_last_date = macro_news["publishedat"].dropna().max() if not macro_news["publishedat"].dropna().empty else pd.NaT
+
+    # Freshness / statuts FR
     now_utc = pd.Timestamp.now(tz="UTC")
-    for ts_col, age_col in ts_cols.items():
-        if ts_col not in health_df.columns:
-            health_df[ts_col] = pd.NaT
-        health_df[ts_col] = pd.to_datetime(health_df[ts_col], errors="coerce", utc=True)
-        health_df[age_col] = (now_utc - health_df[ts_col]).dt.total_seconds() / 86400.0
 
-    def _status_from_age(age_series: pd.Series, ok_days: int, warn_days: int) -> pd.Series:
-        stt = pd.Series("MISSING", index=age_series.index, dtype=object)
-        valid = age_series.notna()
-        stt.loc[valid & (age_series <= ok_days)] = "OK"
-        stt.loc[valid & (age_series > ok_days) & (age_series <= warn_days)] = "WARN"
-        stt.loc[valid & (age_series > warn_days)] = "STALE"
-        return stt
+    def _age_days(dt_series: pd.Series) -> pd.Series:
+        s = pd.to_datetime(dt_series, errors="coerce", utc=True)
+        age = (now_utc - s).dt.total_seconds() / 86400.0
+        # Evite les ages negatifs (dates futures / timezone)
+        return age.clip(lower=0)
 
-    health_df["tech_status"] = _status_from_age(health_df["tech_age_days"], ok_days=3, warn_days=7)
-    health_df["funda_status"] = _status_from_age(health_df["funda_age_days"], ok_days=30, warn_days=90)
-    health_df["news_status"] = _status_from_age(health_df["news_age_days"], ok_days=2, warn_days=7)
-    health_df["macro_status"] = _status_from_age(health_df["macro_age_days"], ok_days=2, warn_days=7)
+    health_df["tech_age_days"] = _age_days(health_df.get("last_tech_date", pd.Series(pd.NaT, index=health_df.index)))
+    health_df["funda_age_days"] = _age_days(health_df.get("last_funda_date", pd.Series(pd.NaT, index=health_df.index)))
+    health_df["news_age_days"] = _age_days(health_df.get("last_news_date", pd.Series(pd.NaT, index=health_df.index)))
 
-    sev_map = {"OK": 0, "WARN": 1, "STALE": 2, "MISSING": 3}
-    inv_sev = {0: "OK", 1: "WARN", 2: "STALE", 3: "MISSING"}
+    def _status_fr(age_series: pd.Series, date_series: pd.Series, ok_days: int, warn_days: int) -> pd.Series:
+        out = pd.Series("Manquant", index=age_series.index, dtype=object)
+        valid = pd.to_datetime(date_series, errors="coerce", utc=True).notna()
+        out.loc[valid & (age_series <= ok_days)] = "A jour"
+        out.loc[valid & (age_series > ok_days) & (age_series <= warn_days)] = "A surveiller"
+        out.loc[valid & (age_series > warn_days)] = "En retard"
+        return out
+
+    health_df["tech_statut"] = _status_fr(health_df["tech_age_days"], health_df.get("last_tech_date"), ok_days=3, warn_days=7)
+    health_df["funda_statut"] = _status_fr(health_df["funda_age_days"], health_df.get("last_funda_date"), ok_days=30, warn_days=90)
+    health_df["news_statut"] = _status_fr(health_df["news_age_days"], health_df.get("last_news_date"), ok_days=2, warn_days=7)
+
+    sev_map = {"A jour": 0, "A surveiller": 1, "En retard": 2, "Manquant": 3}
+    inv_sev = {0: "A jour", 1: "A surveiller", 2: "En retard", 3: "Manquant"}
     sev_cols = []
-    for src in ["tech", "funda", "news", "macro"]:
+    for src in ["tech", "funda", "news"]:
         sev_col = f"{src}_sev"
-        health_df[sev_col] = health_df[f"{src}_status"].map(sev_map).fillna(3).astype(int)
+        health_df[sev_col] = health_df[f"{src}_statut"].map(sev_map).fillna(3).astype(int)
         sev_cols.append(sev_col)
     health_df["global_sev"] = health_df[sev_cols].max(axis=1)
-    health_df["global_status"] = health_df["global_sev"].map(inv_sev).fillna("MISSING")
+    health_df["statut_global"] = health_df["global_sev"].map(inv_sev).fillna("Manquant")
 
-    # KPIs globaux
+    # KPI symboles
     total_symbols = len(health_df)
-    ok_symbols = int((health_df["global_status"] == "OK").sum())
-    warn_symbols = int((health_df["global_status"] == "WARN").sum())
-    stale_symbols = int((health_df["global_status"] == "STALE").sum())
-    missing_symbols = int((health_df["global_status"] == "MISSING").sum())
+    k_ok = int((health_df["statut_global"] == "A jour").sum())
+    k_warn = int((health_df["statut_global"] == "A surveiller").sum())
+    k_late = int((health_df["statut_global"] == "En retard").sum())
+    k_miss = int((health_df["statut_global"] == "Manquant").sum())
 
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("Symboles suivis", total_symbols)
-    k2.metric("OK", ok_symbols)
-    k3.metric("WARN", warn_symbols)
-    k4.metric("STALE", stale_symbols)
-    k5.metric("MISSING", missing_symbols)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Symboles suivis", total_symbols)
+    c2.metric("A jour", k_ok)
+    c3.metric("A surveiller", k_warn)
+    c4.metric("En retard", k_late)
+    c5.metric("Manquant", k_miss)
 
-    # Statut des workflows (dernier run)
+    # Macro globale (independante des symboles)
+    st.markdown("### Macro globale (AG4)")
+    if pd.notna(macro_last_date):
+        macro_age = max(0.0, (now_utc - macro_last_date).total_seconds() / 86400.0)
+        if macro_age <= 2:
+            macro_statut = "A jour"
+        elif macro_age <= 7:
+            macro_statut = "A surveiller"
+        else:
+            macro_statut = "En retard"
+    else:
+        macro_age = float("nan")
+        macro_statut = "Manquant"
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Statut macro", macro_statut)
+    m2.metric("Age macro (jours)", f"{macro_age:.1f}" if pd.notna(macro_age) else "n/a")
+    m3.metric("Derniere date macro", str(macro_last_date)[:19] if pd.notna(macro_last_date) else "n/a")
+
+    # Runs workflows (robuste contre RUNNING stale)
     st.markdown("### Statut des workflows (dernier run)")
 
+    def _workflow_status_fr(raw_status: str) -> str:
+        s = str(raw_status or "").upper().strip()
+        mapping = {
+            "SUCCESS": "Termine",
+            "PARTIAL": "Partiel",
+            "FAILED": "Echec",
+            "RUNNING": "En cours",
+            "NO_DATA": "Aucune donnee",
+            "BLOQUE": "Bloque",
+            "UNKNOWN": "Inconnu",
+            "": "Inconnu",
+        }
+        return mapping.get(s, s.title())
+
     def _latest_run_snapshot(df_runs: pd.DataFrame, workflow: str) -> dict[str, object]:
-        out = {"workflow": workflow, "status": "NO_DATA", "last_start": pd.NaT, "last_finish": pd.NaT, "age_h": pd.NA}
+        out = {
+            "workflow": workflow,
+            "status_raw": "NO_DATA",
+            "status": "Aucune donnee",
+            "last_start": pd.NaT,
+            "last_finish": pd.NaT,
+            "age_h": pd.NA,
+        }
         if df_runs is None or df_runs.empty:
             return out
+
         wk = normalize_cols(df_runs.copy())
         if "started_at" not in wk.columns:
             return out
+
         wk["started_at"] = pd.to_datetime(wk["started_at"], errors="coerce", utc=True)
         if "finished_at" in wk.columns:
             wk["finished_at"] = pd.to_datetime(wk["finished_at"], errors="coerce", utc=True)
-        wk = wk.dropna(subset=["started_at"]).sort_values("started_at", ascending=False)
+        else:
+            wk["finished_at"] = pd.NaT
+
+        wk["status_u"] = wk.get("status", pd.Series("", index=wk.index)).fillna("").astype(str).str.upper().str.strip()
+        wk = wk.dropna(subset=["started_at"]).copy()
         if wk.empty:
             return out
-        row = wk.iloc[0]
-        out["status"] = str(row.get("status", "UNKNOWN")).upper()
-        out["last_start"] = row.get("started_at")
-        out["last_finish"] = row.get("finished_at", pd.NaT)
-        ref_dt = out["last_finish"] if pd.notna(out["last_finish"]) else out["last_start"]
-        if pd.notna(ref_dt):
-            out["age_h"] = round((now_utc - ref_dt).total_seconds() / 3600.0, 1)
+
+        wk["end_ts"] = wk["finished_at"].where(wk["finished_at"].notna(), wk["started_at"])
+        final_statuses = {"SUCCESS", "PARTIAL", "FAILED", "NO_DATA"}
+        finals = wk[(wk["finished_at"].notna()) | (wk["status_u"].isin(final_statuses))].copy()
+        finals = finals.sort_values("end_ts", ascending=False)
+        latest_final = finals.iloc[0] if not finals.empty else None
+
+        runnings = wk[(wk["status_u"] == "RUNNING") & (wk["finished_at"].isna())].copy().sort_values("started_at", ascending=False)
+        latest_running = runnings.iloc[0] if not runnings.empty else None
+
+        chosen = None
+        chosen_status = "NO_DATA"
+
+        if latest_running is not None:
+            running_age_h = (now_utc - latest_running["started_at"]).total_seconds() / 3600.0
+            latest_final_end = latest_final["end_ts"] if latest_final is not None else pd.NaT
+            really_running = pd.isna(latest_final_end) or (latest_running["started_at"] > latest_final_end)
+            if really_running and running_age_h <= 1.5:
+                chosen = latest_running
+                chosen_status = "RUNNING"
+            elif latest_final is not None:
+                chosen = latest_final
+                chosen_status = str(latest_final["status_u"] or "UNKNOWN")
+            else:
+                chosen = latest_running
+                chosen_status = "BLOQUE" if running_age_h > 1.5 else "RUNNING"
+        elif latest_final is not None:
+            chosen = latest_final
+            chosen_status = str(latest_final["status_u"] or "UNKNOWN")
+
+        if chosen is None:
+            return out
+
+        ref_dt = chosen["finished_at"] if pd.notna(chosen["finished_at"]) else chosen["started_at"]
+        age_h = (now_utc - ref_dt).total_seconds() / 3600.0 if pd.notna(ref_dt) else pd.NA
+
+        out["status_raw"] = chosen_status
+        out["status"] = _workflow_status_fr(chosen_status)
+        out["last_start"] = chosen["started_at"]
+        out["last_finish"] = chosen["finished_at"]
+        out["age_h"] = round(float(age_h), 1) if pd.notna(age_h) else pd.NA
         return out
 
     run_rows = [
-        _latest_run_snapshot(duckdb_data.get("df_runs", pd.DataFrame()), "AG2 Technical"),
-        _latest_run_snapshot(duckdb_data.get("df_funda_runs", pd.DataFrame()), "AG3 Fundamental"),
+        _latest_run_snapshot(duckdb_data.get("df_runs", pd.DataFrame()), "AG2 Technique"),
+        _latest_run_snapshot(duckdb_data.get("df_funda_runs", pd.DataFrame()), "AG3 Fondamentale"),
         _latest_run_snapshot(duckdb_data.get("df_news_macro_runs", pd.DataFrame()), "AG4 Macro"),
-        _latest_run_snapshot(duckdb_data.get("df_news_symbol_runs", pd.DataFrame()), "AG4 SPE Symbol"),
+        _latest_run_snapshot(duckdb_data.get("df_news_symbol_runs", pd.DataFrame()), "AG4 SPE News Symbole"),
     ]
     runs_df = pd.DataFrame(run_rows)
 
     r1, r2, r3, r4 = st.columns(4)
     run_cards = [r1, r2, r3, r4]
     for idx, rec in enumerate(run_rows):
-        delta_txt = f"{rec['age_h']}h ago" if pd.notna(rec.get("age_h")) else "n/a"
+        delta_txt = f"{rec['age_h']}h" if pd.notna(rec.get("age_h")) else "n/a"
         run_cards[idx].metric(rec["workflow"], str(rec["status"]), delta=delta_txt)
 
     render_interactive_table(
-        runs_df.rename(
+        runs_df[["workflow", "status", "status_raw", "last_start", "last_finish", "age_h"]].rename(
             columns={
                 "workflow": "Workflow",
-                "status": "Status",
-                "last_start": "Last Start",
-                "last_finish": "Last Finish",
-                "age_h": "Age (hours)",
+                "status": "Statut",
+                "status_raw": "Statut brut",
+                "last_start": "Dernier demarrage",
+                "last_finish": "Derniere fin",
+                "age_h": "Age (heures)",
             }
         ),
         key_suffix="system_health_runs",
@@ -2532,11 +2640,11 @@ elif page == "System Health (Monitoring)":
     )
 
     st.divider()
-    st.markdown("### Fraicheur par source")
+    st.markdown("### Fraicheur par source (symboles)")
     status_counts = []
-    for src, label in [("tech_status", "Technique AG2"), ("funda_status", "Fondamentale AG3"), ("news_status", "News Symbole AG4-SPE"), ("macro_status", "Macro AG4")]:
+    for src, label in [("tech_statut", "Technique AG2"), ("funda_statut", "Fondamentale AG3"), ("news_statut", "News Symbole AG4-SPE")]:
         vc = health_df[src].value_counts(dropna=False)
-        for stt in ["OK", "WARN", "STALE", "MISSING"]:
+        for stt in ["A jour", "A surveiller", "En retard", "Manquant"]:
             status_counts.append({"Source": label, "Statut": stt, "Count": int(vc.get(stt, 0))})
     df_counts = pd.DataFrame(status_counts)
     fig_counts = px.bar(
@@ -2545,7 +2653,7 @@ elif page == "System Health (Monitoring)":
         y="Count",
         color="Statut",
         barmode="stack",
-        color_discrete_map={"OK": "#28a745", "WARN": "#ffc107", "STALE": "#fd7e14", "MISSING": "#dc3545"},
+        color_discrete_map={"A jour": "#28a745", "A surveiller": "#ffc107", "En retard": "#fd7e14", "Manquant": "#dc3545"},
         title="Repartition des statuts de fraicheur",
     )
     fig_counts.update_layout(height=320, margin=dict(t=40, b=20, l=20, r=20))
@@ -2554,11 +2662,10 @@ elif page == "System Health (Monitoring)":
     st.divider()
     st.markdown("### Detail par symbole")
 
-    # Filtres d'investigation
     f1, f2 = st.columns([1, 1])
     view_mode = f1.selectbox(
         "Filtre statut",
-        ["Tous", "Issues critiques (STALE/MISSING)", "WARNING et plus", "OK uniquement"],
+        ["Tous", "Critiques (En retard/Manquant)", "A surveiller et plus", "A jour uniquement"],
         index=0,
         key="health_filter_mode",
     )
@@ -2566,37 +2673,24 @@ elif page == "System Health (Monitoring)":
     sector_sel = f2.selectbox("Secteur", ["Tous"] + sectors, index=0, key="health_filter_sector")
 
     show_df = health_df.copy()
-    if view_mode == "Issues critiques (STALE/MISSING)":
+    if view_mode == "Critiques (En retard/Manquant)":
         show_df = show_df[show_df["global_sev"] >= 2]
-    elif view_mode == "WARNING et plus":
+    elif view_mode == "A surveiller et plus":
         show_df = show_df[show_df["global_sev"] >= 1]
-    elif view_mode == "OK uniquement":
+    elif view_mode == "A jour uniquement":
         show_df = show_df[show_df["global_sev"] == 0]
 
     if sector_sel != "Tous":
         show_df = show_df[show_df["sector"].astype(str) == sector_sel]
 
-    for age_col in ["tech_age_days", "funda_age_days", "news_age_days", "macro_age_days"]:
-        show_df[age_col] = show_df[age_col].round(1)
+    for age_col in ["tech_age_days", "funda_age_days", "news_age_days"]:
+        show_df[age_col] = pd.to_numeric(show_df[age_col], errors="coerce").round(1)
 
     cols_detail = [
-        "symbol",
-        "name",
-        "sector",
-        "industry",
-        "global_status",
-        "tech_status",
-        "tech_age_days",
-        "last_tech_date",
-        "funda_status",
-        "funda_age_days",
-        "last_funda_date",
-        "news_status",
-        "news_age_days",
-        "symbol_news_last_date",
-        "macro_status",
-        "macro_age_days",
-        "macro_last_date",
+        "symbol", "name", "sector", "industry", "statut_global",
+        "tech_statut", "tech_age_days", "last_tech_date",
+        "funda_statut", "funda_age_days", "last_funda_date",
+        "news_statut", "news_age_days", "last_news_date",
     ]
     cols_detail = [c for c in cols_detail if c in show_df.columns]
     show_df = show_df.sort_values(["global_sev", "symbol"], ascending=[False, True], na_position="last")
@@ -2608,19 +2702,16 @@ elif page == "System Health (Monitoring)":
                 "name": "Nom",
                 "sector": "Secteur",
                 "industry": "Industrie",
-                "global_status": "Statut global",
-                "tech_status": "Tech statut",
-                "tech_age_days": "Tech age (j)",
-                "last_tech_date": "Tech derniere date",
-                "funda_status": "Funda statut",
-                "funda_age_days": "Funda age (j)",
-                "last_funda_date": "Funda derniere date",
-                "news_status": "News statut",
-                "news_age_days": "News age (j)",
-                "symbol_news_last_date": "News derniere date",
-                "macro_status": "Macro statut",
-                "macro_age_days": "Macro age (j)",
-                "macro_last_date": "Macro derniere date",
+                "statut_global": "Statut global",
+                "tech_statut": "Statut Tech",
+                "tech_age_days": "Age Tech (j)",
+                "last_tech_date": "Derniere date Tech",
+                "funda_statut": "Statut Funda",
+                "funda_age_days": "Age Funda (j)",
+                "last_funda_date": "Derniere date Funda",
+                "news_statut": "Statut News",
+                "news_age_days": "Age News (j)",
+                "last_news_date": "Derniere date News",
             }
         ),
         key_suffix="system_health_symbols",
@@ -2632,9 +2723,9 @@ elif page == "System Health (Monitoring)":
 # ============================================================
 
 elif page == "Vue consolidee Multi-Agents":
-    st.title("ðŸ§­ Vue consolidee AG2 + AG3 + AG4")
+    st.title("Vue consolidee AG2 + AG3 + AG4")
 
-    if st.button("ðŸ”„ Rafraichir", key="refresh_multi_agents"):
+    if st.button("Rafraichir", key="refresh_multi_agents"):
         load_data.clear()
         load_duckdb_data.clear()
         st.rerun()
@@ -2841,17 +2932,17 @@ elif page == "Vue consolidee Multi-Agents":
 # ============================================================
 
 elif page == "Analyse Technique V2":
-    st.title("ðŸ“ˆ Analyse Technique V2 (AG2)")
+    st.title("Analyse Technique V2 (AG2)")
 
-    if st.button("ðŸ”„ RafraÃ®chir", key="refresh_v2"):
+    if st.button("Rafraichir", key="refresh_v2"):
         load_data.clear()
         load_duckdb_data.clear()
         st.rerun()
 
     if not duckdb_data:
         st.info(
-            "Base DuckDB non disponible. VÃ©rifiez que le fichier existe "
-            f"Ã  l'emplacement : `{DUCKDB_PATH}`"
+            "Base DuckDB non disponible. Vérifiez que le fichier existe "
+            f"à l'emplacement : `{DUCKDB_PATH}`"
         )
         st.stop()
 
@@ -2868,7 +2959,7 @@ elif page == "Analyse Technique V2":
         df_signals = enrich_df_with_name(df_signals, df_univ)
 
     tab_overview, tab_detail, tab_runs = st.tabs(
-        ["Vue d'ensemble", "Vue dÃ©taillÃ©e", "Historique Runs"]
+        ["Vue d'ensemble", "Vue détaillée", "Historique Runs"]
     )
 
     # ================================================================
@@ -2884,12 +2975,12 @@ elif page == "Analyse Technique V2":
         ai_approvals = int(df_signals.get("ai_decision", pd.Series(dtype=str)).astype(str).str.upper().eq("APPROVE").sum()) if "ai_decision" in df_signals.columns else 0
 
         kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
-        kc1.metric("Symboles analysÃ©s", total_symbols)
+        kc1.metric("Symboles analysés", total_symbols)
         kc2.metric("BUY", buy_count)
         kc3.metric("SELL", sell_count)
         kc4.metric("NEUTRAL", neutral_count)
         kc5.metric("Appels IA", ai_calls)
-        kc6.metric("IA ApprouvÃ©s", ai_approvals)
+        kc6.metric("IA Approuvés", ai_approvals)
 
         st.divider()
 
@@ -2923,18 +3014,18 @@ elif page == "Analyse Technique V2":
         d1_rsi_num = safe_float_series(df_ov["d1_rsi14"])
         ai_quality_num = safe_float_series(df_ov["ai_quality"])
 
-        df_display["Close"] = close_num.apply(lambda v: f"{v:.2f}" if v > 0 else "â€”")
-        df_display["H1 Action"] = df_ov["h1_action"].fillna("").astype(str).str.upper().replace("", "â€”")
-        df_display["H1 Score"] = h1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "â€”")
-        df_display["H1 RSI"] = h1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "â€”")
-        df_display["D1 Action"] = df_ov["d1_action"].fillna("").astype(str).str.upper().replace("", "â€”")
-        df_display["D1 Score"] = d1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "â€”")
-        df_display["D1 RSI"] = d1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "â€”")
-        df_display["Filtre"] = df_ov["filter_reason"].fillna("â€”")
-        df_display["IA"] = df_ov["ai_decision"].fillna("").astype(str).str.upper().replace("", "â€”")
-        df_display["QualitÃ© IA"] = ai_quality_num.apply(lambda v: f"{v:.0f}/10" if v > 0 else "â€”")
+        df_display["Close"] = close_num.apply(lambda v: f"{v:.2f}" if v > 0 else "—")
+        df_display["H1 Action"] = df_ov["h1_action"].fillna("").astype(str).str.upper().replace("", "—")
+        df_display["H1 Score"] = h1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "—")
+        df_display["H1 RSI"] = h1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "—")
+        df_display["D1 Action"] = df_ov["d1_action"].fillna("").astype(str).str.upper().replace("", "—")
+        df_display["D1 Score"] = d1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "—")
+        df_display["D1 RSI"] = d1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "—")
+        df_display["Filtre"] = df_ov["filter_reason"].fillna("—")
+        df_display["IA"] = df_ov["ai_decision"].fillna("").astype(str).str.upper().replace("", "—")
+        df_display["Qualité IA"] = ai_quality_num.apply(lambda v: f"{v:.0f}/10" if v > 0 else "—")
         df_display["Date"] = df_ov["workflow_date"].apply(
-            lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() not in ("", "nan", "NaT") else "â€”"
+            lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() not in ("", "nan", "NaT") else "—"
         )
 
         # Apply RSI coloring via Styler on a numeric version for conditional formatting
@@ -2955,18 +3046,18 @@ elif page == "Analyse Technique V2":
         if not symbol_list:
             st.warning("Aucun symbole disponible.")
         else:
-            # Build "SYMBOL â€” NAME" labels for search by company name
+            # Build "SYMBOL — NAME" labels for search by company name
             _name_map = {}
             _label_list = []
             for sym in symbol_list:
                 base_row = signals_by_symbol.loc[sym]
                 name = str(base_row.get("name", "")).strip()
-                label = f"{sym} â€” {name}" if name and name.lower() not in ("", "nan", "none") else sym
+                label = f"{sym} — {name}" if name and name.lower() not in ("", "nan", "none") else sym
                 _name_map[label] = sym
                 _label_list.append(label)
 
             selected_label = st.selectbox(
-                "SÃ©lectionner un symbole (recherche par nom ou ticker) :",
+                "Sélectionner un symbole (recherche par nom ou ticker) :",
                 _label_list,
                 key="v2_symbol_select",
             )
@@ -2974,17 +3065,17 @@ elif page == "Analyse Technique V2":
 
             if selected_symbol:
                 if selected_symbol not in signals_by_symbol.index:
-                    st.warning(f"Aucune donnÃ©e pour {selected_symbol}")
+                    st.warning(f"Aucune donnée pour {selected_symbol}")
                 else:
                     row = signals_by_symbol.loc[selected_symbol]
 
                     # ---- Row 1: KPI Cards ----
-                    st.subheader(f"ðŸ“Š {selected_symbol} â€” {row.get('name', '')}")
+                    st.subheader(f"📊 {selected_symbol} — {row.get('name', '')}")
 
                     mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
 
                     close_price = safe_float(row.get("last_close", 0))
-                    mc1.metric("Close", f"{close_price:.2f} â‚¬" if close_price > 0 else "â€”")
+                    mc1.metric("Close", f"{close_price:.2f} €" if close_price > 0 else "—")
 
                     h1_act = str(row.get("h1_action", "")).upper()
                     h1_sc = safe_float(row.get("h1_score", 0))
@@ -2994,14 +3085,14 @@ elif page == "Analyse Technique V2":
                     d1_sc = safe_float(row.get("d1_score", 0))
                     mc3.metric("D1", f"{d1_act}", delta=f"Score: {d1_sc:.0f}")
 
-                    ai_dec = str(row.get("ai_decision", "â€”"))
-                    mc4.metric("DÃ©cision IA", ai_dec if ai_dec.strip() else "â€”")
+                    ai_dec = str(row.get("ai_decision", "—"))
+                    mc4.metric("Décision IA", ai_dec if ai_dec.strip() else "—")
 
                     ai_qual = safe_float(row.get("ai_quality", 0))
-                    mc5.metric("QualitÃ© IA", f"{ai_qual:.0f}/10" if ai_qual > 0 else "â€”")
+                    mc5.metric("Qualité IA", f"{ai_qual:.0f}/10" if ai_qual > 0 else "—")
 
                     rr = safe_float(row.get("ai_rr_theoretical", 0))
-                    mc6.metric("R/R ThÃ©orique", f"{rr:.2f}" if rr > 0 else "â€”")
+                    mc6.metric("R/R Théorique", f"{rr:.2f}" if rr > 0 else "—")
 
                     st.divider()
 
@@ -3013,7 +3104,7 @@ elif page == "Analyse Technique V2":
                         with tf_col:
                             st.markdown(f"#### Indicateurs {tf_label}")
 
-                            # RSI Gauge (keep the gauge â€” it's the most important)
+                            # RSI Gauge (keep the gauge — it's the most important)
                             rsi_val = safe_float(row.get(f"{prefix}rsi14", 0))
                             if rsi_val > 0:
                                 fig_rsi = _make_rsi_gauge(rsi_val, f"RSI 14 ({tf_label})")
@@ -3081,13 +3172,13 @@ elif page == "Analyse Technique V2":
                             if not df_chart.empty:
                                 fig_candle = _make_candlestick_chart(
                                     df_chart,
-                                    title=f"{selected_symbol} â€” {tf_label} ({interval})",
+                                    title=f"{selected_symbol} — {tf_label} ({interval})",
                                     support=support,
                                     resistance=resistance,
                                 )
                                 st.plotly_chart(fig_candle, use_container_width=True, key=f"chart_{tf_label}_{selected_symbol}")
                             else:
-                                st.caption(f"DonnÃ©es {tf_label} indisponibles (yfinance-api).")
+                                st.caption(f"Données {tf_label} indisponibles (yfinance-api).")
 
                     st.divider()
 
@@ -3101,22 +3192,22 @@ elif page == "Analyse Technique V2":
                             ai_c1, ai_c2, ai_c3 = st.columns(3)
 
                             with ai_c1:
-                                st.markdown(f"**DÃ©cision :** {_ai_badge(ai_decision)}", unsafe_allow_html=True)
-                                st.markdown(f"**QualitÃ© :** {safe_float(row.get('ai_quality', 0)):.0f}/10")
-                                st.markdown(f"**Biais SMA200 :** {row.get('ai_bias_sma200', 'â€”')}")
-                                st.markdown(f"**RÃ©gime D1 :** {row.get('ai_regime_d1', 'â€”')}")
+                                st.markdown(f"**Décision :** {_ai_badge(ai_decision)}", unsafe_allow_html=True)
+                                st.markdown(f"**Qualité :** {safe_float(row.get('ai_quality', 0)):.0f}/10")
+                                st.markdown(f"**Biais SMA200 :** {row.get('ai_bias_sma200', '—')}")
+                                st.markdown(f"**Régime D1 :** {row.get('ai_regime_d1', '—')}")
 
                             with ai_c2:
-                                st.markdown(f"**Alignement :** {row.get('ai_alignment', 'â€”')}")
-                                st.markdown(f"**Pattern :** {row.get('ai_chart_pattern', 'â€”')}")
-                                st.markdown(f"**Stop Loss :** {row.get('ai_stop_loss', 'â€”')} ({row.get('ai_stop_basis', 'â€”')})")
-                                st.markdown(f"**R/R ThÃ©orique :** {safe_float(row.get('ai_rr_theoretical', 0)):.2f}")
+                                st.markdown(f"**Alignement :** {row.get('ai_alignment', '—')}")
+                                st.markdown(f"**Pattern :** {row.get('ai_chart_pattern', '—')}")
+                                st.markdown(f"**Stop Loss :** {row.get('ai_stop_loss', '—')} ({row.get('ai_stop_basis', '—')})")
+                                st.markdown(f"**R/R Théorique :** {safe_float(row.get('ai_rr_theoretical', 0)):.2f}")
 
                             with ai_c3:
                                 ai_missing = str(row.get("ai_missing", "")).strip()
                                 ai_anomalies = str(row.get("ai_anomalies", "")).strip()
                                 if ai_missing and ai_missing.lower() not in ("nan", "none", ""):
-                                    st.markdown(f"**DonnÃ©es manquantes :** {ai_missing}")
+                                    st.markdown(f"**Données manquantes :** {ai_missing}")
                                 if ai_anomalies and ai_anomalies.lower() not in ("nan", "none", ""):
                                     st.markdown(f"**Anomalies :** {ai_anomalies}")
 
@@ -3127,7 +3218,7 @@ elif page == "Analyse Technique V2":
                                 st.markdown(f"**Raisonnement IA :**")
                                 st.markdown(ai_reasoning)
                     else:
-                        st.info("Pas d'analyse IA pour ce symbole (filtre non passÃ© ou IA non appelÃ©e).")
+                        st.info("Pas d'analyse IA pour ce symbole (filtre non passé ou IA non appelée).")
 
     # ================================================================
     # TAB 3: HISTORIQUE RUNS
@@ -3136,26 +3227,26 @@ elif page == "Analyse Technique V2":
         if df_runs is None or df_runs.empty:
             st.info("Aucun historique de runs disponible.")
         else:
-            st.subheader("Historique des exÃ©cutions AG2-V2")
+            st.subheader("Historique des exécutions AG2-V2")
 
             df_runs_display = df_runs.copy()
 
             # Format status badges
             if "status" in df_runs_display.columns:
-                df_runs_display["Statut"] = df_runs_display["status"].fillna("").astype(str).str.upper().replace("", "â€”")
+                df_runs_display["Statut"] = df_runs_display["status"].fillna("").astype(str).str.upper().replace("", "—")
             else:
-                df_runs_display["Statut"] = "â€”"
+                df_runs_display["Statut"] = "—"
 
             display_cols = []
             col_mapping = {
                 "run_id": "Run ID",
-                "started_at": "DÃ©marrÃ©",
-                "finished_at": "TerminÃ©",
+                "started_at": "Démarré",
+                "finished_at": "Terminé",
                 "Statut": "Statut",
                 "symbols_ok": "Symboles OK",
                 "symbols_error": "Symboles Erreur",
                 "ai_calls": "Appels IA",
-                "vectors_written": "Vecteurs Ã©crits",
+                "vectors_written": "Vecteurs écrits",
             }
 
             for src, dst in col_mapping.items():
@@ -3177,9 +3268,9 @@ elif page == "Analyse Technique V2":
 # PAGE 4: ANALYSE FONDAMENTALE V2
 # ================================================================
 elif page == "Analyse Fondamentale V2":
-    st.title("ðŸ“š Analyse Fondamentale V2 (AG3)")
+    st.title("Analyse Fondamentale V2 (AG3)")
 
-    if st.button("ðŸ”„ RafraÃ®chir", key="refresh_funda_v2"):
+    if st.button("Rafraichir", key="refresh_funda_v2"):
         load_data.clear()
         load_duckdb_data.clear()
         st.rerun()
@@ -3192,12 +3283,12 @@ elif page == "Analyse Fondamentale V2":
 
     if df_funda_latest is None or df_funda_latest.empty:
         st.info(
-            "Aucune donnÃ©e fondamentale AG3-V2 disponible dans DuckDB. "
-            f"VÃ©rifiez le fichier `{AG3_DUCKDB_PATH}` et l'exÃ©cution du workflow AG3."
+            "Aucune donnée fondamentale AG3-V2 disponible dans DuckDB. "
+            f"Vérifiez le fichier `{AG3_DUCKDB_PATH}` et l'exécution du workflow AG3."
         )
         st.stop()
 
-    # Enrichissements noms/secteurs depuis Universe si prÃ©sent
+    # Enrichissements noms/secteurs depuis Universe si présent
     if df_univ is not None and not df_univ.empty and "symbol" in df_funda_latest.columns:
         df_funda_latest = enrich_df_with_name(df_funda_latest, df_univ)
     if (
@@ -3210,7 +3301,7 @@ elif page == "Analyse Fondamentale V2":
         df_funda_consensus = enrich_df_with_name(df_funda_consensus, df_univ)
 
     tab_overview, tab_detail, tab_runs = st.tabs(
-        ["Vue d'ensemble", "Vue dÃ©taillÃ©e", "Historique Runs"]
+        ["Vue d'ensemble", "Vue détaillée", "Historique Runs"]
     )
 
     # ================================================================
@@ -3233,10 +3324,10 @@ elif page == "Analyse Fondamentale V2":
         avg_upside = float(upside_num.mean()) if total_symbols > 0 else 0.0
 
         kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
-        kc1.metric("Symboles scorÃ©s", total_symbols)
+        kc1.metric("Symboles scorés", total_symbols)
         kc2.metric("Convictions fortes", high_conv)
         kc3.metric("Scores faibles", weak_conv)
-        kc4.metric("Risque Ã©levÃ©", risk_high)
+        kc4.metric("Risque élevé", risk_high)
         kc5.metric("Score moyen", f"{avg_score:.1f}/100")
         kc6.metric("Potentiel moyen", f"{avg_upside:.1f}%")
 
@@ -3326,14 +3417,14 @@ elif page == "Analyse Fondamentale V2":
                             )
                         )
                         fig_run.update_layout(
-                            title="Performance des runs AG3 (qualitÃ© des sorties)",
+                            title="Performance des runs AG3 (qualité des sorties)",
                             height=320,
                             margin=dict(t=40, b=20, l=20, r=20),
                             yaxis=dict(title="Score /100"),
                         )
                         st.plotly_chart(fig_run, use_container_width=True)
 
-        # Tableau de synthÃ¨se
+        # Tableau de synthèse
         show = pd.DataFrame()
         show["Symbole"] = df_ov.get("symbol", pd.Series(index=df_ov.index)).fillna("").astype(str)
         show["Nom"] = df_ov.get("name", pd.Series(index=df_ov.index)).fillna("")
@@ -3349,7 +3440,7 @@ elif page == "Analyse Fondamentale V2":
         show["Lecture risque"] = risk_num.map(lambda v: _funda_eval("risk_score", float(v))[0])
         show = show[show["Symbole"] != ""].sort_values("Score triage", ascending=False)
 
-        st.subheader("Tableau synthÃ¨se fondamentale")
+        st.subheader("Tableau synthèse fondamentale")
         render_interactive_table(show, key_suffix="funda_v2_overview")
 
     # ================================================================
@@ -3371,12 +3462,12 @@ elif page == "Analyse Fondamentale V2":
             for sym in symbols:
                 r = by_symbol.loc[sym]
                 name = str(r.get("name", "")).strip()
-                lbl = f"{sym} â€” {name}" if name else sym
+                lbl = f"{sym} — {name}" if name else sym
                 labels_map[lbl] = sym
                 labels.append(lbl)
 
             selected_label = st.selectbox(
-                "SÃ©lectionner un symbole :",
+                "Sélectionner un symbole :",
                 labels,
                 key="funda_v2_symbol",
             )
@@ -3394,7 +3485,7 @@ elif page == "Analyse Fondamentale V2":
             upside_v = safe_float(row.get("upside_pct", 0))
             analysts_v = safe_float(row.get("analyst_count", 0))
 
-            st.subheader(f"ðŸ”¬ {selected_symbol} â€” {row.get('name', '')}")
+            st.subheader(f"🔬 {selected_symbol} — {row.get('name', '')}")
             mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
             mc1.metric("Triage", f"{score_v:.0f}/100", delta=_funda_eval("score", score_v)[0])
             mc2.metric("Risque", f"{risk_v:.0f}/100", delta=_funda_eval("risk_score", risk_v)[0])
@@ -3425,7 +3516,7 @@ elif page == "Analyse Fondamentale V2":
 
             st.divider()
 
-            # Table d'interprÃ©tation (bon/mauvais + sens de l'indicateur)
+            # Table d'interprétation (bon/mauvais + sens de l'indicateur)
             interp_rows = []
             for key, val in [
                 ("score", score_v),
@@ -3448,7 +3539,7 @@ elif page == "Analyse Fondamentale V2":
                     }
                 )
 
-            st.markdown("#### InterprÃ©tation des indicateurs")
+            st.markdown("#### Interprétation des indicateurs")
             render_interactive_table(
                 pd.DataFrame(interp_rows),
                 key_suffix="funda_v2_interp",
@@ -3490,14 +3581,14 @@ elif page == "Analyse Fondamentale V2":
                             )
                         )
                         fig_hist.update_layout(
-                            title=f"Ã‰volution historique â€” {selected_symbol}",
+                            title=f"Évolution historique — {selected_symbol}",
                             height=320,
                             margin=dict(t=40, b=20, l=20, r=20),
                             yaxis=dict(title="Score /100"),
                         )
                         st.plotly_chart(fig_hist, use_container_width=True)
 
-            # Consensus + scÃ©narios
+            # Consensus + scénarios
             c_left, c_right = st.columns([1, 1])
             with c_left:
                 st.markdown("#### Consensus")
@@ -3511,7 +3602,7 @@ elif page == "Analyse Fondamentale V2":
 
                 if not c_row.empty:
                     cr = c_row.iloc[0]
-                    st.markdown(f"**Recommandation**: {cr.get('recommendation', 'â€”')}")
+                    st.markdown(f"**Recommandation**: {cr.get('recommendation', '—')}")
                     st.markdown(f"**Objectif moyen**: {safe_float(cr.get('target_mean_price', 0)):.2f}")
                     st.markdown(f"**Objectif haut**: {safe_float(cr.get('target_high_price', 0)):.2f}")
                     st.markdown(f"**Objectif bas**: {safe_float(cr.get('target_low_price', 0)):.2f}")
@@ -3521,7 +3612,7 @@ elif page == "Analyse Fondamentale V2":
                     st.caption("Pas de ligne consensus disponible.")
 
             with c_right:
-                st.markdown("#### ScÃ©narios de valorisation")
+                st.markdown("#### Scénarios de valorisation")
                 scenarios = extract_valuation_scenarios(str(row.get("valuation", "")))
                 current_px = safe_float(row.get("current_price", 0))
                 if scenarios and current_px > 0:
@@ -3547,7 +3638,7 @@ elif page == "Analyse Fondamentale V2":
                                 x=hist_px["time"],
                                 y=hist_px["close"],
                                 mode="lines",
-                                name="Cours rÃ©el (1 an)",
+                                name="Cours réel (1 an)",
                                 line=dict(color="#ffffff", width=2),
                             )
                         )
@@ -3587,14 +3678,14 @@ elif page == "Analyse Fondamentale V2":
                     fig_sc.update_layout(
                         height=320,
                         margin=dict(t=20, b=20, l=20, r=20),
-                        title="Cours rÃ©el (1 an) + projections (12 mois)",
+                        title="Cours réel (1 an) + projections (12 mois)",
                     )
                     st.plotly_chart(fig_sc, use_container_width=True)
-                    st.caption("ProbabilitÃ©s indicatives calculÃ©es par heuristique locale (pas un modÃ¨le IA prÃ©dictif).")
+                    st.caption("Probabilités indicatives calculées par heuristique locale (pas un modèle IA prédictif).")
                 else:
-                    st.caption("ScÃ©narios baissier/central/haussier non disponibles pour ce symbole.")
+                    st.caption("Scénarios baissier/central/haussier non disponibles pour ce symbole.")
 
-            # MÃ©triques fondamentales brutes (latest)
+            # Métriques fondamentales brutes (latest)
             if df_funda_metrics is not None and not df_funda_metrics.empty and "symbol" in df_funda_metrics.columns:
                 m = df_funda_metrics[df_funda_metrics["symbol"] == selected_symbol].copy()
                 if not m.empty:
@@ -3608,15 +3699,15 @@ elif page == "Analyse Fondamentale V2":
                         if col in m.columns:
                             show_cols.append(col)
                     if show_cols:
-                        st.markdown("#### MÃ©triques fondamentales (latest)")
+                        st.markdown("#### Métriques fondamentales (latest)")
                         render_interactive_table(
                             m[show_cols].rename(
                                 columns={
                                     "section": "Section",
                                     "metric": "Indicateur",
-                                    "unit": "UnitÃ©",
+                                    "unit": "Unité",
                                     "notes": "Notes",
-                                    "as_of_date": "Date rÃ©fÃ©rence",
+                                    "as_of_date": "Date référence",
                                     "extracted_at": "Date extraction",
                                 }
                             ),
@@ -3631,7 +3722,7 @@ elif page == "Analyse Fondamentale V2":
         if df_funda_runs is None or df_funda_runs.empty:
             st.info("Aucun historique de runs AG3 disponible.")
         else:
-            st.subheader("Historique des exÃ©cutions AG3-V2")
+            st.subheader("Historique des exécutions AG3-V2")
 
             run_df = df_funda_runs.copy()
             if "status" in run_df.columns:
@@ -3640,11 +3731,11 @@ elif page == "Analyse Fondamentale V2":
             # KPIs run-level
             last = run_df.iloc[0]
             rk1, rk2, rk3, rk4, rk5 = st.columns(5)
-            rk1.metric("Dernier statut", str(last.get("status", "â€”")))
+            rk1.metric("Dernier statut", str(last.get("status", "—")))
             rk2.metric("Symboles", f"{safe_float(last.get('symbols_total', 0)):.0f}")
             rk3.metric("OK", f"{safe_float(last.get('symbols_ok', 0)):.0f}")
             rk4.metric("Erreur", f"{safe_float(last.get('symbols_error', 0)):.0f}")
-            rk5.metric("Metrics Ã©crits", f"{safe_float(last.get('metric_rows', 0)):.0f}")
+            rk5.metric("Metrics écrits", f"{safe_float(last.get('metric_rows', 0)):.0f}")
 
             if "started_at" in run_df.columns:
                 run_df["started_at"] = pd.to_datetime(run_df["started_at"], errors="coerce")
@@ -3671,14 +3762,14 @@ elif page == "Analyse Fondamentale V2":
                         barmode="stack",
                         height=320,
                         margin=dict(t=30, b=20, l=20, r=20),
-                        title="QualitÃ© des runs AG3 dans le temps",
+                        title="Qualité des runs AG3 dans le temps",
                     )
                     st.plotly_chart(fig_runs, use_container_width=True)
 
             ren_map = {
                 "run_id": "Run ID",
-                "started_at": "DÃ©marrÃ©",
-                "finished_at": "TerminÃ©",
+                "started_at": "Démarré",
+                "finished_at": "Terminé",
                 "status": "Statut",
                 "symbols_total": "Total",
                 "symbols_ok": "OK",
