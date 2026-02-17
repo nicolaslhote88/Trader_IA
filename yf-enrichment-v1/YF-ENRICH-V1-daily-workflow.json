@@ -34,7 +34,7 @@
     },
     {
       "parameters": {
-        "command": "sh -c 'SCRIPT=/workspace/yf-enrichment-v1/daily_enrichment.py; if [ ! -f \"$SCRIPT\" ]; then SCRIPT=/files/yf-enrichment-v1/daily_enrichment.py; fi; if [ ! -f \"$SCRIPT\" ]; then echo \"daily_enrichment.py not found (checked /workspace and /files)\"; exit 1; fi; python \"$SCRIPT\" --yf-enrich-db-path \"${YF_ENRICH_DB_PATH:-/files/duckdb/yf_enrichment_v1.duckdb}\" --ag2-db-path \"${AG2_DUCKDB_PATH:-/files/duckdb/ag2_v2.duckdb}\" --yf-api-url \"${YFINANCE_API_URL:-http://yfinance-api:8080}\" --target-days \"${YF_ENRICH_OPTIONS_TARGET_DAYS:-30}\" --quote-chunk-size \"${YF_ENRICH_QUOTE_CHUNK:-80}\" --timeout-sec \"${YF_ENRICH_TIMEOUT_SEC:-14}\"'",
+        "command": "python /files/yf-enrichment-v1/daily_enrichment.py --yf-enrich-db-path /files/duckdb/yf_enrichment_v1.duckdb --ag2-db-path /files/duckdb/ag2_v2.duckdb --yf-api-url http://yfinance-api:8080 --target-days 30 --quote-chunk-size 80 --timeout-sec 14",
         "options": {}
       },
       "type": "n8n-nodes-base.executeCommand",
