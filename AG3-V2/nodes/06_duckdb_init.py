@@ -48,6 +48,7 @@ schema_stmts = [
       consensus_rows INTEGER DEFAULT 0,
       metric_rows INTEGER DEFAULT 0,
       snapshot_rows INTEGER DEFAULT 0,
+      vector_docs_written INTEGER DEFAULT 0,
       error_detail VARCHAR,
       version VARCHAR DEFAULT '2.1.0'
     )
@@ -77,6 +78,9 @@ schema_stmts = [
       financial_health_json VARCHAR,
       consensus_json VARCHAR,
       dividends_json VARCHAR,
+      vector_status VARCHAR DEFAULT 'PENDING',
+      vector_id VARCHAR,
+      vectorized_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -119,6 +123,9 @@ schema_stmts = [
       data_coverage_pct DOUBLE,
       strategy_version VARCHAR,
       config_version VARCHAR,
+      vector_status VARCHAR DEFAULT 'PENDING',
+      vector_id VARCHAR,
+      vectorized_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -202,6 +209,13 @@ schema_stmts = [
     )
     WHERE rn = 1
     """,
+    "ALTER TABLE run_log ADD COLUMN IF NOT EXISTS vector_docs_written INTEGER DEFAULT 0",
+    "ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'",
+    "ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_id VARCHAR",
+    "ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP",
+    "ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'",
+    "ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_id VARCHAR",
+    "ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP",
 ]
 
 with db_con(db_path) as con:

@@ -14,7 +14,9 @@ def load_code(filename: str) -> str:
 
 def build() -> dict:
     doc_id = "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I"
-    creds = {"googleSheetsOAuth2Api": {"id": "aX5iAQEN9HK4UGjr", "name": "Google Sheets account"}}
+    sheet_creds = {"googleSheetsOAuth2Api": {"id": "aX5iAQEN9HK4UGjr", "name": "Google Sheets account"}}
+    openai_creds = {"openAiApi": {"id": "rILpYjTayqc4jXXZ", "name": "OpenAi account"}}
+    qdrant_creds = {"qdrantApi": {"id": "q1CRmg2N6AmW6pC1", "name": "QdrantApi account"}}
 
     nodes = [
         {
@@ -66,7 +68,7 @@ def build() -> dict:
             "position": [-960, -144],
             "id": "8e3a18ed-9e2d-43f1-8b12-a90ff3daa49f",
             "name": "AG3V2.01 - Read Universe",
-            "credentials": creds,
+            "credentials": sheet_creds,
         },
         {
             "parameters": {"jsCode": load_code("01_build_queue.js")},
@@ -151,8 +153,88 @@ def build() -> dict:
             "name": "AG3V2.09 - Finalize Run",
         },
         {
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("09_build_vector_docs.py")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [128, 64],
+            "id": "5e6f56d1-1210-4ab7-9fec-f3aa5ec2f0e6",
+            "name": "AG3V2.10 - Build Vector Docs from DuckDB",
+            "onError": "continueRegularOutput",
+        },
+        {
+            "parameters": {"options": {"dimensions": 1536}},
+            "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+            "typeVersion": 1.2,
+            "position": [560, -48],
+            "id": "0f4c4e5d-c8c7-41d9-a615-c2bfd2f6f7ba",
+            "name": "Embeddings OpenAI",
+            "credentials": openai_creds,
+        },
+        {
+            "parameters": {"chunkSize": 30000, "chunkOverlap": 200, "options": {}},
+            "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+            "typeVersion": 1,
+            "position": [560, 224],
+            "id": "84fe2d6f-40f9-4b25-ab4e-3073958e359f",
+            "name": "Text Splitter",
+        },
+        {
             "parameters": {
-                "content": "AG3-V2 (DuckDB-first): yfinance fundamentals -> scoring -> DuckDB only (no Google Sheets writes).",
+                "jsonMode": "expressionData",
+                "jsonData": "={{ $json.text }}\n",
+                "options": {
+                    "metadata": {
+                        "metadataValues": [
+                            {"name": "id", "value": "={{ $json.metadata.id }}"},
+                            {"name": "record_id", "value": "={{ $json.metadata.record_id }}"},
+                            {"name": "symbol", "value": "={{ $json.metadata.symbol }}"},
+                            {"name": "name", "value": "={{ $json.metadata.name }}"},
+                            {"name": "run_id", "value": "={{ $json.metadata.run_id }}"},
+                            {"name": "status", "value": "={{ $json.metadata.status }}"},
+                            {"name": "horizon", "value": "={{ $json.metadata.horizon }}"},
+                            {"name": "score", "value": "={{ $json.metadata.score }}"},
+                            {"name": "risk_score", "value": "={{ $json.metadata.risk_score }}"},
+                            {"name": "upside_pct", "value": "={{ $json.metadata.upside_pct }}"},
+                            {"name": "recommendation", "value": "={{ $json.metadata.recommendation }}"},
+                            {"name": "analyst_count", "value": "={{ $json.metadata.analyst_count }}"},
+                            {"name": "data_coverage_pct", "value": "={{ $json.metadata.data_coverage_pct }}"},
+                            {"name": "as_of_date", "value": "={{ $json.metadata.as_of_date }}"},
+                            {"name": "db_path", "value": "={{ $json.metadata.db_path }}"},
+                        ]
+                    }
+                },
+            },
+            "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+            "typeVersion": 1,
+            "position": [560, 416],
+            "id": "cb9b0d2b-9562-4e10-91f8-505eb3b39176",
+            "name": "Default Data Loader",
+        },
+        {
+            "parameters": {
+                "mode": "insert",
+                "qdrantCollection": {"__rl": True, "mode": "list", "value": "fundamental_analysis"},
+                "options": {"collectionConfig": {"similarity": "Cosine"}},
+            },
+            "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+            "typeVersion": 1.1,
+            "position": [784, 64],
+            "id": "2b96ab39-6361-4763-a677-d1f883533901",
+            "name": "Qdrant Upsert",
+            "credentials": qdrant_creds,
+        },
+        {
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("10_mark_vectorized.py")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [1008, 64],
+            "id": "f4f72f66-5833-4ea6-83f6-a4d53e2d068c",
+            "name": "AG3V2.11 - Mark Vectorized",
+            "onError": "continueRegularOutput",
+        },
+        {
+            "parameters": {
+                "content": "AG3-V2 (DuckDB-first): yfinance fundamentals -> scoring -> DuckDB + Qdrant (collection: fundamental_analysis).",
                 "height": 160,
                 "width": 1160,
                 "color": 5,
@@ -191,7 +273,8 @@ def build() -> dict:
                     {"node": "AG3V2.05 - Merge Queue + API", "type": "main", "index": 1},
                 ],
                 [
-                    {"node": "AG3V2.09 - Finalize Run", "type": "main", "index": 0}
+                    {"node": "AG3V2.09 - Finalize Run", "type": "main", "index": 0},
+                    {"node": "AG3V2.10 - Build Vector Docs from DuckDB", "type": "main", "index": 0},
                 ],
             ]
         },
@@ -209,6 +292,24 @@ def build() -> dict:
         },
         "AG3V2.08 - Wait Rate Limit": {
             "main": [[{"node": "AG3V2.03 - Split Symbols", "type": "main", "index": 0}]]
+        },
+        "AG3V2.10 - Build Vector Docs from DuckDB": {
+            "main": [[{"node": "Qdrant Upsert", "type": "main", "index": 0}]]
+        },
+        "Embeddings OpenAI": {
+            "ai_embedding": [[{"node": "Qdrant Upsert", "type": "ai_embedding", "index": 0}]]
+        },
+        "Text Splitter": {
+            "ai_textSplitter": [[{"node": "Default Data Loader", "type": "ai_textSplitter", "index": 0}]]
+        },
+        "Default Data Loader": {
+            "ai_document": [[{"node": "Qdrant Upsert", "type": "ai_document", "index": 0}]]
+        },
+        "Qdrant Upsert": {
+            "main": [[{"node": "AG3V2.11 - Mark Vectorized", "type": "main", "index": 0}]]
+        },
+        "AG3V2.11 - Mark Vectorized": {
+            "main": [[]]
         },
     }
 
