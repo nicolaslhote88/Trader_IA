@@ -10,7 +10,7 @@ import time
 import random
 import math
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any, List
 
 import pandas as pd
 import yfinance as yf
@@ -42,6 +42,11 @@ MIN_SECONDS_BETWEEN_CALLS = float(os.getenv("YF_MIN_SECONDS_BETWEEN_CALLS", "5")
 # If the newest bar in cache is older than this, we consider the cache stale
 # and attempt a refresh. These account for market close hours/weekends.
 CACHE_TTL_OVERRIDES = json.loads(os.getenv("YF_CACHE_TTL_JSON", "{}"))
+
+# Short-lived caches for quote/options/calendar endpoints
+QUOTE_CACHE_TTL_SEC = int(os.getenv("YF_QUOTE_CACHE_TTL_SEC", "20"))
+OPTIONS_CACHE_TTL_SEC = int(os.getenv("YF_OPTIONS_CACHE_TTL_SEC", "300"))
+CALENDAR_CACHE_TTL_SEC = int(os.getenv("YF_CALENDAR_CACHE_TTL_SEC", "1800"))
 
 DEFAULT_CACHE_TTL = {
     "1m":  900,       # 15 min
@@ -374,6 +379,87 @@ def _write_cache(symbol: str, interval: str, df: pd.DataFrame, meta: dict) -> No
     _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False))
 
 
+def _safe_file_token(value: str) -> str:
+    return str(value or "").strip().replace("/", "_").replace("\\", "_").replace(":", "_").replace(" ", "_")
+
+
+def _json_cache_path(namespace: str, key: str) -> str:
+    safe_key = _safe_file_token(key)
+    return os.path.join(CACHE_DIR, f"{namespace}__{safe_key}.json")
+
+
+def _read_json_cache(path: str, max_age_seconds: int) -> Optional[dict]:
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            payload = json.load(f)
+        cached_ts = float(payload.get("_cached_at_ts", 0) or 0)
+        if cached_ts <= 0:
+            return None
+        age = time.time() - cached_ts
+        if age > max(1, int(max_age_seconds)):
+            return None
+        data = payload.get("data")
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _write_json_cache(path: str, data: dict) -> None:
+    _safe_mkdir(CACHE_DIR)
+    payload = {
+        "_cached_at": _utcnow().isoformat(),
+        "_cached_at_ts": time.time(),
+        "data": data,
+    }
+    _atomic_write(path, json.dumps(payload, ensure_ascii=False))
+
+
+def _to_iso_from_epoch(value: Any) -> Optional[str]:
+    ts = _safe_num(value)
+    if ts is None:
+        return None
+    try:
+        return datetime.fromtimestamp(float(ts), tz=timezone.utc).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return None
+
+
+def _normalize_symbol_list(symbol: Optional[str], symbols: Optional[str]) -> List[str]:
+    raw_tokens: List[str] = []
+    if symbol:
+        raw_tokens.extend(str(symbol).replace(";", ",").split(","))
+    if symbols:
+        raw_tokens.extend(str(symbols).replace(";", ",").split(","))
+
+    out: List[str] = []
+    seen = set()
+    for token in raw_tokens:
+        t = _safe_str(token, max_len=32).upper()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return out
+
+
+def _safe_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ("1", "true", "yes", "y"):
+            return True
+        if s in ("0", "false", "no", "n"):
+            return False
+    return default
+
+
 # =========================
 # yfinance normalization
 # =========================
@@ -489,6 +575,243 @@ def _classify_error(msg: str) -> str:
     if "EMPTY" in msg.upper() or "No data" in msg:
         return "empty"
     return "other"
+
+
+def _extract_quote_snapshot(
+    symbol: str,
+    info: Dict[str, Any],
+    fast: Dict[str, Any],
+    qty: float = 0.0,
+    side: str = "BUY",
+) -> dict:
+    regular_market_price = _pick_num(
+        info.get("regularMarketPrice"),
+        fast.get("lastPrice"),
+        fast.get("regularMarketPrice"),
+        info.get("currentPrice"),
+        info.get("previousClose"),
+        fast.get("previous_close"),
+    )
+    bid = _pick_num(info.get("bid"), fast.get("bid"))
+    ask = _pick_num(info.get("ask"), fast.get("ask"))
+    bid_size = _pick_num(info.get("bidSize"), fast.get("bidSize"))
+    ask_size = _pick_num(info.get("askSize"), fast.get("askSize"))
+    volume = _pick_num(
+        info.get("regularMarketVolume"),
+        fast.get("lastVolume"),
+        info.get("volume"),
+    )
+    market_state = _pick_str(info.get("marketState"), max_len=64)
+    currency = _pick_str(info.get("currency"), fast.get("currency"), max_len=16)
+    exchange = _pick_str(info.get("exchange"), fast.get("exchange"), max_len=64)
+    short_name = _pick_str(info.get("shortName"), info.get("longName"), max_len=200)
+
+    spread_abs = None
+    spread_pct = None
+    mid = None
+    if bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid:
+        spread_abs = ask - bid
+        mid = (ask + bid) / 2.0
+        if mid > 0:
+            spread_pct = (spread_abs / mid) * 100.0
+
+    side_u = _pick_str(side, max_len=10).upper() or "BUY"
+    if side_u not in ("BUY", "SELL"):
+        side_u = "BUY"
+
+    slippage_proxy_pct = None
+    qty_num = _safe_num(qty)
+    if spread_pct is not None and qty_num is not None and qty_num > 0:
+        top_size = ask_size if side_u == "BUY" else bid_size
+        base = spread_pct / 2.0
+        if top_size is None or top_size <= 0:
+            slippage_proxy_pct = base * 2.0
+        else:
+            size_penalty = max(0.0, (qty_num - top_size) / max(qty_num, 1.0))
+            slippage_proxy_pct = base * (1.0 + size_penalty)
+
+    delayed_by = _safe_int(info.get("exchangeDataDelayedBy"))
+    regular_market_time = _to_iso_from_epoch(_pick_num(info.get("regularMarketTime"), fast.get("lastPriceTime")))
+    last_trade_time = _to_iso_from_epoch(_pick_num(info.get("postMarketTime"), info.get("preMarketTime")))
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "regularMarketPrice": regular_market_price,
+        "bid": bid,
+        "ask": ask,
+        "bidSize": bid_size,
+        "askSize": ask_size,
+        "spreadAbs": spread_abs,
+        "spreadPct": spread_pct,
+        "mid": mid,
+        "slippageProxyPct": slippage_proxy_pct,
+        "currency": currency,
+        "exchange": exchange,
+        "marketState": market_state,
+        "regularMarketTime": regular_market_time,
+        "lastTradeTime": last_trade_time,
+        "exchangeDataDelayedBy": delayed_by,
+        "isDelayed": bool(delayed_by is not None and delayed_by > 0),
+        "volume": volume,
+        "shortName": short_name,
+    }
+
+
+def _parse_expiration_date(value: str) -> Optional[datetime]:
+    s = _safe_str(value, max_len=32)
+    if not s:
+        return None
+    try:
+        d = datetime.strptime(s, "%Y-%m-%d")
+        return d.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _choose_expiration(expirations: List[str], requested: str, target_days: int) -> Tuple[Optional[str], Optional[str]]:
+    exp_list = [_safe_str(x, max_len=32) for x in expirations if _safe_str(x, max_len=32)]
+    if not exp_list:
+        return None, "NO_EXPIRATIONS_AVAILABLE"
+
+    if requested:
+        req = _safe_str(requested, max_len=32)
+        if req in exp_list:
+            return req, None
+        return None, f"REQUESTED_EXPIRATION_NOT_AVAILABLE: {req}"
+
+    today = _utcnow().date()
+    parsed: List[Tuple[str, int]] = []
+    for exp in exp_list:
+        dt = _parse_expiration_date(exp)
+        if dt is None:
+            continue
+        parsed.append((exp, (dt.date() - today).days))
+
+    if not parsed:
+        return exp_list[0], "EXPIRATION_PARSE_FALLBACK"
+
+    parsed_future = [x for x in parsed if x[1] >= 0]
+    pool = parsed_future if parsed_future else parsed
+    tgt = max(0, int(target_days))
+    selected = min(pool, key=lambda x: abs(x[1] - tgt))[0]
+    return selected, None
+
+
+def _normalize_option_rows(df: Optional[pd.DataFrame], max_rows: int) -> List[dict]:
+    if df is None or df.empty:
+        return []
+
+    wk = df.copy()
+    if "strike" not in wk.columns:
+        return []
+
+    for c in ["strike", "lastPrice", "bid", "ask", "volume", "openInterest", "impliedVolatility"]:
+        if c not in wk.columns:
+            wk[c] = pd.NA
+        wk[c] = pd.to_numeric(wk[c], errors="coerce")
+
+    if "contractSymbol" not in wk.columns:
+        wk["contractSymbol"] = ""
+    if "inTheMoney" not in wk.columns:
+        wk["inTheMoney"] = False
+    if "lastTradeDate" not in wk.columns:
+        wk["lastTradeDate"] = pd.NaT
+    wk["lastTradeDate"] = pd.to_datetime(wk["lastTradeDate"], errors="coerce", utc=True)
+    wk = wk.dropna(subset=["strike"]).sort_values("strike")
+
+    if max_rows > 0:
+        wk = wk.head(int(max_rows))
+
+    rows: List[dict] = []
+    for rec in wk.to_dict(orient="records"):
+        bid = _safe_num(rec.get("bid"))
+        ask = _safe_num(rec.get("ask"))
+        spread_abs = None
+        spread_pct = None
+        mid = None
+        if bid is not None and ask is not None and bid > 0 and ask > 0 and ask >= bid:
+            spread_abs = ask - bid
+            mid = (ask + bid) / 2.0
+            if mid > 0:
+                spread_pct = (spread_abs / mid) * 100.0
+
+        rows.append(
+            {
+                "contractSymbol": _safe_str(rec.get("contractSymbol"), max_len=64),
+                "strike": _safe_num(rec.get("strike")),
+                "lastPrice": _safe_num(rec.get("lastPrice")),
+                "bid": bid,
+                "ask": ask,
+                "mid": mid,
+                "spreadAbs": spread_abs,
+                "spreadPct": spread_pct,
+                "volume": _safe_int(rec.get("volume")),
+                "openInterest": _safe_int(rec.get("openInterest")),
+                "impliedVolatility": _safe_num(rec.get("impliedVolatility")),
+                "inTheMoney": _safe_bool(rec.get("inTheMoney"), default=False),
+                "lastTradeDate": rec.get("lastTradeDate").isoformat().replace("+00:00", "Z")
+                if isinstance(rec.get("lastTradeDate"), pd.Timestamp) and pd.notna(rec.get("lastTradeDate"))
+                else None,
+            }
+        )
+    return rows
+
+
+def _pick_nearest_iv(
+    df: Optional[pd.DataFrame],
+    target_strike: float,
+    prefer_above: Optional[bool] = None,
+) -> Tuple[Optional[float], Optional[float]]:
+    if df is None or df.empty or target_strike is None:
+        return None, None
+    wk = df.copy()
+    if "strike" not in wk.columns or "impliedVolatility" not in wk.columns:
+        return None, None
+
+    wk["strike"] = pd.to_numeric(wk["strike"], errors="coerce")
+    wk["impliedVolatility"] = pd.to_numeric(wk["impliedVolatility"], errors="coerce")
+    wk = wk.dropna(subset=["strike", "impliedVolatility"])
+    wk = wk[wk["impliedVolatility"] > 0]
+    if wk.empty:
+        return None, None
+
+    if prefer_above is True:
+        above = wk[wk["strike"] >= float(target_strike)]
+        if not above.empty:
+            wk = above
+    elif prefer_above is False:
+        below = wk[wk["strike"] <= float(target_strike)]
+        if not below.empty:
+            wk = below
+
+    wk["dist"] = (wk["strike"] - float(target_strike)).abs()
+    row = wk.sort_values("dist").iloc[0]
+    return _safe_num(row.get("impliedVolatility")), _safe_num(row.get("strike"))
+
+
+def _json_scalar(value: Any) -> Any:
+    if value is None:
+        return None
+    if isinstance(value, (datetime, pd.Timestamp)):
+        ts = pd.to_datetime(value, errors="coerce", utc=True)
+        if pd.isna(ts):
+            return None
+        return ts.isoformat().replace("+00:00", "Z")
+    if isinstance(value, pd.Series):
+        return [_json_scalar(v) for v in value.tolist()]
+    if isinstance(value, (list, tuple)):
+        return [_json_scalar(v) for v in value]
+    if isinstance(value, dict):
+        return {str(k): _json_scalar(v) for k, v in value.items()}
+    if isinstance(value, (bool, int, float, str)):
+        return value
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    return str(value)
 
 
 # =========================
@@ -806,26 +1129,433 @@ def history(
 # --- Metadata endpoint ---
 @app.get("/info")
 def get_info(symbol: str = Query(...)):
+    symbol = _safe_str(symbol, max_len=32).upper()
     try:
         _global_rate_limit_sleep()
         tick = yf.Ticker(symbol)
-        isin = tick.isin
-        i = tick.info
+        isin = _safe_str(getattr(tick, "isin", ""), max_len=64)
+        info = tick.info or {}
+        fast = dict(tick.fast_info or {})
+        quote = _extract_quote_snapshot(symbol, info, fast)
         return {
             "ok": True,
             "symbol": symbol,
-            "sector": i.get("sector", ""),
-            "industry": i.get("industry", ""),
-            "isin": isin if isin and isin != "-" else i.get("isin", ""),
-            "shortName": i.get("shortName", ""),
-            "country": i.get("country", ""),
-            "quoteType": i.get("quoteType", ""),
+            "sector": _safe_str(info.get("sector"), max_len=200),
+            "industry": _safe_str(info.get("industry"), max_len=200),
+            "isin": isin if isin and isin != "-" else _safe_str(info.get("isin"), max_len=64),
+            "shortName": _safe_str(info.get("shortName"), max_len=200),
+            "country": _safe_str(info.get("country"), max_len=100),
+            "quoteType": _safe_str(info.get("quoteType"), max_len=64),
+            "quote": quote,
+            "fetchedAt": _utcnow().isoformat(),
+            "source": "yahoo_finance_yfinance",
         }
     except Exception as e:
-        print(f"[ERROR INFO] {symbol}: {str(e)}")
+        err = str(e)
+        print(f"[ERROR INFO] {symbol}: {err}")
         return {
-            "ok": False, "symbol": symbol, "error": str(e),
-            "sector": "", "industry": "", "isin": "", "quoteType": "",
+            "ok": False,
+            "symbol": symbol,
+            "error": err,
+            "sector": "",
+            "industry": "",
+            "isin": "",
+            "quoteType": "",
+        }
+
+
+@app.get("/quote")
+def get_quote(
+    symbol: str = Query(None),
+    symbols: str = Query(None),
+    side: str = Query("BUY"),
+    qty: float = Query(0.0, ge=0.0),
+    max_age_seconds: int = Query(QUOTE_CACHE_TTL_SEC, ge=1, le=300),
+    force_refresh: bool = Query(False),
+):
+    symbol_list = _normalize_symbol_list(symbol, symbols)
+    if not symbol_list:
+        return {
+            "ok": False,
+            "error": "NO_SYMBOL_PROVIDED",
+            "quotes": [],
+            "count": 0,
+        }
+
+    results: List[dict] = []
+    success = 0
+    side_u = _safe_str(side, max_len=10).upper()
+    if side_u not in ("BUY", "SELL"):
+        side_u = "BUY"
+
+    for sym in symbol_list:
+        cache_path = _json_cache_path("quote", sym)
+        if not force_refresh:
+            cached = _read_json_cache(cache_path, max_age_seconds=max_age_seconds)
+            if cached is not None:
+                row = dict(cached)
+                row["source"] = "cache"
+                results.append(row)
+                if row.get("ok"):
+                    success += 1
+                continue
+
+        try:
+            _global_rate_limit_sleep()
+            tick = yf.Ticker(sym)
+            info = tick.info or {}
+            fast = dict(tick.fast_info or {})
+            row = _extract_quote_snapshot(sym, info, fast, qty=qty, side=side_u)
+            row["fetchedAt"] = _utcnow().isoformat()
+            row["source"] = "yahoo_finance_yfinance"
+            _write_json_cache(cache_path, row)
+            results.append(row)
+            success += 1
+        except Exception as e:
+            err = str(e)
+            print(f"[ERROR QUOTE] {sym}: {err}", flush=True)
+
+            stale = _read_json_cache(cache_path, max_age_seconds=86400)
+            if stale is not None:
+                row = dict(stale)
+                row["source"] = "cache_stale"
+                row["stale"] = True
+                row["error"] = err
+                results.append(row)
+                if row.get("ok"):
+                    success += 1
+                continue
+
+            results.append(
+                {
+                    "ok": False,
+                    "symbol": sym,
+                    "error": err,
+                    "source": "yahoo_finance_yfinance",
+                }
+            )
+
+    return {
+        "ok": success > 0,
+        "allOk": success == len(results),
+        "partial": 0 < success < len(results),
+        "count": len(results),
+        "successCount": success,
+        "failedCount": len(results) - success,
+        "fetchedAt": _utcnow().isoformat(),
+        "quotes": results,
+    }
+
+
+@app.get("/options")
+def get_options(
+    symbol: str = Query(...),
+    expiration: str = Query(""),
+    target_days: int = Query(30, ge=0, le=3650),
+    max_rows_per_side: int = Query(250, ge=10, le=2000),
+    max_age_seconds: int = Query(OPTIONS_CACHE_TTL_SEC, ge=10, le=3600),
+    force_refresh: bool = Query(False),
+):
+    symbol = _safe_str(symbol, max_len=32).upper()
+    expiration = _safe_str(expiration, max_len=32)
+    cache_key = f"{symbol}|{expiration or 'AUTO'}|{target_days}|{max_rows_per_side}"
+    cache_path = _json_cache_path("options", cache_key)
+
+    if not force_refresh:
+        cached = _read_json_cache(cache_path, max_age_seconds=max_age_seconds)
+        if cached is not None:
+            out = dict(cached)
+            out["source"] = "cache"
+            return out
+
+    try:
+        _global_rate_limit_sleep()
+        tick = yf.Ticker(symbol)
+        expirations = list(tick.options or [])
+        selected_exp, exp_warning = _choose_expiration(
+            expirations=expirations,
+            requested=expiration,
+            target_days=target_days,
+        )
+        if not selected_exp:
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "error": exp_warning or "NO_EXPIRATION_SELECTED",
+                "expirations": expirations,
+                "fetchedAt": _utcnow().isoformat(),
+            }
+
+        _global_rate_limit_sleep()
+        chain = tick.option_chain(selected_exp)
+        calls_df = getattr(chain, "calls", pd.DataFrame())
+        puts_df = getattr(chain, "puts", pd.DataFrame())
+
+        info = {}
+        fast = {}
+        try:
+            info = tick.info or {}
+        except Exception:
+            info = {}
+        try:
+            fast = dict(tick.fast_info or {})
+        except Exception:
+            fast = {}
+
+        quote = _extract_quote_snapshot(symbol, info, fast)
+        spot = quote.get("regularMarketPrice")
+
+        iv_call_atm = None
+        iv_put_atm = None
+        strike_call_atm = None
+        strike_put_atm = None
+        iv_call_otm_5 = None
+        iv_put_otm_5 = None
+        strike_call_otm_5 = None
+        strike_put_otm_5 = None
+        if spot is not None and spot > 0:
+            iv_call_atm, strike_call_atm = _pick_nearest_iv(calls_df, target_strike=spot, prefer_above=None)
+            iv_put_atm, strike_put_atm = _pick_nearest_iv(puts_df, target_strike=spot, prefer_above=None)
+            iv_call_otm_5, strike_call_otm_5 = _pick_nearest_iv(calls_df, target_strike=spot * 1.05, prefer_above=True)
+            iv_put_otm_5, strike_put_otm_5 = _pick_nearest_iv(puts_df, target_strike=spot * 0.95, prefer_above=False)
+
+        iv_candidates = [x for x in [iv_call_atm, iv_put_atm] if x is not None]
+        iv_atm = sum(iv_candidates) / len(iv_candidates) if iv_candidates else None
+        skew_put_minus_call_5 = (
+            iv_put_otm_5 - iv_call_otm_5
+            if iv_put_otm_5 is not None and iv_call_otm_5 is not None
+            else None
+        )
+
+        call_oi_total = None
+        put_oi_total = None
+        call_vol_total = None
+        put_vol_total = None
+        if calls_df is not None and not calls_df.empty and "openInterest" in calls_df.columns:
+            call_oi_total = _safe_int(pd.to_numeric(calls_df["openInterest"], errors="coerce").fillna(0).sum())
+        if puts_df is not None and not puts_df.empty and "openInterest" in puts_df.columns:
+            put_oi_total = _safe_int(pd.to_numeric(puts_df["openInterest"], errors="coerce").fillna(0).sum())
+        if calls_df is not None and not calls_df.empty and "volume" in calls_df.columns:
+            call_vol_total = _safe_int(pd.to_numeric(calls_df["volume"], errors="coerce").fillna(0).sum())
+        if puts_df is not None and not puts_df.empty and "volume" in puts_df.columns:
+            put_vol_total = _safe_int(pd.to_numeric(puts_df["volume"], errors="coerce").fillna(0).sum())
+
+        put_call_oi_ratio = None
+        put_call_volume_ratio = None
+        if call_oi_total is not None and call_oi_total > 0 and put_oi_total is not None:
+            put_call_oi_ratio = float(put_oi_total) / float(call_oi_total)
+        if call_vol_total is not None and call_vol_total > 0 and put_vol_total is not None:
+            put_call_volume_ratio = float(put_vol_total) / float(call_vol_total)
+
+        exp_dt = _parse_expiration_date(selected_exp)
+        days_to_expiry = (exp_dt.date() - _utcnow().date()).days if exp_dt else None
+
+        calls_rows = _normalize_option_rows(calls_df, max_rows=max_rows_per_side)
+        puts_rows = _normalize_option_rows(puts_df, max_rows=max_rows_per_side)
+
+        warnings: List[str] = []
+        if exp_warning:
+            warnings.append(exp_warning)
+        if not calls_rows and not puts_rows:
+            warnings.append("EMPTY_OPTION_CHAIN")
+        if iv_atm is None:
+            warnings.append("ATM_IV_NOT_AVAILABLE")
+
+        out = {
+            "ok": True,
+            "symbol": symbol,
+            "source": "yahoo_finance_yfinance",
+            "fetchedAt": _utcnow().isoformat(),
+            "expirationRequested": expiration or None,
+            "expirationSelected": selected_exp,
+            "targetDays": int(target_days),
+            "daysToExpiration": days_to_expiry,
+            "expirations": expirations,
+            "underlying": {
+                "regularMarketPrice": quote.get("regularMarketPrice"),
+                "bid": quote.get("bid"),
+                "ask": quote.get("ask"),
+                "currency": quote.get("currency"),
+                "marketState": quote.get("marketState"),
+                "regularMarketTime": quote.get("regularMarketTime"),
+            },
+            "metrics": {
+                "ivAtm": iv_atm,
+                "ivAtmCall": iv_call_atm,
+                "ivAtmPut": iv_put_atm,
+                "strikeAtmCall": strike_call_atm,
+                "strikeAtmPut": strike_put_atm,
+                "ivOtmCall5Pct": iv_call_otm_5,
+                "ivOtmPut5Pct": iv_put_otm_5,
+                "strikeOtmCall5Pct": strike_call_otm_5,
+                "strikeOtmPut5Pct": strike_put_otm_5,
+                "skewPutMinusCall5Pct": skew_put_minus_call_5,
+                "callOpenInterestTotal": call_oi_total,
+                "putOpenInterestTotal": put_oi_total,
+                "putCallOiRatio": put_call_oi_ratio,
+                "callVolumeTotal": call_vol_total,
+                "putVolumeTotal": put_vol_total,
+                "putCallVolumeRatio": put_call_volume_ratio,
+            },
+            "chain": {
+                "callsTotalRows": int(len(calls_df)) if calls_df is not None else 0,
+                "putsTotalRows": int(len(puts_df)) if puts_df is not None else 0,
+                "maxRowsPerSide": int(max_rows_per_side),
+                "calls": calls_rows,
+                "puts": puts_rows,
+            },
+            "warnings": warnings,
+        }
+        _write_json_cache(cache_path, out)
+        return out
+    except Exception as e:
+        err = str(e)
+        print(f"[ERROR OPTIONS] {symbol}: {err}", flush=True)
+        stale = _read_json_cache(cache_path, max_age_seconds=86400)
+        if stale is not None:
+            out = dict(stale)
+            out["source"] = "cache_stale"
+            out["stale"] = True
+            out["error"] = err
+            return out
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "source": "yahoo_finance_yfinance",
+            "fetchedAt": _utcnow().isoformat(),
+            "error": err,
+            "expirationRequested": expiration or None,
+        }
+
+
+@app.get("/calendar")
+def get_calendar(
+    symbol: str = Query(...),
+    earnings_limit: int = Query(8, ge=1, le=32),
+    max_age_seconds: int = Query(CALENDAR_CACHE_TTL_SEC, ge=30, le=86400),
+    force_refresh: bool = Query(False),
+):
+    symbol = _safe_str(symbol, max_len=32).upper()
+    cache_path = _json_cache_path("calendar", symbol)
+
+    if not force_refresh:
+        cached = _read_json_cache(cache_path, max_age_seconds=max_age_seconds)
+        if cached is not None:
+            out = dict(cached)
+            out["source"] = "cache"
+            return out
+
+    try:
+        _global_rate_limit_sleep()
+        tick = yf.Ticker(symbol)
+
+        calendar_raw: Any = {}
+        try:
+            calendar_raw = tick.calendar
+        except Exception:
+            calendar_raw = {}
+
+        calendar_payload: dict = {}
+        if isinstance(calendar_raw, pd.DataFrame):
+            if not calendar_raw.empty:
+                if calendar_raw.shape[1] == 1:
+                    col = calendar_raw.columns[0]
+                    calendar_payload = {
+                        _safe_str(idx, max_len=64): _json_scalar(v)
+                        for idx, v in calendar_raw[col].items()
+                    }
+                else:
+                    calendar_payload = _json_scalar(calendar_raw.to_dict()) or {}
+        elif isinstance(calendar_raw, dict):
+            calendar_payload = _json_scalar(calendar_raw) or {}
+
+        earnings_rows: List[dict] = []
+        earnings_df = None
+        try:
+            _global_rate_limit_sleep()
+            earnings_df = tick.get_earnings_dates(limit=earnings_limit)
+        except Exception:
+            try:
+                earnings_df = getattr(tick, "earnings_dates", None)
+            except Exception:
+                earnings_df = None
+
+        if isinstance(earnings_df, pd.DataFrame) and not earnings_df.empty:
+            wk = earnings_df.copy()
+            wk = wk.reset_index()
+            if len(wk) > int(earnings_limit):
+                wk = wk.head(int(earnings_limit))
+            for rec in wk.to_dict(orient="records"):
+                row = {}
+                for k, v in rec.items():
+                    key = _safe_str(k, max_len=64)
+                    if not key:
+                        continue
+                    row[key] = _json_scalar(v)
+                earnings_rows.append(row)
+
+        next_earnings_date = None
+        candidate_dates: List[str] = []
+        for key, value in calendar_payload.items():
+            if "earnings" in key.lower() and "date" in key.lower():
+                if isinstance(value, list):
+                    candidate_dates.extend([_safe_str(v, max_len=64) for v in value if _safe_str(v, max_len=64)])
+                else:
+                    s = _safe_str(value, max_len=64)
+                    if s:
+                        candidate_dates.append(s)
+
+        for row in earnings_rows:
+            for k, v in row.items():
+                if "date" in k.lower():
+                    s = _safe_str(v, max_len=64)
+                    if s:
+                        candidate_dates.append(s)
+
+        today_utc = _utcnow().date()
+        parsed_candidates: List[datetime] = []
+        for item in candidate_dates:
+            dt = pd.to_datetime(item, errors="coerce", utc=True)
+            if pd.isna(dt):
+                continue
+            parsed_candidates.append(dt.to_pydatetime())
+
+        future_dates = [d for d in parsed_candidates if d.date() >= today_utc]
+        if future_dates:
+            next_earnings_date = min(future_dates).isoformat().replace("+00:00", "Z")
+        elif parsed_candidates:
+            next_earnings_date = max(parsed_candidates).isoformat().replace("+00:00", "Z")
+
+        out = {
+            "ok": True,
+            "symbol": symbol,
+            "source": "yahoo_finance_yfinance",
+            "fetchedAt": _utcnow().isoformat(),
+            "calendar": calendar_payload,
+            "earningsDates": earnings_rows,
+            "nextEarningsDate": next_earnings_date,
+        }
+        _write_json_cache(cache_path, out)
+        return out
+    except Exception as e:
+        err = str(e)
+        print(f"[ERROR CALENDAR] {symbol}: {err}", flush=True)
+        stale = _read_json_cache(cache_path, max_age_seconds=86400)
+        if stale is not None:
+            out = dict(stale)
+            out["source"] = "cache_stale"
+            out["stale"] = True
+            out["error"] = err
+            return out
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "source": "yahoo_finance_yfinance",
+            "fetchedAt": _utcnow().isoformat(),
+            "error": err,
+            "calendar": {},
+            "earningsDates": [],
+            "nextEarningsDate": None,
         }
 
 

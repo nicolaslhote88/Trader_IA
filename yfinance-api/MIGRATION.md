@@ -110,3 +110,59 @@ curl http://yfinance-api:8080/cooldown/reset?symbol=AAPL
 
 L'API `/history` conserve exactement les mêmes paramètres et le même format de réponse.
 Le champ `source` peut maintenant valoir `"cache_stale"` ou `"cache_checked"` en plus des valeurs existantes.
+
+## Nouvelles routes (v2.1)
+
+### `GET /quote`
+Objectif: snapshot L1 multi-symboles (spread et proxy de slippage).
+
+Parametres:
+- `symbol` (optionnel): symbole unique ou CSV (`AAPL,MSFT`)
+- `symbols` (optionnel): alias CSV
+- `side` (optionnel): `BUY|SELL` (defaut `BUY`)
+- `qty` (optionnel): quantite theorique pour calcul `slippageProxyPct`
+- `max_age_seconds` (optionnel): age max du cache court (defaut 20s)
+- `force_refresh` (optionnel): bypass cache
+
+Retour principal par symbole:
+- `regularMarketPrice`, `bid`, `ask`, `bidSize`, `askSize`
+- `spreadAbs`, `spreadPct`, `mid`
+- `slippageProxyPct` (si `qty > 0`)
+- `marketState`, `regularMarketTime`, `exchangeDataDelayedBy`
+
+### `GET /options`
+Objectif: chaine options + IV ATM/OTM + skew proxy.
+
+Parametres:
+- `symbol` (requis)
+- `expiration` (optionnel, format `YYYY-MM-DD`)
+- `target_days` (optionnel, defaut 30) si expiration non fournie
+- `max_rows_per_side` (optionnel, defaut 250)
+- `max_age_seconds` (optionnel, cache court, defaut 300s)
+- `force_refresh` (optionnel)
+
+Retour:
+- `expirations`, `expirationSelected`, `daysToExpiration`
+- `underlying` (prix spot + bid/ask)
+- `metrics`: `ivAtm`, `ivAtmCall`, `ivAtmPut`, `ivOtmCall5Pct`, `ivOtmPut5Pct`, `skewPutMinusCall5Pct`, ratios OI/volume
+- `chain.calls` / `chain.puts` (taillees selon `max_rows_per_side`)
+
+### `GET /calendar`
+Objectif: tag risque earnings (proxy evenementiel).
+
+Parametres:
+- `symbol` (requis)
+- `earnings_limit` (optionnel, defaut 8)
+- `max_age_seconds` (optionnel, defaut 1800s)
+- `force_refresh` (optionnel)
+
+Retour:
+- `calendar` normalise
+- `earningsDates` (table normalisee)
+- `nextEarningsDate` (si detecte)
+
+## Nouvelles variables d'environnement
+
+- `YF_QUOTE_CACHE_TTL_SEC` (defaut: `20`)
+- `YF_OPTIONS_CACHE_TTL_SEC` (defaut: `300`)
+- `YF_CALENDAR_CACHE_TTL_SEC` (defaut: `1800`)
