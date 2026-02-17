@@ -77,6 +77,9 @@ with db_con(db_path) as con:
     r = con.execute("SELECT COUNT(*) FROM news_errors WHERE run_id = ?", [run_id]).fetchone()
     errors_logged = int(r[0]) if r else 0
 
+    r = con.execute("SELECT COALESCE(vector_docs_written, 0) FROM run_log WHERE run_id = ?", [run_id]).fetchone()
+    vector_docs_written = int(r[0]) if r else 0
+
     if symbols_total == 0:
         status = "NO_DATA"
     elif articles_total > 0 and errors_logged == 0:
@@ -118,7 +121,7 @@ return [
             "items_analyzed": items_analyzed,
             "items_skipped": items_skipped,
             "errors_logged": errors_logged,
+            "vector_docs_written": vector_docs_written,
         }
     }
 ]
-

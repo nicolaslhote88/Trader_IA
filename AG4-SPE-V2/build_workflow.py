@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 from __future__ import annotations
 
 import json
@@ -14,6 +14,7 @@ def load_code(filename: str) -> str:
 
 def build() -> dict:
     openai_creds = {"openAiApi": {"id": "rILpYjTayqc4jXXZ", "name": "OpenAi account"}}
+    qdrant_creds = {"qdrantApi": {"id": "q1CRmg2N6AmW6pC1", "name": "QdrantApi account"}}
 
     nodes = [
         {
@@ -475,8 +476,89 @@ def build() -> dict:
             "name": "S24 - Finalize Run",
         },
         {
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("15_build_vector_docs.py")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-624, -256],
+            "id": "1ec54a93-8eec-4ff0-aa28-9b37a1912dc7",
+            "name": "S25 - Build Vector Docs",
+            "onError": "continueRegularOutput",
+        },
+        {
+            "parameters": {"options": {"dimensions": 1536}},
+            "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+            "typeVersion": 1.2,
+            "position": [-208, -368],
+            "id": "c7b4970c-c281-4e15-9ec6-f0188ef4abf7",
+            "name": "Embeddings OpenAI",
+            "credentials": openai_creds,
+        },
+        {
+            "parameters": {"chunkSize": 3000, "chunkOverlap": 200, "options": {}},
+            "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+            "typeVersion": 1,
+            "position": [-208, -112],
+            "id": "0de9972c-c071-4d35-888f-4a65ab3402ed",
+            "name": "Text Splitter",
+        },
+        {
             "parameters": {
-                "content": "AG4_Spe-V2: Universe from Google Sheets, specific stock news from Boursorama, dedupe + analysis + storage in DuckDB.",
+                "jsonMode": "expressionData",
+                "jsonData": "={{ $json.text }}\n",
+                "options": {
+                    "metadata": {
+                        "metadataValues": [
+                            {"name": "id", "value": "={{ $json.metadata.id }}"},
+                            {"name": "news_id", "value": "={{ $json.metadata.news_id }}"},
+                            {"name": "run_id", "value": "={{ $json.metadata.run_id }}"},
+                            {"name": "symbol", "value": "={{ $json.metadata.symbol }}"},
+                            {"name": "company_name", "value": "={{ $json.metadata.company_name }}"},
+                            {"name": "source", "value": "={{ $json.metadata.source }}"},
+                            {"name": "published_at", "value": "={{ $json.metadata.published_at }}"},
+                            {"name": "impact_score", "value": "={{ $json.metadata.impact_score }}"},
+                            {"name": "confidence_score", "value": "={{ $json.metadata.confidence_score }}"},
+                            {"name": "sentiment", "value": "={{ $json.metadata.sentiment }}"},
+                            {"name": "category", "value": "={{ $json.metadata.category }}"},
+                            {"name": "suggested_signal", "value": "={{ $json.metadata.suggested_signal }}"},
+                            {"name": "urgency", "value": "={{ $json.metadata.urgency }}"},
+                            {"name": "horizon", "value": "={{ $json.metadata.horizon }}"},
+                            {"name": "is_relevant", "value": "={{ $json.metadata.is_relevant }}"},
+                            {"name": "db_path", "value": "={{ $json.metadata.db_path }}"},
+                        ]
+                    }
+                },
+            },
+            "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+            "typeVersion": 1,
+            "position": [-208, 80],
+            "id": "af0397cc-cf5d-45c5-bfea-864338f6038f",
+            "name": "Default Data Loader",
+        },
+        {
+            "parameters": {
+                "mode": "insert",
+                "qdrantCollection": {"__rl": True, "mode": "list", "value": "financial_news_v3_clean"},
+                "options": {"collectionConfig": {"similarity": "Cosine"}},
+            },
+            "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+            "typeVersion": 1.1,
+            "position": [16, -176],
+            "id": "d620516f-f48b-4e77-a177-4373585454fe",
+            "name": "Qdrant Upsert",
+            "credentials": qdrant_creds,
+        },
+        {
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("16_mark_vectorized.py")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [240, -176],
+            "id": "4f55a2f7-6f33-4d62-9ebe-3641d9c37ef4",
+            "name": "S26 - Mark Vectorized",
+            "onError": "continueRegularOutput",
+        },
+        {
+            "parameters": {
+                "content": "AG4_Spe-V2: Universe from Google Sheets, specific stock news from Boursorama, dedupe + analysis + storage in DuckDB + vectorization to Qdrant financial_news_v3_clean.",
                 "height": 180,
                 "width": 1680,
                 "color": 5,
@@ -498,7 +580,10 @@ def build() -> dict:
         "S02 - Start Run": {"main": [[{"node": "S03 - Split Symbols", "type": "main", "index": 0}]]},
         "S03 - Split Symbols": {
             "main": [
-                [{"node": "S24 - Finalize Run", "type": "main", "index": 0}],
+                [
+                    {"node": "S24 - Finalize Run", "type": "main", "index": 0},
+                    {"node": "S25 - Build Vector Docs", "type": "main", "index": 0},
+                ],
                 [
                     {"node": "S04 - HTTP Listing Page", "type": "main", "index": 0},
                     {"node": "S04M - Merge Symbol + Listing", "type": "main", "index": 1},
@@ -579,6 +664,11 @@ def build() -> dict:
         "S20 - Parse LLM Output": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
         "S21 - Build Skip Row": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
         "S22 - Upsert News DuckDB": {"main": [[{"node": "S10 - Split Articles", "type": "main", "index": 0}]]},
+        "S25 - Build Vector Docs": {"main": [[{"node": "Qdrant Upsert", "type": "main", "index": 0}]]},
+        "Embeddings OpenAI": {"ai_embedding": [[{"node": "Qdrant Upsert", "type": "ai_embedding", "index": 0}]]},
+        "Text Splitter": {"ai_textSplitter": [[{"node": "Default Data Loader", "type": "ai_textSplitter", "index": 0}]]},
+        "Default Data Loader": {"ai_document": [[{"node": "Qdrant Upsert", "type": "ai_document", "index": 0}]]},
+        "Qdrant Upsert": {"main": [[{"node": "S26 - Mark Vectorized", "type": "main", "index": 0}]]},
     }
 
     return {
@@ -599,3 +689,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

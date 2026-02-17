@@ -147,7 +147,7 @@ with db_con(db_path) as con:
         fetched_at = parse_ts(j.get("fetchedAt")) or now_utc
 
         existing = con.execute(
-            "SELECT first_seen_at FROM news_history WHERE news_id = ?",
+            "SELECT first_seen_at, vector_status, vector_id, vectorized_at, chunk_total FROM news_history WHERE news_id = ?",
             [news_id],
         ).fetchone()
         existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None
@@ -156,6 +156,19 @@ with db_con(db_path) as con:
         else:
             first_seen_at = incoming_first_seen
 
+        existing_vector_status = to_text(existing[1]) if existing and existing[1] is not None else ""
+        existing_vector_id = to_text(existing[2]) if existing and existing[2] is not None else ""
+        existing_vectorized_at = parse_ts(existing[3]) if existing and existing[3] is not None else None
+        existing_chunk_total = to_int(existing[4], None) if existing and existing[4] is not None else None
+
+        should_vectorize = action == "analyze" and is_relevant and bool((text or "").strip() or (summary or "").strip() or (snippet or "").strip())
+        vector_status = "PENDING" if should_vectorize else "SKIPPED"
+        if existing_vector_status in ("DONE", "PENDING"):
+            vector_status = existing_vector_status
+        vector_id = existing_vector_id if existing_vector_status == "DONE" else ""
+        vectorized_at = existing_vectorized_at if existing_vector_status == "DONE" else None
+        chunk_total = existing_chunk_total if existing_chunk_total is not None else None
+
         con.execute(
             """
             INSERT OR REPLACE INTO news_history (
@@ -163,10 +176,11 @@ with db_con(db_path) as con:
               url, canonical_url, title, published_at, published_at_raw, snippet, text,
               summary, category, impact_score, sentiment, confidence_score, horizon,
               urgency, suggested_signal, key_drivers, needs_follow_up, is_relevant, relevance_reason,
-              action, reason, status, first_seen_at, last_seen_at, analyzed_at, fetched_at,
+              action, reason, status, vector_status, vector_id, vectorized_at, chunk_total,
+              first_seen_at, last_seen_at, analyzed_at, fetched_at,
               updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [
                 news_id,
@@ -198,6 +212,10 @@ with db_con(db_path) as con:
                 action,
                 reason,
                 status,
+                vector_status,
+                vector_id,
+                vectorized_at,
+                chunk_total,
                 first_seen_at,
                 incoming_last_seen,
                 analyzed_at,

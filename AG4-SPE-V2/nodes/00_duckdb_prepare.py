@@ -76,6 +76,10 @@ SCHEMA = [
       action VARCHAR,
       reason VARCHAR,
       status VARCHAR,
+      vector_status VARCHAR DEFAULT 'PENDING',
+      vector_id VARCHAR,
+      vectorized_at TIMESTAMP,
+      chunk_total INTEGER,
       first_seen_at TIMESTAMP,
       last_seen_at TIMESTAMP,
       analyzed_at TIMESTAMP,
@@ -113,6 +117,7 @@ SCHEMA = [
       items_analyzed INTEGER DEFAULT 0,
       items_skipped INTEGER DEFAULT 0,
       errors_logged INTEGER DEFAULT 0,
+      vector_docs_written INTEGER DEFAULT 0,
       error_detail VARCHAR,
       version VARCHAR DEFAULT '2.0.0'
     )
@@ -131,6 +136,11 @@ with db_con() as con:
     con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS suggested_signal VARCHAR")
     con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS key_drivers VARCHAR")
     con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS needs_follow_up BOOLEAN")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS vector_id VARCHAR")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP")
+    con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS chunk_total INTEGER")
+    con.execute("ALTER TABLE run_log ADD COLUMN IF NOT EXISTS vector_docs_written INTEGER DEFAULT 0")
 
 out = []
 for it in (_items or []):

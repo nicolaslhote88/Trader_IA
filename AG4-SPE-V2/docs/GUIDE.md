@@ -15,6 +15,7 @@ Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base dur
 7. Fetch article HTML + parsing titre/date/snippet/texte.
 8. Filtre age news + analyse IA (JSON schema strict).
 9. Upsert dans `news_history`, erreurs dans `news_errors`, stats de run dans `run_log`.
+10. Vectorisation des news pertinentes vers Qdrant collection `financial_news_v3_clean`.
 
 Le schema IA inclut:
 - `impactScore` (-10..10)
@@ -24,6 +25,12 @@ Le schema IA inclut:
 - `suggestedSignal` (`BUY|SELL|NEUTRAL|WATCH`)
 - `keyDrivers` (2..5)
 - `needsFollowUp` (boolean)
+
+Le suivi vectoriel inclut dans `news_history`:
+- `vector_status` (`PENDING|DONE|SKIPPED`)
+- `vector_id`
+- `vectorized_at`
+- `chunk_total`
 
 ## Tables DuckDB
 - `universe_symbols`
