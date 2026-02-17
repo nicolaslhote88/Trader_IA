@@ -34,21 +34,40 @@
     },
     {
       "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef table_exists(con, table_name):\n    row = con.execute(\n        \"\"\"\n        SELECT COUNT(*)\n        FROM information_schema.tables\n        WHERE table_name = ?\n        \"\"\",\n        [table_name],\n    ).fetchone()\n    return bool(row and int(row[0]) > 0)\n\n\nSCHEMA = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS universe_symbols (\n      symbol VARCHAR PRIMARY KEY,\n      name VARCHAR,\n      isin VARCHAR,\n      asset_class VARCHAR,\n      exchange VARCHAR,\n      currency VARCHAR,\n      country VARCHAR,\n      enabled BOOLEAN DEFAULT TRUE,\n      boursorama_ref VARCHAR,\n      notes_json VARCHAR,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS news_history (\n      news_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      company_name VARCHAR,\n      source VARCHAR,\n      boursorama_ref VARCHAR,\n      listing_url VARCHAR,\n      url VARCHAR,\n      canonical_url VARCHAR,\n      title VARCHAR,\n      published_at TIMESTAMP,\n      published_at_raw VARCHAR,\n      snippet VARCHAR,\n      text VARCHAR,\n      summary VARCHAR,\n      category VARCHAR,\n      impact_score INTEGER,\n      sentiment VARCHAR,\n      is_relevant BOOLEAN,\n      relevance_reason VARCHAR,\n      action VARCHAR,\n      reason VARCHAR,\n      status VARCHAR,\n      first_seen_at TIMESTAMP,\n      last_seen_at TIMESTAMP,\n      analyzed_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS news_errors (\n      error_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR,\n      stage VARCHAR,\n      symbol VARCHAR,\n      company_name VARCHAR,\n      url VARCHAR,\n      http_code INTEGER,\n      message VARCHAR,\n      raw_error VARCHAR,\n      occurred_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      articles_total INTEGER DEFAULT 0,\n      items_analyzed INTEGER DEFAULT 0,\n      items_skipped INTEGER DEFAULT 0,\n      errors_logged INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.0.0'\n    )\n    \"\"\",\n]\n\n\nwith db_con() as con:\n    for stmt in SCHEMA:\n        con.execute(stmt)\n\n    rows = []\n\n    if table_exists(con, \"universe_symbols\"):\n        rows = con.execute(\n            \"\"\"\n            SELECT\n              symbol,\n              COALESCE(name, symbol) AS name,\n              isin,\n              COALESCE(asset_class, 'Equity') AS asset_class,\n              COALESCE(exchange, 'Euronext Paris') AS exchange,\n              COALESCE(currency, 'EUR') AS currency,\n              country,\n              COALESCE(enabled, TRUE) AS enabled,\n              boursorama_ref,\n              notes_json\n            FROM universe_symbols\n            WHERE COALESCE(enabled, TRUE) = TRUE\n            ORDER BY symbol\n            \"\"\"\n        ).fetchall()\n\n    # Fallback for AG2 schema if universe_symbols is still empty.\n    if len(rows) == 0 and table_exists(con, \"universe\"):\n        rows = con.execute(\n            \"\"\"\n            SELECT\n              symbol,\n              COALESCE(name, symbol) AS name,\n              isin,\n              COALESCE(asset_class, 'Equity') AS asset_class,\n              COALESCE(exchange, 'Euronext Paris') AS exchange,\n              COALESCE(currency, 'EUR') AS currency,\n              country,\n              COALESCE(enabled, TRUE) AS enabled,\n              boursorama_ref,\n              NULL AS notes_json\n            FROM universe\n            WHERE COALESCE(enabled, TRUE) = TRUE\n            ORDER BY symbol\n            \"\"\"\n        ).fetchall()\n\nout = []\nfor row in rows:\n    out.append(\n        {\n            \"json\": {\n                \"symbol\": str(row[0] or \"\").strip().upper(),\n                \"companyName\": str(row[1] or \"\").strip(),\n                \"isin\": str(row[2] or \"\").strip(),\n                \"assetClass\": str(row[3] or \"\").strip(),\n                \"exchange\": str(row[4] or \"\").strip(),\n                \"currency\": str(row[5] or \"\").strip(),\n                \"country\": str(row[6] or \"\").strip(),\n                \"enabled\": bool(row[7]) if row[7] is not None else True,\n                \"boursoramaRef\": str(row[8] or \"\").strip(),\n                \"notesJson\": str(row[9] or \"\").strip(),\n                \"sourceUniverse\": \"duckdb\",\n                \"db_path\": DB_PATH,\n            }\n        }\n    )\n\nreturn out\n\n"
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": 1078848687,
+          "cachedResultName": "Universe",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
+        },
+        "options": {}
       },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
       "position": [
         -1728,
         -96
       ],
-      "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
-      "name": "S00 - DuckDB Prepare + Load Universe"
+      "id": "0bd3f148-cff3-4dbe-b9b2-9ea242909b1a",
+      "name": "S00A - Load Universe (Google Sheets)",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
     },
     {
       "parameters": {
-        "jsCode": "const BATCH_SIZE = 20;\nconst ROTATION_KEY = \"ag4_spe_v2_last_symbol_index\";\n\nfunction safeJsonParse(raw) {\n  if (!raw) return null;\n  if (typeof raw === \"object\") return raw;\n  if (typeof raw !== \"string\") return null;\n  try {\n    return JSON.parse(raw);\n  } catch {\n    return null;\n  }\n}\n\nfunction normalizeRef(v) {\n  return String(v || \"\").trim().toUpperCase();\n}\n\nconst rows = $input.all().map((i) => i.json || {});\nconst allCandidates = [];\n\nfor (const r of rows) {\n  const enabled = r.enabled !== false && String(r.enabled || \"\").toLowerCase() !== \"false\";\n  if (!enabled) continue;\n\n  const symbol = String(r.symbol || r.Symbol || \"\").trim().toUpperCase();\n  if (!symbol) continue;\n\n  const notes = safeJsonParse(r.notesJson || r.Notes || null);\n  const boursoramaRef = normalizeRef(\n    r.boursoramaRef || r.BoursoramaRef || notes?.boursoramaRef || notes?.boursoramaCode || \"\"\n  );\n  if (!boursoramaRef) continue;\n\n  const coursUrl = `https://www.boursorama.com/cours/${boursoramaRef}/`;\n  const actualitesUrl = `https://www.boursorama.com/cours/actualites/${boursoramaRef}/`;\n\n  allCandidates.push({\n    json: {\n      queueId: `${symbol}|boursorama|actualites`,\n      symbol,\n      companyName: String(r.companyName || r.Name || symbol),\n      isin: r.isin || null,\n      assetClass: r.assetClass || null,\n      exchange: r.exchange || null,\n      currency: r.currency || null,\n      country: r.country || null,\n      boursoramaRef,\n      coursUrl,\n      actualitesUrl,\n      source: \"boursorama\",\n      enabled: true,\n      db_path: r.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n    },\n  });\n}\n\nconst staticData = $getWorkflowStaticData(\"global\");\nlet start = Number(staticData[ROTATION_KEY] || 0);\nconst totalItems = allCandidates.length;\n\nif (!Number.isFinite(start) || start < 0 || start >= totalItems) {\n  start = 0;\n}\n\nif (totalItems === 0) {\n  staticData[ROTATION_KEY] = 0;\n  return [];\n}\n\nconst end = start + BATCH_SIZE;\nconst batch = allCandidates.slice(start, end);\n\nstaticData[ROTATION_KEY] = end >= totalItems ? 0 : end;\n\nbatch.forEach((item, idx) => {\n  item.json._batchInfo = {\n    batchIndex: idx + 1,\n    globalIndex: start + idx + 1,\n    totalItems,\n    nextStart: staticData[ROTATION_KEY],\n  };\n});\n\nreturn batch;\n\n"
+        "jsCode": "const BATCH_SIZE = 20;\nconst ROTATION_KEY = \"ag4_spe_v2_last_symbol_index\";\n\nfunction safeJsonParse(raw) {\n  if (!raw) return null;\n  if (typeof raw === \"object\") return raw;\n  if (typeof raw !== \"string\") return null;\n  try {\n    return JSON.parse(raw);\n  } catch {\n    return null;\n  }\n}\n\nfunction normalizeRef(v) {\n  return String(v || \"\").trim().toUpperCase();\n}\n\nconst rows = $input.all().map((i) => i.json || {});\nconst allCandidates = [];\n\nfor (const r of rows) {\n  const enabledRaw = r.enabled ?? r.Enabled ?? true;\n  const enabled = enabledRaw !== false && String(enabledRaw || \"\").toLowerCase() !== \"false\";\n  if (!enabled) continue;\n\n  const symbol = String(r.symbol || r.Symbol || \"\").trim().toUpperCase();\n  if (!symbol) continue;\n\n  const notes = safeJsonParse(r.notesJson || r.Notes || null);\n  const boursoramaRef = normalizeRef(\n    r.boursoramaRef || r.BoursoramaRef || notes?.boursoramaRef || notes?.boursoramaCode || \"\"\n  );\n  if (!boursoramaRef) continue;\n\n  const coursUrl = `https://www.boursorama.com/cours/${boursoramaRef}/`;\n  const actualitesUrl = `https://www.boursorama.com/cours/actualites/${boursoramaRef}/`;\n\n  allCandidates.push({\n    json: {\n      queueId: `${symbol}|boursorama|actualites`,\n      symbol,\n      companyName: String(r.companyName || r.Name || symbol),\n      isin: r.isin || null,\n      assetClass: r.assetClass || null,\n      exchange: r.exchange || null,\n      currency: r.currency || null,\n      country: r.country || null,\n      boursoramaRef,\n      coursUrl,\n      actualitesUrl,\n      source: \"boursorama\",\n      enabled: true,\n      db_path: r.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n    },\n  });\n}\n\nconst staticData = $getWorkflowStaticData(\"global\");\nlet start = Number(staticData[ROTATION_KEY] || 0);\nconst totalItems = allCandidates.length;\n\nif (!Number.isFinite(start) || start < 0 || start >= totalItems) {\n  start = 0;\n}\n\nif (totalItems === 0) {\n  staticData[ROTATION_KEY] = 0;\n  return [];\n}\n\nconst end = start + BATCH_SIZE;\nconst batch = allCandidates.slice(start, end);\n\nstaticData[ROTATION_KEY] = end >= totalItems ? 0 : end;\n\nbatch.forEach((item, idx) => {\n  item.json._batchInfo = {\n    batchIndex: idx + 1,\n    globalIndex: start + idx + 1,\n    totalItems,\n    nextStart: staticData[ROTATION_KEY],\n  };\n});\n\nreturn batch;\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -62,12 +81,26 @@
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nWORKFLOW_VERSION = \"2.0.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\ndb_path = DEFAULT_DB_PATH\nif len(items) > 0:\n    db_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nrun_id = f\"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\"\n\nwith db_con(db_path) as con:\n    if len(items) == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, len(items), WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n\n"
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nSCHEMA = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS universe_symbols (\n      symbol VARCHAR PRIMARY KEY,\n      name VARCHAR,\n      isin VARCHAR,\n      asset_class VARCHAR,\n      exchange VARCHAR,\n      currency VARCHAR,\n      country VARCHAR,\n      enabled BOOLEAN DEFAULT TRUE,\n      boursorama_ref VARCHAR,\n      notes_json VARCHAR,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS news_history (\n      news_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      company_name VARCHAR,\n      source VARCHAR,\n      boursorama_ref VARCHAR,\n      listing_url VARCHAR,\n      url VARCHAR,\n      canonical_url VARCHAR,\n      title VARCHAR,\n      published_at TIMESTAMP,\n      published_at_raw VARCHAR,\n      snippet VARCHAR,\n      text VARCHAR,\n      summary VARCHAR,\n      category VARCHAR,\n      impact_score INTEGER,\n      sentiment VARCHAR,\n      is_relevant BOOLEAN,\n      relevance_reason VARCHAR,\n      action VARCHAR,\n      reason VARCHAR,\n      status VARCHAR,\n      first_seen_at TIMESTAMP,\n      last_seen_at TIMESTAMP,\n      analyzed_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS news_errors (\n      error_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR,\n      stage VARCHAR,\n      symbol VARCHAR,\n      company_name VARCHAR,\n      url VARCHAR,\n      http_code INTEGER,\n      message VARCHAR,\n      raw_error VARCHAR,\n      occurred_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      articles_total INTEGER DEFAULT 0,\n      items_analyzed INTEGER DEFAULT 0,\n      items_skipped INTEGER DEFAULT 0,\n      errors_logged INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.0.0'\n    )\n    \"\"\",\n]\n\n\nwith db_con() as con:\n    for stmt in SCHEMA:\n        con.execute(stmt)\n\nout = []\nfor it in (_items or []):\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"db_path\"] = DB_PATH\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         -1280,
+        -96
+      ],
+      "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
+      "name": "S00B - DuckDB Init Schema"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nWORKFLOW_VERSION = \"2.0.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\ndb_path = DEFAULT_DB_PATH\nif len(items) > 0:\n    db_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nrun_id = f\"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\"\n\nwith db_con(db_path) as con:\n    if len(items) == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, len(items), WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1072,
         -96
       ],
       "id": "34c2a416-4c86-4f03-a94e-df5ae6a3f91d",
@@ -82,7 +115,7 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        -1072,
+        -864,
         -96
       ],
       "id": "73358bb3-2807-42f2-a72e-98954b35dfdd",
@@ -679,7 +712,7 @@
     },
     {
       "parameters": {
-        "content": "AG4_Spe-V2: specific stock news from Boursorama, dedupe + analysis + storage in DuckDB only.",
+        "content": "AG4_Spe-V2: Universe from Google Sheets, specific stock news from Boursorama, dedupe + analysis + storage in DuckDB.",
         "height": 180,
         "width": 1680,
         "color": 5
@@ -699,7 +732,7 @@
       "main": [
         [
           {
-            "node": "S00 - DuckDB Prepare + Load Universe",
+            "node": "S00A - Load Universe (Google Sheets)",
             "type": "main",
             "index": 0
           }
@@ -710,14 +743,14 @@
       "main": [
         [
           {
-            "node": "S00 - DuckDB Prepare + Load Universe",
+            "node": "S00A - Load Universe (Google Sheets)",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "S00 - DuckDB Prepare + Load Universe": {
+    "S00A - Load Universe (Google Sheets)": {
       "main": [
         [
           {
@@ -729,6 +762,17 @@
       ]
     },
     "S01 - Build Symbol Queue": {
+      "main": [
+        [
+          {
+            "node": "S00B - DuckDB Init Schema",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S00B - DuckDB Init Schema": {
       "main": [
         [
           {

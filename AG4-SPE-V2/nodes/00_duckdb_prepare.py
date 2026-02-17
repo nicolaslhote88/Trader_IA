@@ -29,18 +29,6 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
         gc.collect()
 
 
-def table_exists(con, table_name):
-    row = con.execute(
-        """
-        SELECT COUNT(*)
-        FROM information_schema.tables
-        WHERE table_name = ?
-        """,
-        [table_name],
-    ).fetchone()
-    return bool(row and int(row[0]) > 0)
-
-
 SCHEMA = [
     """
     CREATE TABLE IF NOT EXISTS universe_symbols (
@@ -130,69 +118,10 @@ with db_con() as con:
     for stmt in SCHEMA:
         con.execute(stmt)
 
-    rows = []
-
-    if table_exists(con, "universe_symbols"):
-        rows = con.execute(
-            """
-            SELECT
-              symbol,
-              COALESCE(name, symbol) AS name,
-              isin,
-              COALESCE(asset_class, 'Equity') AS asset_class,
-              COALESCE(exchange, 'Euronext Paris') AS exchange,
-              COALESCE(currency, 'EUR') AS currency,
-              country,
-              COALESCE(enabled, TRUE) AS enabled,
-              boursorama_ref,
-              notes_json
-            FROM universe_symbols
-            WHERE COALESCE(enabled, TRUE) = TRUE
-            ORDER BY symbol
-            """
-        ).fetchall()
-
-    # Fallback for AG2 schema if universe_symbols is still empty.
-    if len(rows) == 0 and table_exists(con, "universe"):
-        rows = con.execute(
-            """
-            SELECT
-              symbol,
-              COALESCE(name, symbol) AS name,
-              isin,
-              COALESCE(asset_class, 'Equity') AS asset_class,
-              COALESCE(exchange, 'Euronext Paris') AS exchange,
-              COALESCE(currency, 'EUR') AS currency,
-              country,
-              COALESCE(enabled, TRUE) AS enabled,
-              boursorama_ref,
-              NULL AS notes_json
-            FROM universe
-            WHERE COALESCE(enabled, TRUE) = TRUE
-            ORDER BY symbol
-            """
-        ).fetchall()
-
 out = []
-for row in rows:
-    out.append(
-        {
-            "json": {
-                "symbol": str(row[0] or "").strip().upper(),
-                "companyName": str(row[1] or "").strip(),
-                "isin": str(row[2] or "").strip(),
-                "assetClass": str(row[3] or "").strip(),
-                "exchange": str(row[4] or "").strip(),
-                "currency": str(row[5] or "").strip(),
-                "country": str(row[6] or "").strip(),
-                "enabled": bool(row[7]) if row[7] is not None else True,
-                "boursoramaRef": str(row[8] or "").strip(),
-                "notesJson": str(row[9] or "").strip(),
-                "sourceUniverse": "duckdb",
-                "db_path": DB_PATH,
-            }
-        }
-    )
+for it in (_items or []):
+    j = dict(it.get("json", {}) or {})
+    j["db_path"] = DB_PATH
+    out.append({"json": j, "pairedItem": it.get("pairedItem")})
 
 return out
-

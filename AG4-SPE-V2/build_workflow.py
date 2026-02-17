@@ -35,12 +35,31 @@ def build() -> dict:
             "name": "Manual Trigger",
         },
         {
-            "parameters": {"language": "pythonNative", "pythonCode": load_code("00_duckdb_prepare.py")},
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
+            "parameters": {
+                "documentId": {
+                    "__rl": True,
+                    "mode": "list",
+                    "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+                    "cachedResultName": "TradingSim_GoogleSheet_Template",
+                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk",
+                },
+                "sheetName": {
+                    "__rl": True,
+                    "mode": "list",
+                    "value": 1078848687,
+                    "cachedResultName": "Universe",
+                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687",
+                },
+                "options": {},
+            },
+            "type": "n8n-nodes-base.googleSheets",
+            "typeVersion": 4.7,
             "position": [-1728, -96],
-            "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
-            "name": "S00 - DuckDB Prepare + Load Universe",
+            "id": "0bd3f148-cff3-4dbe-b9b2-9ea242909b1a",
+            "name": "S00A - Load Universe (Google Sheets)",
+            "credentials": {
+                "googleSheetsOAuth2Api": {"id": "aX5iAQEN9HK4UGjr", "name": "Google Sheets account"}
+            },
         },
         {
             "parameters": {"jsCode": load_code("01_build_symbol_queue.js")},
@@ -51,10 +70,18 @@ def build() -> dict:
             "name": "S01 - Build Symbol Queue",
         },
         {
-            "parameters": {"language": "pythonNative", "pythonCode": load_code("02_start_run.py")},
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("00_duckdb_prepare.py")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [-1280, -96],
+            "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
+            "name": "S00B - DuckDB Init Schema",
+        },
+        {
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("02_start_run.py")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-1072, -96],
             "id": "34c2a416-4c86-4f03-a94e-df5ae6a3f91d",
             "name": "S02 - Start Run",
         },
@@ -62,7 +89,7 @@ def build() -> dict:
             "parameters": {"options": {"reset": False}},
             "type": "n8n-nodes-base.splitInBatches",
             "typeVersion": 3,
-            "position": [-1072, -96],
+            "position": [-864, -96],
             "id": "73358bb3-2807-42f2-a72e-98954b35dfdd",
             "name": "S03 - Split Symbols",
         },
@@ -449,7 +476,7 @@ def build() -> dict:
         },
         {
             "parameters": {
-                "content": "AG4_Spe-V2: specific stock news from Boursorama, dedupe + analysis + storage in DuckDB only.",
+                "content": "AG4_Spe-V2: Universe from Google Sheets, specific stock news from Boursorama, dedupe + analysis + storage in DuckDB.",
                 "height": 180,
                 "width": 1680,
                 "color": 5,
@@ -463,10 +490,11 @@ def build() -> dict:
     ]
 
     connections = {
-        "Schedule Trigger": {"main": [[{"node": "S00 - DuckDB Prepare + Load Universe", "type": "main", "index": 0}]]},
-        "Manual Trigger": {"main": [[{"node": "S00 - DuckDB Prepare + Load Universe", "type": "main", "index": 0}]]},
-        "S00 - DuckDB Prepare + Load Universe": {"main": [[{"node": "S01 - Build Symbol Queue", "type": "main", "index": 0}]]},
-        "S01 - Build Symbol Queue": {"main": [[{"node": "S02 - Start Run", "type": "main", "index": 0}]]},
+        "Schedule Trigger": {"main": [[{"node": "S00A - Load Universe (Google Sheets)", "type": "main", "index": 0}]]},
+        "Manual Trigger": {"main": [[{"node": "S00A - Load Universe (Google Sheets)", "type": "main", "index": 0}]]},
+        "S00A - Load Universe (Google Sheets)": {"main": [[{"node": "S01 - Build Symbol Queue", "type": "main", "index": 0}]]},
+        "S01 - Build Symbol Queue": {"main": [[{"node": "S00B - DuckDB Init Schema", "type": "main", "index": 0}]]},
+        "S00B - DuckDB Init Schema": {"main": [[{"node": "S02 - Start Run", "type": "main", "index": 0}]]},
         "S02 - Start Run": {"main": [[{"node": "S03 - Split Symbols", "type": "main", "index": 0}]]},
         "S03 - Split Symbols": {
             "main": [
@@ -571,4 +599,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

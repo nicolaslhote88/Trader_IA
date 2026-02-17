@@ -6,8 +6,8 @@ AG4_Spe-V2 collecte les actualites Boursorama **specifiques a chaque valeur** (s
 Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base durable.
 
 ## Architecture
-1. Init DuckDB + creation schema (`universe_symbols`, `news_history`, `news_errors`, `run_log`).
-2. Chargement de l'univers depuis DuckDB (`universe_symbols`, fallback `universe` AG2).
+1. Chargement de l'univers depuis Google Sheets (onglet `Universe`).
+2. Init DuckDB + creation schema (`universe_symbols`, `news_history`, `news_errors`, `run_log`).
 3. Queue rotative (batch 20 symboles par run).
 4. Scraping de la page `cours/actualites/<ref>/` pour chaque symbole.
 5. Extraction + normalisation des URLs article.
@@ -24,15 +24,16 @@ Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base dur
 
 DB par defaut: `/files/duckdb/ag4_spe_v2.duckdb`
 
-## Preparer l'univers (option recommandee)
-```sql
-INSERT OR REPLACE INTO universe_symbols
-(symbol, name, enabled, boursorama_ref, exchange, currency, country, asset_class)
-VALUES
-('AI.PA', 'AIR LIQUIDE', TRUE, '1rPAI', 'Euronext Paris', 'EUR', 'FR', 'Equity');
-```
+## Source Universe
+L'univers est lu depuis le Google Sheet:
+- Document: `TradingSim_GoogleSheet_Template`
+- Onglet: `Universe` (`gid=1078848687`)
 
-Le workflow peut aussi fallback sur la table `universe` (AG2) si `universe_symbols` est vide.
+Colonnes minimales attendues:
+- `Symbol`
+- `Name`
+- `BoursoramaRef` (ou equivalent dans `Notes`)
+- `Enabled` (optionnel, par defaut actif)
 
 ## Fichiers
 - `AG4-SPE-V2/build_workflow.py` : genere le workflow n8n final
@@ -46,4 +47,3 @@ python AG4-SPE-V2/build_workflow.py
 ```
 
 Puis importer `AG4-SPE-V2/AG4-SPE-V2-workflow.json` dans n8n.
-

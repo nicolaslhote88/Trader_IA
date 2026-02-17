@@ -20,7 +20,8 @@ const rows = $input.all().map((i) => i.json || {});
 const allCandidates = [];
 
 for (const r of rows) {
-  const enabled = r.enabled !== false && String(r.enabled || "").toLowerCase() !== "false";
+  const enabledRaw = r.enabled ?? r.Enabled ?? true;
+  const enabled = enabledRaw !== false && String(enabledRaw || "").toLowerCase() !== "false";
   if (!enabled) continue;
 
   const symbol = String(r.symbol || r.Symbol || "").trim().toUpperCase();
@@ -83,4 +84,3 @@ batch.forEach((item, idx) => {
 });
 
 return batch;
-
