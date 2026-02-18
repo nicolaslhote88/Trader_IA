@@ -1461,9 +1461,18 @@ def _build_multi_agent_matrix(
                 "reward_score_u": reward_u,
                 "risk_score_plot": max(0.0, min(100.0, risk_u + _stable_jitter(symbol, "risk"))),
                 "reward_score_plot": max(0.0, min(100.0, reward_u + _stable_jitter(symbol, "reward"))),
+                "reward_component_r": reward_r,
+                "reward_component_upside": reward_upside,
+                "reward_component_space": reward_space,
+                "reward_component_catalyst": reward_catalyst,
+                "reward_component_trend": trend_bonus,
                 "prob_score": prob_score,
                 "prob_score_base": prob_score,
                 "prob_score_for_grade": (0.85 * prob_score + 0.15 * data_quality_score),
+                "prob_component_tech": tech_prob,
+                "prob_component_funda": funda_prob,
+                "prob_component_sentiment": sentiment_prob,
+                "prob_component_regime": (50.0 + regime_adj + align_adj),
                 "p_win": p_win,
                 "ev_r": ev_r,
                 "risk_score_1_5": risk_1_5,
@@ -2273,6 +2282,71 @@ def _clean_context_token(v: object) -> str:
     if s in ("", "n/a", "na", "nan", "none", "unknown", "indefini", "indefinie", "indef"):
         return ""
     return s
+
+
+def _to_dt_utc(v: object) -> pd.Timestamp:
+    return pd.to_datetime(v, errors="coerce", utc=True)
+
+
+def _fmt_dt_short(v: object) -> str:
+    ts = _to_dt_utc(v)
+    if pd.isna(ts):
+        return "N/A"
+    return ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
+
+
+def _gate_badge_html(status: str, label: str, detail: str = "") -> str:
+    st_norm = str(status or "").upper().strip()
+    if st_norm == "OK":
+        bg = "#28a745"
+    elif st_norm in ("WARN", "WARNING"):
+        bg = "#fd7e14"
+    else:
+        bg = "#dc3545"
+    txt = f"{label}: {st_norm}"
+    if detail:
+        txt += f" ({detail})"
+    return (
+        f"<span style='display:inline-block;margin:2px 6px 2px 0;padding:4px 8px;border-radius:6px;"
+        f"background:{bg};color:white;font-size:0.85rem;font-weight:600;'>{txt}</span>"
+    )
+
+
+def _freshness_status(age_h: float, warn_h: float, block_h: float) -> str:
+    a = safe_float(age_h)
+    if a <= warn_h:
+        return "OK"
+    if a <= block_h:
+        return "WARN"
+    return "BLOCK"
+
+
+def _macro_relevance_score(row: pd.Series, sector_token: str, industry_token: str, symbol_token: str = "") -> float:
+    txt = " ".join(
+        [
+            str(row.get("theme", "") or ""),
+            str(row.get("title", "") or ""),
+            str(row.get("snippet", "") or ""),
+            str(row.get("notes", "") or ""),
+            str(row.get("winners", "") or ""),
+            str(row.get("losers", "") or ""),
+            str(row.get("regime", "") or ""),
+        ]
+    ).lower()
+    s = 0.0
+    if sector_token and sector_token in txt:
+        s += 55.0
+    if industry_token and industry_token in txt:
+        s += 35.0
+    if symbol_token and symbol_token in txt:
+        s += 25.0
+    impact = safe_float(row.get("impactscore", 0.0))
+    recency_bonus = 0.0
+    p = _to_dt_utc(row.get("publishedat"))
+    if pd.notna(p):
+        days = max(0.0, (pd.Timestamp.now(tz="UTC") - p).total_seconds() / 86400.0)
+        recency_bonus = max(0.0, 12.0 - days * 0.8)
+    return s + min(20.0, max(0.0, impact)) + recency_bonus
 
 
 def _synthesis_conclusion(score: float, tech_action: str) -> str:
@@ -4000,23 +4074,53 @@ elif page == "Vue consolidee Multi-Agents":
         labels = []
         label_to_symbol = {}
         for _, row in view_df.iterrows():
-            sym = str(row.get("symbol", "")).strip()
+            sym = str(row.get("symbol", "")).strip().upper()
             if not sym:
                 continue
             name = str(row.get("name", "")).strip()
             lbl = f"{sym} - {name}" if name else sym
-            labels.append(lbl)
-            label_to_symbol[lbl] = sym
+            if lbl not in label_to_symbol:
+                labels.append(lbl)
+                label_to_symbol[lbl] = sym
+
+        labels = sorted(labels, key=lambda x: x.lower())
 
         if not labels:
             st.info("Aucune valeur disponible.")
         else:
-            selected_label = st.selectbox("Selectionner une valeur", labels, key="multi_agents_symbol")
+            st.markdown("#### Recherche valeur")
+            search_txt = st.text_input(
+                "Recherche texte (ticker ou nom)",
+                value="",
+                key="multi_agents_symbol_search",
+                placeholder="Ex: OR.PA, LOREAL, APPLE...",
+            )
+            query = str(search_txt or "").strip().lower()
+            labels_filtered = [lbl for lbl in labels if query in lbl.lower()] if query else labels
+            if not labels_filtered:
+                st.warning("Aucun resultat pour cette recherche. La liste complete est rechargee.")
+                labels_filtered = labels
+
+            previous_label = st.session_state.get("multi_agents_symbol_last", labels_filtered[0])
+            if previous_label not in labels_filtered:
+                previous_label = labels_filtered[0]
+            default_idx = labels_filtered.index(previous_label) if previous_label in labels_filtered else 0
+
+            selected_label = st.selectbox(
+                "Selectionner via combobox",
+                labels_filtered,
+                index=default_idx,
+                key="multi_agents_symbol",
+            )
+            st.session_state["multi_agents_symbol_last"] = selected_label
             selected_symbol = label_to_symbol[selected_label]
             row = view_df[view_df["symbol"] == selected_symbol].iloc[0]
 
             if use_matrix:
-                s1, s2, s3, s4, s5, s6, s7, s8 = st.columns(8)
+                selected_name = str(row.get("name", "") or "").strip()
+                st.markdown(f"### {selected_symbol} - {selected_name or 'N/A'}")
+
+                s1, s2, s3, s4, s5, s6, s7, s8, s9 = st.columns(9)
                 s1.metric("Decision", str(row.get("matrix_action", "N/A")))
                 s2.metric("Grade", str(row.get("setup_grade", "N/A")))
                 s3.metric("Risque", f"{safe_float(row.get('risk_score_u', row.get('risk_score_100', 0))):.0f}/100")
@@ -4025,29 +4129,163 @@ elif page == "Vue consolidee Multi-Agents":
                 s6.metric("EV(R)", f"{safe_float(row.get('ev_r', 0)):.2f}")
                 s7.metric("Prob. win", f"{safe_float(row.get('p_win', 0) * 100):.1f}%")
                 s8.metric("Data quality", f"{safe_float(row.get('data_quality_score', 0)):.0f}/100")
+                s9.metric("Sizing reco", f"{safe_float(row.get('size_reco_pct', 0)):.1f}%")
 
-                st.markdown("#### Lecture mecanique")
-                st.write(
-                    f"{selected_symbol}: entree={safe_float(row.get('entry_price', 0)):.2f}, "
-                    f"stop={safe_float(row.get('stop_price', 0)):.2f}, "
-                    f"tp={safe_float(row.get('tp_price', 0)):.2f}, "
-                    f"reward={safe_float(row.get('reward_pct', 0)):.2f}%, "
-                    f"risk={safe_float(row.get('risk_pct', 0)):.2f}%, "
-                    f"R={safe_float(row.get('r_multiple', 0)):.2f}, "
-                    f"EV(R)={safe_float(row.get('ev_r', 0)):.2f}."
-                )
-                st.caption(
-                    f"R brut={safe_float(row.get('r_multiple_raw', 0)):.2f} | "
-                    f"Risk brut={safe_float(row.get('risk_pct_raw', 0)):.2f}% | "
-                    f"Plancher ATR={safe_float(row.get('atr_stop_floor_pct', 0)):.2f}% | "
-                    f"RR outlier={bool(row.get('rr_outlier', False))} | "
-                    f"Sizing reco={safe_float(row.get('size_reco_pct', 0)):.1f}% | "
-                    f"Gates={str(row.get('gate_summary', '') or 'OK')}"
-                )
+                dnext = row.get("days_to_next_earnings", row.get("days_to_earnings", pd.NA))
+                dnext_num = pd.to_numeric(pd.Series([dnext]), errors="coerce").iloc[0]
+                has_dnext = pd.notna(dnext_num)
+                if has_dnext and float(dnext_num) <= 7:
+                    earnings_status = "BLOCK"
+                elif has_dnext and float(dnext_num) <= 14:
+                    earnings_status = "WARN"
+                else:
+                    earnings_status = "OK"
 
-                rd_left, rd_right = st.columns(2)
+                rr_outlier = bool(row.get("rr_outlier", False))
+                rr_status = "WARN" if rr_outlier else "OK"
+
+                liq_score = safe_float(row.get("liquidity_risk_score", 0.0))
+                if bool(row.get("liquidity_gate_block", False)) or liq_score >= 85:
+                    liq_status = "BLOCK"
+                elif liq_score >= 60:
+                    liq_status = "WARN"
+                else:
+                    liq_status = "OK"
+
+                invalid_options_state = bool(row.get("invalid_options_state", False) or row.get("invalid_options_state_gate", False))
+                options_ok_raw = str(row.get("options_ok", "")).strip().lower()
+                options_ok = options_ok_raw in ("1", "true", "yes", "y")
+                if invalid_options_state:
+                    options_status = "BLOCK"
+                elif options_ok:
+                    options_status = "OK"
+                else:
+                    options_status = "WARN"
+
+                concentration_score = safe_float(row.get("concentration_risk_score", 0.0))
+                if concentration_score >= 80:
+                    concentration_status = "BLOCK"
+                elif concentration_score >= 60:
+                    concentration_status = "WARN"
+                else:
+                    concentration_status = "OK"
+
+                data_quality = safe_float(row.get("data_quality_score", 0.0))
+                if data_quality < 60:
+                    quality_status = "BLOCK"
+                elif data_quality < 75:
+                    quality_status = "WARN"
+                else:
+                    quality_status = "OK"
+
+                age_candidates = []
+                for age_col in ["data_age_h1_hours", "data_age_d1_hours", "yf_age_h"]:
+                    age_val = pd.to_numeric(pd.Series([row.get(age_col, pd.NA)]), errors="coerce").iloc[0]
+                    if pd.notna(age_val):
+                        age_candidates.append(float(age_val))
+                max_age_h = max(age_candidates) if age_candidates else pd.NA
+                freshness_status = _freshness_status(max_age_h, warn_h=36.0, block_h=96.0) if pd.notna(max_age_h) else "WARN"
+
+                st.markdown("#### Gates")
+                badges = [
+                    _gate_badge_html(
+                        earnings_status,
+                        "Earnings",
+                        f"J-{float(dnext_num):.1f}" if has_dnext else "date indisponible",
+                    ),
+                    _gate_badge_html(rr_status, "RR outlier", "stop/target a verifier"),
+                    _gate_badge_html(liq_status, "Liquidite", f"score {liq_score:.0f}/100"),
+                    _gate_badge_html(options_status, "Options/IV", str(row.get("options_note", "") or "couverture partielle")),
+                    _gate_badge_html(freshness_status, "Fraicheur data", f"{float(max_age_h):.1f}h" if pd.notna(max_age_h) else "age inconnu"),
+                    _gate_badge_html(concentration_status, "Concentration", f"score {concentration_score:.0f}/100"),
+                    _gate_badge_html(quality_status, "Data quality", f"{data_quality:.0f}/100"),
+                ]
+                st.markdown("".join(badges), unsafe_allow_html=True)
+
+                if "BLOCK" in [earnings_status, liq_status, options_status, freshness_status, concentration_status, quality_status]:
+                    st.error("Au moins un gate critique est actif. Eviter un nouveau renforcement tant que le blocage persiste.")
+                elif "WARN" in [earnings_status, rr_status, liq_status, options_status, freshness_status, concentration_status, quality_status]:
+                    st.warning("Setup conditionnel: execution possible mais taille reduite et verification manuelle requise.")
+                else:
+                    st.success("Aucun gate bloquant detecte.")
+
+                st.markdown("#### Trade card")
+                entry = safe_float(row.get("entry_price", 0))
+                stop = safe_float(row.get("stop_price", 0))
+                tp1 = safe_float(row.get("tp_price", 0))
+                reward_pct = safe_float(row.get("reward_pct", 0))
+                risk_pct = safe_float(row.get("risk_pct", 0))
+                atr_pct = safe_float(row.get("d1_atr_pct", 0))
+                stop_atr = (risk_pct / atr_pct) if atr_pct > 0 else pd.NA
+                runner_bonus_pct = max(1.0, min(12.0, reward_pct * 0.60))
+                tp2 = entry * (1.0 + (max(0.0, reward_pct) + runner_bonus_pct) / 100.0) if entry > 0 else 0.0
+                if tp1 > 0:
+                    tp2 = max(tp1, tp2)
+
+                matrix_action = str(row.get("matrix_action", "Surveiller"))
+                if matrix_action == "Entrer / Renforcer":
+                    order_type = "LIMIT (pullback propre)"
+                    if safe_float(row.get("reward_score_u", 0)) > safe_float(row.get("risk_score_u", 0)) + 10:
+                        order_type = "STOP (breakout confirme)"
+                elif matrix_action == "Reduire / Sortir":
+                    order_type = "LIMIT (sortie partielle/progressive)"
+                else:
+                    order_type = "Aucun ordre automatique"
+
+                pf_total = 0.0
+                if df_port is not None and not df_port.empty:
+                    mv_series = safe_float_series(df_port.get("marketvalue", pd.Series(0.0, index=df_port.index)))
+                    pf_total = float(mv_series.sum())
+                size_pct = safe_float(row.get("size_reco_pct", 0.0))
+                size_eur = pf_total * (size_pct / 100.0) if pf_total > 0 else 0.0
+                qty_reco = (size_eur / entry) if entry > 0 and size_eur > 0 else 0.0
+                invalidation_txt = f"Setup invalide sous {stop:.2f}" if stop > 0 else "Niveau d'invalidation indisponible"
+
+                trade_col, mini_col = st.columns([1.55, 1.0])
+                with trade_col:
+                    st.markdown(
+                        f"""
+- Type d'ordre: `{order_type}`
+- Entree: `{entry:.2f}` | Stop: `{stop:.2f}` ({risk_pct:.2f}% ; {stop_atr:.2f} ATR si ATR>0)
+- TP1: `{tp1:.2f}` ({reward_pct:.2f}%) | TP2/Runner: `{tp2:.2f}`
+- R utilise: `{safe_float(row.get('r_multiple', 0)):.2f}` (cap) | EV(R): `{safe_float(row.get('ev_r', 0)):.2f}`
+- Sizing recommande: `{size_pct:.1f}%` de la taille cible ({size_eur:.0f} EUR, env. {qty_reco:.0f} titres)
+- Validite: `{invalidation_txt}`
+"""
+                    )
+                    plan_txt = (
+                        f"{selected_symbol} | {matrix_action} | Grade {row.get('setup_grade', 'N/A')}\n"
+                        f"Entree={entry:.2f} | Stop={stop:.2f} | TP1={tp1:.2f} | TP2={tp2:.2f}\n"
+                        f"Risk={risk_pct:.2f}% | Reward={reward_pct:.2f}% | R={safe_float(row.get('r_multiple', 0)):.2f} | EV(R)={safe_float(row.get('ev_r', 0)):.2f}\n"
+                        f"Sizing={size_pct:.1f}% ({size_eur:.0f} EUR, ~{qty_reco:.0f} titres)\n"
+                        f"Gates={str(row.get('gate_summary', '') or 'OK')}\n"
+                        f"Invalidation={invalidation_txt}\n"
+                    )
+                    st.caption("Plan execution pret a copier")
+                    st.code(plan_txt, language="text")
+
+                with mini_col:
+                    st.markdown("#### Mini matrice")
+                    risk_thr = safe_float(view_df.get("risk_threshold_dyn", pd.Series([50.0])).iloc[0])
+                    reward_thr = safe_float(view_df.get("reward_threshold_dyn", pd.Series([50.0])).iloc[0])
+                    mini_df = view_df.copy()
+                    mini_df["risk_score_plot"] = safe_float_series(mini_df.get("risk_score_plot", mini_df.get("risk_score_u", pd.Series(50.0, index=mini_df.index)))).fillna(50.0)
+                    mini_df["reward_score_plot"] = safe_float_series(mini_df.get("reward_score_plot", mini_df.get("reward_score_u", pd.Series(50.0, index=mini_df.index)))).fillna(50.0)
+                    mini_all = mini_df[mini_df["symbol"] != selected_symbol]
+                    mini_sel = mini_df[mini_df["symbol"] == selected_symbol].head(1)
+                    fig_mini = go.Figure()
+                    fig_mini.add_trace(go.Scatter(x=mini_all["risk_score_plot"], y=mini_all["reward_score_plot"], mode="markers", marker=dict(size=6, color="rgba(130,130,130,0.35)"), name="Univers", hoverinfo="skip"))
+                    fig_mini.add_trace(go.Scatter(x=mini_sel["risk_score_plot"], y=mini_sel["reward_score_plot"], mode="markers+text", text=[selected_symbol], textposition="top center", marker=dict(size=16, color="#00d4ff", line=dict(width=2, color="#ffffff")), name="Valeur"))
+                    fig_mini.add_vline(x=risk_thr, line_dash="dot", line_color="#dc3545")
+                    fig_mini.add_hline(y=reward_thr, line_dash="dot", line_color="#28a745")
+                    fig_mini.update_xaxes(range=[0, 100], title="Risque")
+                    fig_mini.update_yaxes(range=[0, 100], title="Reward")
+                    fig_mini.update_layout(height=330, margin=dict(t=20, b=20, l=20, r=20))
+                    st.plotly_chart(fig_mini, use_container_width=True)
+
+                rd_left, rd_right, rd_extra = st.columns([1.2, 1.2, 1.0])
                 with rd_left:
-                    st.markdown("#### Decomposition risque")
+                    st.markdown("#### Decomposition risque (0-100)")
                     risk_parts = pd.DataFrame(
                         [
                             {"Composant": "Funda risk", "Score": safe_float(row.get("funda_risk", 0))},
@@ -4064,33 +4302,80 @@ elif page == "Vue consolidee Multi-Agents":
                         x="Score",
                         y="Composant",
                         orientation="h",
-                        title="Composants du score risque (0-100)",
                         color="Score",
                         color_continuous_scale=["#28a745", "#ffc107", "#dc3545"],
                     )
-                    fig_risk.update_layout(height=320, margin=dict(t=40, b=20, l=20, r=20), coloraxis_showscale=False)
+                    fig_risk.update_layout(height=320, margin=dict(t=20, b=20, l=20, r=20), coloraxis_showscale=False)
                     st.plotly_chart(fig_risk, use_container_width=True)
 
                 with rd_right:
-                    st.markdown("#### Donnees marche externes")
+                    st.markdown("#### Decomposition reward (0-100)")
+                    reward_parts = pd.DataFrame(
+                        [
+                            {"Composant": "Asymetrie R", "Score": safe_float(row.get("reward_component_r", 0))},
+                            {"Composant": "Upside fondamental", "Score": safe_float(row.get("reward_component_upside", 0))},
+                            {"Composant": "Espace technique", "Score": safe_float(row.get("reward_component_space", 0))},
+                            {"Composant": "Catalyseurs", "Score": safe_float(row.get("reward_component_catalyst", 0))},
+                            {"Composant": "Trend bonus", "Score": safe_float(row.get("reward_component_trend", 0))},
+                        ]
+                    )
+                    fig_reward = px.bar(
+                        reward_parts.sort_values("Score", ascending=True),
+                        x="Score",
+                        y="Composant",
+                        orientation="h",
+                        color="Score",
+                        color_continuous_scale=["#dc3545", "#ffc107", "#28a745"],
+                    )
+                    fig_reward.update_layout(height=320, margin=dict(t=20, b=20, l=20, r=20), coloraxis_showscale=False)
+                    st.plotly_chart(fig_reward, use_container_width=True)
+
+                with rd_extra:
+                    st.markdown("#### Pourquoi cette decision")
+                    contributions = [
+                        ("Asymetrie R", safe_float(row.get("reward_component_r", 0)) - 50.0, "TP/Stop effectif"),
+                        ("Upside fondamental", safe_float(row.get("reward_component_upside", 0)) - 40.0, "target/funda"),
+                        ("Catalyseurs news", safe_float(row.get("reward_component_catalyst", 0)) - 30.0, "news symbole + macro"),
+                        ("Confluence probabilite", safe_float(row.get("prob_score", 0)) - 50.0, "AG2+AG3+AG4"),
+                        ("Risque fondamental", -(safe_float(row.get("funda_risk", 0)) - 50.0), "solidite business"),
+                        ("Liquidite", -(safe_float(row.get("liquidity_risk_score", 0)) - 35.0), "spread/slippage"),
+                        ("Event risk", -(safe_float(row.get("event_risk_score", 0)) - 35.0), "earnings"),
+                        ("Concentration", -(safe_float(row.get("concentration_risk_score", 0)) - 35.0), "exposition portefeuille"),
+                        ("Data quality", safe_float(row.get("data_quality_score", 0)) - 60.0, "fraicheur/completude"),
+                    ]
+                    if rr_outlier:
+                        contributions.append(("Gate RR outlier", -22.0, "stop trop proche ou target trop loin"))
+                    if has_dnext and float(dnext_num) <= 7:
+                        contributions.append(("Gate earnings", -25.0, "publication imminente"))
+                    if invalid_options_state:
+                        contributions.append(("Etat options invalide", -30.0, "qualite options non fiable"))
+                    cdf = pd.DataFrame(contributions, columns=["Facteur", "Impact", "Detail"])
+                    cdf["ImpactAbs"] = cdf["Impact"].abs()
+                    top5 = cdf.sort_values("ImpactAbs", ascending=False).head(5).reset_index(drop=True)
+                    for _, c_row in top5.iterrows():
+                        impact = safe_float(c_row.get("Impact", 0))
+                        pref = "Positif" if impact >= 0 else "Negatif"
+                        st.write(f"{pref} {c_row.get('Facteur')}: {impact:+.1f} ({c_row.get('Detail')})")
+
+                    st.markdown("#### Donnees marche")
                     dnext = row.get("days_to_next_earnings", row.get("days_to_earnings", pd.NA))
                     dsince = row.get("days_since_last_earnings", pd.NA)
                     dnext_txt = f"{safe_float(dnext):.1f}" if pd.notna(dnext) else "N/A"
                     dsince_txt = f"{safe_float(dsince):.1f}" if pd.notna(dsince) else "N/A"
-                    st.write(
+                    st.caption(
                         f"Spread: {safe_float(row.get('spreadPct', 0)):.2f}% | "
-                        f"Slippage proxy: {safe_float(row.get('slippageProxyPct', 0)):.2f}% | "
-                        f"IV ATM: {safe_float(row.get('iv_atm', 0)):.3f} | "
-                        f"Jours avant prochains earnings: {dnext_txt} | "
-                        f"Jours depuis derniers earnings: {dsince_txt}"
+                        f"Slippage: {safe_float(row.get('slippageProxyPct', 0)):.2f}% | "
+                        f"IV ATM: {safe_float(row.get('iv_atm', 0)):.3f}"
                     )
-                    if not bool(row.get("options_ok", False)):
+                    st.caption(
+                        f"Jours avant earnings: {dnext_txt} | "
+                        f"Jours depuis earnings: {dsince_txt} | "
+                        f"Regime marche: {str(row.get('ai_regime_d1', 'N/A') or 'N/A')}"
+                    )
+                    if not options_ok:
                         note = str(row.get("options_note", "") or "Aucune option Yahoo disponible (cas courant sur titres FR).")
                         st.info(note)
-                    elif str(row.get("options_warning", "")).strip():
-                        st.caption(f"Options warning: {row.get('options_warning')}")
-                    if bool(row.get("earnings_gate_block", False)):
-                        st.warning("Gate earnings actif: prochaines publications proches (<= 7 jours).")
+                    st.caption(f"Raison action: {str(row.get('action_reason', '') or 'N/A')}")
             else:
                 s1, s2, s3, s4, s5, s6 = st.columns(6)
                 s1.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100", delta=str(row.get("conclusion", "")))
@@ -4117,27 +4402,41 @@ elif page == "Vue consolidee Multi-Agents":
                 ind = _clean_context_token(row.get("industry", ""))
                 macro_show = macro_news_norm.copy()
                 if not macro_show.empty:
-                    text_cols = [c for c in ["theme", "title", "snippet", "notes", "winners", "losers", "regime"] if c in macro_show.columns]
-                    macro_show["_ctx"] = macro_show[text_cols].fillna("").astype(str).agg(" ".join, axis=1).str.lower() if text_cols else ""
-                    mask = pd.Series(False, index=macro_show.index)
-                    if sec:
-                        mask = mask | macro_show["_ctx"].str.contains(re.escape(sec), regex=True, na=False)
-                    if ind and ind != sec:
-                        mask = mask | macro_show["_ctx"].str.contains(re.escape(ind), regex=True, na=False)
                     cut30 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=30)
-                    macro_show = macro_show[(macro_show["publishedat"] >= cut30) & mask].copy()
+                    macro_show = macro_show[macro_show["publishedat"] >= cut30].copy()
+                    macro_show["relevance_score"] = macro_show.apply(
+                        lambda x: _macro_relevance_score(x, sec, ind, selected_symbol.lower()),
+                        axis=1,
+                    )
+                    macro_show["relevance_class"] = "Background"
+                    macro_show.loc[macro_show["relevance_score"] >= 55, "relevance_class"] = "Relevant"
+                    macro_show.loc[macro_show["relevance_score"] >= 85, "relevance_class"] = "Highly relevant"
+                    macro_show = macro_show.sort_values(["relevance_score", "publishedat"], ascending=[False, False])
                 if macro_show.empty:
                     st.caption("Aucune news macro reliee sur 30 jours.")
                 else:
-                    cols = [c for c in ["publishedat", "theme", "title", "impactscore", "regime", "winners", "losers"] if c in macro_show.columns]
+                    cards = st.columns(3)
+                    for idx, (_, m_row) in enumerate(macro_show.head(3).iterrows()):
+                        if idx >= 3:
+                            break
+                        title = str(m_row.get("title", "") or "").strip()
+                        title = title[:120] + ("..." if len(title) > 120 else "")
+                        cards[idx].markdown(
+                            f"**{_fmt_dt_short(m_row.get('publishedat'))}**  \n"
+                            f"{title}  \n"
+                            f"Theme `{str(m_row.get('theme', '') or 'N/A')}` | Impact `{safe_float(m_row.get('impactscore', 0)):.1f}` | `{str(m_row.get('relevance_class', 'Background'))}`"
+                        )
+                    cols = [c for c in ["publishedat", "theme", "title", "impactscore", "regime", "relevance_score", "relevance_class", "winners", "losers"] if c in macro_show.columns]
                     render_interactive_table(
-                        macro_show[cols].rename(
+                        macro_show[cols].head(10).rename(
                             columns={
                                 "publishedat": "Date",
                                 "theme": "Theme",
                                 "title": "Titre",
                                 "impactscore": "Impact",
                                 "regime": "Regime",
+                                "relevance_score": "Score pertinence",
+                                "relevance_class": "Classe",
                                 "winners": "Winners",
                                 "losers": "Losers",
                             }
@@ -4145,6 +4444,24 @@ elif page == "Vue consolidee Multi-Agents":
                         key_suffix=f"macro_symbol_{selected_symbol}",
                         height=320,
                     )
+                    with st.expander("Voir toutes les news macro (30j)"):
+                        render_interactive_table(
+                            macro_show[cols].rename(
+                                columns={
+                                    "publishedat": "Date",
+                                    "theme": "Theme",
+                                    "title": "Titre",
+                                    "impactscore": "Impact",
+                                    "regime": "Regime",
+                                    "relevance_score": "Score pertinence",
+                                    "relevance_class": "Classe",
+                                    "winners": "Winners",
+                                    "losers": "Losers",
+                                }
+                            ),
+                            key_suffix=f"macro_symbol_all_{selected_symbol}",
+                            height=340,
+                        )
 
             with c_right:
                 st.markdown("#### News specifiques symbole (30j)")
@@ -4152,12 +4469,35 @@ elif page == "Vue consolidee Multi-Agents":
                 if not sym_show.empty:
                     cut30 = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=30)
                     sym_show = sym_show[(sym_show["symbol"] == selected_symbol) & (sym_show["publishedat"] >= cut30)].copy()
+                    sym_show = sym_show.sort_values("publishedat", ascending=False)
                 if sym_show.empty:
-                    st.caption("Aucune news specifique sur 30 jours.")
+                    last_ag4 = pd.NaT
+                    if not symbol_news_norm.empty and "publishedat" in symbol_news_norm.columns:
+                        last_ag4 = symbol_news_norm["publishedat"].max()
+                    if pd.isna(last_ag4) and not macro_news_norm.empty and "publishedat" in macro_news_norm.columns:
+                        last_ag4 = macro_news_norm["publishedat"].max()
+                    st.caption(
+                        "Aucune news specifique sur 30 jours. "
+                        f"Derniere collecte AG4: {_fmt_dt_short(last_ag4)}."
+                    )
                 else:
+                    cards = st.columns(3)
+                    for idx, (_, s_row) in enumerate(sym_show.head(3).iterrows()):
+                        if idx >= 3:
+                            break
+                        title = str(s_row.get("title", "") or "").strip()
+                        title = title[:120] + ("..." if len(title) > 120 else "")
+                        summary = str(s_row.get("summary", "") or "").strip()
+                        summary = summary[:170] + ("..." if len(summary) > 170 else "")
+                        cards[idx].markdown(
+                            f"**{_fmt_dt_short(s_row.get('publishedat'))}**  \n"
+                            f"{title}  \n"
+                            f"Impact `{safe_float(s_row.get('impactscore', 0)):.1f}` | Sentiment `{str(s_row.get('sentiment', '') or 'N/A')}`  \n"
+                            f"{summary}"
+                        )
                     cols = [c for c in ["publishedat", "title", "impactscore", "sentiment", "urgency", "confidence", "summary"] if c in sym_show.columns]
                     render_interactive_table(
-                        sym_show[cols].rename(
+                        sym_show[cols].head(10).rename(
                             columns={
                                 "publishedat": "Date",
                                 "title": "Titre",
@@ -4170,6 +4510,167 @@ elif page == "Vue consolidee Multi-Agents":
                         ),
                         key_suffix=f"symbol_news_{selected_symbol}",
                         height=320,
+                    )
+                    with st.expander("Voir toutes les news symbole (30j)"):
+                        render_interactive_table(
+                            sym_show[cols].rename(
+                                columns={
+                                    "publishedat": "Date",
+                                    "title": "Titre",
+                                    "impactscore": "Impact",
+                                    "sentiment": "Sentiment",
+                                    "urgency": "Urgence",
+                                    "confidence": "Confiance",
+                                    "summary": "Resume",
+                                }
+                            ),
+                            key_suffix=f"symbol_news_all_{selected_symbol}",
+                            height=340,
+                        )
+
+            if use_matrix:
+                st.divider()
+                t_tech, t_funda, t_news, t_port, t_audit = st.tabs(
+                    ["Tech (AG2)", "Funda (AG3)", "News (AG4)", "Portfolio overlay", "Audit data"]
+                )
+
+                with t_tech:
+                    st.markdown("#### Contexte technique")
+                    t1, t2, t3, t4, t5, t6 = st.columns(6)
+                    t1.metric("Action AG2", str(row.get("tech_action", "N/A")))
+                    t2.metric("Confiance", f"{safe_float(row.get('tech_confidence', 0)):.1f}")
+                    t3.metric("RSI D1", f"{safe_float(row.get('d1_rsi14', 0)):.1f}")
+                    t4.metric("MACD hist D1", f"{safe_float(row.get('d1_macd_hist', 0)):.3f}")
+                    t5.metric("ATR D1 %", f"{safe_float(row.get('d1_atr_pct', 0)):.2f}%")
+                    t6.metric("Regime", str(row.get("ai_regime_d1", "N/A") or "N/A"))
+                    st.caption(
+                        f"Support={safe_float(row.get('d1_support', 0)):.2f} | "
+                        f"Resistance={safe_float(row.get('d1_resistance', 0)):.2f} | "
+                        f"Dist support={safe_float(row.get('d1_dist_sup_pct', 0)):.2f}% | "
+                        f"Dist resistance={safe_float(row.get('d1_dist_res_pct', 0)):.2f}% | "
+                        f"Derniere maj tech={_fmt_dt_short(row.get('last_tech_date', pd.NA))}"
+                    )
+
+                with t_funda:
+                    st.markdown("#### Contexte fondamental")
+                    f1, f2, f3, f4, f5, f6 = st.columns(6)
+                    f1.metric("Score Funda", f"{safe_float(row.get('funda_score', 0)):.1f}/100")
+                    f2.metric("Risque Funda", f"{safe_float(row.get('funda_risk', 0)):.1f}/100")
+                    f3.metric("Upside", f"{safe_float(row.get('funda_upside', 0)):.2f}%")
+                    f4.metric("Target", f"{safe_float(row.get('target_price', 0)):.2f}")
+                    f5.metric("Reco", str(row.get("recommendation", "N/A") or "N/A"))
+                    f6.metric("Horizon", str(row.get("funda_horizon", "N/A") or "N/A"))
+                    st.caption(
+                        f"Quality={safe_float(row.get('quality_score', 0)):.1f} | "
+                        f"Growth={safe_float(row.get('growth_score', 0)):.1f} | "
+                        f"Valuation={safe_float(row.get('valuation_score', 0)):.1f} | "
+                        f"Health={safe_float(row.get('health_score', 0)):.1f} | "
+                        f"Consensus={safe_float(row.get('consensus_score', 0)):.1f} | "
+                        f"Derniere maj funda={_fmt_dt_short(row.get('last_funda_date', pd.NA))}"
+                    )
+
+                with t_news:
+                    st.markdown("#### Resume news et contexte")
+                    st.caption(
+                        f"Impact news symbole 7j={safe_float(row.get('symbol_news_impact_7d', 0)):.2f} | "
+                        f"Impact macro 30j={safe_float(row.get('macro_impact_30d', 0)):.2f} | "
+                        f"Theme macro dominant={str(row.get('macro_themes', '') or 'N/A')}"
+                    )
+                    st.caption("Le detail Top 3 / Top 10 macro et symbole est affiche juste au-dessus.")
+
+                with t_port:
+                    st.markdown("#### Overlay portefeuille et regime")
+                    p1, p2, p3, p4 = st.columns(4)
+                    p1.metric("Poids symbole", f"{safe_float(row.get('symbol_weight_pct', 0)):.2f}%")
+                    p2.metric("Poids secteur", f"{safe_float(row.get('sector_weight_pct', 0)):.2f}%")
+                    p3.metric("Concentration risk", f"{safe_float(row.get('concentration_risk_score', 0)):.1f}/100")
+                    p4.metric("Regime marche", str(row.get("ai_regime_d1", "N/A") or "N/A"))
+                    st.caption(
+                        f"Cluster proxy portefeuille={safe_float(row.get('concentration_risk_score', 0)):.1f}/100 | "
+                        f"Action recommandee={str(row.get('matrix_action', 'N/A'))}"
+                    )
+                    if df_port is not None and not df_port.empty and "symbol" in df_port.columns:
+                        pos = df_port.copy()
+                        pos["symbol"] = pos["symbol"].astype(str).str.strip().str.upper()
+                        pos_show = pos[pos["symbol"] == selected_symbol].copy()
+                        if pos_show.empty:
+                            st.caption("Aucune position portefeuille active sur ce symbole.")
+                        else:
+                            cols_pos = [c for c in ["symbol", "name", "sector", "industry", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl", "unrealizedpnl_pct"] if c in pos_show.columns]
+                            render_interactive_table(
+                                pos_show[cols_pos].rename(
+                                    columns={
+                                        "symbol": "Symbole",
+                                        "name": "Nom",
+                                        "sector": "Secteur",
+                                        "industry": "Industrie",
+                                        "quantity": "Quantite",
+                                        "avgprice": "Prix moyen",
+                                        "lastprice": "Dernier prix",
+                                        "marketvalue": "Valeur marche",
+                                        "unrealizedpnl": "PnL latent",
+                                        "unrealizedpnl_pct": "PnL latent %",
+                                    }
+                                ),
+                                key_suffix=f"portfolio_symbol_{selected_symbol}",
+                                height=220,
+                            )
+
+                with t_audit:
+                    st.markdown("#### Fraicheur et qualite des sources")
+                    now_utc = pd.Timestamp.now(tz="UTC")
+                    age_h1 = pd.to_numeric(pd.Series([row.get("data_age_h1_hours", pd.NA)]), errors="coerce").iloc[0]
+                    age_d1 = pd.to_numeric(pd.Series([row.get("data_age_d1_hours", pd.NA)]), errors="coerce").iloc[0]
+                    age_funda_d = pd.to_numeric(pd.Series([row.get("funda_age_days", pd.NA)]), errors="coerce").iloc[0]
+                    last_news_ts = _to_dt_utc(row.get("last_news_date", pd.NA))
+                    age_news_h = pd.NA
+                    if pd.notna(last_news_ts):
+                        age_news_h = (now_utc - last_news_ts).total_seconds() / 3600.0
+                    yf_age_h = pd.to_numeric(pd.Series([row.get("yf_age_h", pd.NA)]), errors="coerce").iloc[0]
+
+                    audit_rows = [
+                        {
+                            "Source": "AG2 H1",
+                            "Derniere MAJ": _fmt_dt_short(row.get("last_tech_date", pd.NA)),
+                            "Age": f"{float(age_h1):.1f}h" if pd.notna(age_h1) else "N/A",
+                            "Statut": _freshness_status(float(age_h1), 24.0, 72.0) if pd.notna(age_h1) else "WARN",
+                            "Impact": "Timing court terme",
+                        },
+                        {
+                            "Source": "AG2 D1",
+                            "Derniere MAJ": _fmt_dt_short(row.get("last_tech_date", pd.NA)),
+                            "Age": f"{float(age_d1):.1f}h" if pd.notna(age_d1) else "N/A",
+                            "Statut": _freshness_status(float(age_d1), 36.0, 96.0) if pd.notna(age_d1) else "WARN",
+                            "Impact": "Structure tendance",
+                        },
+                        {
+                            "Source": "AG3 Funda",
+                            "Derniere MAJ": _fmt_dt_short(row.get("last_funda_date", pd.NA)),
+                            "Age": f"{float(age_funda_d):.1f}j" if pd.notna(age_funda_d) else "N/A",
+                            "Statut": _freshness_status(float(age_funda_d) * 24.0, 24.0 * 30.0, 24.0 * 90.0) if pd.notna(age_funda_d) else "WARN",
+                            "Impact": "Business et valorisation",
+                        },
+                        {
+                            "Source": "AG4 News",
+                            "Derniere MAJ": _fmt_dt_short(last_news_ts),
+                            "Age": f"{float(age_news_h):.1f}h" if pd.notna(age_news_h) else "N/A",
+                            "Statut": _freshness_status(float(age_news_h), 48.0, 120.0) if pd.notna(age_news_h) else "WARN",
+                            "Impact": "Catalyseurs",
+                        },
+                        {
+                            "Source": "YF Enrichment",
+                            "Derniere MAJ": _fmt_dt_short(row.get("yf_fetched_at", pd.NA)),
+                            "Age": f"{float(yf_age_h):.1f}h" if pd.notna(yf_age_h) else "N/A",
+                            "Statut": _freshness_status(float(yf_age_h), 36.0, 96.0) if pd.notna(yf_age_h) else "WARN",
+                            "Impact": "Spread/IV/Earnings",
+                        },
+                    ]
+                    audit_df = pd.DataFrame(audit_rows)
+                    audit_df["Statut"] = audit_df["Statut"].map({"OK": "OK", "WARN": "A surveiller", "BLOCK": "Critique"}).fillna("A surveiller")
+                    render_interactive_table(audit_df, key_suffix=f"audit_symbol_{selected_symbol}", height=260)
+                    st.caption(
+                        f"Data quality globale: {safe_float(row.get('data_quality_score', 0)):.1f}/100 | "
+                        f"Gate summary: {str(row.get('gate_summary', '') or 'OK')}"
                     )
 
 
