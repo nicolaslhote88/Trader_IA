@@ -25,6 +25,7 @@ st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="A
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
 DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
+AG1_DUCKDB_PATH = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v2.duckdb")
 AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
 AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v2.duckdb")
 AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb")
@@ -214,8 +215,9 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 @st.cache_data(ttl=30)
 def load_duckdb_data() -> dict[str, pd.DataFrame]:
-    """Charge les donnees DuckDB AG2/AG3/AG4/AG4-SPE + enrichissement daily YF (quote/options/calendar)."""
+    """Charge les donnees DuckDB AG1/AG2/AG3/AG4/AG4-SPE + enrichissement daily YF (quote/options/calendar)."""
     result = {
+        "df_portfolio_latest": pd.DataFrame(),
         "df_universe": pd.DataFrame(),
         "df_signals": pd.DataFrame(),
         "df_runs": pd.DataFrame(),
@@ -266,6 +268,39 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
                     continue
                 return None
         return conn
+
+    # -------------------------------
+    # AG1-PF-V1 (Portfolio MTM)
+    # -------------------------------
+    if os.path.exists(AG1_DUCKDB_PATH):
+        conn = _connect_readonly(AG1_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                try:
+                    result["df_portfolio_latest"] = conn.execute("""
+                        SELECT
+                            symbol AS symbol,
+                            name AS name,
+                            asset_class AS assetclass,
+                            sector AS sector,
+                            industry AS industry,
+                            isin AS isin,
+                            quantity AS quantity,
+                            avg_price AS avgprice,
+                            last_price AS lastprice,
+                            market_value AS marketvalue,
+                            unrealized_pnl AS unrealizedpnl,
+                            updated_at AS updatedat
+                        FROM portfolio_positions_mtm_latest
+                        ORDER BY market_value DESC NULLS LAST, symbol
+                    """).fetchdf()
+                except Exception:
+                    result["df_portfolio_latest"] = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
     # -------------------------------
     # AG2-V2 (Technique)
@@ -2717,7 +2752,41 @@ duckdb_data = load_duckdb_data()
 df_univ = data_dict.get("Universe", pd.DataFrame()) if data_dict else pd.DataFrame()
 if (df_univ is None or df_univ.empty) and duckdb_data:
     df_univ = duckdb_data.get("df_universe", pd.DataFrame())
-df_port = enrich_df_with_name(data_dict.get("Portefeuille", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
+# Portfolio source of truth is now DuckDB AG1.
+df_port = duckdb_data.get("df_portfolio_latest", pd.DataFrame()) if duckdb_data else pd.DataFrame()
+if df_port is None:
+    df_port = pd.DataFrame()
+
+# Fallback safety: if AG1 DuckDB is empty/unavailable, keep previous Sheets behavior.
+if (df_port is None or df_port.empty) and data_dict:
+    df_port = data_dict.get("Portefeuille", pd.DataFrame())
+
+# Preserve CASH_EUR / __META__ rows from Sheets when available, so dashboard metrics
+# (cash, initial capital) remain accurate even though positions come from DuckDB.
+if data_dict and df_port is not None and not df_port.empty:
+    df_port_sheet = data_dict.get("Portefeuille", pd.DataFrame())
+    if (
+        df_port_sheet is not None
+        and not df_port_sheet.empty
+        and "symbol" in df_port_sheet.columns
+    ):
+        technical_rows = df_port_sheet[
+            df_port_sheet["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
+        ].copy()
+        if not technical_rows.empty:
+            existing_syms = (
+                df_port.get("symbol", pd.Series("", index=df_port.index))
+                .astype(str)
+                .str.upper()
+                .str.strip()
+            )
+            missing_rows = technical_rows[
+                ~technical_rows["symbol"].astype(str).str.upper().isin(existing_syms)
+            ].copy()
+            if not missing_rows.empty:
+                df_port = pd.concat([df_port, missing_rows], ignore_index=True)
+
+df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
 df_perf = data_dict.get("Performance", pd.DataFrame()) if data_dict else pd.DataFrame()
 df_trans = enrich_df_with_name(data_dict.get("Transactions", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
 df_prices = data_dict.get("Market_Prices", pd.DataFrame()) if data_dict else pd.DataFrame()
@@ -2771,8 +2840,10 @@ cash_pct = (cash / total_val) * 100 if total_val else 0
 
 if page == "Dashboard Trading":
     if not data_dict:
-        st.error("Donnees Google Sheets requises pour cette page.")
-        st.stop()
+        st.warning(
+            "Donnees Google Sheets indisponibles: les vues Portfolio (DuckDB) restent accessibles, "
+            "mais certaines sections historiques peuvent etre vides."
+        )
 
     st.title("AI Trading Executor Dashboard")
 

@@ -162,6 +162,7 @@ services:
       - SHEET_ID=1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/service_account.json
       - TZ=Europe/Paris
+      - AG1_DUCKDB_PATH=/files/duckdb/ag1_v2.duckdb
     command: sh -lc "pip install --no-cache-dir -r requirements.txt && streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
     labels:
       - traefik.enable=true
