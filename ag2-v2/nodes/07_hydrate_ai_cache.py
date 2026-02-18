@@ -5,15 +5,25 @@ from contextlib import contextmanager
 DB_PATH = "/files/duckdb/ag2_v2.duckdb"
 
 @contextmanager
-def db_con(path=DB_PATH):
-    con = duckdb.connect(path)
+def db_con(path=DB_PATH, retries=10, delay=0.5):
+    con = None
+    for attempt in range(retries):
+        try:
+            con = duckdb.connect(path)
+            break
+        except Exception as e:
+            if "lock" in str(e).lower() and attempt < retries - 1:
+                time.sleep(delay * (2 ** attempt))
+            else:
+                raise
     try:
         yield con
     finally:
-        try:
-            con.close()
-        except Exception:
-            pass
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
         gc.collect()
 
 items = _items

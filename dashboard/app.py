@@ -235,8 +235,21 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
         "df_yf_enrichment_history": pd.DataFrame(),
     }
 
-    max_retries = 3
-    delay = 0.5
+    def _env_int(name: str, default: int, minimum: int) -> int:
+        try:
+            return max(minimum, int(os.getenv(name, str(default))))
+        except Exception:
+            return max(minimum, default)
+
+    def _env_float(name: str, default: float, minimum: float) -> float:
+        try:
+            return max(minimum, float(os.getenv(name, str(default))))
+        except Exception:
+            return max(minimum, default)
+
+    max_retries = _env_int("DUCKDB_READ_RETRIES", 8, 3)
+    base_delay = _env_float("DUCKDB_READ_BASE_DELAY_SEC", 0.25, 0.1)
+    max_delay = _env_float("DUCKDB_READ_MAX_DELAY_SEC", 3.0, base_delay)
 
     def _connect_readonly(path: str):
         conn = None
@@ -244,12 +257,13 @@ def load_duckdb_data() -> dict[str, pd.DataFrame]:
             try:
                 conn = duckdb.connect(path, read_only=True)
                 return conn
-            except duckdb.IOException:
-                if attempt < max_retries - 1:
-                    time.sleep(delay)
-                else:
-                    return None
-            except Exception:
+            except Exception as exc:
+                msg = str(exc).lower()
+                is_lock_like = isinstance(exc, duckdb.IOException) or ("lock" in msg) or ("busy" in msg)
+                if is_lock_like and attempt < max_retries - 1:
+                    sleep_s = min(base_delay * (2 ** attempt), max_delay)
+                    time.sleep(sleep_s)
+                    continue
                 return None
         return conn
 

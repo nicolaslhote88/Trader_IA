@@ -14,7 +14,7 @@ def db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):
     con = None
     for attempt in range(retries):
         try:
-            con = duckdb.connect(path)
+            con = duckdb.connect(path, read_only=True)
             break
         except Exception as exc:
             if "lock" in str(exc).lower() and attempt < retries - 1:
