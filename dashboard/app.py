@@ -1089,6 +1089,7 @@ def _build_multi_agent_matrix(
             "options_ok",
             "options_error",
             "options_warning",
+            "options_fetched_at",
             "next_earnings_date",
             "days_to_earnings",
             "calendar_ok",
@@ -1180,13 +1181,35 @@ def _build_multi_agent_matrix(
         sector_weight = safe_float(sec_w_map.get(sector, 0.0))
         symbol_weight = safe_float(sym_w_map.get(symbol, 0.0))
 
-        days_to_earnings = pd.to_numeric(pd.Series([r.get("days_to_earnings", pd.NA)]), errors="coerce").iloc[0]
-        if pd.notna(days_to_earnings):
-            d = max(0.0, min(30.0, float(days_to_earnings)))
+        raw_days_to_earnings = pd.to_numeric(pd.Series([r.get("days_to_earnings", pd.NA)]), errors="coerce").iloc[0]
+        next_earnings_ts = pd.to_datetime(r.get("next_earnings_date", pd.NA), errors="coerce", utc=True)
+        now_utc = pd.Timestamp.now(tz="UTC")
+
+        days_to_next_earnings = pd.NA
+        days_since_last_earnings = pd.NA
+        if pd.notna(next_earnings_ts):
+            delta_days = (next_earnings_ts - now_utc).total_seconds() / 86400.0
+            if delta_days >= -0.4:
+                days_to_next_earnings = max(0.0, round(delta_days, 1))
+            else:
+                days_since_last_earnings = round(abs(delta_days), 1)
+        elif pd.notna(raw_days_to_earnings):
+            d = float(raw_days_to_earnings)
+            if d >= 0:
+                days_to_next_earnings = round(d, 1)
+            else:
+                days_since_last_earnings = round(abs(d), 1)
+
+        if pd.notna(days_to_next_earnings):
+            d = max(0.0, min(30.0, float(days_to_next_earnings)))
             # Linear scale: 0 day -> 95 risk, 30+ days -> 20 risk
             event_risk = 20.0 + ((30.0 - d) / 30.0) * 75.0
+        elif pd.notna(days_since_last_earnings):
+            # Post-earnings: event risk is usually lower than pre-earnings.
+            d = max(0.0, min(30.0, float(days_since_last_earnings)))
+            event_risk = min(45.0, 25.0 + d * 0.5)
         else:
-            event_risk = 40.0
+            event_risk = 42.0
 
         vol_risk = min(100.0, max(0.0, d1_atr_pct * 20.0))
         liq_risk = min(100.0, max(0.0, spread_pct * 35.0 + slip_pct * 20.0))
@@ -1197,6 +1220,21 @@ def _build_multi_agent_matrix(
         options_raw = str(r.get("options_ok", "")).strip().lower()
         options_ok = options_raw in ("1", "true", "yes", "y")
         options_has_iv = options_ok and pd.notna(iv_atm) and float(iv_atm) > 0
+        options_error_text = str(r.get("options_error", "") or "").strip()
+        options_warning_text = str(r.get("options_warning", "") or "").strip()
+        options_state_text = f"{options_error_text} {options_warning_text}".lower()
+        invalid_options_state = any(
+            token in options_state_text
+            for token in ("_global.json.tmp", "global.json.tmp", "/data/state/", "invalid_options_state")
+        )
+        options_missing_known = any(
+            token in options_state_text for token in ("no_expirations_available", "skipped_recent_no_expirations")
+        )
+        options_fetched_ts = pd.to_datetime(r.get("options_fetched_at", pd.NA), errors="coerce", utc=True)
+        options_age_h = pd.NA
+        if pd.notna(options_fetched_ts):
+            options_age_h = (now_utc - options_fetched_ts).total_seconds() / 3600.0
+
         if options_has_iv:
             iv_val = float(iv_atm)
             iv_as_pct = iv_val * 100.0 if iv_val <= 3 else iv_val
@@ -1204,6 +1242,27 @@ def _build_multi_agent_matrix(
         else:
             # Keep a neutral baseline when options are missing (common for FR symbols).
             options_risk = 35.0
+
+        if invalid_options_state:
+            options_coverage_quality = 0.0
+        elif options_has_iv:
+            options_coverage_quality = 100.0
+        elif options_ok:
+            options_coverage_quality = 70.0
+        elif options_missing_known:
+            options_coverage_quality = 35.0
+        else:
+            options_coverage_quality = 20.0
+
+        if pd.notna(options_age_h):
+            if float(options_age_h) <= 48:
+                options_freshness_quality = 100.0
+            elif float(options_age_h) <= 120:
+                options_freshness_quality = 70.0
+            else:
+                options_freshness_quality = 40.0
+        else:
+            options_freshness_quality = 45.0
 
         yf_age_h = pd.to_numeric(pd.Series([r.get("yf_age_h", pd.NA)]), errors="coerce").iloc[0]
         stale_penalty = 0.0
@@ -1218,7 +1277,7 @@ def _build_multi_agent_matrix(
         calendar_raw = str(r.get("calendar_ok", "")).strip().lower()
         calendar_ok = calendar_raw in ("1", "true", "yes", "y")
         has_quote = quote_px > 0
-        has_days_to_earnings = pd.notna(days_to_earnings)
+        has_days_to_next_earnings = pd.notna(days_to_next_earnings)
 
         if pd.notna(yf_age_h):
             if float(yf_age_h) <= 24:
@@ -1257,13 +1316,17 @@ def _build_multi_agent_matrix(
             core_present += 1
         feature_quality = (core_present / len(core_fields)) * 100.0 if core_fields else 50.0
 
+        earnings_quality = 100.0 if has_days_to_next_earnings else (65.0 if calendar_ok else 35.0)
         data_quality_score = (
-            0.22 * (100.0 if has_quote else 45.0)
-            + 0.18 * (100.0 if options_has_iv else 62.0 if options_ok else 50.0)
-            + 0.15 * (100.0 if has_days_to_earnings else 72.0 if calendar_ok else 50.0)
-            + 0.25 * freshness_quality
-            + 0.20 * feature_quality
+            0.20 * (100.0 if has_quote else 30.0)
+            + 0.25 * options_coverage_quality
+            + 0.10 * options_freshness_quality
+            + 0.15 * earnings_quality
+            + 0.15 * freshness_quality
+            + 0.15 * feature_quality
         )
+        if invalid_options_state:
+            data_quality_score = 0.0
         data_quality_score = max(0.0, min(100.0, data_quality_score))
 
         risk_weights = {
@@ -1340,9 +1403,10 @@ def _build_multi_agent_matrix(
         quadrant = "Q?"
         matrix_action = "Surveiller"
 
-        data_quality_gate_ok = data_quality_score >= 55.0
-        earnings_gate_block = bool(pd.notna(days_to_earnings) and float(days_to_earnings) <= 2.0)
+        data_quality_gate_ok = data_quality_score >= 60.0
+        earnings_gate_block = bool(pd.notna(days_to_next_earnings) and float(days_to_next_earnings) <= 7.0)
         liquidity_gate_block = liq_risk >= 85.0
+        invalid_options_state_gate = invalid_options_state
         gates_note = []
         if not data_quality_gate_ok:
             gates_note.append("DATA_QUALITY_LOW")
@@ -1350,15 +1414,17 @@ def _build_multi_agent_matrix(
             gates_note.append("EARNINGS_IMMINENT")
         if liquidity_gate_block:
             gates_note.append("LIQUIDITY_STRESS")
+        if invalid_options_state_gate:
+            gates_note.append("INVALID_OPTIONS_STATE")
         if rr_outlier:
             gates_note.append(rr_note)
         gate_summary = "|".join(gates_note)
 
         options_note = ""
-        if not options_ok:
-            err = str(r.get("options_error", "") or "").strip()
-            warn = str(r.get("options_warning", "") or "").strip()
-            options_note = err or warn or "Aucune option disponible"
+        if invalid_options_state:
+            options_note = "INVALID_OPTIONS_STATE"
+        elif not options_ok:
+            options_note = options_error_text or options_warning_text or "Aucune option disponible"
 
         rows.append(
             {
@@ -1366,11 +1432,17 @@ def _build_multi_agent_matrix(
                 "regularMarketPrice": quote_px if quote_px > 0 else pd.NA,
                 "spreadPct": spread_pct if spread_pct > 0 else pd.NA,
                 "slippageProxyPct": slip_pct if slip_pct > 0 else pd.NA,
-                "days_to_earnings": float(days_to_earnings) if pd.notna(days_to_earnings) else pd.NA,
+                "days_to_earnings": float(days_to_next_earnings) if pd.notna(days_to_next_earnings) else pd.NA,
+                "days_to_next_earnings": float(days_to_next_earnings) if pd.notna(days_to_next_earnings) else pd.NA,
+                "days_since_last_earnings": float(days_since_last_earnings) if pd.notna(days_since_last_earnings) else pd.NA,
                 "iv_atm": float(iv_atm) if pd.notna(iv_atm) else pd.NA,
                 "options_ok": options_ok,
-                "options_error": str(r.get("options_error", "") or ""),
-                "options_warning": str(r.get("options_warning", "") or ""),
+                "options_error": options_error_text,
+                "options_warning": options_warning_text,
+                "options_age_h": float(options_age_h) if pd.notna(options_age_h) else pd.NA,
+                "options_coverage_quality": options_coverage_quality,
+                "options_freshness_quality": options_freshness_quality,
+                "invalid_options_state": invalid_options_state,
                 "has_enrichment": bool(pd.notna(r.get("yf_fetched_at"))) if "yf_fetched_at" in r.index else False,
                 "entry_price": entry,
                 "stop_price": stop,
@@ -1403,6 +1475,7 @@ def _build_multi_agent_matrix(
                 "data_quality_gate_ok": data_quality_gate_ok,
                 "earnings_gate_block": earnings_gate_block,
                 "liquidity_gate_block": liquidity_gate_block,
+                "invalid_options_state_gate": invalid_options_state_gate,
                 "gate_summary": gate_summary,
                 "event_risk_score": event_risk,
                 "vol_risk_score": vol_risk,
@@ -1453,6 +1526,8 @@ def _build_multi_agent_matrix(
             grade = "B"
         if bool(row.get("earnings_gate_block", False)) and grade == "A":
             grade = "B"
+        if bool(row.get("invalid_options_state_gate", False)):
+            grade = _downgrade_grade(grade)
 
         risk_u = safe_float(row.get("risk_score_u", 50.0))
         reward_u = safe_float(row.get("reward_score_u", 50.0))
@@ -1461,7 +1536,8 @@ def _build_multi_agent_matrix(
         rr_outlier = bool(row.get("rr_outlier", False))
         earnings_block = bool(row.get("earnings_gate_block", False))
         liquidity_block = bool(row.get("liquidity_gate_block", False))
-        quality_block = data_quality < 55.0
+        invalid_options_state = bool(row.get("invalid_options_state_gate", False))
+        quality_block = data_quality < 60.0
 
         if risk_u <= risk_threshold and reward_u >= reward_threshold:
             quadrant = "Q1 - Priorite"
@@ -1485,7 +1561,7 @@ def _build_multi_agent_matrix(
         )
 
         reasons = []
-        if enter_core and not (quality_block or earnings_block or rr_outlier):
+        if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state):
             action = "Entrer / Renforcer"
             reasons.append("SETUP_OK")
         elif reduce_core:
@@ -1500,6 +1576,8 @@ def _build_multi_agent_matrix(
                 reasons.append("EARNINGS_GATE")
             if rr_outlier:
                 reasons.append("RR_OUTLIER_GATE")
+            if invalid_options_state:
+                reasons.append("INVALID_OPTIONS_STATE_GATE")
 
         ev_component = max(0.0, min(100.0, (ev_r / 1.5) * 100.0))
         risk_component = max(0.0, min(100.0, 100.0 - risk_u))
@@ -1512,6 +1590,8 @@ def _build_multi_agent_matrix(
             size_pct = 0.0
         if earnings_block:
             size_pct = min(size_pct, 30.0)
+        if invalid_options_state:
+            size_pct = min(size_pct, 20.0)
 
         final_grades.append(grade)
         final_quadrants.append(quadrant)
@@ -3623,7 +3703,8 @@ elif page == "Vue consolidee Multi-Agents":
             options_ok_series = view_df.get("options_ok", pd.Series(False, index=view_df.index)).fillna(False).astype(bool)
             opt_missing = int((~options_ok_series).sum())
             rr_outliers = int(view_df.get("rr_outlier", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).sum())
-            low_quality = int((safe_float_series(view_df.get("data_quality_score", pd.Series(0.0, index=view_df.index))).fillna(0.0) < 55.0).sum())
+            low_quality = int((safe_float_series(view_df.get("data_quality_score", pd.Series(0.0, index=view_df.index))).fillna(0.0) < 60.0).sum())
+            invalid_opt_state_count = int(view_df.get("invalid_options_state", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).sum())
             risk_thr = safe_float(view_df.get("risk_threshold_dyn", pd.Series([50.0])).iloc[0] if total_values else 50.0)
             reward_thr = safe_float(view_df.get("reward_threshold_dyn", pd.Series([50.0])).iloc[0] if total_values else 50.0)
             grade_a_thr = safe_float(view_df.get("grade_a_threshold", pd.Series([70.0])).iloc[0] if total_values else 70.0)
@@ -3642,7 +3723,7 @@ elif page == "Vue consolidee Multi-Agents":
             g5.metric("EV(R) moyen", f"{avg_ev:.2f}")
             g6.metric("Setups grade A", grade_a, delta=f"Options indispo: {opt_missing}")
             g7.metric("RR outliers", rr_outliers)
-            g8.metric("Data quality <55", low_quality)
+            g8.metric("Data quality <60", low_quality, delta=f"Invalid options state: {invalid_opt_state_count}")
             if enrich_cov < 85:
                 st.warning(f"Couverture enrichissement YF insuffisante: {enrich_cov:.1f}% des symboles ont une ligne daily.")
             else:
@@ -3654,8 +3735,18 @@ elif page == "Vue consolidee Multi-Agents":
                 "taille = valeur absolue EV(R), forme = action recommandee."
             )
             st.caption(
+                "Taille des bulles (|EV(R)|): petite bulle = EV proche de 0 (signal faible, ni clairement bon ni mauvais). "
+                "Grosse bulle = conviction forte; grosse + EV(R) positif = favorable, grosse + EV(R) negatif = defavorable."
+            )
+            st.caption(
                 f"Seuils dynamiques: Risk p60={risk_thr:.0f}, Reward p60={reward_thr:.0f}. "
                 f"Grades par quantiles: A >= {grade_a_thr:.1f}, B >= {grade_b_thr:.1f}, sinon C."
+            )
+            st.caption(
+                "Interpretation des classes: "
+                f"`Risk p60={risk_thr:.0f}` signifie que 60% de l'univers a un risque <= {risk_thr:.0f} (au-dessus = plus risque relatif). "
+                f"`Reward p60={reward_thr:.0f}` signifie que les titres >= {reward_thr:.0f} sont dans les 40% les plus attractifs en reward relatif. "
+                f"Grades: `A` = top 10% des setups de l'univers du jour (apres gates), `B` = zone mediane-superieure, `C` = reste."
             )
 
             plot_df = view_df.copy()
@@ -3689,7 +3780,8 @@ elif page == "Vue consolidee Multi-Agents":
                     "risk_pct": ":.2f",
                     "spreadPct": ":.2f",
                     "iv_atm": ":.3f",
-                    "days_to_earnings": ":.1f",
+                    "days_to_next_earnings": ":.1f",
+                    "days_since_last_earnings": ":.1f",
                     "bubble_size": False,
                 },
                 color_discrete_map={"A": "#28a745", "B": "#ffc107", "C": "#dc3545"},
@@ -3698,6 +3790,8 @@ elif page == "Vue consolidee Multi-Agents":
                     "reward_score_plot": "Reward (0-100)",
                     "risk_score_u": "Risque unitaire",
                     "reward_score_u": "Reward unitaire",
+                    "days_to_next_earnings": "Jours avant prochains earnings",
+                    "days_since_last_earnings": "Jours depuis derniers earnings",
                     "setup_grade": "Probabilite",
                     "matrix_action": "Decision",
                 },
@@ -3777,7 +3871,9 @@ elif page == "Vue consolidee Multi-Agents":
                 "risk_pct",
                 "spreadPct",
                 "iv_atm",
-                "days_to_earnings",
+                "days_to_next_earnings",
+                "days_since_last_earnings",
+                "invalid_options_state",
                 "options_note",
             ]
             show_cols = [c for c in matrix_cols if c in view_df.columns]
@@ -3809,7 +3905,9 @@ elif page == "Vue consolidee Multi-Agents":
                         "risk_pct": "Risk %",
                         "spreadPct": "Spread %",
                         "iv_atm": "IV ATM",
-                        "days_to_earnings": "Jours earnings",
+                        "days_to_next_earnings": "Jours avant earnings",
+                        "days_since_last_earnings": "Jours depuis earnings",
+                        "invalid_options_state": "Etat options invalide",
                         "options_note": "Note options",
                     }
                 ),
@@ -3975,17 +4073,24 @@ elif page == "Vue consolidee Multi-Agents":
 
                 with rd_right:
                     st.markdown("#### Donnees marche externes")
+                    dnext = row.get("days_to_next_earnings", row.get("days_to_earnings", pd.NA))
+                    dsince = row.get("days_since_last_earnings", pd.NA)
+                    dnext_txt = f"{safe_float(dnext):.1f}" if pd.notna(dnext) else "N/A"
+                    dsince_txt = f"{safe_float(dsince):.1f}" if pd.notna(dsince) else "N/A"
                     st.write(
                         f"Spread: {safe_float(row.get('spreadPct', 0)):.2f}% | "
                         f"Slippage proxy: {safe_float(row.get('slippageProxyPct', 0)):.2f}% | "
                         f"IV ATM: {safe_float(row.get('iv_atm', 0)):.3f} | "
-                        f"Jours avant earnings: {safe_float(row.get('days_to_earnings', 0)):.1f}"
+                        f"Jours avant prochains earnings: {dnext_txt} | "
+                        f"Jours depuis derniers earnings: {dsince_txt}"
                     )
                     if not bool(row.get("options_ok", False)):
                         note = str(row.get("options_note", "") or "Aucune option Yahoo disponible (cas courant sur titres FR).")
                         st.info(note)
                     elif str(row.get("options_warning", "")).strip():
                         st.caption(f"Options warning: {row.get('options_warning')}")
+                    if bool(row.get("earnings_gate_block", False)):
+                        st.warning("Gate earnings actif: prochaines publications proches (<= 7 jours).")
             else:
                 s1, s2, s3, s4, s5, s6 = st.columns(6)
                 s1.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100", delta=str(row.get("conclusion", "")))
