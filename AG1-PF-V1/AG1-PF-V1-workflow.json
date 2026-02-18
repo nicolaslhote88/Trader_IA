@@ -1,0 +1,733 @@
+{
+  "name": "AG1-PF-V1 - Portfolio MTM (DuckDB + Sheets)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 9-17 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -240,
+        -80
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f101",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -240,
+        80
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f102",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "pf00-01",
+              "name": "yfinance_api_base",
+              "value": "http://yfinance-api:8080",
+              "type": "string"
+            },
+            {
+              "id": "pf00-02",
+              "name": "interval",
+              "value": "1d",
+              "type": "string"
+            },
+            {
+              "id": "pf00-03",
+              "name": "lookback_days",
+              "value": "10",
+              "type": "string"
+            },
+            {
+              "id": "pf00-04",
+              "name": "max_bars",
+              "value": "5",
+              "type": "string"
+            },
+            {
+              "id": "pf00-05",
+              "name": "min_bars",
+              "value": "1",
+              "type": "string"
+            },
+            {
+              "id": "pf00-06",
+              "name": "allow_stale",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "pf00-07",
+              "name": "portfolio_db_path",
+              "value": "/files/duckdb/ag1_v2.duckdb",
+              "type": "string"
+            },
+            {
+              "id": "pf00-08",
+              "name": "workflow_name",
+              "value": "PF Portfolio MTM Updater",
+              "type": "string"
+            },
+            {
+              "id": "pf00-09",
+              "name": "run_id",
+              "value": "={{ 'PFMTM_' + $now.toFormat('yyyyLLddHHmmss') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        0,
+        0
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f103",
+      "name": "PF.00 - Config"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 757810202,
+          "mode": "list",
+          "cachedResultName": "Portefeuille",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=757810202"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        240,
+        0
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f104",
+      "name": "Read Portfolio",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 1078848687,
+          "mode": "list",
+          "cachedResultName": "Universe",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
+        },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Symbol",
+              "lookupValue": "={{ $json.Symbol || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        480,
+        128
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f105",
+      "name": "Get Universe Row",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "﻿// Keep only identity + sector classification fields from Universe lookup\nreturn $input.all().map((item) => {\n  const row = item.json || {};\n  return {\n    json: {\n      Symbol: row.Symbol,\n      Name: row.Name,\n      AssetClass: row.AssetClass,\n      Sector: row.Sector,\n      Industry: row.Industry,\n      ISIN: row.ISIN,\n    },\n  };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        704,
+        128
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f106",
+      "name": "Filter Universe Columns"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "Symbol",
+        "joinMode": "enrichInput1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        928,
+        0
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f107",
+      "name": "Merge Portfolio + Universe"
+    },
+    {
+      "parameters": {
+        "jsCode": "﻿/**\n * PF.02 - Normalize positions (1 item = 1 row)\n * - Parses portfolio row values robustly (FR number support)\n * - Excludes technical rows (__META__, CASH_EUR)\n * - Adds config from PF.00 node to each output item\n */\n\nfunction safeJsonParse(v, fallback = {}) {\n  try {\n    if (!v) return fallback;\n    if (typeof v === \"object\") return v;\n    return JSON.parse(String(v));\n  } catch {\n    return fallback;\n  }\n}\n\nfunction normSymbol(v) {\n  return String(v ?? \"\").trim();\n}\n\nfunction stripSpaces(s) {\n  return String(s ?? \"\").replace(/[\\s\\u00A0\\u202F]/g, \"\");\n}\n\nfunction parseFrNumber(v) {\n  if (v === null || v === undefined || v === \"\") return null;\n  if (typeof v === \"number\") return Number.isFinite(v) ? v : null;\n\n  const s0 = stripSpaces(v)\n    .replace(/EUR/gi, \"\")\n    .replace(/€/g, \"\")\n    .trim();\n\n  if (!s0) return null;\n\n  const s1 = s0.replace(/\\./g, \"\").replace(\",\", \".\");\n  const n = Number(s1);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction getRowNum(r) {\n  const n = Number(r?.row_number);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction loadConfig() {\n  const candidates = [\"PF.00 - Config\", \"PF.00\", \"Config\"];\n  for (const name of candidates) {\n    try {\n      const it = $items(name);\n      if (it?.length) return it[0].json ?? {};\n    } catch {}\n  }\n  return {};\n}\n\nconst cfg = loadConfig();\nconst rows = $input.all().map(i => i.json || {});\n\nconst metaRow = rows.find(r => normSymbol(r.Symbol) === \"__META__\") || null;\nconst cashRow = rows.find(r => normSymbol(r.Symbol) === \"CASH_EUR\") || null;\n\nconst metaRowNumSrc = getRowNum(metaRow);\nconst cashRowNumSrc = getRowNum(cashRow);\n\nconst headerOffset = (metaRowNumSrc === 1) ? 1 : 0;\nconst metaRowNumber = (metaRowNumSrc ?? 1) + headerOffset;\nconst cashRowNumber = (cashRowNumSrc ?? 2) + headerOffset;\n\nconst initialCapitalEUR = metaRow ? parseFrNumber(metaRow.MarketValue) : 50000;\nconst cashMarketValueRaw = cashRow?.MarketValue ?? cashRow?.LastPrice ?? \"\";\nconst cashMarketValueEUR = parseFrNumber(cashMarketValueRaw);\n\nconst pf_ctx = {\n  headerOffset,\n  meta: {\n    row_number: metaRowNumber,\n    row_number_src: metaRowNumSrc,\n    UpdatedAt: metaRow?.UpdatedAt ?? null,\n    initialCapitalEUR,\n  },\n  cash: {\n    row_number: cashRowNumber,\n    row_number_src: cashRowNumSrc,\n    UpdatedAt: cashRow?.UpdatedAt ?? null,\n    MarketValueRaw: cashMarketValueRaw,\n    MarketValueEUR: cashMarketValueEUR,\n  },\n};\n\nconst positions = rows.filter(r => {\n  const sym = normSymbol(r.Symbol);\n  if (!sym) return false;\n  if (sym === \"__META__\") return false;\n  if (sym === \"CASH_EUR\") return false;\n\n  const q = r.Quantity ?? r.qty;\n  return q !== null && q !== undefined && String(q).trim() !== \"\";\n});\n\nconst out = positions.map(r => {\n  const rowNumSrc = getRowNum(r);\n  const rowNumSheet = rowNumSrc !== null ? (rowNumSrc + headerOffset) : null;\n\n  const symbol = normSymbol(r.Symbol);\n  const qty = parseFrNumber(r.Quantity ?? r.qty);\n  const avgPrice = parseFrNumber(r.AvgPrice ?? r.avgPrice);\n\n  return {\n    ...cfg,\n    ...r,\n    pf_ctx,\n    row_number_src: rowNumSrc,\n    row_number: rowNumSheet ?? rowNumSrc,\n    symbol,\n    qty,\n    avgPrice,\n    Name: r.Name,\n    AssetClass: r.AssetClass,\n    Sector: r.Sector,\n    Industry: r.Industry,\n    ISIN: r.ISIN,\n  };\n});\n\nreturn out.map(j => ({ json: j }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1152,
+        0
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f108",
+      "name": "PF.02 - Normalize Positions"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1376,
+        0
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f109",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.yfinance_api_base }}/history",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{$json.symbol}}"
+            },
+            {
+              "name": "max_bars",
+              "value": "={{ $json.max_bars }}"
+            },
+            {
+              "name": "min_bars",
+              "value": "={{ $json.min_bars }}"
+            },
+            {
+              "name": "lookback_days",
+              "value": "={{ $json.lookback_days }}"
+            },
+            {
+              "name": "allow_stale",
+              "value": "={{ $json.allow_stale }}"
+            },
+            {
+              "name": "interval",
+              "value": "={{ $json.interval }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1616,
+        112
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f110",
+      "name": "PF.05A - Fetch Price 1D",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.yfinance_api_base }}/history",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "symbol",
+              "value": "={{$json.symbol}}"
+            },
+            {
+              "name": "max_bars",
+              "value": "={{ $json.max_bars }}"
+            },
+            {
+              "name": "min_bars",
+              "value": "={{ $json.min_bars }}"
+            },
+            {
+              "name": "lookback_days",
+              "value": "={{ $json.lookback_days }}"
+            },
+            {
+              "name": "allow_stale",
+              "value": "={{ $json.allow_stale }}"
+            },
+            {
+              "name": "interval",
+              "value": "1h"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          },
+          "timeout": 60000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        1616,
+        304
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f111",
+      "name": "PF.05B - Fetch Price 1H",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "﻿// PF.05A - Wrap 1D response\nreturn $input.all().map((it) => {\n  const r = it.json ?? {};\n  return { json: { symbol: r.symbol, yf_1d: r } };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        112
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f112",
+      "name": "PF.05A - Wrap 1D"
+    },
+    {
+      "parameters": {
+        "jsCode": "﻿// PF.05B - Wrap 1H response\nreturn $input.all().map((it) => {\n  const r = it.json ?? {};\n  return { json: { symbol: r.symbol, yf_1h: r } };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1824,
+        304
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f113",
+      "name": "PF.05B - Wrap 1H"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "symbol",
+        "joinMode": "enrichInput1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2048,
+        32
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f114",
+      "name": "PF.06A - Merge (portfolio + 1D)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "symbol",
+        "joinMode": "enrichInput1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2272,
+        208
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f115",
+      "name": "PF.06B - Merge (+ 1H)"
+    },
+    {
+      "parameters": {
+        "jsCode": "﻿// PF.07 - Compute MTM (skip-safe)\n// Input: enriched portfolio item (row_number, qty/avgPrice, yf_1d, optional yf_1h)\n// Output: same fields + LastPrice / MarketValue / UnrealizedPnL + diagnostics + gs_update\n\nfunction safeNum(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction parseTime(t) {\n  const d = new Date(t);\n  const ms = d.getTime();\n  return Number.isFinite(ms) ? ms : null;\n}\n\nfunction extractLast(yf) {\n  if (!yf || typeof yf !== \"object\") return null;\n  if (yf.ok === false) return { ok: false, reason: yf.error || \"YF_OK_FALSE\" };\n\n  if (yf.last && typeof yf.last === \"object\") {\n    const price = safeNum(yf.last.c);\n    const tMs = parseTime(yf.last.t);\n    if (price != null) {\n      return {\n        ok: true,\n        price,\n        t: yf.last.t || null,\n        tMs,\n        interval: yf.interval || null,\n        source: yf.source || null,\n        stale: !!yf.stale,\n      };\n    }\n  }\n\n  if (Array.isArray(yf.bars) && yf.bars.length) {\n    const b = yf.bars[yf.bars.length - 1];\n    const price = safeNum(b?.c);\n    const tMs = parseTime(b?.t);\n    if (price != null) {\n      return {\n        ok: true,\n        price,\n        t: b.t || null,\n        tMs,\n        interval: yf.interval || null,\n        source: yf.source || null,\n        stale: !!yf.stale,\n      };\n    }\n  }\n\n  return { ok: false, reason: \"NO_LAST_PRICE_IN_PAYLOAD\" };\n}\n\nreturn $input.all().map((it) => {\n  const j = it.json ?? {};\n\n  const qty = safeNum(j.qty ?? j.Quantity);\n  const avgPrice = safeNum(j.avgPrice ?? j.AvgPrice);\n\n  const last1d = extractLast(j.yf_1d);\n  const last1h = extractLast(j.yf_1h);\n\n  let chosen = null;\n  if (last1h?.ok && last1d?.ok) {\n    if (last1h.tMs != null && last1d.tMs != null) {\n      chosen = (last1h.tMs >= last1d.tMs) ? { ...last1h, picked: \"1h\" } : { ...last1d, picked: \"1d\" };\n    } else {\n      chosen = { ...last1h, picked: \"1h\" };\n    }\n  } else if (last1h?.ok) {\n    chosen = { ...last1h, picked: \"1h\" };\n  } else if (last1d?.ok) {\n    chosen = { ...last1d, picked: \"1d\" };\n  }\n\n  const fallbackLastPrice = safeNum(j.LastPrice);\n  if (!chosen && fallbackLastPrice != null && fallbackLastPrice > 0) {\n    chosen = {\n      ok: true,\n      price: fallbackLastPrice,\n      t: j.asof || j.UpdatedAt || null,\n      tMs: parseTime(j.asof || j.UpdatedAt),\n      interval: \"fallback\",\n      source: \"portfolio_input\",\n      stale: true,\n      picked: \"fallback\",\n    };\n  }\n\n  const updatedAt = new Date().toISOString();\n\n  let mtm_ok = true;\n  let mtm_status = \"OK\";\n  let mtm_reason = null;\n\n  const price = chosen?.ok ? chosen.price : null;\n\n  if (qty == null || avgPrice == null) {\n    mtm_ok = false;\n    mtm_status = \"INVALID_INPUT\";\n    mtm_reason = \"Missing qty or avgPrice\";\n  } else if (price == null) {\n    mtm_ok = false;\n    mtm_status = \"NO_PRICE\";\n    mtm_reason = `No usable price from yf_1h/yf_1d (1h=${last1h?.reason || \"n/a\"}, 1d=${last1d?.reason || \"n/a\"})`;\n  }\n\n  const MarketValue = (mtm_ok ? qty * price : safeNum(j.MarketValue) ?? 0);\n  const UnrealizedPnL = (mtm_ok ? qty * (price - avgPrice) : safeNum(j.UnrealizedPnL) ?? 0);\n\n  const out = {\n    ...j,\n\n    LastPrice: mtm_ok ? price : (safeNum(j.LastPrice) ?? 0),\n    MarketValue,\n    UnrealizedPnL,\n    UpdatedAt: updatedAt,\n\n    mtm_ok,\n    mtm_status,\n    mtm_reason,\n    mtm_price: price,\n    mtm_price_picked: chosen?.picked || null,\n    mtm_price_asof: chosen?.t || null,\n    mtm_price_interval: chosen?.interval || null,\n    mtm_price_source: chosen?.source || null,\n    mtm_price_stale: chosen?.stale ?? null,\n\n    gs_update: {\n      row_number: j.row_number,\n      LastPrice: mtm_ok ? price : (safeNum(j.LastPrice) ?? 0),\n      MarketValue,\n      UnrealizedPnL,\n      UpdatedAt: updatedAt,\n    },\n  };\n\n  if (out.yf_1d?.bars) delete out.yf_1d.bars;\n  if (out.yf_1h?.bars) delete out.yf_1h.bars;\n\n  return { json: out };\n});\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2496,
+        208
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f116",
+      "name": "PF.07 - Compute MTM"
+    },
+    {
+      "parameters": {
+        "jsCode": "﻿// PF.08 - Build Sheet Updates + payload for DuckDB writer\n// Input: items from PF.07\n// Output: only position update rows (no META row updates)\n\nfunction safeNum(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : 0;\n}\n\nfunction round2(v) {\n  const n = safeNum(v);\n  return Math.round((n + Number.EPSILON) * 100) / 100;\n}\n\nfunction makeFallbackRunId() {\n  const d = new Date();\n  const pad = (x) => String(x).padStart(2, \"0\");\n  return `PFMTM_${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;\n}\n\nconst nowIso = new Date().toISOString();\nconst inItems = $input.all().map((i) => i.json || {});\nconst fallbackRunId = makeFallbackRunId();\n\nconst positionUpdates = inItems\n  .filter((j) => j?.gs_update?.row_number != null)\n  .map((j) => {\n    const u = j.gs_update;\n    return {\n      row_number: u.row_number,\n      LastPrice: round2(u.LastPrice),\n      MarketValue: round2(u.MarketValue),\n      UnrealizedPnL: round2(u.UnrealizedPnL),\n      UpdatedAt: u.UpdatedAt || nowIso,\n\n      Name: j.Name ?? \"\",\n      AssetClass: j.AssetClass ?? \"\",\n      Sector: j.Sector ?? \"\",\n      Industry: j.Industry ?? \"\",\n\n      // Extra fields for DuckDB persistence node\n      Symbol: j.symbol || j.Symbol || \"\",\n      ISIN: j.ISIN || \"\",\n      Quantity: j.qty ?? j.Quantity ?? \"\",\n      AvgPrice: j.avgPrice ?? j.AvgPrice ?? \"\",\n      run_id: j.run_id || fallbackRunId,\n      portfolio_db_path: j.portfolio_db_path || j.db_path || \"/files/duckdb/ag1_v2.duckdb\",\n      workflow_name: j.workflow_name || \"PF Portfolio MTM Updater\",\n\n      mtm_ok: j.mtm_ok,\n      mtm_status: j.mtm_status,\n      mtm_reason: j.mtm_reason,\n      mtm_price_picked: j.mtm_price_picked,\n      mtm_price_asof: j.mtm_price_asof,\n    };\n  });\n\nreturn positionUpdates.map((o) => ({ json: o }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        -160
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f117",
+      "name": "PF.08 - Build Sheet Updates"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "﻿import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag1_v2.duckdb\"\nDEFAULT_WORKFLOW_NAME = \"PF Portfolio MTM Updater\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=6, base_delay=0.25):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            msg = str(exc).lower()\n            if (\"lock\" in msg or \"busy\" in msg) and attempt < retries - 1:\n                time.sleep(base_delay * (2 ** attempt))\n                continue\n            raise\n\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef pick(*vals):\n    for v in vals:\n        if v is None:\n            continue\n        if isinstance(v, str) and v.strip() == \"\":\n            continue\n        return v\n    return None\n\n\ndef to_float(v):\n    if v is None:\n        return None\n    if isinstance(v, bool):\n        return float(v)\n    if isinstance(v, (int, float)):\n        return float(v)\n\n    s = str(v).strip()\n    if not s:\n        return None\n\n    s = (\n        s.replace(\"EUR\", \"\")\n        .replace(\"eur\", \"\")\n        .replace(\"€\", \"\")\n        .replace(\"\\u20ac\", \"\")\n        .replace(\" \", \"\")\n        .replace(\"\\u00a0\", \"\")\n        .replace(\"\\u202f\", \"\")\n    )\n\n    # French number support: 1 234,56 -> 1234.56\n    s = s.replace(\".\", \"\").replace(\",\", \".\") if (\",\" in s and \".\" in s) else s.replace(\",\", \".\")\n\n    try:\n        n = float(s)\n        return n\n    except Exception:\n        return None\n\n\ndef to_int(v):\n    if v is None or v == \"\":\n        return None\n    try:\n        return int(float(v))\n    except Exception:\n        return None\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    s = str(v)\n    return \"\" if s.lower() in (\"nan\", \"nat\", \"none\", \"null\") else s.strip()\n\n\ndef utc_now_iso():\n    return datetime.now(timezone.utc).isoformat()\n\n\ndef build_run_id(items):\n    for it in items:\n        j = (it or {}).get(\"json\", {}) or {}\n        rid = to_text(pick(j.get(\"run_id\"), j.get(\"pf_run_id\"), j.get(\"workflow_run_id\")))\n        if rid:\n            return rid\n    return \"PFMTM_\" + datetime.now(timezone.utc).strftime(\"%Y%m%d%H%M%S\")\n\n\ndef pick_db_path(items):\n    for it in items:\n        j = (it or {}).get(\"json\", {}) or {}\n        path = to_text(pick(j.get(\"portfolio_db_path\"), j.get(\"db_path\"), j.get(\"duckdb_path\")))\n        if path:\n            return path\n    return DEFAULT_DB_PATH\n\n\ndef pick_workflow_name(items):\n    for it in items:\n        j = (it or {}).get(\"json\", {}) or {}\n        name = to_text(j.get(\"workflow_name\"))\n        if name:\n            return name\n    return DEFAULT_WORKFLOW_NAME\n\n\ndef to_timestamp_candidate(v):\n    s = to_text(v)\n    return s or None\n\n\nSCHEMA_SQL = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_run_log (\n        run_id          VARCHAR PRIMARY KEY,\n        started_at      TIMESTAMP NOT NULL,\n        finished_at     TIMESTAMP,\n        status          VARCHAR DEFAULT 'RUNNING',\n        rows_in         INTEGER DEFAULT 0,\n        rows_written    INTEGER DEFAULT 0,\n        rows_error      INTEGER DEFAULT 0,\n        error_detail    VARCHAR,\n        source          VARCHAR DEFAULT 'PF_MTM',\n        workflow_name   VARCHAR\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_latest (\n        symbol              VARCHAR PRIMARY KEY,\n        row_number          INTEGER,\n        symbol_raw          VARCHAR,\n        name                VARCHAR,\n        asset_class         VARCHAR,\n        sector              VARCHAR,\n        industry            VARCHAR,\n        isin                VARCHAR,\n        quantity            DOUBLE,\n        avg_price           DOUBLE,\n        last_price          DOUBLE,\n        market_value        DOUBLE,\n        unrealized_pnl      DOUBLE,\n        updated_at          TIMESTAMP,\n        source_updated_at   VARCHAR,\n        run_id              VARCHAR,\n        ingested_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_history (\n        id                  VARCHAR PRIMARY KEY,\n        run_id              VARCHAR NOT NULL,\n        symbol              VARCHAR NOT NULL,\n        row_number          INTEGER,\n        symbol_raw          VARCHAR,\n        name                VARCHAR,\n        asset_class         VARCHAR,\n        sector              VARCHAR,\n        industry            VARCHAR,\n        isin                VARCHAR,\n        quantity            DOUBLE,\n        avg_price           DOUBLE,\n        last_price          DOUBLE,\n        market_value        DOUBLE,\n        unrealized_pnl      DOUBLE,\n        updated_at          TIMESTAMP,\n        source_updated_at   VARCHAR,\n        ingested_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"CREATE INDEX IF NOT EXISTS idx_pf_mtm_latest_updated_at ON portfolio_positions_mtm_latest(updated_at)\",\n    \"CREATE INDEX IF NOT EXISTS idx_pf_mtm_history_run ON portfolio_positions_mtm_history(run_id)\",\n    \"CREATE INDEX IF NOT EXISTS idx_pf_mtm_history_symbol ON portfolio_positions_mtm_history(symbol)\",\n]\n\n\nitems = _items or []\nif not items:\n    return []\n\nrun_id = build_run_id(items)\ndb_path = pick_db_path(items)\nworkflow_name = pick_workflow_name(items)\nnow_iso = utc_now_iso()\n\nrows = []\nfor it in items:\n    j = (it or {}).get(\"json\", {}) or {}\n\n    symbol_raw = to_text(pick(j.get(\"Symbol\"), j.get(\"symbol\")))\n    symbol = symbol_raw.upper()\n    if not symbol:\n        continue\n\n    # This workflow is dedicated to positions MTM. Skip technical rows if they leak in.\n    if symbol in (\"CASH_EUR\", \"__META__\"):\n        continue\n\n    row_number = to_int(pick(j.get(\"row_number\"), j.get(\"rowNumber\"), j.get(\"row_number_src\")))\n\n    row = {\n        \"id\": f\"{run_id}|{symbol}|{row_number if row_number is not None else 0}\",\n        \"run_id\": run_id,\n        \"symbol\": symbol,\n        \"row_number\": row_number,\n        \"symbol_raw\": symbol_raw,\n        \"name\": to_text(pick(j.get(\"Name\"), j.get(\"name\"))),\n        \"asset_class\": to_text(pick(j.get(\"AssetClass\"), j.get(\"assetClass\"), j.get(\"asset_class\"))),\n        \"sector\": to_text(pick(j.get(\"Sector\"), j.get(\"sector\"))),\n        \"industry\": to_text(pick(j.get(\"Industry\"), j.get(\"industry\"))),\n        \"isin\": to_text(pick(j.get(\"ISIN\"), j.get(\"isin\"))),\n        \"quantity\": to_float(pick(j.get(\"Quantity\"), j.get(\"qty\"))),\n        \"avg_price\": to_float(pick(j.get(\"AvgPrice\"), j.get(\"avgPrice\"))),\n        \"last_price\": to_float(j.get(\"LastPrice\")),\n        \"market_value\": to_float(j.get(\"MarketValue\")),\n        \"unrealized_pnl\": to_float(j.get(\"UnrealizedPnL\")),\n        \"updated_at\": to_timestamp_candidate(pick(j.get(\"UpdatedAt\"), now_iso)),\n        \"source_updated_at\": to_text(pick(j.get(\"mtm_price_asof\"), j.get(\"UpdatedAt\"), now_iso)),\n    }\n\n    rows.append(row)\n\nrows_in = len(items)\nrows_written = 0\nrows_error = 0\nerror_detail = \"\"\n\ntry:\n    with db_con(db_path) as con:\n        for stmt in SCHEMA_SQL:\n            con.execute(stmt)\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO portfolio_positions_mtm_run_log\n              (run_id, started_at, finished_at, status, rows_in, rows_written, rows_error, error_detail, source, workflow_name)\n            VALUES\n              (?, CURRENT_TIMESTAMP, NULL, 'RUNNING', ?, 0, 0, '', 'PF_MTM', ?)\n            \"\"\",\n            [run_id, rows_in, workflow_name],\n        )\n\n        for row in rows:\n            try:\n                con.execute(\n                    \"\"\"\n                    INSERT OR REPLACE INTO portfolio_positions_mtm_latest\n                    (\n                        symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,\n                        quantity, avg_price, last_price, market_value, unrealized_pnl,\n                        updated_at, source_updated_at, run_id, ingested_at\n                    )\n                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                    \"\"\",\n                    [\n                        row[\"symbol\"], row[\"row_number\"], row[\"symbol_raw\"], row[\"name\"], row[\"asset_class\"],\n                        row[\"sector\"], row[\"industry\"], row[\"isin\"], row[\"quantity\"], row[\"avg_price\"],\n                        row[\"last_price\"], row[\"market_value\"], row[\"unrealized_pnl\"],\n                        row[\"updated_at\"], row[\"source_updated_at\"], row[\"run_id\"],\n                    ],\n                )\n\n                con.execute(\n                    \"\"\"\n                    INSERT OR REPLACE INTO portfolio_positions_mtm_history\n                    (\n                        id, run_id, symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,\n                        quantity, avg_price, last_price, market_value, unrealized_pnl,\n                        updated_at, source_updated_at, ingested_at\n                    )\n                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                    \"\"\",\n                    [\n                        row[\"id\"], row[\"run_id\"], row[\"symbol\"], row[\"row_number\"], row[\"symbol_raw\"],\n                        row[\"name\"], row[\"asset_class\"], row[\"sector\"], row[\"industry\"], row[\"isin\"],\n                        row[\"quantity\"], row[\"avg_price\"], row[\"last_price\"], row[\"market_value\"],\n                        row[\"unrealized_pnl\"], row[\"updated_at\"], row[\"source_updated_at\"],\n                    ],\n                )\n\n                rows_written += 1\n            except Exception as row_exc:\n                rows_error += 1\n                if not error_detail:\n                    error_detail = str(row_exc)[:900]\n\n        final_status = \"SUCCESS\" if rows_error == 0 else \"PARTIAL\"\n\n        con.execute(\n            \"\"\"\n            UPDATE portfolio_positions_mtm_run_log\n            SET\n                finished_at = CURRENT_TIMESTAMP,\n                status = ?,\n                rows_written = ?,\n                rows_error = ?,\n                error_detail = ?\n            WHERE run_id = ?\n            \"\"\",\n            [final_status, rows_written, rows_error, error_detail, run_id],\n        )\n\nexcept Exception as exc:\n    # Keep workflow running; the row update to Google Sheets can still proceed.\n    rows_error = max(rows_error, 1)\n    error_detail = str(exc)[:900]\n\nout = []\nfor it in items:\n    j = (it or {}).get(\"json\", {}) or {}\n    jj = dict(j)\n    jj[\"pf_duckdb_run_id\"] = run_id\n    jj[\"pf_duckdb_path\"] = db_path\n    jj[\"pf_duckdb_rows_in\"] = rows_in\n    jj[\"pf_duckdb_rows_written\"] = rows_written\n    jj[\"pf_duckdb_rows_error\"] = rows_error\n    jj[\"pf_duckdb_error\"] = error_detail\n    out.append({\"json\": jj})\n\nreturn out\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1840,
+        -160
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f118",
+      "name": "PF.08B - Write Positions MTM DuckDB",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+          "mode": "list",
+          "cachedResultName": "TradingSim_GoogleSheet_Template",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": 757810202,
+          "mode": "list",
+          "cachedResultName": "Portefeuille",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=757810202"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "row_number": "={{ $json.row_number }}",
+            "LastPrice": "={{ $json.LastPrice }}",
+            "MarketValue": "={{ $json.MarketValue }}",
+            "UnrealizedPnL": "={{ $json.UnrealizedPnL }}",
+            "UpdatedAt": "={{ $json.UpdatedAt }}",
+            "Name": "={{ $json.Name }}",
+            "AssetClass": "={{ $json.AssetClass }}",
+            "Sector": "={{ $json.Sector }}",
+            "Industry": "={{ $json.Industry }}"
+          },
+          "matchingColumns": [
+            "row_number"
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2064,
+        -160
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f119",
+      "name": "Update Portfolio Row",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "aX5iAQEN9HK4UGjr",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "PF workflow: DuckDB is persisted at PF.08B, Google Sheets stays updated for manual control.",
+        "height": 220,
+        "width": 900,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -280,
+        -240
+      ],
+      "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f120",
+      "name": "Note"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "PF.00 - Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "PF.00 - Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.00 - Config": {
+      "main": [
+        [
+          {
+            "node": "Read Portfolio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Portfolio": {
+      "main": [
+        [
+          {
+            "node": "Get Universe Row",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge Portfolio + Universe",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Universe Row": {
+      "main": [
+        [
+          {
+            "node": "Filter Universe Columns",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Universe Columns": {
+      "main": [
+        [
+          {
+            "node": "Merge Portfolio + Universe",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge Portfolio + Universe": {
+      "main": [
+        [
+          {
+            "node": "PF.02 - Normalize Positions",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.02 - Normalize Positions": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "PF.08 - Build Sheet Updates",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PF.05A - Fetch Price 1D",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PF.05B - Fetch Price 1H",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "PF.06A - Merge (portfolio + 1D)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.05A - Fetch Price 1D": {
+      "main": [
+        [
+          {
+            "node": "PF.05A - Wrap 1D",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.05B - Fetch Price 1H": {
+      "main": [
+        [
+          {
+            "node": "PF.05B - Wrap 1H",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.05A - Wrap 1D": {
+      "main": [
+        [
+          {
+            "node": "PF.06A - Merge (portfolio + 1D)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "PF.06A - Merge (portfolio + 1D)": {
+      "main": [
+        [
+          {
+            "node": "PF.06B - Merge (+ 1H)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.05B - Wrap 1H": {
+      "main": [
+        [
+          {
+            "node": "PF.06B - Merge (+ 1H)",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "PF.06B - Merge (+ 1H)": {
+      "main": [
+        [
+          {
+            "node": "PF.07 - Compute MTM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.07 - Compute MTM": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.08 - Build Sheet Updates": {
+      "main": [
+        [
+          {
+            "node": "PF.08B - Write Positions MTM DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PF.08B - Write Positions MTM DuckDB": {
+      "main": [
+        [
+          {
+            "node": "Update Portfolio Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"
+  }
+}
