@@ -1,0 +1,12 @@
+key	id	name	type	code_len
+2B_init_run_context	bba4c183-54c6-4047-a1e2-ee9118ee5f31	2B - Init Run Context	n8n-nodes-base.code	2266
+4B_build_portfolio_context	886e1ebc-b734-4447-8610-bb67e97a370e	4B – Build Portfolio Context	n8n-nodes-base.code	6857
+4C_enrich_portfolio_with_market_prices	67ab671b-7d64-41bf-9f58-0fba50c0b3b5	4C — Enrich Portfolio with Market Prices	n8n-nodes-base.code	5725
+AG4_01_fetch_macro_news	cc77d3d3-3353-4d0d-88f7-561dec5b5dc2	AG4.01 - Récupération des news générales	n8n-nodes-base.code	2438
+20J_final_build_market_news_pack	4afab52a-009a-4a27-9087-8885f4b79c1f	20J_FINAL — Build MarketNewsPack Final	n8n-nodes-base.code	5300
+R8_data_prep_matrix	c550c8c4-11c7-4423-986e-9007b7f142a1	R8 — Data Prep for Matrix (Fusion Filter)	n8n-nodes-base.code	18375
+calcul_matrice_briefing	f27420a5-f1a1-4495-8efa-d935bf63183c	Calcul Matrice & Briefing	n8n-nodes-base.code	26966
+merge7	bd985750-0a6f-4382-84bb-00526f800fbf	Merge7	n8n-nodes-base.merge	0
+ag1_00_assemble_input_packs	21206129-5a81-4e80-8fb1-11026a8446b4	AG1.00 — Assemble Input Packs	n8n-nodes-base.code	2474
+agent_1_portfolio_manager	577dd790-2f60-4d30-9a94-f4add6866aab	Agent #1 - Portfolio manager	@n8n/n8n-nodes-langchain.agent	0
+information_extractor	a05c7914-51df-4e1f-ab3b-d27d033788ac	Information Extractor	@n8n/n8n-nodes-langchain.informationExtractor	0

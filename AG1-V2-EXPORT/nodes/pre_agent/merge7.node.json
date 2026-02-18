@@ -1,0 +1,13 @@
+{
+  "parameters": {
+    "numberInputs": 4
+  },
+  "type": "n8n-nodes-base.merge",
+  "typeVersion": 3.2,
+  "position": [
+    1840,
+    -736
+  ],
+  "id": "bd985750-0a6f-4382-84bb-00526f800fbf",
+  "name": "Merge7"
+}
