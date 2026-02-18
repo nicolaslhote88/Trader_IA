@@ -37,6 +37,27 @@ def to_iso(v):
     except Exception:
         return str(v) if v is not None else "unknown"
 
+def _norm_text(v):
+    return str(v or "").strip().upper()
+
+def is_cash_row(r):
+    sym = _norm_text(r.get("Symbol") or r.get("symbol"))
+    name = _norm_text(r.get("Name") or r.get("name"))
+    asset = _norm_text(r.get("AssetClass") or r.get("assetClass") or r.get("asset_class"))
+    sector = _norm_text(r.get("Sector") or r.get("sector"))
+    return (
+        sym in ("CASH_EUR", "CASH", "EUR_CASH", "LIQUIDITE", "LIQUIDITES")
+        or "CASH" in name
+        or "LIQUID" in name
+        or asset == "CASH"
+        or sector == "CASH"
+    )
+
+def is_meta_row(r):
+    sym = _norm_text(r.get("Symbol") or r.get("symbol"))
+    name = _norm_text(r.get("Name") or r.get("name"))
+    return sym == "__META__" or name == "__META__"
+
 @contextmanager
 def db_con(path, retries=5, delay=0.25):
     con = None
@@ -145,37 +166,18 @@ rows = load_rows_from_duckdb(db_path)
 source = "duckdb"
 
 if not rows:
-    source = "sheets_fallback"
+    source = "duckdb_empty"
     rows = []
-    for idx, it in enumerate(incoming, start=1):
-        r = it.get("json", {}) if isinstance(it, dict) else {}
-        rows.append({
-            "row_number": r.get("row_number", idx),
-            "Symbol": r.get("Symbol", r.get("symbol", "")),
-            "Name": r.get("Name", r.get("name", "")),
-            "AssetClass": r.get("AssetClass", r.get("assetClass", "")),
-            "Sector": r.get("Sector", r.get("sector", "Unknown")) or "Unknown",
-            "Industry": r.get("Industry", r.get("industry", "")),
-            "ISIN": r.get("ISIN", ""),
-            "Quantity": to_num(r.get("Quantity")),
-            "AvgPrice": to_num(r.get("AvgPrice")),
-            "LastPrice": to_num(r.get("LastPrice")),
-            "MarketValue": to_num(r.get("MarketValue")),
-            "UnrealizedPnL": to_num(r.get("UnrealizedPnL")),
-            "UpdatedAt": r.get("UpdatedAt", "unknown"),
-            "NextReviewDate": r.get("NextReviewDate"),
-        })
 
-cash_row = next((r for r in rows if str(r.get("Symbol", "")).upper() == "CASH_EUR"), None)
-meta_row = next((r for r in rows if str(r.get("Symbol", "")).upper() == "__META__"), None)
+cash_row = next((r for r in rows if is_cash_row(r)), None)
+meta_row = next((r for r in rows if is_meta_row(r)), None)
 
 cash_eur = to_num(cash_row.get("MarketValue")) if cash_row else 0.0
 cash_eur = cash_eur if cash_eur is not None else 0.0
 
 positions = []
 for r in rows:
-    sym = str(r.get("Symbol", "")).upper()
-    if not sym or sym in ("CASH_EUR", "__META__"):
+    if is_cash_row(r) or is_meta_row(r):
         continue
     positions.append(r)
 

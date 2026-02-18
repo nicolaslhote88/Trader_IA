@@ -20,40 +20,6 @@
     },
     {
       "parameters": {
-        "documentId": {
-          "__rl": true,
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "mode": "list",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
-        },
-        "sheetName": {
-          "__rl": true,
-          "value": 757810202,
-          "mode": "list",
-          "cachedResultName": "Portefeuille",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=757810202"
-        },
-        "options": {}
-      },
-      "id": "c4641e08-9140-4d45-9079-2b3bf2c094cc",
-      "name": "4 - Read Portfolio (Google Sheets)",
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4,
-      "position": [
-        608,
-        -816
-      ],
-      "alwaysOutputData": true,
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      }
-    },
-    {
-      "parameters": {
         "jsCode": "// Node 7 — Validate & Enforce Safety (v4 - Fixed & Flexible)\n// Mode: Run Once for All Items\n// Output: [{ json: { decision, commentary, agentDecision, orders, metrics, warnings, ctx } }]\n\nfunction isObj(x) {\n  return x && typeof x === \"object\" && !Array.isArray(x);\n}\n\nfunction safeJsonParse(s) {\n  try { return JSON.parse(s); } catch { return null; }\n}\n\nfunction toNumOrNull(x) {\n  const n = Number(x);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction clampText(s, n) {\n  return String(s ?? \"\").replace(/\\s+/g, \" \").trim().slice(0, n);\n}\n\nfunction normSymbol(v) {\n  return String(v ?? \"\").trim();\n}\n\nfunction uniq(arr) {\n  return Array.from(new Set((arr || []).filter(Boolean)));\n}\n\nfunction deepClone(obj) {\n  try { return JSON.parse(JSON.stringify(obj)); } catch { return obj; }\n}\n\nfunction pickFirstRelevantInput(all) {\n  for (const it of all) {\n    const j = it?.json ?? {};\n    if (j.portfolioSummary || j.portfolioRows) return j;\n  }\n  return all[0]?.json ?? {};\n}\n\nfunction extractNewsItems(input) {\n  const candidates = [\n    input?.market?.newsItems,\n    input?.market?.marketNewsPack?.newsItems,\n    input?.market?.marketNewsPack?.topItems,\n    input?.market?.marketNewsPack?.items,\n    input?.marketNewsPack?.newsItems,\n    input?.marketNewsPack?.topItems,\n    input?.marketNewsPack?.items,\n    input?.newsItems,\n    input?.news,\n    input?.market?.news,\n  ];\n\n  for (const c of candidates) {\n    if (Array.isArray(c) && c.length) return c;\n  }\n  return [];\n}\n\nfunction getPortfolioPositionsSymbols(portfolioSummary) {\n  const pos = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n  return uniq(\n    pos\n      .map((p) => normSymbol(p.Symbol ?? p.symbol))\n      .filter((s) => s && s !== \"CASH_EUR\" && s !== \"__META__\")\n  );\n}\n\nfunction buildPricesFallbackFromPortfolio(portfolioSummary) {\n  const pricesFallback = {};\n  const posArr = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n\n  for (const p of posArr) {\n    const s = normSymbol(p.Symbol ?? p.symbol);\n    if (!s || s === \"CASH_EUR\" || s === \"__META__\") continue;\n\n    let last = Number(p.LastPrice ?? NaN);\n    if (!Number.isFinite(last) || last <= 0) {\n      const q = Number(p.Quantity ?? NaN);\n      const mv = Number(p.MarketValue ?? NaN);\n      if (Number.isFinite(q) && q > 0 && Number.isFinite(mv)) last = mv / q;\n    }\n\n    if (Number.isFinite(last) && last > 0) {\n      pricesFallback[s] = {\n        lastPrice: last,\n        source: \"portfolio_lastPrice\",\n        ts: String(p.UpdatedAt ?? \"\"),\n        stale: false,\n      };\n    }\n  }\n  return pricesFallback;\n}\n\nfunction extractAgentDecisionObject(input) {\n  if (isObj(input.output) && (\n    Array.isArray(input.output.actions) ||\n    isObj(input.output.portfolioPlan) ||\n    isObj(input.output.decisionMeta)\n  )) {\n    return { ...input.output, _parseStatus: \"OK_OBJECT_OUTPUT\" };\n  }\n\n  if (isObj(input.agentDecision)) {\n    return { ...input.agentDecision, _parseStatus: \"OK_AGENTDECISION\" };\n  }\n\n  const msg0 = Array.isArray(input.output) ? input.output[0] : null;\n  const content0 = msg0 && Array.isArray(msg0.content) ? msg0.content[0] : null;\n\n  let decisionRaw = content0?.text ?? content0?.text?.text ?? null;\n\n  if (isObj(decisionRaw)) return { ...decisionRaw, _parseStatus: \"OK_OPENAI_OBJECT\" };\n\n  if (typeof decisionRaw === \"string\") {\n    const parsed = safeJsonParse(decisionRaw);\n    if (isObj(parsed)) return { ...parsed, _parseStatus: \"OK_OPENAI_TEXT_JSON\" };\n    return { _rawText: decisionRaw, _parseStatus: \"TEXT_NOT_JSON\" };\n  }\n\n  if (decisionRaw == null) {\n    return { _parseStatus: \"MISSING_DECISION\", _why: \"No decision payload found.\" };\n  }\n\n  return { _rawValue: decisionRaw, _parseStatus: \"UNEXPECTED_TYPE\" };\n}\n\nfunction coerceAgentDecisionToExpectedShape(agentDecision) {\n  if (!isObj(agentDecision)) return { _parseStatus: \"NOT_OBJECT\", actions: [], dataCaveats: [], backfillRequests: [] };\n  const d = deepClone(agentDecision);\n  if (!Array.isArray(d.actions)) d.actions = [];\n  if (!Array.isArray(d.dataCaveats)) d.dataCaveats = [];\n  if (!Array.isArray(d.backfillRequests)) d.backfillRequests = [];\n  return d;\n}\n\nfunction computeTotalPortfolioValueEUR(portfolioSummary, prices) {\n  const explicit = Number(\n    portfolioSummary?.totalPortfolioValueEUR ??\n    portfolioSummary?.totalValueEUR ??\n    NaN\n  );\n  if (Number.isFinite(explicit) && explicit > 0) return explicit;\n\n  const cash = Number(portfolioSummary?.cashEUR ?? 0);\n  const posArr = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n  let equity = 0;\n\n  for (const p of posArr) {\n    const s = normSymbol(p.Symbol ?? p.symbol);\n    if (!s || s === \"CASH_EUR\" || s === \"__META__\") continue;\n\n    const q = Number(p.Quantity ?? 0);\n    if (!Number.isFinite(q) || q === 0) continue;\n\n    const last = Number(prices?.[s]?.lastPrice ?? p.LastPrice ?? NaN);\n    if (Number.isFinite(last) && last > 0) equity += q * last;\n    else {\n      const mv = Number(p.MarketValue ?? NaN);\n      if (Number.isFinite(mv)) equity += mv;\n    }\n  }\n  return cash + equity;\n}\n\nfunction buildHoldingsMap(portfolioSummary, prices) {\n  const map = {};\n  const posArr = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n\n  for (const p of posArr) {\n    const s = normSymbol(p.Symbol ?? p.symbol);\n    if (!s || s === \"CASH_EUR\" || s === \"__META__\") continue;\n    \n    const qty = Number(p.Quantity ?? 0);\n    const last = Number(prices?.[s]?.lastPrice ?? p.LastPrice ?? NaN);\n\n    map[s] = {\n      Symbol: s,\n      Quantity: Number.isFinite(qty) ? qty : 0,\n      LastPrice: Number.isFinite(last) ? last : null,\n    };\n  }\n  return map;\n}\n\nfunction generateOrdersFromActions(agentDecision, portfolioSummary, prices, feesConfig, rmCfg) {\n  const warnings = [];\n  const ordersSell = [];\n  const ordersBuy = [];\n\n  const actions = Array.isArray(agentDecision?.actions) ? agentDecision.actions : [];\n  const holdings = buildHoldingsMap(portfolioSummary, prices);\n\n  const totalValue = computeTotalPortfolioValueEUR(portfolioSummary, prices);\n  if (!Number.isFinite(totalValue) || totalValue <= 0) {\n    warnings.push(\"PORTFOLIO_VALUE_INVALID: cannot size orders.\");\n    return { orders: [], warnings };\n  }\n\n  let cashSim = Number(portfolioSummary?.cashEUR ?? 0);\n  const fixed = Number(feesConfig?.orderFeeFixedEUR ?? 0);\n  const pct = Number(feesConfig?.orderFeePct ?? 0);\n\n  const currentNotional = (sym) => {\n    const h = holdings[sym];\n    if (!h) return 0;\n    const px = Number(prices?.[sym]?.lastPrice ?? h.LastPrice ?? NaN);\n    if (!Number.isFinite(px) || px <= 0) return 0;\n    return h.Quantity * px;\n  };\n\n  for (const a of actions) {\n    const sym = normSymbol(a?.symbol);\n    const act = String(a?.action ?? \"\").toUpperCase();\n    if (!sym) continue;\n    if (![\"OPEN\", \"INCREASE\", \"DECREASE\", \"CLOSE\"].includes(act)) continue;\n\n    const px = Number(prices?.[sym]?.lastPrice ?? NaN);\n    if (!Number.isFinite(px) || px <= 0) {\n      warnings.push(`SKIP_NO_PRICE:${sym}:${act}`);\n      continue;\n    }\n\n    const currNotional = currentNotional(sym);\n    const targetNotionalExplicit = toNumOrNull(a?.targetNotionalEUR ?? a?.targetNotional ?? null);\n    \n    let targetNotional = null;\n    if (act === \"CLOSE\") targetNotional = 0;\n    else if (targetNotionalExplicit != null) targetNotional = targetNotionalExplicit;\n    else if (a?.targetWeightPct != null) targetNotional = (Number(a.targetWeightPct) / 100) * totalValue;\n\n    // Common extras\n    const horizonDays = toNumOrNull(a?.horizonDays);\n    const entryPlan = isObj(a?.entryPlan) ? a.entryPlan : {};\n    const riskPlan = isObj(a?.riskPlan) ? a.riskPlan : {};\n\n    if (targetNotional == null) {\n        warnings.push(`SKIP_NO_TARGET:${sym}:${act}`);\n        continue;\n    }\n\n    // Processing Logic\n    if (act === \"DECREASE\" || act === \"CLOSE\") {\n       const sellNotional = currNotional - targetNotional;\n       if (sellNotional > 0) {\n         const qtyToSell = Math.ceil(sellNotional / px);\n         ordersSell.push({\n            symbol: sym, side: \"SELL\", quantity: qtyToSell, price: null,\n            rationale: clampText(a?.rationale, 240),\n            orderType: String(entryPlan.orderType || \"MARKET\"),\n            limitPrice: toNumOrNull(entryPlan.limitPrice),\n            stopLossPct: toNumOrNull(riskPlan.stopLossPct),\n            confidence: a?.confidence,\n            priority: a?.priority\n         });\n       }\n    }\n\n    if (act === \"OPEN\" || act === \"INCREASE\") {\n        const buyNotional = targetNotional - currNotional;\n        if (buyNotional > 0) {\n            const qtyToBuy = Math.floor(buyNotional / px);\n            if (qtyToBuy >= 1) {\n                ordersBuy.push({\n                    symbol: sym, side: \"BUY\", quantity: qtyToBuy, price: null,\n                    rationale: clampText(a?.rationale, 240),\n                    orderType: String(entryPlan.orderType || \"MARKET\"),\n                    limitPrice: toNumOrNull(entryPlan.limitPrice),\n                    stopLossPct: toNumOrNull(riskPlan.stopLossPct),\n                    confidence: a?.confidence,\n                    priority: a?.priority\n                });\n            }\n        }\n    }\n  }\n\n  // Execution simulation\n  const finalOrders = [];\n  \n  // Sells first to raise cash\n  for (const o of ordersSell) {\n    finalOrders.push(o);\n    const px = Number(prices?.[o.symbol]?.lastPrice ?? NaN);\n    if (Number.isFinite(px)) {\n        const proceeds = (o.quantity * px) * (1 - pct) - fixed;\n        cashSim += proceeds;\n    }\n  }\n\n  // Buys if cash available\n  for (const o of ordersBuy) {\n    const px = Number(prices?.[o.symbol]?.lastPrice ?? NaN);\n    if (Number.isFinite(px)) {\n        const cost = (o.quantity * px) * (1 + pct) + fixed;\n        if (cashSim >= cost) {\n            finalOrders.push(o);\n            cashSim -= cost;\n        } else {\n            warnings.push(`SKIP_INSUFFICIENT_CASH:${o.symbol}`);\n        }\n    }\n  }\n\n  return { orders: finalOrders, warnings };\n}\n\nfunction estimateFeesEUR(orders, feesConfig, prices) {\n  const fixed = Number(feesConfig?.orderFeeFixedEUR ?? 0);\n  const pct = Number(feesConfig?.orderFeePct ?? 0);\n  let total = 0;\n\n  for (const o of orders) {\n    const s = normSymbol(o.symbol);\n    const q = Number(o.quantity ?? NaN);\n    if (!s || !Number.isFinite(q) || q <= 0) continue;\n    const px = Number(o.price ?? prices?.[s]?.lastPrice ?? NaN);\n    if (!Number.isFinite(px) || px <= 0) continue;\n    total += fixed + pct * (q * px);\n  }\n  return total;\n}\n\n// ------------------- MAIN -------------------\n\nconst all = $input.all();\nconst input = pickFirstRelevantInput(all);\n\nconst now = new Date();\nconst ts = now.toISOString();\n\nconst portfolioSummary = input.portfolioSummary ?? input.ctx?.portfolioSummary ?? { cashEUR: 0, positions: [] };\nconst meta0 = input.meta ?? input.ctx?.meta ?? {};\nconst feesConfig = input.feesConfig ?? input.ctx?.feesConfig ?? { orderFeeFixedEUR: 0, orderFeePct: 0 };\nconst market0 = input.market ?? input.ctx?.market ?? {};\nconst upstreamPrices = isObj(market0.prices) ? market0.prices : {};\nconst upstreamNewsItems = extractNewsItems(input);\n\n// Agent decision parsing\nlet agentDecision = extractAgentDecisionObject(input);\nagentDecision = coerceAgentDecisionToExpectedShape(agentDecision);\n\n// Prices merge (fallback from portfolio)\nconst pricesFallback = buildPricesFallbackFromPortfolio(portfolioSummary);\nconst mergedPrices = { ...pricesFallback, ...upstreamPrices };\n\n// --- PATCH : INJECT LIMIT PRICES AS PROXY ---\nconst injectedPrices = [];\nif (Array.isArray(agentDecision.actions)) {\n    for (const action of agentDecision.actions) {\n        const sym = normSymbol(action.symbol);\n        const limit = toNumOrNull(action.entryPlan?.limitPrice);\n        \n        // Si on veut trader et qu'on n'a pas de prix marché, mais qu'on a une limite agent\n        if (sym && limit && limit > 0) {\n            const currentPrice = mergedPrices[sym]?.lastPrice;\n            if (!currentPrice) {\n                mergedPrices[sym] = {\n                    lastPrice: limit,\n                    source: \"agent_limit_proxy\",\n                    stale: false\n                };\n                injectedPrices.push(sym);\n            }\n        }\n    }\n}\n// --------------------------------------------\n\n// Universe + coverage check\nconst heldSymbols = getPortfolioPositionsSymbols(portfolioSummary);\nconst tradeSymbols = uniq(\n  (Array.isArray(agentDecision?.actions) ? agentDecision.actions : [])\n    .filter((a) => [\"OPEN\", \"INCREASE\", \"DECREASE\", \"CLOSE\"].includes(String(a?.action ?? \"\").toUpperCase()))\n    .map((a) => normSymbol(a?.symbol))\n);\n\nconst universe = uniq([...heldSymbols, ...tradeSymbols]);\n\nlet pricedForRequested = 0;\nconst missingRequested = [];\nfor (const s of tradeSymbols) {\n  const px = Number(mergedPrices?.[s]?.lastPrice ?? NaN);\n  if (Number.isFinite(px) && px > 0) pricedForRequested += 1;\n  else missingRequested.push(s);\n}\n\n// Safety definition\nconst okForTrading = tradeSymbols.length ? (pricedForRequested === tradeSymbols.length) : true;\nconst rmCfg = input.config?.riskManager ?? input.ctx?.config?.riskManager ?? {};\n\n// Generate orders\nlet { orders, warnings: orderWarnings } = generateOrdersFromActions(\n  agentDecision,\n  portfolioSummary,\n  mergedPrices, // Now contains injected limit prices\n  feesConfig,\n  rmCfg\n);\n\n// --- WARNINGS AGGREGATION (Fixed ReferenceError) ---\nconst warnings = [];\n\n// Safety Veto (should not trigger if patch worked)\nconst safetyWarnings = [];\nif (!okForTrading) {\n  if (tradeSymbols.length) {\n    safetyWarnings.push(`SAFETY_VETO_MISSING_PRICES:${missingRequested.join(\",\")}`);\n    orders = [];\n  }\n}\n\nif (injectedPrices.length > 0) {\n    safetyWarnings.push(`NOTICE: Used agent limit price as proxy for: ${injectedPrices.join(\", \")}`);\n}\n\n// Parse problems\nif (agentDecision?._parseStatus && !String(agentDecision._parseStatus).startsWith(\"OK\")) {\n  warnings.push(`AGENT_DECISION_PARSE:${agentDecision._parseStatus}`);\n  if (agentDecision?._why) warnings.push(`AGENT_DECISION_PARSE_WHY:${agentDecision._why}`);\n}\n\n// Carry caveats\nif (Array.isArray(agentDecision?.dataCaveats)) {\n  for (const c of agentDecision.dataCaveats) warnings.push(String(c));\n}\n\n// Missing prices for held positions (informational)\nfor (const s of heldSymbols) {\n  const px = Number(mergedPrices?.[s]?.lastPrice ?? NaN);\n  if (!Number.isFinite(px) || px <= 0) warnings.push(`MISSING_PRICE_FOR_HELD:${s}`);\n}\n\n// Add order & safety warnings\nfor (const w of orderWarnings) warnings.push(String(w));\nfor (const w of safetyWarnings) warnings.push(String(w));\n// ---------------------------------------------------\n\n// Metrics\nconst aiCostEUR = Number(input?.metrics?.aiCostEUR ?? 0);\nconst expectedFeesEUR = estimateFeesEUR(orders, feesConfig, mergedPrices);\n\nconst decision = orders.length ? \"TRADE\" : \"NO_TRADE\";\n\nconst ctx = {\n  sheetId: input.sheetId,\n  run: { timestampParis: ts, model: \"gpt-5.2\" },\n  portfolioSummary,\n  market: { prices: mergedPrices }\n};\n\nconst cash0 = Number(portfolioSummary?.cashEUR ?? 0);\nconst actionsCount = Array.isArray(agentDecision?.actions) ? agentDecision.actions.length : 0;\nconst caveatsCount = Array.isArray(agentDecision?.dataCaveats) ? agentDecision.dataCaveats.length : 0;\n\nconst commentary = `PM_DECISION=${decision} | orders=${orders.length} | actions=${actionsCount} | cash0=${cash0} | caveats=${caveatsCount}`;\n\nreturn [{\n  json: {\n    decision,\n    commentary,\n    agentDecision,\n    orders,\n    metrics: {\n        aiCostEUR: Number.isFinite(aiCostEUR) ? aiCostEUR : 0,\n        expectedFeesEUR: Number.isFinite(expectedFeesEUR) ? expectedFeesEUR : 0,\n    },\n    warnings,\n    ctx,\n  },\n}];"
       },
       "type": "n8n-nodes-base.code",
@@ -578,7 +544,7 @@
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "\nimport os\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDB_PATH_DEFAULT = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2.duckdb\")\n\ndef to_num(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        s = str(v).replace(\"€\", \"\").replace(\"\\u00a0\", \"\").replace(\"\\u202f\", \"\").replace(\" \", \"\").replace(\",\", \".\")\n        n = float(s)\n        return n if n == n else None\n    except Exception:\n        return None\n\ndef to_iso(v):\n    try:\n        if v is None:\n            return \"unknown\"\n        if isinstance(v, datetime):\n            dt = v\n        else:\n            s = str(v).strip()\n            if not s:\n                return \"unknown\"\n            if s.endswith(\"Z\"):\n                s = s[:-1] + \"+00:00\"\n            dt = datetime.fromisoformat(s)\n        if dt.tzinfo is None:\n            dt = dt.replace(tzinfo=timezone.utc)\n        return dt.astimezone(timezone.utc).isoformat()\n    except Exception:\n        return str(v) if v is not None else \"unknown\"\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if (\"lock\" in str(e).lower() or \"busy\" in str(e).lower()) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef load_rows_from_duckdb(db_path):\n    rows = []\n    with db_con(db_path) as con:\n        if con is None:\n            return rows\n        sql_with_review = \"\"\"\n            SELECT\n              symbol,\n              name,\n              asset_class,\n              sector,\n              industry,\n              isin,\n              quantity,\n              avg_price,\n              last_price,\n              market_value,\n              unrealized_pnl,\n              updated_at,\n              next_review_date\n            FROM portfolio_positions_mtm_latest\n            ORDER BY market_value DESC NULLS LAST, symbol\n        \"\"\"\n        sql_fallback = \"\"\"\n            SELECT\n              symbol,\n              name,\n              asset_class,\n              sector,\n              industry,\n              isin,\n              quantity,\n              avg_price,\n              last_price,\n              market_value,\n              unrealized_pnl,\n              updated_at\n            FROM portfolio_positions_mtm_latest\n            ORDER BY market_value DESC NULLS LAST, symbol\n        \"\"\"\n        out = []\n        try:\n            cur = con.execute(sql_with_review)\n            cols = [d[0] for d in cur.description]\n            out = [dict(zip(cols, r)) for r in cur.fetchall()]\n        except Exception:\n            try:\n                cur = con.execute(sql_fallback)\n                cols = [d[0] for d in cur.description]\n                out = [dict(zip(cols, r)) for r in cur.fetchall()]\n            except Exception:\n                out = []\n\n        for idx, r in enumerate(out, start=1):\n            rows.append({\n                \"row_number\": idx,\n                \"Symbol\": str(r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"asset_class\") or \"\").strip(),\n                \"Sector\": str(r.get(\"sector\") or \"Unknown\").strip() or \"Unknown\",\n                \"Industry\": str(r.get(\"industry\") or \"\").strip(),\n                \"ISIN\": str(r.get(\"isin\") or \"\").strip(),\n                \"Quantity\": to_num(r.get(\"quantity\")),\n                \"AvgPrice\": to_num(r.get(\"avg_price\")),\n                \"LastPrice\": to_num(r.get(\"last_price\")),\n                \"MarketValue\": to_num(r.get(\"market_value\")),\n                \"UnrealizedPnL\": to_num(r.get(\"unrealized_pnl\")),\n                \"UpdatedAt\": to_iso(r.get(\"updated_at\")),\n                \"NextReviewDate\": to_iso(r.get(\"next_review_date\")) if r.get(\"next_review_date\") is not None else None,\n            })\n    return rows\n\n\nincoming = _items or []\n\ndb_path = DB_PATH_DEFAULT\nfor it in incoming:\n    j = it.get(\"json\", {}) if isinstance(it, dict) else {}\n    if isinstance(j, dict) and j.get(\"ag1_db_path\"):\n        db_path = str(j.get(\"ag1_db_path\"))\n\nrows = load_rows_from_duckdb(db_path)\nsource = \"duckdb\"\n\nif not rows:\n    source = \"sheets_fallback\"\n    rows = []\n    for idx, it in enumerate(incoming, start=1):\n        r = it.get(\"json\", {}) if isinstance(it, dict) else {}\n        rows.append({\n            \"row_number\": r.get(\"row_number\", idx),\n            \"Symbol\": r.get(\"Symbol\", r.get(\"symbol\", \"\")),\n            \"Name\": r.get(\"Name\", r.get(\"name\", \"\")),\n            \"AssetClass\": r.get(\"AssetClass\", r.get(\"assetClass\", \"\")),\n            \"Sector\": r.get(\"Sector\", r.get(\"sector\", \"Unknown\")) or \"Unknown\",\n            \"Industry\": r.get(\"Industry\", r.get(\"industry\", \"\")),\n            \"ISIN\": r.get(\"ISIN\", \"\"),\n            \"Quantity\": to_num(r.get(\"Quantity\")),\n            \"AvgPrice\": to_num(r.get(\"AvgPrice\")),\n            \"LastPrice\": to_num(r.get(\"LastPrice\")),\n            \"MarketValue\": to_num(r.get(\"MarketValue\")),\n            \"UnrealizedPnL\": to_num(r.get(\"UnrealizedPnL\")),\n            \"UpdatedAt\": r.get(\"UpdatedAt\", \"unknown\"),\n            \"NextReviewDate\": r.get(\"NextReviewDate\"),\n        })\n\ncash_row = next((r for r in rows if str(r.get(\"Symbol\", \"\")).upper() == \"CASH_EUR\"), None)\nmeta_row = next((r for r in rows if str(r.get(\"Symbol\", \"\")).upper() == \"__META__\"), None)\n\ncash_eur = to_num(cash_row.get(\"MarketValue\")) if cash_row else 0.0\ncash_eur = cash_eur if cash_eur is not None else 0.0\n\npositions = []\nfor r in rows:\n    sym = str(r.get(\"Symbol\", \"\")).upper()\n    if not sym or sym in (\"CASH_EUR\", \"__META__\"):\n        continue\n    positions.append(r)\n\npositions_market_value = 0.0\nfor p in positions:\n    mv = to_num(p.get(\"MarketValue\"))\n    positions_market_value += mv if mv is not None else 0.0\n\ntotal_value = cash_eur + positions_market_value\ninitial_capital = to_num(meta_row.get(\"MarketValue\")) if meta_row else None\nif initial_capital is None:\n    initial_capital = 50000\n\nmeta = {\n    \"startDate\": datetime.now(timezone.utc).isoformat(),\n    \"initialCapitalEUR\": initial_capital,\n    \"cumFeesEUR\": 0,\n    \"cumAiCostEUR\": 0,\n}\n\nportfolio_summary = {\n    \"cashEUR\": cash_eur,\n    \"positionsCount\": len(positions),\n    \"positionsMarketValueEUR\": positions_market_value,\n    \"totalPortfolioValueEUR\": total_value,\n    \"positions\": positions,\n}\n\nreturn [{\n    \"json\": {\n        \"portfolioRows\": rows,\n        \"portfolioSummary\": portfolio_summary,\n        \"meta\": meta,\n        \"portfolioSource\": source,\n    }\n}]\n"
+        "pythonCode": "\nimport os\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDB_PATH_DEFAULT = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2.duckdb\")\n\ndef to_num(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        s = str(v).replace(\"€\", \"\").replace(\"\\u00a0\", \"\").replace(\"\\u202f\", \"\").replace(\" \", \"\").replace(\",\", \".\")\n        n = float(s)\n        return n if n == n else None\n    except Exception:\n        return None\n\ndef to_iso(v):\n    try:\n        if v is None:\n            return \"unknown\"\n        if isinstance(v, datetime):\n            dt = v\n        else:\n            s = str(v).strip()\n            if not s:\n                return \"unknown\"\n            if s.endswith(\"Z\"):\n                s = s[:-1] + \"+00:00\"\n            dt = datetime.fromisoformat(s)\n        if dt.tzinfo is None:\n            dt = dt.replace(tzinfo=timezone.utc)\n        return dt.astimezone(timezone.utc).isoformat()\n    except Exception:\n        return str(v) if v is not None else \"unknown\"\n\ndef _norm_text(v):\n    return str(v or \"\").strip().upper()\n\ndef is_cash_row(r):\n    sym = _norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = _norm_text(r.get(\"Name\") or r.get(\"name\"))\n    asset = _norm_text(r.get(\"AssetClass\") or r.get(\"assetClass\") or r.get(\"asset_class\"))\n    sector = _norm_text(r.get(\"Sector\") or r.get(\"sector\"))\n    return (\n        sym in (\"CASH_EUR\", \"CASH\", \"EUR_CASH\", \"LIQUIDITE\", \"LIQUIDITES\")\n        or \"CASH\" in name\n        or \"LIQUID\" in name\n        or asset == \"CASH\"\n        or sector == \"CASH\"\n    )\n\ndef is_meta_row(r):\n    sym = _norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = _norm_text(r.get(\"Name\") or r.get(\"name\"))\n    return sym == \"__META__\" or name == \"__META__\"\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if (\"lock\" in str(e).lower() or \"busy\" in str(e).lower()) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef load_rows_from_duckdb(db_path):\n    rows = []\n    with db_con(db_path) as con:\n        if con is None:\n            return rows\n        sql_with_review = \"\"\"\n            SELECT\n              symbol,\n              name,\n              asset_class,\n              sector,\n              industry,\n              isin,\n              quantity,\n              avg_price,\n              last_price,\n              market_value,\n              unrealized_pnl,\n              updated_at,\n              next_review_date\n            FROM portfolio_positions_mtm_latest\n            ORDER BY market_value DESC NULLS LAST, symbol\n        \"\"\"\n        sql_fallback = \"\"\"\n            SELECT\n              symbol,\n              name,\n              asset_class,\n              sector,\n              industry,\n              isin,\n              quantity,\n              avg_price,\n              last_price,\n              market_value,\n              unrealized_pnl,\n              updated_at\n            FROM portfolio_positions_mtm_latest\n            ORDER BY market_value DESC NULLS LAST, symbol\n        \"\"\"\n        out = []\n        try:\n            cur = con.execute(sql_with_review)\n            cols = [d[0] for d in cur.description]\n            out = [dict(zip(cols, r)) for r in cur.fetchall()]\n        except Exception:\n            try:\n                cur = con.execute(sql_fallback)\n                cols = [d[0] for d in cur.description]\n                out = [dict(zip(cols, r)) for r in cur.fetchall()]\n            except Exception:\n                out = []\n\n        for idx, r in enumerate(out, start=1):\n            rows.append({\n                \"row_number\": idx,\n                \"Symbol\": str(r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"asset_class\") or \"\").strip(),\n                \"Sector\": str(r.get(\"sector\") or \"Unknown\").strip() or \"Unknown\",\n                \"Industry\": str(r.get(\"industry\") or \"\").strip(),\n                \"ISIN\": str(r.get(\"isin\") or \"\").strip(),\n                \"Quantity\": to_num(r.get(\"quantity\")),\n                \"AvgPrice\": to_num(r.get(\"avg_price\")),\n                \"LastPrice\": to_num(r.get(\"last_price\")),\n                \"MarketValue\": to_num(r.get(\"market_value\")),\n                \"UnrealizedPnL\": to_num(r.get(\"unrealized_pnl\")),\n                \"UpdatedAt\": to_iso(r.get(\"updated_at\")),\n                \"NextReviewDate\": to_iso(r.get(\"next_review_date\")) if r.get(\"next_review_date\") is not None else None,\n            })\n    return rows\n\n\nincoming = _items or []\n\ndb_path = DB_PATH_DEFAULT\nfor it in incoming:\n    j = it.get(\"json\", {}) if isinstance(it, dict) else {}\n    if isinstance(j, dict) and j.get(\"ag1_db_path\"):\n        db_path = str(j.get(\"ag1_db_path\"))\n\nrows = load_rows_from_duckdb(db_path)\nsource = \"duckdb\"\n\nif not rows:\n    source = \"duckdb_empty\"\n    rows = []\n\ncash_row = next((r for r in rows if is_cash_row(r)), None)\nmeta_row = next((r for r in rows if is_meta_row(r)), None)\n\ncash_eur = to_num(cash_row.get(\"MarketValue\")) if cash_row else 0.0\ncash_eur = cash_eur if cash_eur is not None else 0.0\n\npositions = []\nfor r in rows:\n    if is_cash_row(r) or is_meta_row(r):\n        continue\n    positions.append(r)\n\npositions_market_value = 0.0\nfor p in positions:\n    mv = to_num(p.get(\"MarketValue\"))\n    positions_market_value += mv if mv is not None else 0.0\n\ntotal_value = cash_eur + positions_market_value\ninitial_capital = to_num(meta_row.get(\"MarketValue\")) if meta_row else None\nif initial_capital is None:\n    initial_capital = 50000\n\nmeta = {\n    \"startDate\": datetime.now(timezone.utc).isoformat(),\n    \"initialCapitalEUR\": initial_capital,\n    \"cumFeesEUR\": 0,\n    \"cumAiCostEUR\": 0,\n}\n\nportfolio_summary = {\n    \"cashEUR\": cash_eur,\n    \"positionsCount\": len(positions),\n    \"positionsMarketValueEUR\": positions_market_value,\n    \"totalPortfolioValueEUR\": total_value,\n    \"positions\": positions,\n}\n\nreturn [{\n    \"json\": {\n        \"portfolioRows\": rows,\n        \"portfolioSummary\": portfolio_summary,\n        \"meta\": meta,\n        \"portfolioSource\": source,\n    }\n}]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -1562,7 +1528,7 @@
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "\nimport os\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDB_PATH_DEFAULT = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2.duckdb\")\n\ndef to_num(v, default=0.0):\n    try:\n        if v is None or v == \"\":\n            return default\n        s = str(v).replace(\"€\", \"\").replace(\"\\u00a0\", \"\").replace(\"\\u202f\", \"\").replace(\" \", \"\").replace(\",\", \".\")\n        n = float(s)\n        return n if n == n else default\n    except Exception:\n        return default\n\ndef round2(v):\n    return round(float(v or 0.0), 2)\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if (\"lock\" in str(e).lower() or \"busy\" in str(e).lower()) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef load_rows_from_duckdb(db_path):\n    with db_con(db_path) as con:\n        if con is None:\n            return []\n        try:\n            cur = con.execute(\"\"\"\n                SELECT\n                  symbol,\n                  name,\n                  asset_class,\n                  sector,\n                  industry,\n                  quantity,\n                  last_price,\n                  market_value,\n                  unrealized_pnl,\n                  updated_at\n                FROM portfolio_positions_mtm_latest\n                ORDER BY market_value DESC NULLS LAST, symbol\n            \"\"\")\n            cols = [d[0] for d in cur.description]\n            return [dict(zip(cols, r)) for r in cur.fetchall()]\n        except Exception:\n            return []\n\nincoming = _items or []\ninput0 = incoming[0].get(\"json\", {}) if incoming else {}\nrows_from_4b = input0.get(\"portfolioRows\", []) if isinstance(input0, dict) else []\ndb_path = input0.get(\"ag1_db_path\", DB_PATH_DEFAULT) if isinstance(input0, dict) else DB_PATH_DEFAULT\n\ndb_rows = load_rows_from_duckdb(str(db_path))\n\nrows = []\nsource = \"duckdb\" if db_rows else \"4b_fallback\"\n\nif db_rows:\n    for r in db_rows:\n        rows.append({\n            \"Symbol\": str(r.get(\"symbol\") or \"\").strip().upper(),\n            \"Name\": str(r.get(\"name\") or \"\").strip(),\n            \"AssetClass\": str(r.get(\"asset_class\") or \"Equity\"),\n            \"Sector\": str(r.get(\"sector\") or \"Unknown\"),\n            \"Industry\": str(r.get(\"industry\") or \"Unknown\"),\n            \"Quantity\": to_num(r.get(\"quantity\"), 0.0),\n            \"LastPrice\": to_num(r.get(\"last_price\"), 0.0),\n            \"MarketValue\": to_num(r.get(\"market_value\"), 0.0),\n            \"UnrealizedPnL\": to_num(r.get(\"unrealized_pnl\"), 0.0),\n        })\nelse:\n    for r in rows_from_4b:\n        rows.append({\n            \"Symbol\": str(r.get(\"Symbol\") or r.get(\"symbol\") or \"\").strip().upper(),\n            \"Name\": str(r.get(\"Name\") or r.get(\"name\") or \"\").strip(),\n            \"AssetClass\": str(r.get(\"AssetClass\") or r.get(\"assetClass\") or \"Equity\"),\n            \"Sector\": str(r.get(\"Sector\") or r.get(\"sector\") or \"Unknown\"),\n            \"Industry\": str(r.get(\"Industry\") or r.get(\"industry\") or \"Unknown\"),\n            \"Quantity\": to_num(r.get(\"Quantity\"), 0.0),\n            \"LastPrice\": to_num(r.get(\"LastPrice\"), 0.0),\n            \"MarketValue\": to_num(r.get(\"MarketValue\"), 0.0),\n            \"UnrealizedPnL\": to_num(r.get(\"UnrealizedPnL\"), 0.0),\n        })\n\ncash_value = 0.0\nvalid_positions = []\ncalculated_positions_value = 0.0\n\nfor row in rows:\n    sym = str(row.get(\"Symbol\") or \"\").upper()\n    if sym == \"CASH_EUR\":\n        cash_value = round2(row.get(\"MarketValue\"))\n        continue\n    if sym == \"__META__\":\n        continue\n\n    qty = to_num(row.get(\"Quantity\"), 0.0)\n    price = round2(row.get(\"LastPrice\"))\n    pnl = round2(row.get(\"UnrealizedPnL\"))\n    val = round2(qty * price) if qty > 0 and price > 0 else round2(row.get(\"MarketValue\"))\n\n    if qty > 0 or val > 0:\n        calculated_positions_value += val\n        valid_positions.append({\n            \"symbol\": sym,\n            \"name\": row.get(\"Name\") or sym,\n            \"sector\": row.get(\"Sector\") or \"Unknown\",\n            \"industry\": row.get(\"Industry\") or \"Unknown\",\n            \"assetClass\": row.get(\"AssetClass\") or \"Equity\",\n            \"qty\": qty,\n            \"price\": price,\n            \"value\": val,\n            \"pnl\": pnl,\n        })\n\ntotal_value = round2(cash_value + calculated_positions_value)\nexposure_pct = int(round((calculated_positions_value / total_value) * 100)) if total_value > 0 else 0\n\nportfolio_text = (\n    \"ÉTAT DU PORTEFEUILLE:\\n\"\n    f\"- VALEUR TOTALE : {total_value} €\\n\"\n    f\"- CASH DISPONIBLE : {cash_value} €\\n\"\n    f\"- EXPOSITION ACTIONS : {exposure_pct}%\\n\\n\"\n    \"POSITIONS ACTUELLES :\"\n)\n\nif not valid_positions:\n    portfolio_text += \"\\n(Aucune position, portefeuille liquide)\"\nelse:\n    for p in valid_positions:\n        sign = \"+\" if p[\"pnl\"] > 0 else \"\"\n        portfolio_text += (\n            f\"\\n- {p['symbol']} ({p['name']}) [{p['sector']}]: {p['qty']} titres @ {p['price']}€ \"\n            f\"(Val: {p['value']}€) | PnL: {sign}{p['pnl']}€\"\n        )\n\nreturn [{\n    \"json\": {\n        \"portfolioBrief\": {\n            \"generatedAt\": datetime.now(timezone.utc).isoformat(),\n            \"totalValue\": total_value,\n            \"cash\": cash_value,\n            \"exposurePct\": exposure_pct,\n            \"agentBriefingText\": portfolio_text,\n            \"positions\": valid_positions,\n            \"source\": source,\n        }\n    }\n}]\n"
+        "pythonCode": "import os\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDB_PATH_DEFAULT = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2.duckdb\")\n\n\ndef to_num(v, default=0.0):\n    try:\n        if v is None or v == \"\":\n            return default\n        s = str(v).replace(\"EUR\", \"\").replace(\"€\", \"\").replace(\"\\u00a0\", \"\").replace(\"\\u202f\", \"\").replace(\" \", \"\").replace(\",\", \".\")\n        n = float(s)\n        return n if n == n else default\n    except Exception:\n        return default\n\n\ndef round2(v):\n    return round(float(v or 0.0), 2)\n\n\ndef norm_text(v):\n    return str(v or \"\").strip().upper()\n\n\ndef is_cash_row(r):\n    sym = norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = norm_text(r.get(\"Name\") or r.get(\"name\"))\n    asset = norm_text(r.get(\"AssetClass\") or r.get(\"assetClass\") or r.get(\"asset_class\"))\n    sector = norm_text(r.get(\"Sector\") or r.get(\"sector\"))\n    return (\n        sym in (\"CASH_EUR\", \"CASH\", \"EUR_CASH\", \"LIQUIDITE\", \"LIQUIDITES\")\n        or \"CASH\" in name\n        or \"LIQUID\" in name\n        or asset == \"CASH\"\n        or sector == \"CASH\"\n    )\n\n\ndef is_meta_row(r):\n    sym = norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = norm_text(r.get(\"Name\") or r.get(\"name\"))\n    return sym == \"__META__\" or name == \"__META__\"\n\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if (\"lock\" in str(e).lower() or \"busy\" in str(e).lower()) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef load_rows_from_duckdb(db_path):\n    with db_con(db_path) as con:\n        if con is None:\n            return []\n        try:\n            cur = con.execute(\n                \"\"\"\n                SELECT\n                  symbol,\n                  name,\n                  asset_class,\n                  sector,\n                  industry,\n                  quantity,\n                  last_price,\n                  market_value,\n                  unrealized_pnl,\n                  updated_at\n                FROM portfolio_positions_mtm_latest\n                ORDER BY market_value DESC NULLS LAST, symbol\n                \"\"\"\n            )\n            cols = [d[0] for d in cur.description]\n            return [dict(zip(cols, r)) for r in cur.fetchall()]\n        except Exception:\n            return []\n\n\nincoming = _items or []\ninput0 = incoming[0].get(\"json\", {}) if incoming else {}\nrows_from_4b = input0.get(\"portfolioRows\", []) if isinstance(input0, dict) else []\nportfolio_summary_in = input0.get(\"portfolioSummary\", {}) if isinstance(input0, dict) else {}\ndb_path = input0.get(\"ag1_db_path\", DB_PATH_DEFAULT) if isinstance(input0, dict) else DB_PATH_DEFAULT\n\ndb_rows = load_rows_from_duckdb(str(db_path))\n\nrows = []\nsource = \"duckdb\" if db_rows else \"4b_fallback\"\n\nif db_rows:\n    for r in db_rows:\n        rows.append(\n            {\n                \"Symbol\": str(r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"asset_class\") or \"Equity\"),\n                \"Sector\": str(r.get(\"sector\") or \"Unknown\"),\n                \"Industry\": str(r.get(\"industry\") or \"Unknown\"),\n                \"Quantity\": to_num(r.get(\"quantity\"), 0.0),\n                \"LastPrice\": to_num(r.get(\"last_price\"), 0.0),\n                \"MarketValue\": to_num(r.get(\"market_value\"), 0.0),\n                \"UnrealizedPnL\": to_num(r.get(\"unrealized_pnl\"), 0.0),\n            }\n        )\nelse:\n    for r in rows_from_4b:\n        rows.append(\n            {\n                \"Symbol\": str(r.get(\"Symbol\") or r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"Name\") or r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"AssetClass\") or r.get(\"assetClass\") or \"Equity\"),\n                \"Sector\": str(r.get(\"Sector\") or r.get(\"sector\") or \"Unknown\"),\n                \"Industry\": str(r.get(\"Industry\") or r.get(\"industry\") or \"Unknown\"),\n                \"Quantity\": to_num(r.get(\"Quantity\"), 0.0),\n                \"LastPrice\": to_num(r.get(\"LastPrice\"), 0.0),\n                \"MarketValue\": to_num(r.get(\"MarketValue\"), 0.0),\n                \"UnrealizedPnL\": to_num(r.get(\"UnrealizedPnL\"), 0.0),\n            }\n        )\n\ncash_value = 0.0\ncash_found = False\nvalid_positions = []\ncalculated_positions_value = 0.0\nfallback_cash = to_num(portfolio_summary_in.get(\"cashEUR\"), 0.0) if isinstance(portfolio_summary_in, dict) else 0.0\n\nfor row in rows:\n    sym = norm_text(row.get(\"Symbol\"))\n    if is_cash_row(row):\n        cash_value = max(cash_value, round2(row.get(\"MarketValue\")))\n        cash_found = True\n        continue\n    if is_meta_row(row):\n        continue\n\n    qty = to_num(row.get(\"Quantity\"), 0.0)\n    price = round2(row.get(\"LastPrice\"))\n    pnl = round2(row.get(\"UnrealizedPnL\"))\n    val = round2(qty * price) if qty > 0 and price > 0 else round2(row.get(\"MarketValue\"))\n\n    if qty > 0 or val > 0:\n        calculated_positions_value += val\n        valid_positions.append(\n            {\n                \"symbol\": sym,\n                \"name\": row.get(\"Name\") or sym,\n                \"sector\": row.get(\"Sector\") or \"Unknown\",\n                \"industry\": row.get(\"Industry\") or \"Unknown\",\n                \"assetClass\": row.get(\"AssetClass\") or \"Equity\",\n                \"qty\": qty,\n                \"price\": price,\n                \"value\": val,\n                \"pnl\": pnl,\n            }\n        )\n\nif (not cash_found) and abs(fallback_cash) > 0:\n    cash_value = round2(fallback_cash)\n    source = source + \"+summary_cash\"\n\ntotal_value = round2(cash_value + calculated_positions_value)\nexposure_pct = int(round((calculated_positions_value / total_value) * 100)) if total_value > 0 else 0\n\nportfolio_text = (\n    \"ETAT DU PORTEFEUILLE:\\n\"\n    f\"- VALEUR TOTALE : {total_value} EUR\\n\"\n    f\"- CASH DISPONIBLE : {cash_value} EUR\\n\"\n    f\"- EXPOSITION ACTIONS : {exposure_pct}%\\n\\n\"\n    \"POSITIONS ACTUELLES :\"\n)\n\nif not valid_positions:\n    portfolio_text += \"\\n(Aucune position, portefeuille liquide)\"\nelse:\n    for p in valid_positions:\n        sign = \"+\" if p[\"pnl\"] > 0 else \"\"\n        portfolio_text += (\n            f\"\\n- {p['symbol']} ({p['name']}) [{p['sector']}]: {p['qty']} titres @ {p['price']} EUR \"\n            f\"(Val: {p['value']} EUR) | PnL: {sign}{p['pnl']} EUR\"\n        )\n\nreturn [\n    {\n        \"json\": {\n            \"portfolioBrief\": {\n                \"generatedAt\": datetime.now(timezone.utc).isoformat(),\n                \"totalValue\": total_value,\n                \"cash\": cash_value,\n                \"exposurePct\": exposure_pct,\n                \"agentBriefingText\": portfolio_text,\n                \"positions\": valid_positions,\n                \"source\": source,\n            }\n        }\n    }\n]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -2558,17 +2524,6 @@
         ]
       ]
     },
-    "4 - Read Portfolio (Google Sheets)": {
-      "main": [
-        [
-          {
-            "node": "Merge",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "merge": {
       "main": [
         [
@@ -2782,12 +2737,7 @@
       "main": [
         [
           {
-            "node": "4 - Read Portfolio (Google Sheets)",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Universe",
+            "node": "4B – Build Portfolio Context",
             "type": "main",
             "index": 0
           },
@@ -2865,7 +2815,8 @@
       ],
       "ai_tool": [
         []
-      ]
+      ],
+      "main": []
     },
     "OpenAI Chat Model": {
       "ai_languageModel": [
@@ -2876,7 +2827,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Qdrant Vector Store1": {
       "ai_vectorStore": [
@@ -2887,7 +2839,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "OpenAI Chat Model1": {
       "ai_languageModel": [
@@ -2898,7 +2851,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Qdrant Vector Store2": {
       "ai_vectorStore": [
@@ -2909,7 +2863,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "OpenAI Chat Model2": {
       "ai_languageModel": [
@@ -2920,7 +2875,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "get_specific_news": {
       "ai_tool": [
@@ -2931,7 +2887,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "get_fundamental_details": {
       "ai_tool": [
@@ -2942,7 +2899,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "get_technical_details": {
       "ai_tool": [
@@ -2953,7 +2911,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Embeddings OpenAI1": {
       "ai_embedding": [
@@ -2964,7 +2923,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Agent #1 - Portfolio manager": {
       "main": [
@@ -2997,7 +2957,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "OpenAI Chat Model3": {
       "ai_languageModel": [
@@ -3008,17 +2969,12 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Merge": {
       "main": [
-        [
-          {
-            "node": "4B – Build Portfolio Context",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        []
       ]
     },
     "Embeddings OpenAI2": {
@@ -3030,7 +2986,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Embeddings OpenAI3": {
       "ai_embedding": [
@@ -3041,7 +2998,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "16A — Prepare Backfill": {
       "main": [
@@ -3063,17 +3021,12 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     },
     "Universe": {
       "main": [
-        [
-          {
-            "node": "Merge",
-            "type": "main",
-            "index": 1
-          }
-        ]
+        []
       ]
     },
     "News_Symbol": {
@@ -3169,7 +3122,8 @@
             "index": 0
           }
         ]
-      ]
+      ],
+      "main": []
     }
   },
   "active": true,
