@@ -1160,9 +1160,16 @@ def _build_multi_agent_matrix(
         tp = min(tp_candidates) if tp_candidates else 0.0
 
         reward_pct = ((tp - entry) / entry * 100.0) if entry > 0 else 0.0
-        risk_pct = ((entry - stop) / entry * 100.0) if entry > 0 else 0.0
-        risk_pct = max(0.1, risk_pct)
-        r_multiple = reward_pct / risk_pct if risk_pct > 0 else 0.0
+        risk_pct_raw = ((entry - stop) / entry * 100.0) if entry > 0 else 0.0
+        atr_stop_floor_pct = max(0.8 * d1_atr_pct, 0.75 if d1_atr_pct > 0 else 1.2)
+        risk_pct_effective = max(0.1, risk_pct_raw, atr_stop_floor_pct)
+        r_multiple_raw = reward_pct / max(0.1, risk_pct_raw) if reward_pct > 0 else 0.0
+        r_multiple = reward_pct / risk_pct_effective if reward_pct > 0 else 0.0
+        r_multiple_capped = min(6.0, max(0.0, r_multiple))
+        rr_outlier = bool(r_multiple_raw > 6.0 or (risk_pct_raw > 0 and risk_pct_raw < atr_stop_floor_pct * 0.85))
+        rr_note = ""
+        if rr_outlier:
+            rr_note = "RR_OUTLIER_STOP_TROP_PROCHE_OU_TARGET_TROP_LOIN"
 
         funda_risk = safe_float(r.get("funda_risk", 50.0))
         spread_pct = safe_float(r.get("spreadPct", 0))
@@ -1208,6 +1215,57 @@ def _build_multi_agent_matrix(
             elif float(yf_age_h) > 24:
                 stale_penalty = 3.0
 
+        calendar_raw = str(r.get("calendar_ok", "")).strip().lower()
+        calendar_ok = calendar_raw in ("1", "true", "yes", "y")
+        has_quote = quote_px > 0
+        has_days_to_earnings = pd.notna(days_to_earnings)
+
+        if pd.notna(yf_age_h):
+            if float(yf_age_h) <= 24:
+                freshness_quality = 100.0
+            elif float(yf_age_h) <= 48:
+                freshness_quality = 85.0
+            elif float(yf_age_h) <= 72:
+                freshness_quality = 70.0
+            elif float(yf_age_h) <= 120:
+                freshness_quality = 50.0
+            else:
+                freshness_quality = 30.0
+        else:
+            freshness_quality = 50.0
+
+        core_fields = [
+            r.get("tech_action", None),
+            r.get("tech_confidence", None),
+            r.get("funda_score", None),
+            r.get("funda_risk", None),
+            r.get("funda_upside", None),
+            r.get("symbol_news_impact_7d", None),
+            r.get("macro_impact_30d", None),
+            r.get("d1_atr_pct", None),
+            r.get("d1_dist_res_pct", None),
+            r.get("d1_dist_sup_pct", None),
+        ]
+        core_present = 0
+        for fv in core_fields:
+            if fv is None:
+                continue
+            if isinstance(fv, str) and not fv.strip():
+                continue
+            if pd.isna(fv):
+                continue
+            core_present += 1
+        feature_quality = (core_present / len(core_fields)) * 100.0 if core_fields else 50.0
+
+        data_quality_score = (
+            0.22 * (100.0 if has_quote else 45.0)
+            + 0.18 * (100.0 if options_has_iv else 62.0 if options_ok else 50.0)
+            + 0.15 * (100.0 if has_days_to_earnings else 72.0 if calendar_ok else 50.0)
+            + 0.25 * freshness_quality
+            + 0.20 * feature_quality
+        )
+        data_quality_score = max(0.0, min(100.0, data_quality_score))
+
         risk_weights = {
             "funda": 0.30,
             "vol": 0.18,
@@ -1231,7 +1289,7 @@ def _build_multi_agent_matrix(
         risk_score_100 = risk_core + stale_penalty
         risk_score_100 = max(0.0, min(100.0, risk_score_100))
 
-        reward_r = min(100.0, max(0.0, r_multiple * 35.0))
+        reward_r = min(100.0, max(0.0, r_multiple_capped * 35.0))
         reward_upside = min(100.0, max(0.0, funda_upside * 3.0))
         reward_space = min(100.0, max(0.0, d1_dist_res * 4.0))
         reward_catalyst = min(100.0, max(0.0, max(0.0, symbol_news_impact) * 6.0 + max(0.0, macro_impact) * 2.0))
@@ -1271,29 +1329,30 @@ def _build_multi_agent_matrix(
         prob_score = max(0.0, min(100.0, prob_score))
 
         p_win = max(0.05, min(0.95, prob_score / 100.0))
-        ev_r = (p_win * max(0.0, r_multiple)) - (1.0 - p_win)
+        ev_r = (p_win * max(0.0, r_multiple_capped)) - (1.0 - p_win)
 
         risk_1_5 = _score_to_1_5(risk_score_100)
         reward_1_5 = _score_to_1_5(reward_score_100)
         risk_u = _score_unit(risk_score_100)
         reward_u = _score_unit(reward_score_100)
+        # Final grade/action are set after full-universe quantiles and dynamic thresholds.
         grade = _grade_from_prob(prob_score)
+        quadrant = "Q?"
+        matrix_action = "Surveiller"
 
-        if risk_u <= 50 and reward_u >= 50:
-            quadrant = "Q1 - Priorite"
-        elif risk_u > 50 and reward_u >= 50:
-            quadrant = "Q2 - Speculatif"
-        elif risk_u <= 50 and reward_u < 50:
-            quadrant = "Q3 - Defensif"
-        else:
-            quadrant = "Q4 - Sortie"
-
-        if ev_r >= 0.30 and reward_score_100 >= 60.0 and risk_score_100 <= 40.0 and grade in ("A", "B"):
-            matrix_action = "Entrer / Renforcer"
-        elif ev_r < 0 or (risk_score_100 >= 70.0 and reward_score_100 <= 45.0):
-            matrix_action = "Reduire / Sortir"
-        else:
-            matrix_action = "Surveiller"
+        data_quality_gate_ok = data_quality_score >= 55.0
+        earnings_gate_block = bool(pd.notna(days_to_earnings) and float(days_to_earnings) <= 2.0)
+        liquidity_gate_block = liq_risk >= 85.0
+        gates_note = []
+        if not data_quality_gate_ok:
+            gates_note.append("DATA_QUALITY_LOW")
+        if earnings_gate_block:
+            gates_note.append("EARNINGS_IMMINENT")
+        if liquidity_gate_block:
+            gates_note.append("LIQUIDITY_STRESS")
+        if rr_outlier:
+            gates_note.append(rr_note)
+        gate_summary = "|".join(gates_note)
 
         options_note = ""
         if not options_ok:
@@ -1317,8 +1376,13 @@ def _build_multi_agent_matrix(
                 "stop_price": stop,
                 "tp_price": tp,
                 "reward_pct": reward_pct,
-                "risk_pct": risk_pct,
-                "r_multiple": r_multiple,
+                "risk_pct": risk_pct_effective,
+                "risk_pct_raw": risk_pct_raw,
+                "atr_stop_floor_pct": atr_stop_floor_pct,
+                "r_multiple_raw": r_multiple_raw,
+                "r_multiple": r_multiple_capped,
+                "rr_outlier": rr_outlier,
+                "rr_note": rr_note,
                 "risk_score_100": risk_score_100,
                 "reward_score_100": reward_score_100,
                 "risk_score_u": risk_u,
@@ -1326,6 +1390,8 @@ def _build_multi_agent_matrix(
                 "risk_score_plot": max(0.0, min(100.0, risk_u + _stable_jitter(symbol, "risk"))),
                 "reward_score_plot": max(0.0, min(100.0, reward_u + _stable_jitter(symbol, "reward"))),
                 "prob_score": prob_score,
+                "prob_score_base": prob_score,
+                "prob_score_for_grade": (0.85 * prob_score + 0.15 * data_quality_score),
                 "p_win": p_win,
                 "ev_r": ev_r,
                 "risk_score_1_5": risk_1_5,
@@ -1333,6 +1399,11 @@ def _build_multi_agent_matrix(
                 "setup_grade": grade,
                 "matrix_action": matrix_action,
                 "quadrant": quadrant,
+                "data_quality_score": data_quality_score,
+                "data_quality_gate_ok": data_quality_gate_ok,
+                "earnings_gate_block": earnings_gate_block,
+                "liquidity_gate_block": liquidity_gate_block,
+                "gate_summary": gate_summary,
                 "event_risk_score": event_risk,
                 "vol_risk_score": vol_risk,
                 "liquidity_risk_score": liq_risk,
@@ -1348,11 +1419,127 @@ def _build_multi_agent_matrix(
     out_df = pd.DataFrame(rows)
     if out_df.empty:
         return out_df
+
+    risk_scores = safe_float_series(out_df.get("risk_score_u", pd.Series(50.0, index=out_df.index))).fillna(50.0)
+    reward_scores = safe_float_series(out_df.get("reward_score_u", pd.Series(50.0, index=out_df.index))).fillna(50.0)
+    risk_threshold = int(round(float(risk_scores.quantile(0.60)))) if len(risk_scores) else 50
+    reward_threshold = int(round(float(reward_scores.quantile(0.60)))) if len(reward_scores) else 50
+    risk_threshold = max(20, min(85, risk_threshold))
+    reward_threshold = max(20, min(85, reward_threshold))
+
+    grade_scores = safe_float_series(out_df.get("prob_score_for_grade", out_df.get("prob_score", pd.Series(50.0, index=out_df.index)))).fillna(50.0)
+    grade_a_thr = float(grade_scores.quantile(0.90)) if len(grade_scores) else 75.0
+    grade_b_thr = float(grade_scores.quantile(0.50)) if len(grade_scores) else 55.0
+
+    def _downgrade_grade(g: str) -> str:
+        if g == "A":
+            return "B"
+        if g == "B":
+            return "C"
+        return "C"
+
+    final_grades = []
+    final_quadrants = []
+    final_actions = []
+    final_action_reason = []
+    final_size_pct = []
+
+    for _, row in out_df.iterrows():
+        score_g = safe_float(row.get("prob_score_for_grade", row.get("prob_score", 50.0)))
+        grade = "A" if score_g >= grade_a_thr else ("B" if score_g >= grade_b_thr else "C")
+        if safe_float(row.get("data_quality_score", 50.0)) < 45.0:
+            grade = _downgrade_grade(grade)
+        if bool(row.get("rr_outlier", False)) and grade == "A":
+            grade = "B"
+        if bool(row.get("earnings_gate_block", False)) and grade == "A":
+            grade = "B"
+
+        risk_u = safe_float(row.get("risk_score_u", 50.0))
+        reward_u = safe_float(row.get("reward_score_u", 50.0))
+        ev_r = safe_float(row.get("ev_r", 0.0))
+        data_quality = safe_float(row.get("data_quality_score", 50.0))
+        rr_outlier = bool(row.get("rr_outlier", False))
+        earnings_block = bool(row.get("earnings_gate_block", False))
+        liquidity_block = bool(row.get("liquidity_gate_block", False))
+        quality_block = data_quality < 55.0
+
+        if risk_u <= risk_threshold and reward_u >= reward_threshold:
+            quadrant = "Q1 - Priorite"
+        elif risk_u > risk_threshold and reward_u >= reward_threshold:
+            quadrant = "Q2 - Speculatif"
+        elif risk_u <= risk_threshold and reward_u < reward_threshold:
+            quadrant = "Q3 - Defensif"
+        else:
+            quadrant = "Q4 - Sortie"
+
+        enter_core = (
+            ev_r >= 0.20
+            and reward_u >= reward_threshold
+            and risk_u <= risk_threshold
+            and grade in ("A", "B")
+        )
+        reduce_core = (
+            ev_r < 0.0
+            or (risk_u >= min(95.0, risk_threshold + 18.0) and reward_u <= max(5.0, reward_threshold - 12.0))
+            or (liquidity_block and ev_r < 0.15)
+        )
+
+        reasons = []
+        if enter_core and not (quality_block or earnings_block or rr_outlier):
+            action = "Entrer / Renforcer"
+            reasons.append("SETUP_OK")
+        elif reduce_core:
+            action = "Reduire / Sortir"
+            reasons.append("RISK_REWARD_UNFAVORABLE")
+        else:
+            action = "Surveiller"
+            reasons.append("WAIT_CONFIRMATION")
+            if quality_block:
+                reasons.append("DATA_QUALITY_GATE")
+            if earnings_block:
+                reasons.append("EARNINGS_GATE")
+            if rr_outlier:
+                reasons.append("RR_OUTLIER_GATE")
+
+        ev_component = max(0.0, min(100.0, (ev_r / 1.5) * 100.0))
+        risk_component = max(0.0, min(100.0, 100.0 - risk_u))
+        size_score = 0.55 * ev_component + 0.25 * risk_component + 0.20 * data_quality
+        if action == "Entrer / Renforcer":
+            size_pct = max(10.0, min(100.0, size_score))
+        elif action == "Surveiller":
+            size_pct = max(0.0, min(50.0, size_score * 0.50))
+        else:
+            size_pct = 0.0
+        if earnings_block:
+            size_pct = min(size_pct, 30.0)
+
+        final_grades.append(grade)
+        final_quadrants.append(quadrant)
+        final_actions.append(action)
+        final_action_reason.append("|".join(reasons))
+        final_size_pct.append(round(size_pct, 1))
+
+    out_df["setup_grade"] = final_grades
+    out_df["quadrant"] = final_quadrants
+    out_df["matrix_action"] = final_actions
+    out_df["action_reason"] = final_action_reason
+    out_df["size_reco_pct"] = final_size_pct
+    out_df["risk_threshold_dyn"] = risk_threshold
+    out_df["reward_threshold_dyn"] = reward_threshold
+    out_df["grade_a_threshold"] = grade_a_thr
+    out_df["grade_b_threshold"] = grade_b_thr
+    out_df["rr_used_for_scoring"] = safe_float_series(out_df.get("r_multiple", pd.Series(0.0, index=out_df.index))).fillna(0.0).clip(upper=6.0)
+
+    action_rank = {"Entrer / Renforcer": 0, "Surveiller": 1, "Reduire / Sortir": 2}
+    grade_rank = {"A": 0, "B": 1, "C": 2}
+    out_df["action_rank"] = out_df["matrix_action"].map(action_rank).fillna(9)
+    out_df["grade_rank"] = out_df["setup_grade"].map(grade_rank).fillna(9)
     out_df = out_df.sort_values(
-        ["matrix_action", "ev_r", "reward_score_u", "risk_score_u"],
-        ascending=[True, False, False, True],
+        ["action_rank", "grade_rank", "ev_r", "reward_score_u", "risk_score_u"],
+        ascending=[True, True, False, False, True],
         na_position="last",
     ).reset_index(drop=True)
+    out_df = out_df.drop(columns=["action_rank", "grade_rank"], errors="ignore")
     return out_df
 
 
@@ -3435,19 +3622,27 @@ elif page == "Vue consolidee Multi-Agents":
             grade_a = int(view_df.get("setup_grade", pd.Series(dtype=str)).astype(str).eq("A").sum())
             options_ok_series = view_df.get("options_ok", pd.Series(False, index=view_df.index)).fillna(False).astype(bool)
             opt_missing = int((~options_ok_series).sum())
+            rr_outliers = int(view_df.get("rr_outlier", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).sum())
+            low_quality = int((safe_float_series(view_df.get("data_quality_score", pd.Series(0.0, index=view_df.index))).fillna(0.0) < 55.0).sum())
+            risk_thr = safe_float(view_df.get("risk_threshold_dyn", pd.Series([50.0])).iloc[0] if total_values else 50.0)
+            reward_thr = safe_float(view_df.get("reward_threshold_dyn", pd.Series([50.0])).iloc[0] if total_values else 50.0)
+            grade_a_thr = safe_float(view_df.get("grade_a_threshold", pd.Series([70.0])).iloc[0] if total_values else 70.0)
+            grade_b_thr = safe_float(view_df.get("grade_b_threshold", pd.Series([55.0])).iloc[0] if total_values else 55.0)
             enrich_cov = (
                 float(view_df.get("has_enrichment", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).mean()) * 100.0
                 if total_values
                 else 0.0
             )
 
-            g1, g2, g3, g4, g5, g6 = st.columns(6)
+            g1, g2, g3, g4, g5, g6, g7, g8 = st.columns(8)
             g1.metric("Valeurs suivies", total_values)
             g2.metric("Entrer / Renforcer", enter_count)
             g3.metric("Surveiller", watch_count)
             g4.metric("Reduire / Sortir", exit_count)
             g5.metric("EV(R) moyen", f"{avg_ev:.2f}")
             g6.metric("Setups grade A", grade_a, delta=f"Options indispo: {opt_missing}")
+            g7.metric("RR outliers", rr_outliers)
+            g8.metric("Data quality <55", low_quality)
             if enrich_cov < 85:
                 st.warning(f"Couverture enrichissement YF insuffisante: {enrich_cov:.1f}% des symboles ont une ligne daily.")
             else:
@@ -3457,6 +3652,10 @@ elif page == "Vue consolidee Multi-Agents":
                 "Legende matrice: Axe X = Score RISQUE (0 faible -> 100 eleve), "
                 "Axe Y = Score REWARD (0 faible -> 100 fort), couleur = grade setup (A/B/C), "
                 "taille = valeur absolue EV(R), forme = action recommandee."
+            )
+            st.caption(
+                f"Seuils dynamiques: Risk p60={risk_thr:.0f}, Reward p60={reward_thr:.0f}. "
+                f"Grades par quantiles: A >= {grade_a_thr:.1f}, B >= {grade_b_thr:.1f}, sinon C."
             )
 
             plot_df = view_df.copy()
@@ -3481,8 +3680,11 @@ elif page == "Vue consolidee Multi-Agents":
                     "risk_score_u": ":.0f",
                     "reward_score_u": ":.0f",
                     "r_multiple": ":.2f",
+                    "r_multiple_raw": ":.2f",
                     "ev_r": ":.2f",
                     "p_win_pct": ":.1f",
+                    "data_quality_score": ":.1f",
+                    "size_reco_pct": ":.1f",
                     "reward_pct": ":.2f",
                     "risk_pct": ":.2f",
                     "spreadPct": ":.2f",
@@ -3502,8 +3704,8 @@ elif page == "Vue consolidee Multi-Agents":
                 title="Matrice Risk / Reward / Probabilite (echelle 0-100)",
             )
             fig_rr.update_traces(marker=dict(opacity=0.62))
-            fig_rr.add_vline(x=50, line_dash="dot", line_color="#dc3545")
-            fig_rr.add_hline(y=50, line_dash="dot", line_color="#28a745")
+            fig_rr.add_vline(x=risk_thr, line_dash="dot", line_color="#dc3545")
+            fig_rr.add_hline(y=reward_thr, line_dash="dot", line_color="#28a745")
             fig_rr.update_xaxes(range=[0, 100], dtick=10)
             fig_rr.update_yaxes(range=[0, 100], dtick=10)
             fig_rr.update_layout(height=540)
@@ -3512,12 +3714,44 @@ elif page == "Vue consolidee Multi-Agents":
             st.markdown(
                 """
 **Lecture des 4 cadrants (investissement)**
-1. `Haut gauche` (Risque <= 50, Reward >= 50): Zone de priorite. Candidats a l'entree/renforcement avec sizing normal.
-2. `Haut droite` (Risque > 50, Reward >= 50): Opportunites speculatives. Taille reduite, stop strict, suivi plus frequent.
-3. `Bas gauche` (Risque <= 50, Reward < 50): Profil defensif. Conservation possible, mais faible upside a court terme.
-4. `Bas droite` (Risque > 50, Reward < 50): Zone a risque negatif. Reduction/sortie prioritaire sauf raison tactique forte.
+1. `Haut gauche` (Risque <= seuil dynamique, Reward >= seuil dynamique): Zone de priorite. Entree/renforcement possible si les gates sont ouverts.
+2. `Haut droite` (Risque > seuil dynamique, Reward >= seuil dynamique): Opportunites speculatives. Taille reduite, stop strict, execution selective.
+3. `Bas gauche` (Risque <= seuil dynamique, Reward < seuil dynamique): Profil defensif. Surveillance/conservation, upside limite a court terme.
+4. `Bas droite` (Risque > seuil dynamique, Reward < seuil dynamique): Zone de derisque. Reduction/sortie prioritaire sauf argument tactique fort.
 """
             )
+
+            st.markdown("#### Sanity checks")
+            qc1, qc2 = st.columns(2)
+            with qc1:
+                qtab = (
+                    pd.crosstab(
+                        view_df.get("quadrant", pd.Series(dtype=str)),
+                        view_df.get("matrix_action", pd.Series(dtype=str)),
+                    )
+                    .reset_index()
+                    .rename(columns={"quadrant": "Quadrant"})
+                )
+                render_interactive_table(qtab, key_suffix="multi_agents_quadrant_action", height=220)
+            with qc2:
+                rr_out = view_df[view_df.get("rr_outlier", pd.Series(False, index=view_df.index)).fillna(False).astype(bool)].copy()
+                cols_rr = [c for c in ["symbol", "name", "r_multiple_raw", "r_multiple", "risk_pct_raw", "atr_stop_floor_pct", "matrix_action"] if c in rr_out.columns]
+                if cols_rr:
+                    render_interactive_table(
+                        rr_out[cols_rr].sort_values("r_multiple_raw", ascending=False).head(15).rename(
+                            columns={
+                                "symbol": "Symbole",
+                                "name": "Nom",
+                                "r_multiple_raw": "R brut",
+                                "r_multiple": "R utilise",
+                                "risk_pct_raw": "Risk % brut",
+                                "atr_stop_floor_pct": "Plancher ATR %",
+                                "matrix_action": "Decision",
+                            }
+                        ),
+                        key_suffix="multi_agents_rr_outliers",
+                        height=220,
+                    )
 
             st.markdown("#### Priorisation matrice")
             matrix_cols = [
@@ -3529,9 +3763,16 @@ elif page == "Vue consolidee Multi-Agents":
                 "setup_grade",
                 "risk_score_u",
                 "reward_score_u",
+                "data_quality_score",
                 "r_multiple",
+                "r_multiple_raw",
+                "risk_pct_raw",
+                "atr_stop_floor_pct",
+                "rr_outlier",
                 "ev_r",
                 "p_win",
+                "size_reco_pct",
+                "action_reason",
                 "reward_pct",
                 "risk_pct",
                 "spreadPct",
@@ -3554,9 +3795,16 @@ elif page == "Vue consolidee Multi-Agents":
                         "setup_grade": "Grade",
                         "risk_score_u": "Risque (0-100)",
                         "reward_score_u": "Reward (0-100)",
+                        "data_quality_score": "Data quality",
                         "r_multiple": "R",
+                        "r_multiple_raw": "R brut",
+                        "risk_pct_raw": "Risk % brut",
+                        "atr_stop_floor_pct": "Plancher ATR %",
+                        "rr_outlier": "RR outlier",
                         "ev_r": "EV(R)",
                         "p_win": "Prob. win %",
+                        "size_reco_pct": "Sizing reco %",
+                        "action_reason": "Raison action",
                         "reward_pct": "Reward %",
                         "risk_pct": "Risk %",
                         "spreadPct": "Spread %",
@@ -3678,7 +3926,7 @@ elif page == "Vue consolidee Multi-Agents":
                 s5.metric("R", f"{safe_float(row.get('r_multiple', 0)):.2f}")
                 s6.metric("EV(R)", f"{safe_float(row.get('ev_r', 0)):.2f}")
                 s7.metric("Prob. win", f"{safe_float(row.get('p_win', 0) * 100):.1f}%")
-                s8.metric("Conviction", f"{safe_float(row.get('conviction_score', 0)):.1f}/100")
+                s8.metric("Data quality", f"{safe_float(row.get('data_quality_score', 0)):.0f}/100")
 
                 st.markdown("#### Lecture mecanique")
                 st.write(
@@ -3689,6 +3937,14 @@ elif page == "Vue consolidee Multi-Agents":
                     f"risk={safe_float(row.get('risk_pct', 0)):.2f}%, "
                     f"R={safe_float(row.get('r_multiple', 0)):.2f}, "
                     f"EV(R)={safe_float(row.get('ev_r', 0)):.2f}."
+                )
+                st.caption(
+                    f"R brut={safe_float(row.get('r_multiple_raw', 0)):.2f} | "
+                    f"Risk brut={safe_float(row.get('risk_pct_raw', 0)):.2f}% | "
+                    f"Plancher ATR={safe_float(row.get('atr_stop_floor_pct', 0)):.2f}% | "
+                    f"RR outlier={bool(row.get('rr_outlier', False))} | "
+                    f"Sizing reco={safe_float(row.get('size_reco_pct', 0)):.1f}% | "
+                    f"Gates={str(row.get('gate_summary', '') or 'OK')}"
                 )
 
                 rd_left, rd_right = st.columns(2)
