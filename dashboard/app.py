@@ -1,4 +1,5 @@
 import json
+import hashlib
 import os
 import re
 import sys
@@ -998,6 +999,17 @@ def _grade_from_prob(prob_score: float) -> str:
     return "C"
 
 
+def _score_unit(v: float) -> int:
+    return int(round(max(0.0, min(100.0, safe_float(v)))))
+
+
+def _stable_jitter(symbol: str, salt: str, amplitude: float = 0.45) -> float:
+    seed = f"{symbol}|{salt}".encode("utf-8")
+    h = hashlib.sha1(seed).hexdigest()
+    unit = int(h[:8], 16) / 0xFFFFFFFF
+    return (unit * 2.0 - 1.0) * amplitude
+
+
 def _build_multi_agent_matrix(
     consolidated: pd.DataFrame,
     df_portfolio: pd.DataFrame,
@@ -1162,16 +1174,10 @@ def _build_multi_agent_matrix(
         symbol_weight = safe_float(sym_w_map.get(symbol, 0.0))
 
         days_to_earnings = pd.to_numeric(pd.Series([r.get("days_to_earnings", pd.NA)]), errors="coerce").iloc[0]
-        if pd.notna(days_to_earnings) and float(days_to_earnings) <= 3:
-            event_risk = 95.0
-        elif pd.notna(days_to_earnings) and float(days_to_earnings) <= 7:
-            event_risk = 80.0
-        elif pd.notna(days_to_earnings) and float(days_to_earnings) <= 14:
-            event_risk = 60.0
-        elif pd.notna(days_to_earnings) and float(days_to_earnings) <= 30:
-            event_risk = 40.0
-        elif pd.notna(days_to_earnings) and float(days_to_earnings) > 30:
-            event_risk = 20.0
+        if pd.notna(days_to_earnings):
+            d = max(0.0, min(30.0, float(days_to_earnings)))
+            # Linear scale: 0 day -> 95 risk, 30+ days -> 20 risk
+            event_risk = 20.0 + ((30.0 - d) / 30.0) * 75.0
         else:
             event_risk = 40.0
 
@@ -1183,12 +1189,14 @@ def _build_multi_agent_matrix(
         iv_atm = pd.to_numeric(pd.Series([r.get("iv_atm", pd.NA)]), errors="coerce").iloc[0]
         options_raw = str(r.get("options_ok", "")).strip().lower()
         options_ok = options_raw in ("1", "true", "yes", "y")
-        if options_ok and pd.notna(iv_atm) and float(iv_atm) > 0:
+        options_has_iv = options_ok and pd.notna(iv_atm) and float(iv_atm) > 0
+        if options_has_iv:
             iv_val = float(iv_atm)
             iv_as_pct = iv_val * 100.0 if iv_val <= 3 else iv_val
             options_risk = min(100.0, max(0.0, iv_as_pct * 1.8))
         else:
-            options_risk = 45.0
+            # Keep a neutral baseline when options are missing (common for FR symbols).
+            options_risk = 35.0
 
         yf_age_h = pd.to_numeric(pd.Series([r.get("yf_age_h", pd.NA)]), errors="coerce").iloc[0]
         stale_penalty = 0.0
@@ -1200,16 +1208,27 @@ def _build_multi_agent_matrix(
             elif float(yf_age_h) > 24:
                 stale_penalty = 3.0
 
-        risk_score_100 = (
-            0.30 * funda_risk
-            + 0.18 * vol_risk
-            + 0.14 * liq_risk
-            + 0.14 * event_risk
-            + 0.10 * news_risk
-            + 0.09 * concentration_risk
-            + 0.05 * options_risk
-            + stale_penalty
-        )
+        risk_weights = {
+            "funda": 0.30,
+            "vol": 0.18,
+            "liq": 0.14,
+            "event": 0.14,
+            "news": 0.10,
+            "concentration": 0.09,
+            "options": 0.05 if options_has_iv else 0.01,
+        }
+        risk_values = {
+            "funda": min(100.0, max(0.0, funda_risk)),
+            "vol": vol_risk,
+            "liq": liq_risk,
+            "event": event_risk,
+            "news": news_risk,
+            "concentration": concentration_risk,
+            "options": options_risk,
+        }
+        wsum = sum(risk_weights.values())
+        risk_core = sum(risk_values[k] * risk_weights[k] for k in risk_weights) / wsum if wsum > 0 else 50.0
+        risk_score_100 = risk_core + stale_penalty
         risk_score_100 = max(0.0, min(100.0, risk_score_100))
 
         reward_r = min(100.0, max(0.0, r_multiple * 35.0))
@@ -1256,11 +1275,22 @@ def _build_multi_agent_matrix(
 
         risk_1_5 = _score_to_1_5(risk_score_100)
         reward_1_5 = _score_to_1_5(reward_score_100)
+        risk_u = _score_unit(risk_score_100)
+        reward_u = _score_unit(reward_score_100)
         grade = _grade_from_prob(prob_score)
 
-        if ev_r > 0.35 and reward_1_5 >= 4 and risk_1_5 <= 2 and grade in ("A", "B"):
+        if risk_u <= 50 and reward_u >= 50:
+            quadrant = "Q1 - Priorite"
+        elif risk_u > 50 and reward_u >= 50:
+            quadrant = "Q2 - Speculatif"
+        elif risk_u <= 50 and reward_u < 50:
+            quadrant = "Q3 - Defensif"
+        else:
+            quadrant = "Q4 - Sortie"
+
+        if ev_r >= 0.30 and reward_score_100 >= 60.0 and risk_score_100 <= 40.0 and grade in ("A", "B"):
             matrix_action = "Entrer / Renforcer"
-        elif ev_r < 0 or (risk_1_5 >= 4 and reward_1_5 <= 2):
+        elif ev_r < 0 or (risk_score_100 >= 70.0 and reward_score_100 <= 45.0):
             matrix_action = "Reduire / Sortir"
         else:
             matrix_action = "Surveiller"
@@ -1291,6 +1321,10 @@ def _build_multi_agent_matrix(
                 "r_multiple": r_multiple,
                 "risk_score_100": risk_score_100,
                 "reward_score_100": reward_score_100,
+                "risk_score_u": risk_u,
+                "reward_score_u": reward_u,
+                "risk_score_plot": max(0.0, min(100.0, risk_u + _stable_jitter(symbol, "risk"))),
+                "reward_score_plot": max(0.0, min(100.0, reward_u + _stable_jitter(symbol, "reward"))),
                 "prob_score": prob_score,
                 "p_win": p_win,
                 "ev_r": ev_r,
@@ -1298,6 +1332,7 @@ def _build_multi_agent_matrix(
                 "reward_score_1_5": reward_1_5,
                 "setup_grade": grade,
                 "matrix_action": matrix_action,
+                "quadrant": quadrant,
                 "event_risk_score": event_risk,
                 "vol_risk_score": vol_risk,
                 "liquidity_risk_score": liq_risk,
@@ -1314,7 +1349,7 @@ def _build_multi_agent_matrix(
     if out_df.empty:
         return out_df
     out_df = out_df.sort_values(
-        ["matrix_action", "ev_r", "reward_score_1_5", "risk_score_1_5"],
+        ["matrix_action", "ev_r", "reward_score_u", "risk_score_u"],
         ascending=[True, False, False, True],
         na_position="last",
     ).reset_index(drop=True)
@@ -3419,19 +3454,23 @@ elif page == "Vue consolidee Multi-Agents":
                 st.caption(f"Couverture enrichissement YF: {enrich_cov:.1f}%")
 
             st.caption(
-                "Legende matrice: Axe X = Score RISQUE (1 faible -> 5 eleve), "
-                "Axe Y = Score REWARD (1 faible -> 5 fort), couleur = grade setup (A/B/C), "
+                "Legende matrice: Axe X = Score RISQUE (0 faible -> 100 eleve), "
+                "Axe Y = Score REWARD (0 faible -> 100 fort), couleur = grade setup (A/B/C), "
                 "taille = valeur absolue EV(R), forme = action recommandee."
             )
 
             plot_df = view_df.copy()
             plot_df["bubble_size"] = (plot_df.get("ev_r", pd.Series(0.0, index=plot_df.index)).abs() * 24.0 + 10.0).clip(lower=10, upper=60)
             plot_df["p_win_pct"] = plot_df.get("p_win", pd.Series(0.0, index=plot_df.index)) * 100.0
+            plot_df["risk_score_u"] = safe_float_series(plot_df.get("risk_score_u", pd.Series(50.0, index=plot_df.index))).fillna(50.0)
+            plot_df["reward_score_u"] = safe_float_series(plot_df.get("reward_score_u", pd.Series(50.0, index=plot_df.index))).fillna(50.0)
+            plot_df["risk_score_plot"] = safe_float_series(plot_df.get("risk_score_plot", plot_df["risk_score_u"])).fillna(50.0)
+            plot_df["reward_score_plot"] = safe_float_series(plot_df.get("reward_score_plot", plot_df["reward_score_u"])).fillna(50.0)
 
             fig_rr = px.scatter(
                 plot_df,
-                x="risk_score_1_5",
-                y="reward_score_1_5",
+                x="risk_score_plot",
+                y="reward_score_plot",
                 color="setup_grade",
                 symbol="matrix_action",
                 size="bubble_size",
@@ -3439,6 +3478,8 @@ elif page == "Vue consolidee Multi-Agents":
                 hover_data={
                     "name": True,
                     "sector": True,
+                    "risk_score_u": ":.0f",
+                    "reward_score_u": ":.0f",
                     "r_multiple": ":.2f",
                     "ev_r": ":.2f",
                     "p_win_pct": ":.1f",
@@ -3451,19 +3492,32 @@ elif page == "Vue consolidee Multi-Agents":
                 },
                 color_discrete_map={"A": "#28a745", "B": "#ffc107", "C": "#dc3545"},
                 labels={
-                    "risk_score_1_5": "Risque (1-5)",
-                    "reward_score_1_5": "Reward (1-5)",
+                    "risk_score_plot": "Risque (0-100)",
+                    "reward_score_plot": "Reward (0-100)",
+                    "risk_score_u": "Risque unitaire",
+                    "reward_score_u": "Reward unitaire",
                     "setup_grade": "Probabilite",
                     "matrix_action": "Decision",
                 },
-                title="Matrice Risk / Reward / Probabilite",
+                title="Matrice Risk / Reward / Probabilite (echelle 0-100)",
             )
-            fig_rr.add_vline(x=3, line_dash="dot", line_color="#dc3545")
-            fig_rr.add_hline(y=3, line_dash="dot", line_color="#28a745")
-            fig_rr.update_xaxes(range=[0.7, 5.3], dtick=1)
-            fig_rr.update_yaxes(range=[0.7, 5.3], dtick=1)
+            fig_rr.update_traces(marker=dict(opacity=0.62))
+            fig_rr.add_vline(x=50, line_dash="dot", line_color="#dc3545")
+            fig_rr.add_hline(y=50, line_dash="dot", line_color="#28a745")
+            fig_rr.update_xaxes(range=[0, 100], dtick=10)
+            fig_rr.update_yaxes(range=[0, 100], dtick=10)
             fig_rr.update_layout(height=540)
             st.plotly_chart(fig_rr, use_container_width=True)
+
+            st.markdown(
+                """
+**Lecture des 4 cadrants (investissement)**
+1. `Haut gauche` (Risque <= 50, Reward >= 50): Zone de priorite. Candidats a l'entree/renforcement avec sizing normal.
+2. `Haut droite` (Risque > 50, Reward >= 50): Opportunites speculatives. Taille reduite, stop strict, suivi plus frequent.
+3. `Bas gauche` (Risque <= 50, Reward < 50): Profil defensif. Conservation possible, mais faible upside a court terme.
+4. `Bas droite` (Risque > 50, Reward < 50): Zone a risque negatif. Reduction/sortie prioritaire sauf raison tactique forte.
+"""
+            )
 
             st.markdown("#### Priorisation matrice")
             matrix_cols = [
@@ -3471,9 +3525,10 @@ elif page == "Vue consolidee Multi-Agents":
                 "name",
                 "sector",
                 "matrix_action",
+                "quadrant",
                 "setup_grade",
-                "risk_score_1_5",
-                "reward_score_1_5",
+                "risk_score_u",
+                "reward_score_u",
                 "r_multiple",
                 "ev_r",
                 "p_win",
@@ -3495,9 +3550,10 @@ elif page == "Vue consolidee Multi-Agents":
                         "name": "Nom",
                         "sector": "Secteur",
                         "matrix_action": "Decision",
+                        "quadrant": "Quadrant",
                         "setup_grade": "Grade",
-                        "risk_score_1_5": "Risque (1-5)",
-                        "reward_score_1_5": "Reward (1-5)",
+                        "risk_score_u": "Risque (0-100)",
+                        "reward_score_u": "Reward (0-100)",
                         "r_multiple": "R",
                         "ev_r": "EV(R)",
                         "p_win": "Prob. win %",
@@ -3617,8 +3673,8 @@ elif page == "Vue consolidee Multi-Agents":
                 s1, s2, s3, s4, s5, s6, s7, s8 = st.columns(8)
                 s1.metric("Decision", str(row.get("matrix_action", "N/A")))
                 s2.metric("Grade", str(row.get("setup_grade", "N/A")))
-                s3.metric("Risque", f"{safe_float(row.get('risk_score_1_5', 0)):.0f}/5")
-                s4.metric("Reward", f"{safe_float(row.get('reward_score_1_5', 0)):.0f}/5")
+                s3.metric("Risque", f"{safe_float(row.get('risk_score_u', row.get('risk_score_100', 0))):.0f}/100")
+                s4.metric("Reward", f"{safe_float(row.get('reward_score_u', row.get('reward_score_100', 0))):.0f}/100")
                 s5.metric("R", f"{safe_float(row.get('r_multiple', 0)):.2f}")
                 s6.metric("EV(R)", f"{safe_float(row.get('ev_r', 0)):.2f}")
                 s7.metric("Prob. win", f"{safe_float(row.get('p_win', 0) * 100):.1f}%")
