@@ -1,4 +1,4 @@
-﻿import duckdb
+import duckdb
 import gc
 import time
 from contextlib import contextmanager

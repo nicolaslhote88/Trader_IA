@@ -1,4 +1,4 @@
-﻿// PF.08 - Build Sheet Updates + payload for DuckDB writer
+// PF.08 - Build Sheet Updates + payload for DuckDB writer
 // Input: items from PF.07
 // Output: only position update rows (no META row updates)
 

@@ -1,4 +1,4 @@
-﻿# AG1-PF-V1
+# AG1-PF-V1
 
 DuckDB extension for the portfolio MTM workflow.
 

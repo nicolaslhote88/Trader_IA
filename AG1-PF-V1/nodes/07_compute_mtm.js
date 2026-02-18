@@ -1,4 +1,4 @@
-﻿// PF.07 - Compute MTM (skip-safe)
+// PF.07 - Compute MTM (skip-safe)
 // Input: enriched portfolio item (row_number, qty/avgPrice, yf_1d, optional yf_1h)
 // Output: same fields + LastPrice / MarketValue / UnrealizedPnL + diagnostics + gs_update
 

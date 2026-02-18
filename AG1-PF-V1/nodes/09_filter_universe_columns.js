@@ -1,4 +1,4 @@
-﻿// Keep only identity + sector classification fields from Universe lookup
+// Keep only identity + sector classification fields from Universe lookup
 return $input.all().map((item) => {
   const row = item.json || {};
   return {

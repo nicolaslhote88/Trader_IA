@@ -1,4 +1,4 @@
-﻿/**
+/**
  * PF.02 - Normalize positions (1 item = 1 row)
  * - Parses portfolio row values robustly (FR number support)
  * - Excludes technical rows (__META__, CASH_EUR)

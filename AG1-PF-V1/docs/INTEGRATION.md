@@ -1,4 +1,4 @@
-﻿# AG1-PF-V1 Integration Notes
+# AG1-PF-V1 Integration Notes
 
 ## 1) Audit of the provided PF workflow
 
