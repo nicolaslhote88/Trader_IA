@@ -2024,14 +2024,14 @@
     },
     "Split Vector Docs (TECH)": {
       "main": [
+        [],
         [
           {
             "node": "Qdrant Delete (TECH by doc_id)",
             "type": "main",
             "index": 0
           }
-        ],
-        []
+        ]
       ]
     },
     "Build Vector Docs from DuckDB (Final Loop)": {
