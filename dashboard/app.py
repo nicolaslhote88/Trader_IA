@@ -32,6 +32,384 @@ AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2
 YF_ENRICH_DUCKDB_PATH = os.getenv("YF_ENRICH_DUCKDB_PATH", "/files/duckdb/yf_enrichment_v1.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
+GRADE_COLOR_MAP = {"A": "#0072B2", "B": "#E69F00", "C": "#CC79A7"}
+GRADE_CONTOUR_WIDTH_MAP = {"A": 3.2, "B": 2.4, "C": 1.6}
+EV_SIGN_BORDER_MAP = {"EV_POS": "#2ECC71", "EV_NEG": "#FF4D4F"}
+DECISION_SYMBOL_MAP = {
+    "Entrer / Renforcer|EV_POS": "triangle-up",
+    "Entrer / Renforcer|EV_NEG": "triangle-up",
+    "Surveiller|EV_POS": "circle",
+    "Surveiller|EV_NEG": "circle",
+    "Reduire / Sortir|EV_POS": "x",
+    "Reduire / Sortir|EV_NEG": "x",
+}
+
+METRICS_META: dict[str, dict[str, str]] = {
+    "total_values": {
+        "label": "Valeurs suivies",
+        "definition_short": "Nombre total de symboles analyses dans la matrice.",
+        "definition_long": "Compteur de toutes les valeurs presentes apres fusion AG2 (tech), AG3 (fonda), AG4 (news) et enrichissement YF.",
+        "formula": "COUNT(symbol)",
+        "unit": "nb",
+        "source": "Derived (AG2+AG3+AG4+YF)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Definit la taille de l'univers et le contexte des seuils dynamiques.",
+        "display_format": "entier",
+    },
+    "enter_count": {
+        "label": "Entrer / Renforcer",
+        "definition_short": "Nombre de valeurs avec signal d'action positive.",
+        "definition_long": "Compte les valeurs dont la decision finale matrice est 'Entrer / Renforcer' apres scoring + gates.",
+        "formula": "COUNT(matrix_action == 'Entrer / Renforcer')",
+        "unit": "nb",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Indique combien d'opportunites immediates sont actionnables.",
+        "display_format": "entier",
+    },
+    "watch_count": {
+        "label": "Surveiller",
+        "definition_short": "Nombre de valeurs a conserver en watchlist active.",
+        "definition_long": "Valeurs qui ne passent pas tous les filtres d'entree mais ne justifient pas une sortie immediate.",
+        "formula": "COUNT(matrix_action == 'Surveiller')",
+        "unit": "nb",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Represente les setups conditionnels en attente de confirmation.",
+        "display_format": "entier",
+    },
+    "exit_count": {
+        "label": "Reduire / Sortir",
+        "definition_short": "Nombre de valeurs a derisquer en priorite.",
+        "definition_long": "Valeurs avec EV defavorable, risque relatif trop eleve, ou combinaison risque/reward deteriorante.",
+        "formula": "COUNT(matrix_action == 'Reduire / Sortir')",
+        "unit": "nb",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Signale la pression de reduction du risque global.",
+        "display_format": "entier",
+    },
+    "avg_ev_r": {
+        "label": "EV(R) moyen",
+        "definition_short": "Esperance moyenne en multiple de risque.",
+        "definition_long": "Moyenne de EV(R) = p_win x R_utilise - (1 - p_win), sur tout l'univers.",
+        "formula": "AVG(ev_r)",
+        "unit": "R",
+        "source": "Derived (AG2+AG3+AG4)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Donne le biais moyen de l'univers (favorable si positif).",
+        "display_format": "float_2",
+    },
+    "grade_a_count": {
+        "label": "Setups grade A",
+        "definition_short": "Valeurs dans la meilleure classe de probabilite.",
+        "definition_long": "Grade calcule par quantiles sur prob_score_for_grade (ajuste par data quality et gates).",
+        "formula": "COUNT(setup_grade == 'A')",
+        "unit": "nb",
+        "source": "Derived (AG2+AG3+AG4)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Quantifie le stock de setups haute qualite relative.",
+        "display_format": "entier",
+    },
+    "rr_outliers": {
+        "label": "RR outliers",
+        "definition_short": "Valeurs avec ratio R suspect (souvent stop trop serre).",
+        "definition_long": "Outlier si R brut > 6 ou si risque brut < plancher ATR. Ces cas sont gates pour eviter les faux signaux.",
+        "formula": "COUNT(rr_outlier == True)",
+        "unit": "nb",
+        "source": "Derived (AG2+AG3+YF)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Reduit le risque de surestimer des trades artificiellement attractifs.",
+        "display_format": "entier",
+    },
+    "low_data_quality": {
+        "label": "Data quality <60",
+        "definition_short": "Valeurs avec fiabilite de donnees insuffisante.",
+        "definition_long": "Score de qualite data agregant couverture quote/options/earnings, fraicheur et completude des features.",
+        "formula": "COUNT(data_quality_score < 60)",
+        "unit": "nb",
+        "source": "Derived + YF",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Declenche un gate et limite les entrees non robustes.",
+        "display_format": "entier",
+    },
+    "options_missing": {
+        "label": "Options indispo",
+        "definition_short": "Valeurs sans chaines options exploitables.",
+        "definition_long": "Nombre de symboles avec options_ok=false (cas frequent hors US).",
+        "formula": "COUNT(options_ok == False)",
+        "unit": "nb",
+        "source": "YF /options + derived",
+        "update_frequency": "Workflow daily enrich + rafraichissement dashboard",
+        "impact_on_decision": "Baisse la confiance sur le risque options/IV, sans bloquer systematiquement.",
+        "display_format": "entier",
+    },
+    "invalid_options_state_count": {
+        "label": "Invalid options state",
+        "definition_short": "Valeurs avec etat options invalide (erreur systeme).",
+        "definition_long": "Detection de patterns d'erreur critiques dans les etats options (fichiers temporaires, etats incoherents).",
+        "formula": "COUNT(invalid_options_state == True)",
+        "unit": "nb",
+        "source": "YF enrich workflow state",
+        "update_frequency": "Workflow daily enrich + rafraichissement dashboard",
+        "impact_on_decision": "Gate bloquant: pas de nouvel 'Entrer' si etat options invalide.",
+        "display_format": "entier",
+    },
+    "risk_score_u": {
+        "label": "Risk score (0-100)",
+        "definition_short": "Score de risque relatif: plus haut = plus risque.",
+        "definition_long": "Agrege risque fondamental, volatilite, liquidite, event risk, news risk, concentration, options risk.",
+        "formula": "Weighted sum des composantes risk puis normalisation 0-100",
+        "unit": "score",
+        "source": "Derived (AG2+AG3+AG4+YF+Portfolio)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Position X de la matrice et condition principale de derisk.",
+        "display_format": "entier",
+    },
+    "reward_score_u": {
+        "label": "Reward score (0-100)",
+        "definition_short": "Score de potentiel de gain relatif: plus haut = plus attractif.",
+        "definition_long": "Agrege asymetrie R, upside fondamental, espace technique, catalyseurs, trend bonus.",
+        "formula": "Weighted sum des composantes reward puis normalisation 0-100",
+        "unit": "score",
+        "source": "Derived (AG2+AG3+AG4)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Position Y de la matrice et composante cle de priorisation.",
+        "display_format": "entier",
+    },
+    "r_multiple": {
+        "label": "R utilise",
+        "definition_short": "Ratio reward/risk utilise pour scoring (cap).",
+        "definition_long": "R utilise = reward_pct / risk_pct_effective, puis cap a 6 pour eviter les outliers extremes.",
+        "formula": "min(6, reward_pct / risk_pct_effective)",
+        "unit": "R",
+        "source": "Derived (AG2+AG3)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Entre dans EV(R), sizing, et filtre des faux setups.",
+        "display_format": "float_2",
+    },
+    "r_multiple_raw": {
+        "label": "R brut",
+        "definition_short": "Ratio reward/risk sans cap.",
+        "definition_long": "Permet de detecter les ratios artificiellement gonfles par un stop trop proche.",
+        "formula": "reward_pct / risk_pct_raw",
+        "unit": "R",
+        "source": "Derived (AG2+AG3)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Si trop eleve, classe en RR outlier et bloque l'entree.",
+        "display_format": "float_2",
+    },
+    "ev_r": {
+        "label": "EV(R)",
+        "definition_short": "Esperance de gain en multiple R.",
+        "definition_long": "EV(R) combine proba de gain et asymetrie R. Positif = avantage statistique; negatif = desavantage.",
+        "formula": "p_win x R_utilise - (1 - p_win)",
+        "unit": "R",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Moteur principal de priorisation et sizing.",
+        "display_format": "signed_float_2",
+    },
+    "p_win": {
+        "label": "Prob. win",
+        "definition_short": "Probabilite estimee de scenario gagnant.",
+        "definition_long": "Issue du score probabiliste AG2+AG3+AG4 avec ajustements regime/alignment.",
+        "formula": "p_win = clamp(prob_score / 100, 0.05, 0.95)",
+        "unit": "%",
+        "source": "Derived (AG2+AG3+AG4)",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Transforme le ratio R en esperance reelle via EV(R).",
+        "display_format": "pct_1",
+    },
+    "data_quality_score": {
+        "label": "Data quality",
+        "definition_short": "Indice de confiance des donnees utilisees.",
+        "definition_long": "Combine couverture quote/options/earnings, fraicheur YF, completude des features et validite des etats.",
+        "formula": "Weighted blend qualite sources, puis clamp 0-100",
+        "unit": "score",
+        "source": "Derived + YF",
+        "update_frequency": "Workflow daily enrich + rafraichissement dashboard",
+        "impact_on_decision": "Gate de fiabilite: faible qualite degrade grade et bloque certaines entrees.",
+        "display_format": "entier",
+    },
+    "risk_threshold_dyn": {
+        "label": "Seuil risque p60",
+        "definition_short": "Frontiere dynamique risque de l'univers du jour.",
+        "definition_long": "P60 des risk scores: au-dessus du seuil, le risque est eleve relativement aux autres valeurs.",
+        "formula": "quantile_60(risk_score_u)",
+        "unit": "score",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Determine les quadrants gauche/droite de la matrice.",
+        "display_format": "entier",
+    },
+    "reward_threshold_dyn": {
+        "label": "Seuil reward p60",
+        "definition_short": "Frontiere dynamique reward de l'univers du jour.",
+        "definition_long": "P60 des reward scores: au-dessus du seuil, les valeurs appartiennent aux 40% les plus attractives en reward relatif.",
+        "formula": "quantile_60(reward_score_u)",
+        "unit": "score",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Determine les quadrants haut/bas de la matrice.",
+        "display_format": "entier",
+    },
+    "grade_a_threshold": {
+        "label": "Seuil grade A",
+        "definition_short": "Score mini pour entrer en grade A.",
+        "definition_long": "Quantile 90% du score de probabilite ajuste par qualite data et gates.",
+        "formula": "quantile_90(prob_score_for_grade)",
+        "unit": "score",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Identifie les setups top decile de l'univers du jour.",
+        "display_format": "float_1",
+    },
+    "grade_b_threshold": {
+        "label": "Seuil grade B",
+        "definition_short": "Score mini pour entrer en grade B.",
+        "definition_long": "Quantile median (50%) du score de probabilite ajuste.",
+        "formula": "quantile_50(prob_score_for_grade)",
+        "unit": "score",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Separation entre setups moyens (B) et faibles (C).",
+        "display_format": "float_1",
+    },
+    "matrix_action": {
+        "label": "Decision finale",
+        "definition_short": "Action proposee par la matrice.",
+        "definition_long": "Decision issue du pipeline complet: scoring, quadrants, gates et regles EV/risk/reward.",
+        "formula": "Rule engine (enter/watch/exit)",
+        "unit": "classe",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Traduction actionnable immediate pour execution ou surveillance.",
+        "display_format": "texte",
+    },
+    "setup_grade": {
+        "label": "Grade setup",
+        "definition_short": "Classe de probabilite/qualite relative du setup.",
+        "definition_long": "A/B/C via quantiles dynamiques, puis ajustements selon gates et data quality.",
+        "formula": "A si score>=thr_A, B si score>=thr_B sinon C, avec downgrades gates",
+        "unit": "classe",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Filtre qualitatif principal des entrees.",
+        "display_format": "texte",
+    },
+    "gate_summary": {
+        "label": "Gates actifs",
+        "definition_short": "Liste des verrous/alertes actifs sur une valeur.",
+        "definition_long": "Concatene les controles critiques (earnings, qualite data, liquidite, options state, RR outlier).",
+        "formula": "Join des gates actifs par '|'",
+        "unit": "texte",
+        "source": "Derived",
+        "update_frequency": "A chaque rafraichissement dashboard",
+        "impact_on_decision": "Un gate critique peut forcer 'Surveiller' ou interdire l'entree.",
+        "display_format": "texte",
+    },
+    "spreadPct": {
+        "label": "Spread %",
+        "definition_short": "Spread bid/ask relatif au prix mid.",
+        "definition_long": "Mesure la friction d'execution immediate. Plus haut = liquidite plus fragile.",
+        "formula": "(ask - bid) / mid x 100",
+        "unit": "%",
+        "source": "YF quote",
+        "update_frequency": "Workflow daily enrich",
+        "impact_on_decision": "Alimente le risque liquidite et les gates d'execution.",
+        "display_format": "pct_2",
+    },
+    "iv_atm": {
+        "label": "IV ATM",
+        "definition_short": "Volatilite implicite at-the-money.",
+        "definition_long": "Proxy de risque evenementiel issu de la chaine options lorsque disponible.",
+        "formula": "Extraction /options (ATM interpolation simple)",
+        "unit": "vol",
+        "source": "YF options",
+        "update_frequency": "Workflow daily enrich",
+        "impact_on_decision": "Influence le score de risque options et la confiance data.",
+        "display_format": "float_3",
+    },
+    "days_to_next_earnings": {
+        "label": "Jours avant earnings",
+        "definition_short": "Delai estime avant prochaine publication de resultats.",
+        "definition_long": "Si <=7 jours, gate bloquant pour limiter le gap risk evenementiel.",
+        "formula": "next_earnings_date - now (jours)",
+        "unit": "jours",
+        "source": "YF calendar + derived",
+        "update_frequency": "Workflow daily enrich",
+        "impact_on_decision": "Active le gate earnings et reduit/annule les entrees.",
+        "display_format": "float_1",
+    },
+    "days_since_last_earnings": {
+        "label": "Jours depuis earnings",
+        "definition_short": "Temps ecoule depuis la derniere publication connue.",
+        "definition_long": "Permet de distinguer post-earnings (souvent moins de risque evenementiel) vs pre-earnings.",
+        "formula": "abs(days_to_earnings) quand date passee",
+        "unit": "jours",
+        "source": "YF calendar + derived",
+        "update_frequency": "Workflow daily enrich",
+        "impact_on_decision": "Ajuste event risk et interpretation du timing.",
+        "display_format": "float_1",
+    },
+}
+
+
+def _metric_meta(metric_id: str) -> dict[str, str]:
+    return METRICS_META.get(metric_id, {})
+
+
+def _render_metric_help_popover(metric_id: str, unique_suffix: str, overrides: dict[str, str] | None = None) -> None:
+    meta = dict(_metric_meta(metric_id))
+    if overrides:
+        meta.update({k: str(v) for k, v in overrides.items() if v is not None})
+    if not meta:
+        return
+
+    label = str(meta.get("label", metric_id))
+    hidden_suffix = "\u200b" * (1 + (sum(ord(ch) for ch in str(unique_suffix or metric_id)) % 5))
+    pop_label = f"ⓘ {label}{hidden_suffix}"
+    content = {
+        "Definition simple": meta.get("definition_short", "N/A"),
+        "Definition detaillee": meta.get("definition_long", "N/A"),
+        "Regle de calcul": meta.get("formula", "N/A"),
+        "Source": meta.get("source", "N/A"),
+        "Frequence MAJ": meta.get("update_frequency", "N/A"),
+        "Impact decision": meta.get("impact_on_decision", "N/A"),
+    }
+    if hasattr(st, "popover"):
+        with st.popover(pop_label):
+            for k, v in content.items():
+                st.markdown(f"**{k}:** {v}")
+    else:
+        with st.expander(pop_label):
+            for k, v in content.items():
+                st.markdown(f"**{k}:** {v}")
+
+
+def _metrics_dictionary_df(metric_ids: list[str] | None = None) -> pd.DataFrame:
+    ids = metric_ids if metric_ids else list(METRICS_META.keys())
+    rows = []
+    for mid in ids:
+        meta = _metric_meta(mid)
+        if not meta:
+            continue
+        rows.append(
+            {
+                "Champ": mid,
+                "Label": meta.get("label", mid),
+                "Definition": meta.get("definition_long", meta.get("definition_short", "")),
+                "Formule": meta.get("formula", ""),
+                "Unite": meta.get("unit", ""),
+                "Source": meta.get("source", ""),
+                "Frequence MAJ": meta.get("update_frequency", ""),
+                "Impact decision": meta.get("impact_on_decision", ""),
+                "Format": meta.get("display_format", ""),
+            }
+        )
+    return pd.DataFrame(rows)
+
 # ============================================================
 # CSS PERSONNALISE
 # ============================================================
@@ -2370,6 +2748,137 @@ def _freshness_status(age_h: float, warn_h: float, block_h: float) -> str:
     return "BLOCK"
 
 
+def _latest_timestamp(df: pd.DataFrame, candidates: list[str]) -> pd.Timestamp:
+    if df is None or df.empty:
+        return pd.NaT
+    wk = normalize_cols(df.copy())
+    col = _first_existing_column(wk, candidates)
+    if not col:
+        return pd.NaT
+    ts = pd.to_datetime(wk[col], errors="coerce", utc=True)
+    if ts.dropna().empty:
+        return pd.NaT
+    return ts.max()
+
+
+def _freshness_label_from_age(age_h: float, warn_h: float, late_h: float) -> str:
+    if pd.isna(age_h):
+        return "Manquant"
+    a = safe_float(age_h)
+    if a <= warn_h:
+        return "A jour"
+    if a <= late_h:
+        return "A surveiller"
+    return "En retard"
+
+
+def _build_multi_agent_data_freshness(
+    duckdb_data: dict[str, pd.DataFrame],
+    view_df: pd.DataFrame,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    now_utc = pd.Timestamp.now(tz="UTC")
+    total_values = len(view_df) if view_df is not None else 0
+    opt_missing = int((~view_df.get("options_ok", pd.Series(False, index=view_df.index)).fillna(False).astype(bool)).sum()) if total_values else 0
+    invalid_opt_state = int(view_df.get("invalid_options_state", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).sum()) if total_values else 0
+    enrich_cov = (
+        float(view_df.get("has_enrichment", pd.Series(False, index=view_df.index)).fillna(False).astype(bool).mean()) * 100.0
+        if total_values
+        else 0.0
+    )
+
+    snapshots = [
+        {
+            "source_id": "ag2_h1",
+            "source": "AG2 Technique H1",
+            "ts": _latest_timestamp(duckdb_data.get("df_signals", pd.DataFrame()), ["h1_date", "workflow_date", "updated_at", "created_at"]),
+            "warn_h": 24.0,
+            "late_h": 72.0,
+        },
+        {
+            "source_id": "ag2_d1",
+            "source": "AG2 Technique D1",
+            "ts": _latest_timestamp(duckdb_data.get("df_signals", pd.DataFrame()), ["d1_date", "workflow_date", "updated_at", "created_at"]),
+            "warn_h": 36.0,
+            "late_h": 96.0,
+        },
+        {
+            "source_id": "ag3",
+            "source": "AG3 Fondamentale",
+            "ts": _latest_timestamp(
+                _load_fundamentals_for_dashboard(duckdb_data),
+                ["updated_at", "updatedat", "fetched_at", "fetchedat", "created_at"],
+            ),
+            "warn_h": 24.0 * 7.0,
+            "late_h": 24.0 * 30.0,
+        },
+        {
+            "source_id": "ag4_macro",
+            "source": "AG4 Macro",
+            "ts": _latest_timestamp(_normalize_macro_news_df(duckdb_data.get("df_news_macro_history", pd.DataFrame())), ["publishedat"]),
+            "warn_h": 24.0,
+            "late_h": 72.0,
+        },
+        {
+            "source_id": "ag4_symbol",
+            "source": "AG4 News symbole",
+            "ts": _latest_timestamp(_normalize_symbol_news_df(duckdb_data.get("df_news_symbol_history", pd.DataFrame())), ["publishedat"]),
+            "warn_h": 24.0,
+            "late_h": 72.0,
+        },
+        {
+            "source_id": "yf_quote",
+            "source": "YF Enrich quote",
+            "ts": _latest_timestamp(
+                duckdb_data.get("df_yf_enrichment_latest", pd.DataFrame()),
+                ["yf_fetched_at", "fetched_at", "fetchedat"],
+            ),
+            "warn_h": 30.0,
+            "late_h": 96.0,
+        },
+        {
+            "source_id": "yf_options",
+            "source": "YF Enrich options",
+            "ts": _latest_timestamp(
+                duckdb_data.get("df_yf_enrichment_latest", pd.DataFrame()),
+                ["options_fetched_at", "fetched_at", "fetchedat"],
+            ),
+            "warn_h": 48.0,
+            "late_h": 120.0,
+        },
+    ]
+
+    rows = []
+    for rec in snapshots:
+        ts = pd.to_datetime(rec.get("ts"), errors="coerce", utc=True)
+        age_h = (now_utc - ts).total_seconds() / 3600.0 if pd.notna(ts) else pd.NA
+        rows.append(
+            {
+                "Source": rec.get("source"),
+                "Derniere mise a jour": _fmt_dt_short(ts),
+                "Age (h)": round(float(age_h), 1) if pd.notna(age_h) else pd.NA,
+                "Statut": _freshness_label_from_age(age_h, warn_h=safe_float(rec.get("warn_h", 24.0)), late_h=safe_float(rec.get("late_h", 72.0))),
+                "Couverture / erreurs": (
+                    f"Couverture YF: {enrich_cov:.1f}%"
+                    if rec.get("source_id") == "yf_quote"
+                    else (
+                        f"Options indispo: {opt_missing}, invalid state: {invalid_opt_state}"
+                        if rec.get("source_id") == "yf_options"
+                        else "N/A"
+                    )
+                ),
+            }
+        )
+
+    out_df = pd.DataFrame(rows)
+
+    summary = {
+        "enrichment_coverage_pct": enrich_cov,
+        "options_missing_count": float(opt_missing),
+        "invalid_options_state_count": float(invalid_opt_state),
+    }
+    return out_df, summary
+
+
 def _macro_relevance_score(row: pd.Series, sector_token: str, industry_token: str, symbol_token: str = "") -> float:
     txt = " ".join(
         [
@@ -3873,39 +4382,108 @@ elif page == "Vue consolidee Multi-Agents":
                 if total_values
                 else 0.0
             )
+            freshness_df, freshness_summary = _build_multi_agent_data_freshness(duckdb_data, view_df)
 
-            g1, g2, g3, g4, g5, g6, g7, g8 = st.columns(8)
-            g1.metric("Valeurs suivies", total_values)
-            g2.metric("Entrer / Renforcer", enter_count)
-            g3.metric("Surveiller", watch_count)
-            g4.metric("Reduire / Sortir", exit_count)
-            g5.metric("EV(R) moyen", f"{avg_ev:.2f}")
-            g6.metric("Setups grade A", grade_a, delta=f"Options indispo: {opt_missing}")
-            g7.metric("RR outliers", rr_outliers)
-            g8.metric("Data quality <60", low_quality, delta=f"Invalid options state: {invalid_opt_state_count}")
+            st.markdown("#### Comment lire cette page en 30 secondes")
+            st.markdown(
+                """
+1. Lisez le bandeau KPI pour voir rapidement le nombre de valeurs a **entrer**, **surveiller** ou **reduire/sortir**.
+2. Dans la matrice: **X = Risque (0-100)**, **Y = Reward (0-100)**. Le cadrant **haut-gauche** est la zone prioritaire.
+3. **Couleur = grade**, **forme = decision**, **taille = |EV(R)|**, **bordure verte/rouge = EV positif/negatif**.
+4. Survolez un point pour les details complets, puis cliquez pour afficher la fiche rapide de la valeur.
+5. Verifiez la section **Methodologie + Fraicheur des donnees** avant toute execution.
+"""
+            )
+
+            def _render_kpi_block(col, metric_id: str, value: object, delta: object | None = None, overrides: dict[str, str] | None = None) -> None:
+                with col:
+                    st.metric(_metric_meta(metric_id).get("label", metric_id), value, delta=delta)
+                    _render_metric_help_popover(metric_id, unique_suffix=f"kpi_{metric_id}", overrides=overrides)
+
+            k1, k2, k3, k4, k5 = st.columns(5)
+            _render_kpi_block(k1, "total_values", total_values)
+            _render_kpi_block(k2, "enter_count", enter_count)
+            _render_kpi_block(k3, "watch_count", watch_count)
+            _render_kpi_block(k4, "exit_count", exit_count)
+            _render_kpi_block(k5, "avg_ev_r", f"{avg_ev:.2f}")
+
+            k6, k7, k8, k9, k10 = st.columns(5)
+            _render_kpi_block(
+                k6,
+                "grade_a_count",
+                grade_a,
+                overrides={
+                    "definition_long": (
+                        f"Setups classes A. Seuils du jour: A >= {grade_a_thr:.1f}, "
+                        f"B >= {grade_b_thr:.1f}, sinon C."
+                    ),
+                    "formula": f"COUNT(setup_grade == 'A') avec A >= {grade_a_thr:.1f}",
+                },
+            )
+            _render_kpi_block(k7, "rr_outliers", rr_outliers)
+            _render_kpi_block(k8, "low_data_quality", low_quality)
+            _render_kpi_block(k9, "options_missing", opt_missing)
+            _render_kpi_block(k10, "invalid_options_state_count", invalid_opt_state_count)
+
             if enrich_cov < 85:
                 st.warning(f"Couverture enrichissement YF insuffisante: {enrich_cov:.1f}% des symboles ont une ligne daily.")
             else:
                 st.caption(f"Couverture enrichissement YF: {enrich_cov:.1f}%")
 
-            st.caption(
-                "Legende matrice: Axe X = Score RISQUE (0 faible -> 100 eleve), "
-                "Axe Y = Score REWARD (0 faible -> 100 fort), couleur = grade setup (A/B/C), "
-                "taille = valeur absolue EV(R), forme = action recommandee."
-            )
-            st.caption(
-                "Taille des bulles (|EV(R)|): petite bulle = EV proche de 0 (signal faible, ni clairement bon ni mauvais). "
-                "Grosse bulle = conviction forte; grosse + EV(R) positif = favorable, grosse + EV(R) negatif = defavorable."
-            )
-            st.caption(
-                f"Seuils dynamiques: Risk p60={risk_thr:.0f}, Reward p60={reward_thr:.0f}. "
-                f"Grades par quantiles: A >= {grade_a_thr:.1f}, B >= {grade_b_thr:.1f}, sinon C."
-            )
-            st.caption(
-                "Interpretation des classes: "
-                f"`Risk p60={risk_thr:.0f}` signifie que 60% de l'univers a un risque <= {risk_thr:.0f} (au-dessus = plus risque relatif). "
-                f"`Reward p60={reward_thr:.0f}` signifie que les titres >= {reward_thr:.0f} sont dans les 40% les plus attractifs en reward relatif. "
-                f"Grades: `A` = top 10% des setups de l'univers du jour (apres gates), `B` = zone mediane-superieure, `C` = reste."
+            st.markdown("#### Legende visuelle")
+            lg1, lg2, lg3 = st.columns([1.2, 1.1, 1.7])
+            with lg1:
+                st.markdown(
+                    f"""
+- **Couleur = Grade**: A ({GRADE_COLOR_MAP['A']}), B ({GRADE_COLOR_MAP['B']}), C ({GRADE_COLOR_MAP['C']})
+- **Alternative daltonisme**: contour aussi informatif  
+  A = epais ({GRADE_CONTOUR_WIDTH_MAP['A']:.1f}px), B = moyen ({GRADE_CONTOUR_WIDTH_MAP['B']:.1f}px), C = fin ({GRADE_CONTOUR_WIDTH_MAP['C']:.1f}px)
+"""
+                )
+            with lg2:
+                st.markdown(
+                    """
+- **Forme = Decision**
+  triangle-up = Entrer / Renforcer
+  circle = Surveiller
+  x = Reduire / Sortir
+- **Bordure = signe EV(R)**
+  verte = EV(R) > 0, rouge = EV(R) < 0
+"""
+                )
+            with lg3:
+                st.markdown(
+                    f"""
+- **Axes**
+  X = Risque (0 faible -> 100 eleve), seuil p60 = **{risk_thr:.0f}**  
+  Y = Reward (0 faible -> 100 fort), seuil p60 = **{reward_thr:.0f}**
+- **Grades dynamiques**
+  A >= **{grade_a_thr:.1f}**, B >= **{grade_b_thr:.1f}**, sinon C
+- **Taille = |EV(R)|**
+  petite = signal faible proche de 0  
+  grande = conviction forte; grande+verte favorable, grande+rouge defavorable
+"""
+                )
+                _render_metric_help_popover(
+                    "setup_grade",
+                    unique_suffix="grade_legend",
+                    overrides={
+                        "definition_long": (
+                            f"Classes du jour: A >= {grade_a_thr:.1f}, B >= {grade_b_thr:.1f}, sinon C. "
+                            "A = top relatif de l'univers; B = intermediaire; C = faible qualite relative."
+                        )
+                    },
+                )
+
+            st.markdown("#### Comment la decision est prise")
+            st.markdown(
+                f"""
+1. **Scores de base**: calcul de Risk, Reward, R, p_win, EV(R).
+2. **Quadrants dynamiques**: application des seuils p60 du jour (`Risk={risk_thr:.0f}`, `Reward={reward_thr:.0f}`).
+3. **Gates**: data quality, earnings proches, liquidite, RR outlier, invalid options state.
+4. **Decision finale**: regles metier -> Entrer / Renforcer, Surveiller, ou Reduire / Sortir.
+5. **Sizing**: taille recommandee derivee de EV(R), du risque relatif et de la qualite data.
+"""
             )
 
             plot_df = view_df.copy()
@@ -3915,54 +4493,132 @@ elif page == "Vue consolidee Multi-Agents":
             plot_df["reward_score_u"] = safe_float_series(plot_df.get("reward_score_u", pd.Series(50.0, index=plot_df.index))).fillna(50.0)
             plot_df["risk_score_plot"] = safe_float_series(plot_df.get("risk_score_plot", plot_df["risk_score_u"])).fillna(50.0)
             plot_df["reward_score_plot"] = safe_float_series(plot_df.get("reward_score_plot", plot_df["reward_score_u"])).fillna(50.0)
+            plot_df["name"] = plot_df.get("name", pd.Series("", index=plot_df.index)).fillna("").astype(str)
+            plot_df["sector"] = plot_df.get("sector", pd.Series("", index=plot_df.index)).fillna("").astype(str)
+            plot_df["matrix_action"] = plot_df.get("matrix_action", pd.Series("Surveiller", index=plot_df.index)).fillna("Surveiller").astype(str)
+            plot_df["setup_grade"] = plot_df.get("setup_grade", pd.Series("C", index=plot_df.index)).fillna("C").astype(str)
+            plot_df["ev_sign"] = plot_df.get("ev_r", pd.Series(0.0, index=plot_df.index)).apply(lambda v: "EV_POS" if safe_float(v) >= 0 else "EV_NEG")
+            plot_df["decision_shape_key"] = plot_df["matrix_action"] + "|" + plot_df["ev_sign"]
+            plot_df["gate_summary_hover"] = (
+                plot_df.get("gate_summary", pd.Series("", index=plot_df.index))
+                .fillna("")
+                .astype(str)
+                .str.replace("|", " | ", regex=False)
+                .replace("", "Aucun gate actif")
+            )
+            plot_df["action_reason_hover"] = plot_df.get("action_reason", pd.Series("", index=plot_df.index)).fillna("").astype(str).str.replace("|", " | ", regex=False)
+
+            custom_cols = [
+                "symbol",
+                "name",
+                "sector",
+                "matrix_action",
+                "setup_grade",
+                "risk_score_u",
+                "reward_score_u",
+                "r_multiple",
+                "r_multiple_raw",
+                "ev_r",
+                "p_win_pct",
+                "data_quality_score",
+                "gate_summary_hover",
+                "action_reason_hover",
+                "reward_pct",
+                "risk_pct",
+                "spreadPct",
+                "iv_atm",
+                "days_to_next_earnings",
+                "days_since_last_earnings",
+            ]
+            for col in custom_cols:
+                if col not in plot_df.columns:
+                    plot_df[col] = pd.NA
 
             fig_rr = px.scatter(
                 plot_df,
                 x="risk_score_plot",
                 y="reward_score_plot",
                 color="setup_grade",
-                symbol="matrix_action",
+                symbol="decision_shape_key",
                 size="bubble_size",
-                hover_name="symbol",
-                hover_data={
-                    "name": True,
-                    "sector": True,
-                    "risk_score_u": ":.0f",
-                    "reward_score_u": ":.0f",
-                    "r_multiple": ":.2f",
-                    "r_multiple_raw": ":.2f",
-                    "ev_r": ":.2f",
-                    "p_win_pct": ":.1f",
-                    "data_quality_score": ":.1f",
-                    "size_reco_pct": ":.1f",
-                    "reward_pct": ":.2f",
-                    "risk_pct": ":.2f",
-                    "spreadPct": ":.2f",
-                    "iv_atm": ":.3f",
-                    "days_to_next_earnings": ":.1f",
-                    "days_since_last_earnings": ":.1f",
-                    "bubble_size": False,
-                },
-                color_discrete_map={"A": "#28a745", "B": "#ffc107", "C": "#dc3545"},
+                custom_data=custom_cols,
+                color_discrete_map=GRADE_COLOR_MAP,
+                symbol_map=DECISION_SYMBOL_MAP,
+                category_orders={"setup_grade": ["A", "B", "C"]},
                 labels={
                     "risk_score_plot": "Risque (0-100)",
                     "reward_score_plot": "Reward (0-100)",
-                    "risk_score_u": "Risque unitaire",
-                    "reward_score_u": "Reward unitaire",
-                    "days_to_next_earnings": "Jours avant prochains earnings",
-                    "days_since_last_earnings": "Jours depuis derniers earnings",
-                    "setup_grade": "Probabilite",
-                    "matrix_action": "Decision",
                 },
                 title="Matrice Risk / Reward / Probabilite (echelle 0-100)",
             )
-            fig_rr.update_traces(marker=dict(opacity=0.62))
-            fig_rr.add_vline(x=risk_thr, line_dash="dot", line_color="#dc3545")
-            fig_rr.add_hline(y=reward_thr, line_dash="dot", line_color="#28a745")
+
+            hover_template = (
+                "<b>%{customdata[0]}</b> - %{customdata[1]}<br>"
+                "Secteur: %{customdata[2]}<br>"
+                "Decision: %{customdata[3]} | Grade: %{customdata[4]}<br>"
+                "Risque / Reward: %{customdata[5]:.0f} / %{customdata[6]:.0f}<br>"
+                "R utilise / R brut: %{customdata[7]:.2f} / %{customdata[8]:.2f}<br>"
+                "EV(R): %{customdata[9]:+.2f} | Prob. win: %{customdata[10]:.1f}%<br>"
+                "Data quality: %{customdata[11]:.1f}/100<br>"
+                "Gates actifs: %{customdata[12]}<br>"
+                "Raison decision: %{customdata[13]}<br>"
+                "Reward%: %{customdata[14]:.2f} | Risk%: %{customdata[15]:.2f}<br>"
+                "Spread%: %{customdata[16]:.2f} | IV ATM: %{customdata[17]:.3f}<br>"
+                "Jours earnings (avant/depuis): %{customdata[18]:.1f} / %{customdata[19]:.1f}<br>"
+                "<i>Cliquer pour ouvrir vue detail.</i><extra></extra>"
+            )
+            for tr in fig_rr.data:
+                trace_name = str(getattr(tr, "name", "") or "")
+                grade_token = trace_name.split(",")[0].strip() if "," in trace_name else trace_name.strip()
+                ev_sign = "EV_POS" if "EV_POS" in trace_name else "EV_NEG"
+                tr.marker.opacity = 0.78
+                tr.marker.line.color = EV_SIGN_BORDER_MAP.get(ev_sign, "#ffffff")
+                tr.marker.line.width = GRADE_CONTOUR_WIDTH_MAP.get(grade_token, 2.0)
+                tr.hovertemplate = hover_template
+
+            fig_rr.add_vline(x=risk_thr, line_dash="dot", line_color="#FF4D4F")
+            fig_rr.add_hline(y=reward_thr, line_dash="dot", line_color="#2ECC71")
             fig_rr.update_xaxes(range=[0, 100], dtick=10)
             fig_rr.update_yaxes(range=[0, 100], dtick=10)
-            fig_rr.update_layout(height=540)
-            st.plotly_chart(fig_rr, use_container_width=True)
+            fig_rr.update_layout(height=620)
+
+            plot_selection = None
+            try:
+                plot_selection = st.plotly_chart(
+                    fig_rr,
+                    use_container_width=True,
+                    key="multi_agents_rr_scatter",
+                    on_select="rerun",
+                    selection_mode=("points",),
+                )
+            except TypeError:
+                st.plotly_chart(fig_rr, use_container_width=True, key="multi_agents_rr_scatter_fallback")
+
+            clicked_symbol = ""
+            try:
+                points = ((plot_selection or {}).get("selection") or {}).get("points", [])
+                if points:
+                    custom_data = points[0].get("customdata", [])
+                    if custom_data:
+                        clicked_symbol = str(custom_data[0] or "").strip().upper()
+            except Exception:
+                clicked_symbol = ""
+
+            if clicked_symbol:
+                st.session_state["multi_agents_symbol_jump"] = clicked_symbol
+                quick = view_df[view_df.get("symbol", pd.Series("", index=view_df.index)).astype(str).str.upper() == clicked_symbol]
+                if not quick.empty:
+                    q = quick.iloc[0]
+                    st.info(
+                        f"Fiche rapide: {clicked_symbol}. "
+                        "Ouvrez l'onglet 'Vue par valeur' pour le detail complet."
+                    )
+                    q1, q2, q3, q4, q5 = st.columns(5)
+                    q1.metric("Decision", str(q.get("matrix_action", "N/A")))
+                    q2.metric("Grade", str(q.get("setup_grade", "N/A")))
+                    q3.metric("EV(R)", f"{safe_float(q.get('ev_r', 0.0)):+.2f}")
+                    q4.metric("R", f"{safe_float(q.get('r_multiple', 0.0)):.2f}")
+                    q5.metric("Data quality", f"{safe_float(q.get('data_quality_score', 0.0)):.0f}/100")
 
             st.markdown(
                 """
@@ -3973,6 +4629,33 @@ elif page == "Vue consolidee Multi-Agents":
 4. `Bas droite` (Risque > seuil dynamique, Reward < seuil dynamique): Zone de derisque. Reduction/sortie prioritaire sauf argument tactique fort.
 """
             )
+
+            with st.expander("Exemple concret de calcul R et EV(R)", expanded=False):
+                entry_ex = 100.0
+                stop_ex = 95.0
+                tp_ex = 112.0
+                pwin_ex = 0.55
+                risk_ex = (entry_ex - stop_ex) / entry_ex * 100.0
+                reward_ex = (tp_ex - entry_ex) / entry_ex * 100.0
+                r_ex = (tp_ex - entry_ex) / max(0.0001, entry_ex - stop_ex)
+                evr_ex = (pwin_ex * r_ex) - (1.0 - pwin_ex)
+                st.markdown(
+                    f"""
+- Entree = `{entry_ex:.2f}`, Stop = `{stop_ex:.2f}`, TP = `{tp_ex:.2f}`
+- Risk % = `(Entree-Stop)/Entree` = `{risk_ex:.2f}%`
+- Reward % = `(TP-Entree)/Entree` = `{reward_ex:.2f}%`
+- **R** = `(TP-Entree)/(Entree-Stop)` = `{r_ex:.2f}R`
+- Avec `p_win={pwin_ex*100:.1f}%`, **EV(R)** = `p_win x R - (1-p_win)` = `{evr_ex:+.2f}R`
+- Interpretation: EV(R) positif = avantage statistique, EV(R) negatif = setup defavorable.
+"""
+                )
+
+            st.markdown("#### Etat des donnees & fraicheur")
+            f1, f2, f3 = st.columns(3)
+            f1.metric("Couverture YF enrich", f"{safe_float(freshness_summary.get('enrichment_coverage_pct', 0.0)):.1f}%")
+            f2.metric("Options indispo", int(safe_float(freshness_summary.get("options_missing_count", 0.0))))
+            f3.metric("Invalid options state", int(safe_float(freshness_summary.get("invalid_options_state_count", 0.0))))
+            render_interactive_table(freshness_df, key_suffix="multi_agents_data_freshness", height=260)
 
             st.markdown("#### Sanity checks")
             qc1, qc2 = st.columns(2)
@@ -4073,6 +4756,39 @@ elif page == "Vue consolidee Multi-Agents":
                 key_suffix="multi_agents_matrix_global",
                 height=460,
             )
+            with st.expander("Dictionnaire des champs (metriques affichees)", expanded=False):
+                dict_metric_ids = [
+                    "total_values",
+                    "enter_count",
+                    "watch_count",
+                    "exit_count",
+                    "avg_ev_r",
+                    "grade_a_count",
+                    "rr_outliers",
+                    "low_data_quality",
+                    "options_missing",
+                    "invalid_options_state_count",
+                    "risk_score_u",
+                    "reward_score_u",
+                    "r_multiple",
+                    "r_multiple_raw",
+                    "ev_r",
+                    "p_win",
+                    "setup_grade",
+                    "matrix_action",
+                    "data_quality_score",
+                    "risk_threshold_dyn",
+                    "reward_threshold_dyn",
+                    "grade_a_threshold",
+                    "grade_b_threshold",
+                    "gate_summary",
+                    "spreadPct",
+                    "iv_atm",
+                    "days_to_next_earnings",
+                    "days_since_last_earnings",
+                ]
+                dict_df = _metrics_dictionary_df(dict_metric_ids)
+                render_interactive_table(dict_df, key_suffix="multi_agents_metrics_dictionary", height=380)
         else:
             avg_conv = float(consolidated["conviction_score"].mean()) if "conviction_score" in consolidated.columns else 0.0
             bullish = int(consolidated.get("tech_action", pd.Series(dtype=str)).astype(str).str.upper().eq("BUY").sum())
@@ -4185,6 +4901,13 @@ elif page == "Vue consolidee Multi-Agents":
             if not labels_filtered:
                 st.warning("Aucun resultat pour cette recherche. La liste complete est rechargee.")
                 labels_filtered = labels
+
+            jump_symbol = str(st.session_state.get("multi_agents_symbol_jump", "") or "").strip().upper()
+            if jump_symbol:
+                jump_label = next((lbl for lbl in labels_filtered if label_to_symbol.get(lbl, "") == jump_symbol), "")
+                if jump_label:
+                    st.session_state["multi_agents_symbol_last"] = jump_label
+                st.session_state["multi_agents_symbol_jump"] = ""
 
             previous_label = st.session_state.get("multi_agents_symbol_last", labels_filtered[0])
             if previous_label not in labels_filtered:
