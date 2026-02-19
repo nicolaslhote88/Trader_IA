@@ -1,631 +1,735 @@
 {
-  "name": "AG3-V2 - Fundamental Analyst (DuckDB-first)",
-  "nodes": [
-    {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "cronExpression",
-              "expression": "0 7 * * 1-5"
-            }
-          ]
-        }
-      },
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.3,
-      "position": [
-        -1424,
-        -224
-      ],
-      "id": "dcd6b2a3-cc74-4f03-8588-b8a24fe9908d",
-      "name": "Schedule Trigger"
-    },
-    {
-      "parameters": {},
-      "type": "n8n-nodes-base.manualTrigger",
-      "typeVersion": 1,
-      "position": [
-        -1424,
-        -64
-      ],
-      "id": "092be7cc-16e7-4904-8d73-bf0ae727f25a",
-      "name": "Manual Trigger"
-    },
-    {
-      "parameters": {
-        "jsCode": "function pad(n) {\n  return String(n).padStart(2, \"0\");\n}\n\nfunction isoDate(d) {\n  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;\n}\n\nconst now = new Date();\nconst ts = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;\nconst rand = Math.random().toString(16).slice(2, 8).toUpperCase();\n\nconst input = ($input.first() && $input.first().json) ? $input.first().json : {};\nconst maxSymbolsIn = Number(input.max_symbols);\n\nreturn [\n  {\n    json: {\n      run_id: `AG3V2_${ts}_${rand}`,\n      nowIso: now.toISOString(),\n      asOfDate: isoDate(now),\n      api_base: String(input.api_base || \"http://yfinance-api:8080\"),\n      db_path: String(input.db_path || \"/files/duckdb/ag3_v2.duckdb\"),\n      max_symbols: Number.isFinite(maxSymbolsIn) && maxSymbolsIn > 0 ? Math.floor(maxSymbolsIn) : 0,\n      only_enabled: true,\n      strategy_version: \"ag3_v2_fundamentals\",\n      config_version: \"ag3_v2_default\",\n    },\n  },\n];\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -1184,
-        -144
-      ],
-      "id": "013e013b-4655-4bdb-8f2b-66fdffb09e95",
-      "name": "AG3V2.00 - Init Context"
-    },
-    {
-      "parameters": {
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": "Universe",
-          "cachedResultName": "Universe",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        -960,
-        -144
-      ],
-      "id": "8e3a18ed-9e2d-43f1-8b12-a90ff3daa49f",
-      "name": "AG3V2.01 - Read Universe",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst out = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  out.push({\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      Symbol: symbol,\n      Name: name,\n      Sector: sector,\n      BoursoramaRef: boursoramaRef,\n      UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n    },\n  });\n}\n\nif (ctx.max_symbols && Number(ctx.max_symbols) > 0) {\n  return out.slice(0, Number(ctx.max_symbols));\n}\nreturn out;\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -736,
-        -144
-      ],
-      "id": "d7dc6bbd-c6b9-402f-b2da-21594941e731",
-      "name": "AG3V2.02 - Build Queue"
-    },
-    {
-      "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\nWORKFLOW_VERSION = \"2.1.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nfirst = items[0].get(\"json\", {}) if items else {}\nrun_id = str(first.get(\"run_id\") or f\"AG3V2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\")\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nschema_stmts = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      triage_rows INTEGER DEFAULT 0,\n      consensus_rows INTEGER DEFAULT 0,\n      metric_rows INTEGER DEFAULT 0,\n      snapshot_rows INTEGER DEFAULT 0,\n      vector_docs_written INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.1.0'\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (\n      snapshot_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      as_of_date DATE,\n      fetched_at TIMESTAMP,\n      status VARCHAR,\n      error VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      data_coverage_pct DOUBLE,\n      profile_json VARCHAR,\n      price_json VARCHAR,\n      valuation_json VARCHAR,\n      profitability_json VARCHAR,\n      growth_json VARCHAR,\n      financial_health_json VARCHAR,\n      consensus_json VARCHAR,\n      dividends_json VARCHAR,\n      vector_status VARCHAR DEFAULT 'PENDING',\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_triage_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      as_of_date DATE,\n      status VARCHAR,\n      error VARCHAR,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      score INTEGER,\n      funda_conf INTEGER,\n      risk_score INTEGER,\n      quality_score INTEGER,\n      growth_score INTEGER,\n      valuation_score INTEGER,\n      health_score INTEGER,\n      consensus_score INTEGER,\n      horizon VARCHAR,\n      current_price DOUBLE,\n      target_price DOUBLE,\n      upside_pct DOUBLE,\n      recommendation VARCHAR,\n      analyst_count INTEGER,\n      valuation VARCHAR,\n      why VARCHAR,\n      risks VARCHAR,\n      next_steps VARCHAR,\n      data_coverage_pct DOUBLE,\n      strategy_version VARCHAR,\n      config_version VARCHAR,\n      vector_status VARCHAR DEFAULT 'PENDING',\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS analyst_consensus_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      recommendation VARCHAR,\n      recommendation_mean DOUBLE,\n      analyst_count INTEGER,\n      current_price DOUBLE,\n      target_mean_price DOUBLE,\n      target_high_price DOUBLE,\n      target_low_price DOUBLE,\n      upside_pct DOUBLE,\n      dispersion_pct DOUBLE,\n      confidence_proxy INTEGER,\n      risk_proxy INTEGER,\n      source VARCHAR,\n      source_url VARCHAR,\n      status VARCHAR,\n      error VARCHAR,\n      horizon VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamental_metrics_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      extracted_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      boursorama_ref VARCHAR,\n      data_type VARCHAR,\n      section VARCHAR,\n      metric VARCHAR,\n      period VARCHAR,\n      value_num DOUBLE,\n      value_text VARCHAR,\n      unit VARCHAR,\n      source_url VARCHAR,\n      sig_hash VARCHAR,\n      title VARCHAR,\n      author VARCHAR,\n      excerpt VARCHAR,\n      raw_text VARCHAR,\n      signal VARCHAR,\n      score DOUBLE,\n      currency VARCHAR,\n      title_or_label VARCHAR,\n      notes VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_triage AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT t.*,\n             ROW_NUMBER() OVER (PARTITION BY t.symbol ORDER BY t.updated_at DESC, t.created_at DESC) AS rn\n      FROM fundamentals_triage_history t\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_consensus AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT c.*,\n             ROW_NUMBER() OVER (PARTITION BY c.symbol ORDER BY c.updated_at DESC, c.created_at DESC) AS rn\n      FROM analyst_consensus_history c\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"ALTER TABLE run_log ADD COLUMN IF NOT EXISTS vector_docs_written INTEGER DEFAULT 0\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n]\n\nwith db_con(db_path) as con:\n    for stmt in schema_stmts:\n        con.execute(stmt)\n\n    total = len(items)\n    if total == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, total, WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -512,
-        -144
-      ],
-      "id": "d75538b7-502e-463e-ad73-69b940339f2c",
-      "name": "AG3V2.02B - DuckDB Init Run"
-    },
-    {
-      "parameters": {
-        "options": {}
-      },
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [
-        -304,
-        -144
-      ],
-      "id": "b3f5f89f-7c85-49ad-907f-f715ea79754a",
-      "name": "AG3V2.03 - Split Symbols"
-    },
-    {
-      "parameters": {
-        "url": "={{$json.api_base}}/fundamentals",
-        "sendQuery": true,
-        "queryParameters": {
-          "parameters": [
-            {
-              "name": "symbol",
-              "value": "={{$json.Symbol}}"
-            }
-          ]
-        },
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        -80,
-        -256
-      ],
-      "id": "3208f39c-278d-4a0d-b3a6-c7f89f2e6f50",
-      "name": "AG3V2.04 - HTTP Fundamentals",
-      "retryOnFail": true,
-      "maxTries": 3,
-      "waitBetweenTries": 2000,
-      "continueOnFail": true,
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "mode": "combine",
-        "combineBy": "combineByPosition",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3.2,
-      "position": [
-        128,
-        -144
-      ],
-      "id": "045b4a91-afca-4c67-b1d9-03b7f0107f3a",
-      "name": "AG3V2.05 - Merge Queue + API"
-    },
-    {
-      "parameters": {
-        "jsCode": "const crypto = require(\"crypto\");\n\nfunction sha1(x) {\n  return crypto.createHash(\"sha1\").update(String(x || \"\"), \"utf8\").digest(\"hex\");\n}\n\nfunction num(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction text(v, maxLen = 4000) {\n  const s = String(v || \"\").replace(/\\s+/g, \" \").trim();\n  return s.slice(0, maxLen);\n}\n\nfunction clamp(v, lo = 0, hi = 100) {\n  if (!Number.isFinite(v)) return lo;\n  return Math.max(lo, Math.min(hi, v));\n}\n\nfunction pct(v) {\n  const n = num(v);\n  if (n === null) return null;\n  if (Math.abs(n) <= 1.5) return n * 100;\n  return n;\n}\n\nfunction scoreHigher(v, floor, ceil) {\n  if (v === null || v === undefined) return null;\n  if (v <= floor) return 0;\n  if (v >= ceil) return 100;\n  return Math.round(((v - floor) / (ceil - floor)) * 100);\n}\n\nfunction scoreLower(v, best, worst) {\n  if (v === null || v === undefined) return null;\n  if (v <= best) return 100;\n  if (v >= worst) return 0;\n  return Math.round((1 - (v - best) / (worst - best)) * 100);\n}\n\nfunction weighted(parts, fallback = 50) {\n  let acc = 0;\n  let wsum = 0;\n  for (const p of parts) {\n    if (!p || p.value === null || p.value === undefined) continue;\n    const w = Number.isFinite(p.weight) ? p.weight : 1;\n    acc += p.value * w;\n    wsum += w;\n  }\n  if (wsum <= 0) return fallback;\n  return Math.round(acc / wsum);\n}\n\nfunction priceFmt(v) {\n  const n = num(v);\n  if (n === null) return \"n/a\";\n  return String(Math.round(n * 100) / 100);\n}\n\nfunction obj(v) {\n  return v && typeof v === \"object\" && !Array.isArray(v) ? v : {};\n}\n\nreturn $input.all().map((item) => {\n  const j = item.json || {};\n  const nowIso = new Date().toISOString();\n\n  const runId = String(j.run_id || \"\").trim();\n  const asOfDate = String(j.asOfDate || nowIso.slice(0, 10));\n  const symbol = String(j.Symbol || j.symbol || \"\").trim().toUpperCase();\n  const boursoramaRef = String(j.BoursoramaRef || \"\").trim();\n\n  const ok = j.ok === true;\n  const err = text(j.error || \"\", 500);\n\n  const profile = obj(j.profile);\n  const price = obj(j.price);\n  const val = obj(j.valuation);\n  const prof = obj(j.profitability);\n  const growth = obj(j.growth);\n  const health = obj(j.financialHealth);\n  const cons = obj(j.consensus);\n  const meta = obj(j.meta);\n\n  const companyName = text(j.Name || profile.longName || profile.shortName || symbol, 200);\n  const sector = text(j.Sector || profile.sector || \"\", 120);\n  const industry = text(profile.industry || \"\", 120);\n  const country = text(profile.country || \"\", 80);\n  const currency = text(profile.currency || \"EUR\", 16);\n  const fetchedAt = text(j.fetchedAt || j.nowIso || nowIso, 64);\n\n  const currentPrice = num(price.currentPrice);\n  const marketCap = num(price.marketCap);\n  const beta = num(price.beta);\n  const debtToEquity = num(health.debtToEquity);\n  const currentRatio = num(health.currentRatio);\n  const quickRatio = num(health.quickRatio);\n  const freeCashflow = num(prof.freeCashflow);\n\n  const gm = pct(prof.grossMargins);\n  const om = pct(prof.operatingMargins);\n  const pm = pct(prof.profitMargins);\n  const roe = pct(prof.returnOnEquity);\n  const roa = pct(prof.returnOnAssets);\n\n  const rg = pct(growth.revenueGrowth);\n  const eg = pct(growth.earningsGrowth);\n  const eqg = pct(growth.earningsQuarterlyGrowth);\n\n  const trailingPE = num(val.trailingPE);\n  const forwardPE = num(val.forwardPE);\n  const peg = num(val.pegRatio);\n  const pb = num(val.priceToBook);\n\n  const recMean = num(cons.recommendationMean);\n  const analysts = num(cons.numberOfAnalystOpinions);\n  const targetMean = num(cons.targetMeanPrice);\n  const targetHigh = num(cons.targetHighPrice);\n  const targetLow = num(cons.targetLowPrice);\n  const upside = num(cons.upsidePctToTargetMean);\n\n  let fcfYield = null;\n  if (freeCashflow !== null && marketCap !== null && marketCap > 0) {\n    fcfYield = (freeCashflow / marketCap) * 100;\n  }\n\n  const qualityScore = weighted(\n    [\n      { value: scoreHigher(gm, 20, 65), weight: 1.0 },\n      { value: scoreHigher(om, 8, 30), weight: 1.2 },\n      { value: scoreHigher(pm, 5, 25), weight: 1.0 },\n      { value: scoreHigher(roe, 8, 25), weight: 1.2 },\n      { value: scoreHigher(roa, 2, 12), weight: 0.8 },\n    ],\n    50\n  );\n\n  const growthScore = weighted(\n    [\n      { value: scoreHigher(rg, -2, 15), weight: 1.0 },\n      { value: scoreHigher(eg, -5, 20), weight: 1.2 },\n      { value: scoreHigher(eqg, -10, 25), weight: 0.8 },\n    ],\n    50\n  );\n\n  const valuationScore = weighted(\n    [\n      { value: scoreLower(trailingPE, 10, 35), weight: 1.0 },\n      { value: scoreLower(forwardPE, 9, 30), weight: 1.0 },\n      { value: scoreLower(pb, 1.5, 8), weight: 0.7 },\n      { value: scoreLower(peg, 0.8, 2.5), weight: 1.0 },\n      { value: scoreHigher(upside, -5, 25), weight: 1.0 },\n    ],\n    50\n  );\n\n  const healthScore = weighted(\n    [\n      { value: scoreLower(debtToEquity, 30, 250), weight: 1.2 },\n      { value: scoreHigher(currentRatio, 0.8, 2.2), weight: 1.0 },\n      { value: scoreHigher(quickRatio, 0.7, 1.8), weight: 0.8 },\n      { value: scoreHigher(fcfYield, 2, 8), weight: 1.0 },\n    ],\n    50\n  );\n\n  let dispersionPct = null;\n  if (targetHigh !== null && targetLow !== null && targetMean !== null && targetMean > 0) {\n    dispersionPct = ((targetHigh - targetLow) / targetMean) * 100;\n  }\n\n  const consensusScore = weighted(\n    [\n      { value: scoreLower(recMean, 1.5, 4.2), weight: 1.2 },\n      { value: scoreHigher(analysts, 3, 20), weight: 0.8 },\n      { value: scoreHigher(upside, 0, 25), weight: 1.0 },\n      { value: scoreLower(dispersionPct, 10, 80), weight: 0.6 },\n    ],\n    50\n  );\n\n  const coverage = num(meta.dataCoveragePctApprox);\n\n  let triageScore = Math.round(\n    qualityScore * 0.32 +\n      growthScore * 0.2 +\n      valuationScore * 0.2 +\n      healthScore * 0.18 +\n      consensusScore * 0.1\n  );\n  if (coverage !== null && coverage < 35) triageScore -= 8;\n  if (!ok) triageScore = Math.min(triageScore, 40);\n  triageScore = clamp(triageScore);\n\n  let riskScore = Math.round(100 - (healthScore * 0.45 + qualityScore * 0.3 + consensusScore * 0.15 + (coverage !== null ? coverage : 50) * 0.1));\n  if (debtToEquity !== null && debtToEquity > 250) riskScore += 12;\n  if (currentRatio !== null && currentRatio < 1.0) riskScore += 8;\n  if (rg !== null && rg < 0) riskScore += 6;\n  if (eg !== null && eg < 0) riskScore += 6;\n  if (!ok) riskScore = Math.max(riskScore, 80);\n  riskScore = clamp(riskScore);\n\n  const bull = [];\n  if (qualityScore >= 65) bull.push(\"High quality profitability profile.\");\n  if (growthScore >= 60) bull.push(\"Revenue/earnings growth remains supportive.\");\n  if (valuationScore >= 60) bull.push(\"Valuation appears acceptable vs fundamentals.\");\n  if (consensusScore >= 60) bull.push(\"Analyst consensus and target imply upside.\");\n  if (fcfYield !== null && fcfYield > 4) bull.push(\"Free cash-flow yield is healthy.\");\n\n  const bear = [];\n  if (qualityScore < 45) bear.push(\"Weak quality metrics (margins/returns).\");\n  if (growthScore < 45) bear.push(\"Growth profile is soft or negative.\");\n  if (valuationScore < 40) bear.push(\"Valuation is stretched vs peers/risk.\");\n  if (debtToEquity !== null && debtToEquity > 220) bear.push(\"High leverage raises balance-sheet risk.\");\n  if (consensusScore < 45) bear.push(\"Sell-side sentiment is not supportive.\");\n  if (coverage !== null && coverage < 35) bear.push(\"Low data coverage lowers confidence.\");\n  if (!ok) bear.push(`Data provider issue: ${err || \"unknown error\"}.`);\n\n  let horizon = \"WATCH\";\n  if (triageScore >= 72 && riskScore <= 45) horizon = \"LONG_TERM\";\n  else if (triageScore >= 58 && riskScore <= 62) horizon = \"SWING\";\n\n  const basePx = targetMean !== null ? targetMean : currentPrice;\n  const bullPx = targetHigh !== null ? targetHigh : (basePx !== null ? basePx * 1.15 : null);\n  const bearPx = targetLow !== null ? targetLow : (basePx !== null ? basePx * 0.85 : null);\n  const valuationText = `Bear: ~${priceFmt(bearPx)} | Base: ~${priceFmt(basePx)} | Bull: ~${priceFmt(bullPx)} ${currency}`.trim();\n\n  const why = `Quality ${qualityScore}/100, Growth ${growthScore}/100, Valuation ${valuationScore}/100, Financial health ${healthScore}/100, Consensus ${consensusScore}/100. Bull case: ${bull.length ? bull.join(\" \") : \"No strong fundamental edge detected.\"}`;\n  const risks = `Bear case: ${bear.length ? bear.join(\" \") : \"No major red flag in available data.\"}`;\n\n  const nextSteps = [\n    coverage !== null && coverage < 45 ? \"Backfill missing fundamentals before sizing aggressively.\" : \"\",\n    analysts !== null && analysts < 3 ? \"Consensus depth is limited; confirm with additional sources.\" : \"\",\n    horizon === \"WATCH\" ? \"Wait for next earnings/news catalyst before action.\" : \"\",\n  ]\n    .filter(Boolean)\n    .join(\" | \");\n\n  const sourceUrl = symbol ? `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}` : \"\";\n  const triageRecordId = sha1(`${runId}|triage|${symbol}`);\n  const consensusRecordId = sha1(`${runId}|consensus|${symbol}`);\n\n  const triageRow = {\n    RecordId: triageRecordId,\n    RunId: runId,\n    UpdatedAt: nowIso,\n    fetchedAt: fetchedAt,\n    AsOfDate: asOfDate,\n    Status: ok ? \"OK\" : \"ERR_SOURCE\",\n    Error: err || null,\n    Symbol: symbol,\n    Name: companyName,\n    Sector: sector,\n    Industry: industry,\n    Country: country,\n    BoursoramaRef: boursoramaRef,\n    Source: \"yfinance_api\",\n    SourceUrl: sourceUrl,\n    Score: triageScore,\n    funda_conf: triageScore,\n    risk_score: riskScore,\n    quality_score: qualityScore,\n    growth_score: growthScore,\n    valuation_score: valuationScore,\n    health_score: healthScore,\n    consensus_score: consensusScore,\n    horizon: horizon,\n    current_price: currentPrice,\n    target_price: targetMean,\n    upside_pct: upside,\n    recommendation: text(cons.recommendationKey || \"\", 64),\n    analyst_count: analysts,\n    valuation: valuationText,\n    why: text(why, 3000),\n    risks: text(risks, 3000),\n    nextSteps: text(nextSteps, 1500),\n    data_coverage_pct: coverage,\n    strategy_version: String(j.strategy_version || \"ag3_v2_fundamentals\"),\n    config_version: String(j.config_version || \"ag3_v2_default\"),\n  };\n\n  const consensusRow = {\n    RecordId: consensusRecordId,\n    RunId: runId,\n    UpdatedAt: nowIso,\n    AsOfDate: asOfDate,\n    Symbol: symbol,\n    Name: companyName,\n    Sector: sector,\n    recommendation: text(cons.recommendationKey || \"\", 64),\n    recommendationMean: recMean,\n    analystCount: analysts,\n    currentPrice: currentPrice,\n    targetMeanPrice: targetMean,\n    targetHighPrice: targetHigh,\n    targetLowPrice: targetLow,\n    upsidePct: upside,\n    dispersionPct: dispersionPct,\n    confidenceProxy: triageScore,\n    riskProxy: riskScore,\n    Source: \"yfinance_api\",\n    SourceUrl: sourceUrl,\n    Status: ok ? \"OK\" : \"ERR_SOURCE\",\n    Error: err || null,\n    horizon: horizon,\n  };\n\n  function metricRow(section, metric, value, unit = null, notes = null) {\n    if (value === null || value === undefined || value === \"\") return null;\n    const rid = sha1(`${runId}|metric|${symbol}|${section}|${metric}|${asOfDate}`);\n    return {\n      Symbol: symbol,\n      RecordId: rid,\n      BoursoramaRef: boursoramaRef || null,\n      DataType: \"metric\",\n      Section: section,\n      Metric: metric,\n      Period: null,\n      Value: value,\n      Unit: unit,\n      AsOfDate: asOfDate,\n      SourceUrl: sourceUrl,\n      ExtractedAt: nowIso,\n      RunId: runId,\n      SigHash: sha1(`${metric}|${String(value)}`),\n      Title: null,\n      Author: null,\n      Excerpt: null,\n      RawText: null,\n      Signal: null,\n      Score: null,\n      Currency: currency,\n      TitleOrLabel: null,\n      Notes: notes,\n    };\n  }\n\n  const metricRows = [\n    metricRow(\"scores\", \"triage_score\", triageScore, \"/100\"),\n    metricRow(\"scores\", \"risk_score\", riskScore, \"/100\"),\n    metricRow(\"scores\", \"quality_score\", qualityScore, \"/100\"),\n    metricRow(\"scores\", \"growth_score\", growthScore, \"/100\"),\n    metricRow(\"scores\", \"valuation_score\", valuationScore, \"/100\"),\n    metricRow(\"scores\", \"health_score\", healthScore, \"/100\"),\n    metricRow(\"scores\", \"consensus_score\", consensusScore, \"/100\"),\n    metricRow(\"price\", \"current_price\", currentPrice, currency),\n    metricRow(\"price\", \"market_cap\", marketCap, currency),\n    metricRow(\"price\", \"beta\", beta, null),\n    metricRow(\"valuation\", \"trailing_pe\", trailingPE, \"x\"),\n    metricRow(\"valuation\", \"forward_pe\", forwardPE, \"x\"),\n    metricRow(\"valuation\", \"peg_ratio\", peg, \"x\"),\n    metricRow(\"valuation\", \"price_to_book\", pb, \"x\"),\n    metricRow(\"profitability\", \"gross_margin_pct\", gm, \"%\"),\n    metricRow(\"profitability\", \"operating_margin_pct\", om, \"%\"),\n    metricRow(\"profitability\", \"profit_margin_pct\", pm, \"%\"),\n    metricRow(\"profitability\", \"roe_pct\", roe, \"%\"),\n    metricRow(\"profitability\", \"roa_pct\", roa, \"%\"),\n    metricRow(\"growth\", \"revenue_growth_pct\", rg, \"%\"),\n    metricRow(\"growth\", \"earnings_growth_pct\", eg, \"%\"),\n    metricRow(\"growth\", \"earnings_q_growth_pct\", eqg, \"%\"),\n    metricRow(\"health\", \"debt_to_equity\", debtToEquity, \"x\"),\n    metricRow(\"health\", \"current_ratio\", currentRatio, \"x\"),\n    metricRow(\"health\", \"quick_ratio\", quickRatio, \"x\"),\n    metricRow(\"health\", \"fcf_yield_pct\", fcfYield, \"%\"),\n    metricRow(\"consensus\", \"target_mean_price\", targetMean, currency),\n    metricRow(\"consensus\", \"target_high_price\", targetHigh, currency),\n    metricRow(\"consensus\", \"target_low_price\", targetLow, currency),\n    metricRow(\"consensus\", \"upside_pct\", upside, \"%\"),\n    metricRow(\"consensus\", \"recommendation_mean\", recMean, \"score\"),\n    metricRow(\"consensus\", \"analyst_count\", analysts, \"count\"),\n  ].filter(Boolean);\n\n  return {\n    json: {\n      ...j,\n      triageRow,\n      consensusRow,\n      metricRows,\n    },\n  };\n});\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        336,
-        -144
-      ],
-      "id": "f21995ee-8c01-43dc-b90a-fcf877539f61",
-      "name": "AG3V2.06 - Score Fundamentals"
-    },
-    {
-      "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb, time, gc, json, hashlib\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return None\n    s = str(v).strip()\n    return s if s else None\n\n\ndef to_float(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        return float(v)\n    except Exception:\n        return None\n\n\ndef to_int(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        return int(round(float(v)))\n    except Exception:\n        return None\n\n\ndef to_json(v):\n    try:\n        if v is None:\n            return None\n        return json.dumps(v, ensure_ascii=False)\n    except Exception:\n        return None\n\n\nitems = _items or []\nif not items:\n    return []\n\nfirst = items[0].get(\"json\", {}) or {}\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for it in items:\n        j = it.get(\"json\", {}) or {}\n        run_id = str(j.get(\"run_id\", \"\") or \"\").strip()\n        symbol = str(j.get(\"Symbol\") or j.get(\"symbol\") or \"\").strip().upper()\n        if not run_id or not symbol:\n            continue\n\n        triage = j.get(\"triageRow\", {}) or {}\n        consensus = j.get(\"consensusRow\", {}) or {}\n        metric_rows = j.get(\"metricRows\", []) or []\n\n        status = str((triage.get(\"Status\") if triage else j.get(\"ok\")) or \"\").strip()\n        if status in (\"True\", \"true\", \"1\"):\n            status = \"OK\"\n        if not status:\n            status = \"OK\" if j.get(\"ok\") is True else \"ERR_SOURCE\"\n\n        error_txt = to_text(triage.get(\"Error\") if triage else j.get(\"error\"))\n        as_of = to_text((triage.get(\"AsOfDate\") if triage else j.get(\"asOfDate\")) or j.get(\"as_of_date\"))\n        fetched = to_text((triage.get(\"fetchedAt\") if triage else j.get(\"fetchedAt\")) or j.get(\"nowIso\"))\n\n        snapshot_seed = f\"{run_id}|{symbol}|{as_of or ''}\"\n        snapshot_id = hashlib.sha1(snapshot_seed.encode(\"utf-8\")).hexdigest()\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO fundamentals_snapshot (\n              snapshot_id, run_id, symbol, name, sector, industry, country, boursorama_ref,\n              as_of_date, fetched_at, status, error, source, source_url, data_coverage_pct,\n              profile_json, price_json, valuation_json, profitability_json, growth_json,\n              financial_health_json, consensus_json, dividends_json, updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                snapshot_id,\n                run_id,\n                symbol,\n                to_text(triage.get(\"Name\") if triage else j.get(\"Name\")),\n                to_text(triage.get(\"Sector\") if triage else j.get(\"Sector\")),\n                to_text(triage.get(\"Industry\") if triage else (j.get(\"profile\") or {}).get(\"industry\")),\n                to_text(triage.get(\"Country\") if triage else (j.get(\"profile\") or {}).get(\"country\")),\n                to_text(triage.get(\"BoursoramaRef\") if triage else j.get(\"BoursoramaRef\")),\n                as_of,\n                fetched,\n                status,\n                error_txt,\n                to_text(triage.get(\"Source\") if triage else j.get(\"source\")) or \"yfinance_api\",\n                to_text(triage.get(\"SourceUrl\") if triage else j.get(\"sourceUrl\")),\n                to_float(triage.get(\"data_coverage_pct\") if triage else (j.get(\"meta\") or {}).get(\"dataCoveragePctApprox\")),\n                to_json(j.get(\"profile\")),\n                to_json(j.get(\"price\")),\n                to_json(j.get(\"valuation\")),\n                to_json(j.get(\"profitability\")),\n                to_json(j.get(\"growth\")),\n                to_json(j.get(\"financialHealth\")),\n                to_json(j.get(\"consensus\")),\n                to_json(j.get(\"dividends\")),\n            ],\n        )\n\n        if triage and triage.get(\"RecordId\"):\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO fundamentals_triage_history (\n                  record_id, run_id, updated_at, fetched_at, as_of_date, status, error,\n                  symbol, name, sector, industry, country, boursorama_ref, source, source_url,\n                  score, funda_conf, risk_score, quality_score, growth_score, valuation_score,\n                  health_score, consensus_score, horizon, current_price, target_price, upside_pct,\n                  recommendation, analyst_count, valuation, why, risks, next_steps,\n                  data_coverage_pct, strategy_version, config_version, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    to_text(triage.get(\"RecordId\")),\n                    run_id,\n                    to_text(triage.get(\"UpdatedAt\")),\n                    to_text(triage.get(\"fetchedAt\")),\n                    to_text(triage.get(\"AsOfDate\")),\n                    to_text(triage.get(\"Status\")),\n                    to_text(triage.get(\"Error\")),\n                    to_text(triage.get(\"Symbol\")) or symbol,\n                    to_text(triage.get(\"Name\")),\n                    to_text(triage.get(\"Sector\")),\n                    to_text(triage.get(\"Industry\")),\n                    to_text(triage.get(\"Country\")),\n                    to_text(triage.get(\"BoursoramaRef\")),\n                    to_text(triage.get(\"Source\")),\n                    to_text(triage.get(\"SourceUrl\")),\n                    to_int(triage.get(\"Score\")),\n                    to_int(triage.get(\"funda_conf\")),\n                    to_int(triage.get(\"risk_score\")),\n                    to_int(triage.get(\"quality_score\")),\n                    to_int(triage.get(\"growth_score\")),\n                    to_int(triage.get(\"valuation_score\")),\n                    to_int(triage.get(\"health_score\")),\n                    to_int(triage.get(\"consensus_score\")),\n                    to_text(triage.get(\"horizon\")),\n                    to_float(triage.get(\"current_price\")),\n                    to_float(triage.get(\"target_price\")),\n                    to_float(triage.get(\"upside_pct\")),\n                    to_text(triage.get(\"recommendation\")),\n                    to_int(triage.get(\"analyst_count\")),\n                    to_text(triage.get(\"valuation\")),\n                    to_text(triage.get(\"why\")),\n                    to_text(triage.get(\"risks\")),\n                    to_text(triage.get(\"nextSteps\")),\n                    to_float(triage.get(\"data_coverage_pct\")),\n                    to_text(triage.get(\"strategy_version\")),\n                    to_text(triage.get(\"config_version\")),\n                ],\n            )\n\n        if consensus and consensus.get(\"RecordId\"):\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO analyst_consensus_history (\n                  record_id, run_id, updated_at, as_of_date, symbol, name, sector, recommendation,\n                  recommendation_mean, analyst_count, current_price, target_mean_price, target_high_price,\n                  target_low_price, upside_pct, dispersion_pct, confidence_proxy, risk_proxy,\n                  source, source_url, status, error, horizon, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    to_text(consensus.get(\"RecordId\")),\n                    run_id,\n                    to_text(consensus.get(\"UpdatedAt\")),\n                    to_text(consensus.get(\"AsOfDate\")),\n                    to_text(consensus.get(\"Symbol\")) or symbol,\n                    to_text(consensus.get(\"Name\")),\n                    to_text(consensus.get(\"Sector\")),\n                    to_text(consensus.get(\"recommendation\")),\n                    to_float(consensus.get(\"recommendationMean\")),\n                    to_int(consensus.get(\"analystCount\")),\n                    to_float(consensus.get(\"currentPrice\")),\n                    to_float(consensus.get(\"targetMeanPrice\")),\n                    to_float(consensus.get(\"targetHighPrice\")),\n                    to_float(consensus.get(\"targetLowPrice\")),\n                    to_float(consensus.get(\"upsidePct\")),\n                    to_float(consensus.get(\"dispersionPct\")),\n                    to_int(consensus.get(\"confidenceProxy\")),\n                    to_int(consensus.get(\"riskProxy\")),\n                    to_text(consensus.get(\"Source\")),\n                    to_text(consensus.get(\"SourceUrl\")),\n                    to_text(consensus.get(\"Status\")),\n                    to_text(consensus.get(\"Error\")),\n                    to_text(consensus.get(\"horizon\")),\n                ],\n            )\n\n        for m in metric_rows:\n            rid = to_text(m.get(\"RecordId\"))\n            if not rid:\n                continue\n            raw_val = m.get(\"Value\")\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO fundamental_metrics_history (\n                  record_id, run_id, extracted_at, as_of_date, symbol, boursorama_ref, data_type,\n                  section, metric, period, value_num, value_text, unit, source_url, sig_hash,\n                  title, author, excerpt, raw_text, signal, score, currency, title_or_label, notes, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    rid,\n                    run_id,\n                    to_text(m.get(\"ExtractedAt\")),\n                    to_text(m.get(\"AsOfDate\")),\n                    to_text(m.get(\"Symbol\")) or symbol,\n                    to_text(m.get(\"BoursoramaRef\")),\n                    to_text(m.get(\"DataType\")),\n                    to_text(m.get(\"Section\")),\n                    to_text(m.get(\"Metric\")),\n                    to_text(m.get(\"Period\")),\n                    to_float(raw_val),\n                    to_text(raw_val),\n                    to_text(m.get(\"Unit\")),\n                    to_text(m.get(\"SourceUrl\")),\n                    to_text(m.get(\"SigHash\")),\n                    to_text(m.get(\"Title\")),\n                    to_text(m.get(\"Author\")),\n                    to_text(m.get(\"Excerpt\")),\n                    to_text(m.get(\"RawText\")),\n                    to_text(m.get(\"Signal\")),\n                    to_float(m.get(\"Score\")),\n                    to_text(m.get(\"Currency\")),\n                    to_text(m.get(\"TitleOrLabel\")),\n                    to_text(m.get(\"Notes\")),\n                ],\n            )\n\nreturn items\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        560,
-        -144
-      ],
-      "id": "568aee73-8511-4db6-885d-f90e85dc7ca8",
-      "name": "AG3V2.07 - Write Fundamentals DuckDB"
-    },
-    {
-      "parameters": {
-        "amount": 0.4,
-        "unit": "seconds"
-      },
-      "type": "n8n-nodes-base.wait",
-      "typeVersion": 1.1,
-      "position": [
-        768,
-        -144
-      ],
-      "id": "51f057cb-5dcb-4bc9-95a7-a8161eb45f7b",
-      "name": "AG3V2.08 - Wait Rate Limit"
-    },
-    {
-      "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\") or \"\").strip()\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\"SELECT run_id FROM run_log WHERE status='RUNNING' ORDER BY started_at DESC LIMIT 1\").fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\", \"run_id\": \"\", \"db_path\": db_path}}]\n\n    r = con.execute(\"SELECT COALESCE(symbols_total, 0) FROM run_log WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_total = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_snapshot WHERE run_id = ?\", [run_id]).fetchone()\n    snapshot_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_snapshot WHERE run_id = ? AND status = 'OK'\", [run_id]).fetchone()\n    symbols_ok = int(r[0]) if r else 0\n    symbols_error = max(snapshot_rows - symbols_ok, 0)\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_triage_history WHERE run_id = ?\", [run_id]).fetchone()\n    triage_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM analyst_consensus_history WHERE run_id = ?\", [run_id]).fetchone()\n    consensus_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamental_metrics_history WHERE run_id = ?\", [run_id]).fetchone()\n    metric_rows = int(r[0]) if r else 0\n\n    if symbols_total == 0:\n        status = \"NO_DATA\"\n    elif symbols_ok == symbols_total and symbols_total > 0:\n        status = \"SUCCESS\"\n    elif symbols_ok > 0:\n        status = \"PARTIAL\"\n    else:\n        status = \"FAILED\"\n\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            status = ?,\n            symbols_ok = ?,\n            symbols_error = ?,\n            triage_rows = ?,\n            consensus_rows = ?,\n            metric_rows = ?,\n            snapshot_rows = ?,\n            error_detail = ?\n        WHERE run_id = ?\n        \"\"\",\n        [status, symbols_ok, symbols_error, triage_rows, consensus_rows, metric_rows, snapshot_rows, None, run_id],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"db_path\": db_path,\n            \"status\": status,\n            \"symbols_total\": symbols_total,\n            \"symbols_ok\": symbols_ok,\n            \"symbols_error\": symbols_error,\n            \"triage_rows\": triage_rows,\n            \"consensus_rows\": consensus_rows,\n            \"metric_rows\": metric_rows,\n            \"snapshot_rows\": snapshot_rows,\n        }\n    }\n]\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -80,
-        64
-      ],
-      "id": "1a4ac7a0-e2ac-4eb0-bbc5-eb33f2533204",
-      "name": "AG3V2.09 - Finalize Run"
-    },
-    {
-      "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb, json, time, gc, re\nfrom contextlib import contextmanager\nfrom datetime import date, datetime\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\ndef sanitize_id(value):\n    value = to_text(value)\n    return re.sub(r\"[^a-zA-Z0-9_-]\", \"_\", value)\n\n\ndef pick_run_id(items):\n    for it in items:\n        d = it.get(\"json\", {}) or {}\n        rid = to_text(d.get(\"run_id\"))\n        if rid:\n            return rid\n    return \"\"\n\n\ndef pick_db_path(items):\n    for it in items:\n        d = it.get(\"json\", {}) or {}\n        p = to_text(d.get(\"db_path\"))\n        if p:\n            return p\n    return DEFAULT_DB_PATH\n\n\ndef json_default(v):\n    if isinstance(v, (datetime, date)):\n        return v.isoformat()\n    return str(v)\n\n\ndef fmt_num(v, digits=2):\n    if v is None:\n        return \"n/a\"\n    try:\n        return f\"{float(v):.{digits}f}\"\n    except Exception:\n        return to_text(v) or \"n/a\"\n\n\ndef add_line(lines, value):\n    s = to_text(value)\n    if s:\n        lines.append(s)\n\n\ndef build_metrics_by_symbol(con, run_id):\n    rows = con.execute(\n        \"\"\"\n        SELECT symbol, section, metric, value_num, value_text, unit\n        FROM fundamental_metrics_history\n        WHERE run_id = ?\n        ORDER BY symbol, section, metric\n        \"\"\",\n        [run_id],\n    ).fetchall()\n\n    by_symbol = {}\n    for symbol, section, metric, value_num, value_text, unit in rows:\n        sym = to_text(symbol).upper()\n        if not sym:\n            continue\n        sec = to_text(section) or \"other\"\n        met = to_text(metric) or \"metric\"\n        value = value_num if value_num is not None else value_text\n        unit_txt = to_text(unit)\n        by_symbol.setdefault(sym, {}).setdefault(sec, []).append(\n            {\"metric\": met, \"value\": value, \"unit\": unit_txt}\n        )\n    return by_symbol\n\n\ndef render_vector_text(payload):\n    lines = []\n\n    add_line(lines, f\"[ENTITY] {payload.get('symbol')} ({payload.get('name') or payload.get('symbol')})\")\n    add_line(lines, f\"[RUN] {payload.get('run_id')} | [ASOF] {payload.get('as_of_date')}\")\n    add_line(lines, f\"[STATUS] {payload.get('status')} | horizon={payload.get('horizon')}\")\n    add_line(lines, \"\")\n\n    add_line(lines, \"[SCORES]\")\n    add_line(\n        lines,\n        \"triage={}/100 risk={}/100 quality={}/100 growth={}/100 valuation={}/100 health={}/100 consensus={}/100\".format(\n            payload.get(\"score\"),\n            payload.get(\"risk_score\"),\n            payload.get(\"quality_score\"),\n            payload.get(\"growth_score\"),\n            payload.get(\"valuation_score\"),\n            payload.get(\"health_score\"),\n            payload.get(\"consensus_score\"),\n        ),\n    )\n    add_line(lines, \"\")\n\n    add_line(lines, \"[THESIS]\")\n    add_line(lines, f\"why={payload.get('why')}\")\n    add_line(lines, f\"risks={payload.get('risks')}\")\n    add_line(lines, f\"next_steps={payload.get('next_steps')}\")\n    add_line(lines, \"\")\n\n    add_line(lines, \"[VALUATION]\")\n    add_line(\n        lines,\n        \"current_price={} target_price={} upside_pct={} analyst_count={} recommendation={}\".format(\n            fmt_num(payload.get(\"current_price\")),\n            fmt_num(payload.get(\"target_price\")),\n            fmt_num(payload.get(\"upside_pct\")),\n            payload.get(\"analyst_count\"),\n            payload.get(\"recommendation\"),\n        ),\n    )\n    add_line(lines, f\"scenario={payload.get('valuation')}\")\n    add_line(lines, \"\")\n\n    add_line(lines, \"[CONSENSUS]\")\n    add_line(\n        lines,\n        \"recommendation_mean={} target_low={} target_high={} dispersion_pct={}\".format(\n            fmt_num(payload.get(\"recommendation_mean\")),\n            fmt_num(payload.get(\"target_low_price\")),\n            fmt_num(payload.get(\"target_high_price\")),\n            fmt_num(payload.get(\"dispersion_pct\")),\n        ),\n    )\n    add_line(lines, \"\")\n\n    metrics = payload.get(\"metrics_by_section\") or {}\n    if metrics:\n        add_line(lines, \"[METRICS]\")\n        for section in sorted(metrics.keys()):\n            entries = metrics.get(section) or []\n            if not entries:\n                continue\n            rendered = []\n            for entry in entries[:12]:\n                metric = to_text(entry.get(\"metric\"))\n                value = entry.get(\"value\")\n                unit = to_text(entry.get(\"unit\"))\n                if value is None:\n                    continue\n                vv = fmt_num(value)\n                rendered.append(f\"{metric}:{vv}{unit}\")\n            if rendered:\n                add_line(lines, f\"{section} => \" + \", \".join(rendered))\n\n    return \"\\n\".join(lines).strip()\n\n\nitems = _items or []\nrun_id = pick_run_id(items)\ndb_path = pick_db_path(items)\n\nwith db_con(db_path) as con:\n    if not run_id:\n        row = con.execute(\n            \"SELECT run_id FROM run_log ORDER BY started_at DESC LIMIT 1\"\n        ).fetchone()\n        run_id = to_text(row[0]) if row else \"\"\n\n    if not run_id:\n        return []\n\n    rows = con.execute(\n        \"\"\"\n        SELECT\n          t.record_id,\n          t.run_id,\n          t.symbol,\n          t.name,\n          t.sector,\n          t.industry,\n          t.country,\n          t.status,\n          t.error,\n          t.as_of_date,\n          t.horizon,\n          t.score,\n          t.risk_score,\n          t.quality_score,\n          t.growth_score,\n          t.valuation_score,\n          t.health_score,\n          t.consensus_score,\n          t.current_price,\n          t.target_price,\n          t.upside_pct,\n          t.analyst_count,\n          t.recommendation,\n          t.valuation,\n          t.why,\n          t.risks,\n          t.next_steps,\n          t.data_coverage_pct,\n          t.strategy_version,\n          t.config_version,\n          c.recommendation_mean,\n          c.target_low_price,\n          c.target_high_price,\n          c.dispersion_pct\n        FROM fundamentals_triage_history t\n        LEFT JOIN analyst_consensus_history c\n          ON c.run_id = t.run_id AND c.symbol = t.symbol\n        WHERE t.run_id = ?\n        ORDER BY t.symbol\n        \"\"\",\n        [run_id],\n    ).fetchall()\n    cols = [d[0] for d in con.description]\n    metrics_by_symbol = build_metrics_by_symbol(con, run_id)\n\nout = []\nfor tup in rows:\n    row = dict(zip(cols, tup))\n    symbol = to_text(row.get(\"symbol\")).upper()\n    if not symbol:\n        continue\n\n    payload = {\n        \"schema_version\": \"ag3_vector_fundamentals_v1\",\n        \"record_id\": to_text(row.get(\"record_id\")),\n        \"run_id\": to_text(row.get(\"run_id\")),\n        \"symbol\": symbol,\n        \"name\": to_text(row.get(\"name\")),\n        \"sector\": to_text(row.get(\"sector\")),\n        \"industry\": to_text(row.get(\"industry\")),\n        \"country\": to_text(row.get(\"country\")),\n        \"status\": to_text(row.get(\"status\")),\n        \"error\": to_text(row.get(\"error\")),\n        \"as_of_date\": to_text(row.get(\"as_of_date\")),\n        \"horizon\": to_text(row.get(\"horizon\")),\n        \"score\": row.get(\"score\"),\n        \"risk_score\": row.get(\"risk_score\"),\n        \"quality_score\": row.get(\"quality_score\"),\n        \"growth_score\": row.get(\"growth_score\"),\n        \"valuation_score\": row.get(\"valuation_score\"),\n        \"health_score\": row.get(\"health_score\"),\n        \"consensus_score\": row.get(\"consensus_score\"),\n        \"current_price\": row.get(\"current_price\"),\n        \"target_price\": row.get(\"target_price\"),\n        \"upside_pct\": row.get(\"upside_pct\"),\n        \"analyst_count\": row.get(\"analyst_count\"),\n        \"recommendation\": to_text(row.get(\"recommendation\")),\n        \"valuation\": to_text(row.get(\"valuation\")),\n        \"why\": to_text(row.get(\"why\")),\n        \"risks\": to_text(row.get(\"risks\")),\n        \"next_steps\": to_text(row.get(\"next_steps\")),\n        \"data_coverage_pct\": row.get(\"data_coverage_pct\"),\n        \"strategy_version\": to_text(row.get(\"strategy_version\")),\n        \"config_version\": to_text(row.get(\"config_version\")),\n        \"recommendation_mean\": row.get(\"recommendation_mean\"),\n        \"target_low_price\": row.get(\"target_low_price\"),\n        \"target_high_price\": row.get(\"target_high_price\"),\n        \"dispersion_pct\": row.get(\"dispersion_pct\"),\n        \"metrics_by_section\": metrics_by_symbol.get(symbol, {}),\n    }\n\n    vector_text = render_vector_text(payload)\n    point_id = sanitize_id(payload.get(\"record_id\") or f\"{payload.get('run_id')}|{symbol}\")\n    metadata = {\n        \"id\": point_id,\n        \"record_id\": payload.get(\"record_id\"),\n        \"run_id\": payload.get(\"run_id\"),\n        \"symbol\": symbol,\n        \"name\": payload.get(\"name\"),\n        \"sector\": payload.get(\"sector\"),\n        \"status\": payload.get(\"status\"),\n        \"horizon\": payload.get(\"horizon\"),\n        \"score\": payload.get(\"score\"),\n        \"risk_score\": payload.get(\"risk_score\"),\n        \"valuation_score\": payload.get(\"valuation_score\"),\n        \"quality_score\": payload.get(\"quality_score\"),\n        \"health_score\": payload.get(\"health_score\"),\n        \"consensus_score\": payload.get(\"consensus_score\"),\n        \"upside_pct\": payload.get(\"upside_pct\"),\n        \"recommendation\": payload.get(\"recommendation\"),\n        \"analyst_count\": payload.get(\"analyst_count\"),\n        \"data_coverage_pct\": payload.get(\"data_coverage_pct\"),\n        \"as_of_date\": payload.get(\"as_of_date\"),\n        \"strategy_version\": payload.get(\"strategy_version\"),\n        \"config_version\": payload.get(\"config_version\"),\n        \"db_path\": db_path,\n        \"payload_json\": json.dumps(payload, ensure_ascii=False, default=json_default),\n    }\n\n    out.append({\"json\": {\"text\": vector_text, \"metadata\": metadata}})\n\nreturn out\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        128,
-        64
-      ],
-      "id": "5e6f56d1-1210-4ab7-9fec-f3aa5ec2f0e6",
-      "name": "AG3V2.10 - Build Vector Docs from DuckDB",
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "options": {
-          "dimensions": 1536
-        }
-      },
-      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
-      "typeVersion": 1.2,
-      "position": [
-        560,
-        -48
-      ],
-      "id": "0f4c4e5d-c8c7-41d9-a615-c2bfd2f6f7ba",
-      "name": "Embeddings OpenAI",
-      "credentials": {
-        "openAiApi": {
-          "id": "rILpYjTayqc4jXXZ",
-          "name": "OpenAi account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "chunkSize": 30000,
-        "chunkOverlap": 200,
-        "options": {}
-      },
-      "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
-      "typeVersion": 1,
-      "position": [
-        560,
-        224
-      ],
-      "id": "84fe2d6f-40f9-4b25-ab4e-3073958e359f",
-      "name": "Text Splitter"
-    },
-    {
-      "parameters": {
-        "jsonMode": "expressionData",
-        "jsonData": "={{ $json.text }}\n",
-        "options": {
-          "metadata": {
-            "metadataValues": [
-              {
-                "name": "id",
-                "value": "={{ $json.metadata.id }}"
-              },
-              {
-                "name": "record_id",
-                "value": "={{ $json.metadata.record_id }}"
-              },
-              {
-                "name": "symbol",
-                "value": "={{ $json.metadata.symbol }}"
-              },
-              {
-                "name": "name",
-                "value": "={{ $json.metadata.name }}"
-              },
-              {
-                "name": "run_id",
-                "value": "={{ $json.metadata.run_id }}"
-              },
-              {
-                "name": "status",
-                "value": "={{ $json.metadata.status }}"
-              },
-              {
-                "name": "horizon",
-                "value": "={{ $json.metadata.horizon }}"
-              },
-              {
-                "name": "score",
-                "value": "={{ $json.metadata.score }}"
-              },
-              {
-                "name": "risk_score",
-                "value": "={{ $json.metadata.risk_score }}"
-              },
-              {
-                "name": "upside_pct",
-                "value": "={{ $json.metadata.upside_pct }}"
-              },
-              {
-                "name": "recommendation",
-                "value": "={{ $json.metadata.recommendation }}"
-              },
-              {
-                "name": "analyst_count",
-                "value": "={{ $json.metadata.analyst_count }}"
-              },
-              {
-                "name": "data_coverage_pct",
-                "value": "={{ $json.metadata.data_coverage_pct }}"
-              },
-              {
-                "name": "as_of_date",
-                "value": "={{ $json.metadata.as_of_date }}"
-              },
-              {
-                "name": "db_path",
-                "value": "={{ $json.metadata.db_path }}"
-              }
-            ]
-          }
-        }
-      },
-      "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
-      "typeVersion": 1,
-      "position": [
-        560,
-        416
-      ],
-      "id": "cb9b0d2b-9562-4e10-91f8-505eb3b39176",
-      "name": "Default Data Loader"
-    },
-    {
-      "parameters": {
-        "mode": "insert",
-        "qdrantCollection": {
-          "__rl": true,
-          "mode": "list",
-          "value": "fundamental_analysis"
-        },
-        "options": {
-          "collectionConfig": {
-            "similarity": "Cosine"
-          }
-        }
-      },
-      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
-      "typeVersion": 1.1,
-      "position": [
-        784,
-        64
-      ],
-      "id": "2b96ab39-6361-4763-a677-d1f883533901",
-      "name": "Qdrant Upsert",
-      "credentials": {
-        "qdrantApi": {
-          "id": "q1CRmg2N6AmW6pC1",
-          "name": "QdrantApi account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\nitems = _items or []\nif not items:\n    return []\n\nupdates = []\nrun_ids = set()\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    d = it.get(\"json\", {}) or {}\n    meta = d.get(\"metadata\") or {}\n\n    run_id = to_text(meta.get(\"run_id\") or d.get(\"run_id\"))\n    symbol = to_text(meta.get(\"symbol\") or d.get(\"symbol\")).upper()\n    record_id = to_text(meta.get(\"record_id\") or d.get(\"record_id\"))\n    vector_id = to_text(d.get(\"id\") or meta.get(\"id\"))\n\n    p = to_text(meta.get(\"db_path\") or d.get(\"db_path\"))\n    if p:\n        db_path = p\n\n    if run_id and symbol:\n        updates.append(\n            {\n                \"run_id\": run_id,\n                \"symbol\": symbol,\n                \"record_id\": record_id,\n                \"vector_id\": vector_id,\n            }\n        )\n        run_ids.add(run_id)\n\nif not updates:\n    return items\n\nwith db_con(db_path) as con:\n    for row in updates:\n        rid = row[\"record_id\"]\n        if rid:\n            con.execute(\n                \"\"\"\n                UPDATE fundamentals_triage_history\n                SET vector_status = 'DONE',\n                    vector_id = ?,\n                    vectorized_at = CURRENT_TIMESTAMP,\n                    updated_row_at = CURRENT_TIMESTAMP\n                WHERE record_id = ?\n                \"\"\",\n                [row[\"vector_id\"] or rid, rid],\n            )\n        else:\n            con.execute(\n                \"\"\"\n                UPDATE fundamentals_triage_history\n                SET vector_status = 'DONE',\n                    vector_id = ?,\n                    vectorized_at = CURRENT_TIMESTAMP,\n                    updated_row_at = CURRENT_TIMESTAMP\n                WHERE run_id = ? AND symbol = ?\n                \"\"\",\n                [row[\"vector_id\"] or f\"{row['run_id']}|{row['symbol']}\", row[\"run_id\"], row[\"symbol\"]],\n            )\n\n        con.execute(\n            \"\"\"\n            UPDATE fundamentals_snapshot\n            SET vector_status = 'DONE',\n                vector_id = ?,\n                vectorized_at = CURRENT_TIMESTAMP,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE run_id = ? AND symbol = ?\n            \"\"\",\n            [row[\"vector_id\"] or f\"{row['run_id']}|{row['symbol']}\", row[\"run_id\"], row[\"symbol\"]],\n        )\n\n    for run_id in run_ids:\n        rec = con.execute(\n            \"\"\"\n            SELECT COUNT(*)\n            FROM fundamentals_triage_history\n            WHERE run_id = ? AND vector_status = 'DONE'\n            \"\"\",\n            [run_id],\n        ).fetchone()\n        done_count = int(rec[0]) if rec else 0\n        con.execute(\n            \"UPDATE run_log SET vector_docs_written = ? WHERE run_id = ?\",\n            [done_count, run_id],\n        )\n\nreturn items\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1008,
-        64
-      ],
-      "id": "f4f72f66-5833-4ea6-83f6-a4d53e2d068c",
-      "name": "AG3V2.11 - Mark Vectorized",
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "content": "AG3-V2 (DuckDB-first): yfinance fundamentals -> scoring -> DuckDB + Qdrant (collection: fundamental_analysis).",
-        "height": 160,
-        "width": 1160,
-        "color": 5
-      },
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
-      "position": [
-        -1488,
-        -336
-      ],
-      "id": "f46735a8-4b73-4685-9493-bf170c0afcb6",
-      "name": "AG3V2 - Note"
-    }
-  ],
-  "connections": {
-    "Schedule Trigger": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.00 - Init Context",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Manual Trigger": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.00 - Init Context",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.00 - Init Context": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.01 - Read Universe",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.01 - Read Universe": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.02 - Build Queue",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.02 - Build Queue": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.02B - DuckDB Init Run",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.02B - DuckDB Init Run": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.03 - Split Symbols",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.03 - Split Symbols": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.04 - HTTP Fundamentals",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "AG3V2.05 - Merge Queue + API",
-            "type": "main",
-            "index": 1
-          }
-        ],
-        [
-          {
-            "node": "AG3V2.09 - Finalize Run",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "AG3V2.10 - Build Vector Docs from DuckDB",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.04 - HTTP Fundamentals": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.05 - Merge Queue + API",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.05 - Merge Queue + API": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.06 - Score Fundamentals",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.06 - Score Fundamentals": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.07 - Write Fundamentals DuckDB",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.07 - Write Fundamentals DuckDB": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.08 - Wait Rate Limit",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.08 - Wait Rate Limit": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.03 - Split Symbols",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.10 - Build Vector Docs from DuckDB": {
-      "main": [
-        [
-          {
-            "node": "Qdrant Upsert",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Embeddings OpenAI": {
-      "ai_embedding": [
-        [
-          {
-            "node": "Qdrant Upsert",
-            "type": "ai_embedding",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Text Splitter": {
-      "ai_textSplitter": [
-        [
-          {
-            "node": "Default Data Loader",
-            "type": "ai_textSplitter",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Default Data Loader": {
-      "ai_document": [
-        [
-          {
-            "node": "Qdrant Upsert",
-            "type": "ai_document",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Qdrant Upsert": {
-      "main": [
-        [
-          {
-            "node": "AG3V2.11 - Mark Vectorized",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.11 - Mark Vectorized": {
-      "main": [
-        []
-      ]
-    }
-  },
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "pinData": {},
-  "meta": {
-    "templateCredsSetupCompleted": true
-  }
+    "name":  "AG3-V2 - Fundamental Analyst (DuckDB-first)",
+    "nodes":  [
+                  {
+                      "parameters":  {
+                                         "rule":  {
+                                                      "interval":  [
+                                                                       {
+                                                                           "field":  "cronExpression",
+                                                                           "expression":  "0 7 * * 1-5"
+                                                                       }
+                                                                   ]
+                                                  }
+                                     },
+                      "type":  "n8n-nodes-base.scheduleTrigger",
+                      "typeVersion":  1.3,
+                      "position":  [
+                                       -1424,
+                                       -224
+                                   ],
+                      "id":  "dcd6b2a3-cc74-4f03-8588-b8a24fe9908d",
+                      "name":  "Schedule Trigger"
+                  },
+                  {
+                      "parameters":  {
+
+                                     },
+                      "type":  "n8n-nodes-base.manualTrigger",
+                      "typeVersion":  1,
+                      "position":  [
+                                       -1424,
+                                       -64
+                                   ],
+                      "id":  "092be7cc-16e7-4904-8d73-bf0ae727f25a",
+                      "name":  "Manual Trigger"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "function pad(n) {\n  return String(n).padStart(2, \"0\");\n}\n\nfunction isoDate(d) {\n  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;\n}\n\nconst now = new Date();\nconst ts = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}${pad(now.getUTCSeconds())}`;\nconst rand = Math.random().toString(16).slice(2, 8).toUpperCase();\n\nconst input = ($input.first() \u0026\u0026 $input.first().json) ? $input.first().json : {};\nconst maxSymbolsIn = Number(input.max_symbols);\n\nreturn [\n  {\n    json: {\n      run_id: `AG3V2_${ts}_${rand}`,\n      nowIso: now.toISOString(),\n      asOfDate: isoDate(now),\n      api_base: String(input.api_base || \"http://yfinance-api:8080\"),\n      db_path: String(input.db_path || \"/files/duckdb/ag3_v2.duckdb\"),\n      max_symbols: Number.isFinite(maxSymbolsIn) \u0026\u0026 maxSymbolsIn \u003e 0 ? Math.floor(maxSymbolsIn) : 0,\n      only_enabled: true,\n      strategy_version: \"ag3_v2_fundamentals\",\n      config_version: \"ag3_v2_default\",\n    },\n  },\n];\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       -1184,
+                                       -144
+                                   ],
+                      "id":  "013e013b-4655-4bdb-8f2b-66fdffb09e95",
+                      "name":  "AG3V2.00 - Init Context"
+                  },
+                  {
+                      "parameters":  {
+                                         "documentId":  {
+                                                            "__rl":  true,
+                                                            "mode":  "list",
+                                                            "value":  "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
+                                                            "cachedResultName":  "TradingSim_GoogleSheet_Template",
+                                                            "cachedResultUrl":  "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+                                                        },
+                                         "sheetName":  {
+                                                           "__rl":  true,
+                                                           "mode":  "list",
+                                                           "value":  "Universe",
+                                                           "cachedResultName":  "Universe",
+                                                           "cachedResultUrl":  "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+                                                       },
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.googleSheets",
+                      "typeVersion":  4.7,
+                      "position":  [
+                                       -960,
+                                       -144
+                                   ],
+                      "id":  "8e3a18ed-9e2d-43f1-8b12-a90ff3daa49f",
+                      "name":  "AG3V2.01 - Read Universe",
+                      "credentials":  {
+                                          "googleSheetsOAuth2Api":  {
+                                                                        "id":  "aX5iAQEN9HK4UGjr",
+                                                                        "name":  "Google Sheets account"
+                                                                    }
+                                      }
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined \u0026\u0026 row[key] !== null \u0026\u0026 String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined \u0026\u0026 v !== null \u0026\u0026 String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) =\u003e i.json || {});\n\nconst out = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled \u0026\u0026 enabledRaw !== null \u0026\u0026 !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  out.push({\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      Symbol: symbol,\n      Name: name,\n      Sector: sector,\n      BoursoramaRef: boursoramaRef,\n      UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n    },\n  });\n}\n\nif (ctx.max_symbols \u0026\u0026 Number(ctx.max_symbols) \u003e 0) {\n  return out.slice(0, Number(ctx.max_symbols));\n}\nreturn out;\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       -736,
+                                       -144
+                                   ],
+                      "id":  "d7dc6bbd-c6b9-402f-b2da-21594941e731",
+                      "name":  "AG3V2.02 - Build Queue"
+                  },
+                  {
+                      "parameters":  {
+                                         "language":  "pythonNative",
+                                         "pythonCode":  "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\nWORKFLOW_VERSION = \"2.1.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt \u003c retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nfirst = items[0].get(\"json\", {}) if items else {}\nrun_id = str(first.get(\"run_id\") or f\"AG3V2_{datetime.now(timezone.utc).strftime(\u0027%Y%m%d%H%M%S\u0027)}\")\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nschema_stmts = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT \u0027RUNNING\u0027,\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      triage_rows INTEGER DEFAULT 0,\n      consensus_rows INTEGER DEFAULT 0,\n      metric_rows INTEGER DEFAULT 0,\n      snapshot_rows INTEGER DEFAULT 0,\n      vector_docs_written INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT \u00272.1.0\u0027\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (\n      snapshot_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      as_of_date DATE,\n      fetched_at TIMESTAMP,\n      status VARCHAR,\n      error VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      data_coverage_pct DOUBLE,\n      profile_json VARCHAR,\n      price_json VARCHAR,\n      valuation_json VARCHAR,\n      profitability_json VARCHAR,\n      growth_json VARCHAR,\n      financial_health_json VARCHAR,\n      consensus_json VARCHAR,\n      dividends_json VARCHAR,\n      vector_status VARCHAR DEFAULT \u0027PENDING\u0027,\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_triage_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      as_of_date DATE,\n      status VARCHAR,\n      error VARCHAR,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      score INTEGER,\n      funda_conf INTEGER,\n      risk_score INTEGER,\n      quality_score INTEGER,\n      growth_score INTEGER,\n      valuation_score INTEGER,\n      health_score INTEGER,\n      consensus_score INTEGER,\n      horizon VARCHAR,\n      current_price DOUBLE,\n      target_price DOUBLE,\n      upside_pct DOUBLE,\n      recommendation VARCHAR,\n      analyst_count INTEGER,\n      valuation VARCHAR,\n      why VARCHAR,\n      risks VARCHAR,\n      next_steps VARCHAR,\n      data_coverage_pct DOUBLE,\n      strategy_version VARCHAR,\n      config_version VARCHAR,\n      vector_status VARCHAR DEFAULT \u0027PENDING\u0027,\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS analyst_consensus_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      recommendation VARCHAR,\n      recommendation_mean DOUBLE,\n      analyst_count INTEGER,\n      current_price DOUBLE,\n      target_mean_price DOUBLE,\n      target_high_price DOUBLE,\n      target_low_price DOUBLE,\n      upside_pct DOUBLE,\n      dispersion_pct DOUBLE,\n      confidence_proxy INTEGER,\n      risk_proxy INTEGER,\n      source VARCHAR,\n      source_url VARCHAR,\n      status VARCHAR,\n      error VARCHAR,\n      horizon VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamental_metrics_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      extracted_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      boursorama_ref VARCHAR,\n      data_type VARCHAR,\n      section VARCHAR,\n      metric VARCHAR,\n      period VARCHAR,\n      value_num DOUBLE,\n      value_text VARCHAR,\n      unit VARCHAR,\n      source_url VARCHAR,\n      sig_hash VARCHAR,\n      title VARCHAR,\n      author VARCHAR,\n      excerpt VARCHAR,\n      raw_text VARCHAR,\n      signal VARCHAR,\n      score DOUBLE,\n      currency VARCHAR,\n      title_or_label VARCHAR,\n      notes VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_triage AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT t.*,\n             ROW_NUMBER() OVER (PARTITION BY t.symbol ORDER BY t.updated_at DESC, t.created_at DESC) AS rn\n      FROM fundamentals_triage_history t\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_consensus AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT c.*,\n             ROW_NUMBER() OVER (PARTITION BY c.symbol ORDER BY c.updated_at DESC, c.created_at DESC) AS rn\n      FROM analyst_consensus_history c\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"ALTER TABLE run_log ADD COLUMN IF NOT EXISTS vector_docs_written INTEGER DEFAULT 0\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT \u0027PENDING\u0027\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT \u0027PENDING\u0027\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n]\n\nwith db_con(db_path) as con:\n    for stmt in schema_stmts:\n        con.execute(stmt)\n\n    total = len(items)\n    if total == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, \u0027NO_DATA\u0027, 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, \u0027RUNNING\u0027, ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, total, WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       -512,
+                                       -144
+                                   ],
+                      "id":  "d75538b7-502e-463e-ad73-69b940339f2c",
+                      "name":  "AG3V2.02B - DuckDB Init Run"
+                  },
+                  {
+                      "parameters":  {
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.splitInBatches",
+                      "typeVersion":  3,
+                      "position":  [
+                                       -304,
+                                       -144
+                                   ],
+                      "id":  "b3f5f89f-7c85-49ad-907f-f715ea79754a",
+                      "name":  "AG3V2.03 - Split Symbols"
+                  },
+                  {
+                      "parameters":  {
+                                         "url":  "={{$json.api_base}}/fundamentals",
+                                         "sendQuery":  true,
+                                         "queryParameters":  {
+                                                                 "parameters":  [
+                                                                                    {
+                                                                                        "name":  "symbol",
+                                                                                        "value":  "={{$json.Symbol}}"
+                                                                                    }
+                                                                                ]
+                                                             },
+                                         "options":  {
+                                                         "timeout":  30000
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.httpRequest",
+                      "typeVersion":  4,
+                      "position":  [
+                                       -80,
+                                       -256
+                                   ],
+                      "id":  "3208f39c-278d-4a0d-b3a6-c7f89f2e6f50",
+                      "name":  "AG3V2.04 - HTTP Fundamentals",
+                      "retryOnFail":  true,
+                      "maxTries":  3,
+                      "waitBetweenTries":  2000,
+                      "continueOnFail":  true,
+                      "onError":  "continueRegularOutput"
+                  },
+                  {
+                      "parameters":  {
+                                         "mode":  "combine",
+                                         "combineBy":  "combineByPosition",
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.merge",
+                      "typeVersion":  3.2,
+                      "position":  [
+                                       128,
+                                       -144
+                                   ],
+                      "id":  "045b4a91-afca-4c67-b1d9-03b7f0107f3a",
+                      "name":  "AG3V2.05 - Merge Queue + API"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsCode":  "const crypto = require(\"crypto\");\n\nfunction sha1(x) {\n  return crypto.createHash(\"sha1\").update(String(x || \"\"), \"utf8\").digest(\"hex\");\n}\n\nfunction num(v) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction text(v, maxLen = 4000) {\n  const s = String(v || \"\").replace(/\\s+/g, \" \").trim();\n  return s.slice(0, maxLen);\n}\n\nfunction clamp(v, lo = 0, hi = 100) {\n  if (!Number.isFinite(v)) return lo;\n  return Math.max(lo, Math.min(hi, v));\n}\n\nfunction pct(v) {\n  const n = num(v);\n  if (n === null) return null;\n  if (Math.abs(n) \u003c= 1.5) return n * 100;\n  return n;\n}\n\nfunction scoreHigher(v, floor, ceil) {\n  if (v === null || v === undefined) return null;\n  if (v \u003c= floor) return 0;\n  if (v \u003e= ceil) return 100;\n  return Math.round(((v - floor) / (ceil - floor)) * 100);\n}\n\nfunction scoreLower(v, best, worst) {\n  if (v === null || v === undefined) return null;\n  if (v \u003c= best) return 100;\n  if (v \u003e= worst) return 0;\n  return Math.round((1 - (v - best) / (worst - best)) * 100);\n}\n\nfunction weighted(parts, fallback = 50) {\n  let acc = 0;\n  let wsum = 0;\n  for (const p of parts) {\n    if (!p || p.value === null || p.value === undefined) continue;\n    const w = Number.isFinite(p.weight) ? p.weight : 1;\n    acc += p.value * w;\n    wsum += w;\n  }\n  if (wsum \u003c= 0) return fallback;\n  return Math.round(acc / wsum);\n}\n\nfunction priceFmt(v) {\n  const n = num(v);\n  if (n === null) return \"n/a\";\n  return String(Math.round(n * 100) / 100);\n}\n\nfunction obj(v) {\n  return v \u0026\u0026 typeof v === \"object\" \u0026\u0026 !Array.isArray(v) ? v : {};\n}\n\nreturn $input.all().map((item) =\u003e {\n  const j = item.json || {};\n  const nowIso = new Date().toISOString();\n\n  const runId = String(j.run_id || \"\").trim();\n  const asOfDate = String(j.asOfDate || nowIso.slice(0, 10));\n  const symbol = String(j.Symbol || j.symbol || \"\").trim().toUpperCase();\n  const boursoramaRef = String(j.BoursoramaRef || \"\").trim();\n\n  const ok = j.ok === true;\n  const err = text(j.error || \"\", 500);\n\n  const profile = obj(j.profile);\n  const price = obj(j.price);\n  const val = obj(j.valuation);\n  const prof = obj(j.profitability);\n  const growth = obj(j.growth);\n  const health = obj(j.financialHealth);\n  const cons = obj(j.consensus);\n  const meta = obj(j.meta);\n\n  const companyName = text(j.Name || profile.longName || profile.shortName || symbol, 200);\n  const sector = text(j.Sector || profile.sector || \"\", 120);\n  const industry = text(profile.industry || \"\", 120);\n  const country = text(profile.country || \"\", 80);\n  const currency = text(profile.currency || \"EUR\", 16);\n  const fetchedAt = text(j.fetchedAt || j.nowIso || nowIso, 64);\n\n  const currentPrice = num(price.currentPrice);\n  const marketCap = num(price.marketCap);\n  const beta = num(price.beta);\n  const debtToEquity = num(health.debtToEquity);\n  const currentRatio = num(health.currentRatio);\n  const quickRatio = num(health.quickRatio);\n  const freeCashflow = num(prof.freeCashflow);\n\n  const gm = pct(prof.grossMargins);\n  const om = pct(prof.operatingMargins);\n  const pm = pct(prof.profitMargins);\n  const roe = pct(prof.returnOnEquity);\n  const roa = pct(prof.returnOnAssets);\n\n  const rg = pct(growth.revenueGrowth);\n  const eg = pct(growth.earningsGrowth);\n  const eqg = pct(growth.earningsQuarterlyGrowth);\n\n  const trailingPE = num(val.trailingPE);\n  const forwardPE = num(val.forwardPE);\n  const peg = num(val.pegRatio);\n  const pb = num(val.priceToBook);\n\n  const recMean = num(cons.recommendationMean);\n  const analysts = num(cons.numberOfAnalystOpinions);\n  const targetMean = num(cons.targetMeanPrice);\n  const targetHigh = num(cons.targetHighPrice);\n  const targetLow = num(cons.targetLowPrice);\n  const upside = num(cons.upsidePctToTargetMean);\n\n  let fcfYield = null;\n  if (freeCashflow !== null \u0026\u0026 marketCap !== null \u0026\u0026 marketCap \u003e 0) {\n    fcfYield = (freeCashflow / marketCap) * 100;\n  }\n\n  const qualityScore = weighted(\n    [\n      { value: scoreHigher(gm, 20, 65), weight: 1.0 },\n      { value: scoreHigher(om, 8, 30), weight: 1.2 },\n      { value: scoreHigher(pm, 5, 25), weight: 1.0 },\n      { value: scoreHigher(roe, 8, 25), weight: 1.2 },\n      { value: scoreHigher(roa, 2, 12), weight: 0.8 },\n    ],\n    50\n  );\n\n  const growthScore = weighted(\n    [\n      { value: scoreHigher(rg, -2, 15), weight: 1.0 },\n      { value: scoreHigher(eg, -5, 20), weight: 1.2 },\n      { value: scoreHigher(eqg, -10, 25), weight: 0.8 },\n    ],\n    50\n  );\n\n  const valuationScore = weighted(\n    [\n      { value: scoreLower(trailingPE, 10, 35), weight: 1.0 },\n      { value: scoreLower(forwardPE, 9, 30), weight: 1.0 },\n      { value: scoreLower(pb, 1.5, 8), weight: 0.7 },\n      { value: scoreLower(peg, 0.8, 2.5), weight: 1.0 },\n      { value: scoreHigher(upside, -5, 25), weight: 1.0 },\n    ],\n    50\n  );\n\n  const healthScore = weighted(\n    [\n      { value: scoreLower(debtToEquity, 30, 250), weight: 1.2 },\n      { value: scoreHigher(currentRatio, 0.8, 2.2), weight: 1.0 },\n      { value: scoreHigher(quickRatio, 0.7, 1.8), weight: 0.8 },\n      { value: scoreHigher(fcfYield, 2, 8), weight: 1.0 },\n    ],\n    50\n  );\n\n  let dispersionPct = null;\n  if (targetHigh !== null \u0026\u0026 targetLow !== null \u0026\u0026 targetMean !== null \u0026\u0026 targetMean \u003e 0) {\n    dispersionPct = ((targetHigh - targetLow) / targetMean) * 100;\n  }\n\n  const consensusScore = weighted(\n    [\n      { value: scoreLower(recMean, 1.5, 4.2), weight: 1.2 },\n      { value: scoreHigher(analysts, 3, 20), weight: 0.8 },\n      { value: scoreHigher(upside, 0, 25), weight: 1.0 },\n      { value: scoreLower(dispersionPct, 10, 80), weight: 0.6 },\n    ],\n    50\n  );\n\n  const coverage = num(meta.dataCoveragePctApprox);\n\n  let triageScore = Math.round(\n    qualityScore * 0.32 +\n      growthScore * 0.2 +\n      valuationScore * 0.2 +\n      healthScore * 0.18 +\n      consensusScore * 0.1\n  );\n  if (coverage !== null \u0026\u0026 coverage \u003c 35) triageScore -= 8;\n  if (!ok) triageScore = Math.min(triageScore, 40);\n  triageScore = clamp(triageScore);\n\n  let riskScore = Math.round(100 - (healthScore * 0.45 + qualityScore * 0.3 + consensusScore * 0.15 + (coverage !== null ? coverage : 50) * 0.1));\n  if (debtToEquity !== null \u0026\u0026 debtToEquity \u003e 250) riskScore += 12;\n  if (currentRatio !== null \u0026\u0026 currentRatio \u003c 1.0) riskScore += 8;\n  if (rg !== null \u0026\u0026 rg \u003c 0) riskScore += 6;\n  if (eg !== null \u0026\u0026 eg \u003c 0) riskScore += 6;\n  if (!ok) riskScore = Math.max(riskScore, 80);\n  riskScore = clamp(riskScore);\n\n  const bull = [];\n  if (qualityScore \u003e= 65) bull.push(\"High quality profitability profile.\");\n  if (growthScore \u003e= 60) bull.push(\"Revenue/earnings growth remains supportive.\");\n  if (valuationScore \u003e= 60) bull.push(\"Valuation appears acceptable vs fundamentals.\");\n  if (consensusScore \u003e= 60) bull.push(\"Analyst consensus and target imply upside.\");\n  if (fcfYield !== null \u0026\u0026 fcfYield \u003e 4) bull.push(\"Free cash-flow yield is healthy.\");\n\n  const bear = [];\n  if (qualityScore \u003c 45) bear.push(\"Weak quality metrics (margins/returns).\");\n  if (growthScore \u003c 45) bear.push(\"Growth profile is soft or negative.\");\n  if (valuationScore \u003c 40) bear.push(\"Valuation is stretched vs peers/risk.\");\n  if (debtToEquity !== null \u0026\u0026 debtToEquity \u003e 220) bear.push(\"High leverage raises balance-sheet risk.\");\n  if (consensusScore \u003c 45) bear.push(\"Sell-side sentiment is not supportive.\");\n  if (coverage !== null \u0026\u0026 coverage \u003c 35) bear.push(\"Low data coverage lowers confidence.\");\n  if (!ok) bear.push(`Data provider issue: ${err || \"unknown error\"}.`);\n\n  let horizon = \"WATCH\";\n  if (triageScore \u003e= 72 \u0026\u0026 riskScore \u003c= 45) horizon = \"LONG_TERM\";\n  else if (triageScore \u003e= 58 \u0026\u0026 riskScore \u003c= 62) horizon = \"SWING\";\n\n  const basePx = targetMean !== null ? targetMean : currentPrice;\n  const bullPx = targetHigh !== null ? targetHigh : (basePx !== null ? basePx * 1.15 : null);\n  const bearPx = targetLow !== null ? targetLow : (basePx !== null ? basePx * 0.85 : null);\n  const valuationText = `Bear: ~${priceFmt(bearPx)} | Base: ~${priceFmt(basePx)} | Bull: ~${priceFmt(bullPx)} ${currency}`.trim();\n\n  const why = `Quality ${qualityScore}/100, Growth ${growthScore}/100, Valuation ${valuationScore}/100, Financial health ${healthScore}/100, Consensus ${consensusScore}/100. Bull case: ${bull.length ? bull.join(\" \") : \"No strong fundamental edge detected.\"}`;\n  const risks = `Bear case: ${bear.length ? bear.join(\" \") : \"No major red flag in available data.\"}`;\n\n  const nextSteps = [\n    coverage !== null \u0026\u0026 coverage \u003c 45 ? \"Backfill missing fundamentals before sizing aggressively.\" : \"\",\n    analysts !== null \u0026\u0026 analysts \u003c 3 ? \"Consensus depth is limited; confirm with additional sources.\" : \"\",\n    horizon === \"WATCH\" ? \"Wait for next earnings/news catalyst before action.\" : \"\",\n  ]\n    .filter(Boolean)\n    .join(\" | \");\n\n  const sourceUrl = symbol ? `https://finance.yahoo.com/quote/${encodeURIComponent(symbol)}` : \"\";\n  const triageRecordId = sha1(`${runId}|triage|${symbol}`);\n  const consensusRecordId = sha1(`${runId}|consensus|${symbol}`);\n\n  const triageRow = {\n    RecordId: triageRecordId,\n    RunId: runId,\n    UpdatedAt: nowIso,\n    fetchedAt: fetchedAt,\n    AsOfDate: asOfDate,\n    Status: ok ? \"OK\" : \"ERR_SOURCE\",\n    Error: err || null,\n    Symbol: symbol,\n    Name: companyName,\n    Sector: sector,\n    Industry: industry,\n    Country: country,\n    BoursoramaRef: boursoramaRef,\n    Source: \"yfinance_api\",\n    SourceUrl: sourceUrl,\n    Score: triageScore,\n    funda_conf: triageScore,\n    risk_score: riskScore,\n    quality_score: qualityScore,\n    growth_score: growthScore,\n    valuation_score: valuationScore,\n    health_score: healthScore,\n    consensus_score: consensusScore,\n    horizon: horizon,\n    current_price: currentPrice,\n    target_price: targetMean,\n    upside_pct: upside,\n    recommendation: text(cons.recommendationKey || \"\", 64),\n    analyst_count: analysts,\n    valuation: valuationText,\n    why: text(why, 3000),\n    risks: text(risks, 3000),\n    nextSteps: text(nextSteps, 1500),\n    data_coverage_pct: coverage,\n    strategy_version: String(j.strategy_version || \"ag3_v2_fundamentals\"),\n    config_version: String(j.config_version || \"ag3_v2_default\"),\n  };\n\n  const consensusRow = {\n    RecordId: consensusRecordId,\n    RunId: runId,\n    UpdatedAt: nowIso,\n    AsOfDate: asOfDate,\n    Symbol: symbol,\n    Name: companyName,\n    Sector: sector,\n    recommendation: text(cons.recommendationKey || \"\", 64),\n    recommendationMean: recMean,\n    analystCount: analysts,\n    currentPrice: currentPrice,\n    targetMeanPrice: targetMean,\n    targetHighPrice: targetHigh,\n    targetLowPrice: targetLow,\n    upsidePct: upside,\n    dispersionPct: dispersionPct,\n    confidenceProxy: triageScore,\n    riskProxy: riskScore,\n    Source: \"yfinance_api\",\n    SourceUrl: sourceUrl,\n    Status: ok ? \"OK\" : \"ERR_SOURCE\",\n    Error: err || null,\n    horizon: horizon,\n  };\n\n  function metricRow(section, metric, value, unit = null, notes = null) {\n    if (value === null || value === undefined || value === \"\") return null;\n    const rid = sha1(`${runId}|metric|${symbol}|${section}|${metric}|${asOfDate}`);\n    return {\n      Symbol: symbol,\n      RecordId: rid,\n      BoursoramaRef: boursoramaRef || null,\n      DataType: \"metric\",\n      Section: section,\n      Metric: metric,\n      Period: null,\n      Value: value,\n      Unit: unit,\n      AsOfDate: asOfDate,\n      SourceUrl: sourceUrl,\n      ExtractedAt: nowIso,\n      RunId: runId,\n      SigHash: sha1(`${metric}|${String(value)}`),\n      Title: null,\n      Author: null,\n      Excerpt: null,\n      RawText: null,\n      Signal: null,\n      Score: null,\n      Currency: currency,\n      TitleOrLabel: null,\n      Notes: notes,\n    };\n  }\n\n  const metricRows = [\n    metricRow(\"scores\", \"triage_score\", triageScore, \"/100\"),\n    metricRow(\"scores\", \"risk_score\", riskScore, \"/100\"),\n    metricRow(\"scores\", \"quality_score\", qualityScore, \"/100\"),\n    metricRow(\"scores\", \"growth_score\", growthScore, \"/100\"),\n    metricRow(\"scores\", \"valuation_score\", valuationScore, \"/100\"),\n    metricRow(\"scores\", \"health_score\", healthScore, \"/100\"),\n    metricRow(\"scores\", \"consensus_score\", consensusScore, \"/100\"),\n    metricRow(\"price\", \"current_price\", currentPrice, currency),\n    metricRow(\"price\", \"market_cap\", marketCap, currency),\n    metricRow(\"price\", \"beta\", beta, null),\n    metricRow(\"valuation\", \"trailing_pe\", trailingPE, \"x\"),\n    metricRow(\"valuation\", \"forward_pe\", forwardPE, \"x\"),\n    metricRow(\"valuation\", \"peg_ratio\", peg, \"x\"),\n    metricRow(\"valuation\", \"price_to_book\", pb, \"x\"),\n    metricRow(\"profitability\", \"gross_margin_pct\", gm, \"%\"),\n    metricRow(\"profitability\", \"operating_margin_pct\", om, \"%\"),\n    metricRow(\"profitability\", \"profit_margin_pct\", pm, \"%\"),\n    metricRow(\"profitability\", \"roe_pct\", roe, \"%\"),\n    metricRow(\"profitability\", \"roa_pct\", roa, \"%\"),\n    metricRow(\"growth\", \"revenue_growth_pct\", rg, \"%\"),\n    metricRow(\"growth\", \"earnings_growth_pct\", eg, \"%\"),\n    metricRow(\"growth\", \"earnings_q_growth_pct\", eqg, \"%\"),\n    metricRow(\"health\", \"debt_to_equity\", debtToEquity, \"x\"),\n    metricRow(\"health\", \"current_ratio\", currentRatio, \"x\"),\n    metricRow(\"health\", \"quick_ratio\", quickRatio, \"x\"),\n    metricRow(\"health\", \"fcf_yield_pct\", fcfYield, \"%\"),\n    metricRow(\"consensus\", \"target_mean_price\", targetMean, currency),\n    metricRow(\"consensus\", \"target_high_price\", targetHigh, currency),\n    metricRow(\"consensus\", \"target_low_price\", targetLow, currency),\n    metricRow(\"consensus\", \"upside_pct\", upside, \"%\"),\n    metricRow(\"consensus\", \"recommendation_mean\", recMean, \"score\"),\n    metricRow(\"consensus\", \"analyst_count\", analysts, \"count\"),\n  ].filter(Boolean);\n\n  return {\n    json: {\n      ...j,\n      triageRow,\n      consensusRow,\n      metricRows,\n    },\n  };\n});\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       336,
+                                       -144
+                                   ],
+                      "id":  "f21995ee-8c01-43dc-b90a-fcf877539f61",
+                      "name":  "AG3V2.06 - Score Fundamentals"
+                  },
+                  {
+                      "parameters":  {
+                                         "language":  "pythonNative",
+                                         "pythonCode":  "import duckdb, time, gc, json, hashlib\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt \u003c retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return None\n    s = str(v).strip()\n    return s if s else None\n\n\ndef to_float(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        return float(v)\n    except Exception:\n        return None\n\n\ndef to_int(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        return int(round(float(v)))\n    except Exception:\n        return None\n\n\ndef to_json(v):\n    try:\n        if v is None:\n            return None\n        return json.dumps(v, ensure_ascii=False)\n    except Exception:\n        return None\n\n\nitems = _items or []\nif not items:\n    return []\n\nfirst = items[0].get(\"json\", {}) or {}\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for it in items:\n        j = it.get(\"json\", {}) or {}\n        run_id = str(j.get(\"run_id\", \"\") or \"\").strip()\n        symbol = str(j.get(\"Symbol\") or j.get(\"symbol\") or \"\").strip().upper()\n        if not run_id or not symbol:\n            continue\n\n        triage = j.get(\"triageRow\", {}) or {}\n        consensus = j.get(\"consensusRow\", {}) or {}\n        metric_rows = j.get(\"metricRows\", []) or []\n\n        status = str((triage.get(\"Status\") if triage else j.get(\"ok\")) or \"\").strip()\n        if status in (\"True\", \"true\", \"1\"):\n            status = \"OK\"\n        if not status:\n            status = \"OK\" if j.get(\"ok\") is True else \"ERR_SOURCE\"\n\n        error_txt = to_text(triage.get(\"Error\") if triage else j.get(\"error\"))\n        as_of = to_text((triage.get(\"AsOfDate\") if triage else j.get(\"asOfDate\")) or j.get(\"as_of_date\"))\n        fetched = to_text((triage.get(\"fetchedAt\") if triage else j.get(\"fetchedAt\")) or j.get(\"nowIso\"))\n\n        snapshot_seed = f\"{run_id}|{symbol}|{as_of or \u0027\u0027}\"\n        snapshot_id = hashlib.sha1(snapshot_seed.encode(\"utf-8\")).hexdigest()\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO fundamentals_snapshot (\n              snapshot_id, run_id, symbol, name, sector, industry, country, boursorama_ref,\n              as_of_date, fetched_at, status, error, source, source_url, data_coverage_pct,\n              profile_json, price_json, valuation_json, profitability_json, growth_json,\n              financial_health_json, consensus_json, dividends_json, updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                snapshot_id,\n                run_id,\n                symbol,\n                to_text(triage.get(\"Name\") if triage else j.get(\"Name\")),\n                to_text(triage.get(\"Sector\") if triage else j.get(\"Sector\")),\n                to_text(triage.get(\"Industry\") if triage else (j.get(\"profile\") or {}).get(\"industry\")),\n                to_text(triage.get(\"Country\") if triage else (j.get(\"profile\") or {}).get(\"country\")),\n                to_text(triage.get(\"BoursoramaRef\") if triage else j.get(\"BoursoramaRef\")),\n                as_of,\n                fetched,\n                status,\n                error_txt,\n                to_text(triage.get(\"Source\") if triage else j.get(\"source\")) or \"yfinance_api\",\n                to_text(triage.get(\"SourceUrl\") if triage else j.get(\"sourceUrl\")),\n                to_float(triage.get(\"data_coverage_pct\") if triage else (j.get(\"meta\") or {}).get(\"dataCoveragePctApprox\")),\n                to_json(j.get(\"profile\")),\n                to_json(j.get(\"price\")),\n                to_json(j.get(\"valuation\")),\n                to_json(j.get(\"profitability\")),\n                to_json(j.get(\"growth\")),\n                to_json(j.get(\"financialHealth\")),\n                to_json(j.get(\"consensus\")),\n                to_json(j.get(\"dividends\")),\n            ],\n        )\n\n        if triage and triage.get(\"RecordId\"):\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO fundamentals_triage_history (\n                  record_id, run_id, updated_at, fetched_at, as_of_date, status, error,\n                  symbol, name, sector, industry, country, boursorama_ref, source, source_url,\n                  score, funda_conf, risk_score, quality_score, growth_score, valuation_score,\n                  health_score, consensus_score, horizon, current_price, target_price, upside_pct,\n                  recommendation, analyst_count, valuation, why, risks, next_steps,\n                  data_coverage_pct, strategy_version, config_version, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    to_text(triage.get(\"RecordId\")),\n                    run_id,\n                    to_text(triage.get(\"UpdatedAt\")),\n                    to_text(triage.get(\"fetchedAt\")),\n                    to_text(triage.get(\"AsOfDate\")),\n                    to_text(triage.get(\"Status\")),\n                    to_text(triage.get(\"Error\")),\n                    to_text(triage.get(\"Symbol\")) or symbol,\n                    to_text(triage.get(\"Name\")),\n                    to_text(triage.get(\"Sector\")),\n                    to_text(triage.get(\"Industry\")),\n                    to_text(triage.get(\"Country\")),\n                    to_text(triage.get(\"BoursoramaRef\")),\n                    to_text(triage.get(\"Source\")),\n                    to_text(triage.get(\"SourceUrl\")),\n                    to_int(triage.get(\"Score\")),\n                    to_int(triage.get(\"funda_conf\")),\n                    to_int(triage.get(\"risk_score\")),\n                    to_int(triage.get(\"quality_score\")),\n                    to_int(triage.get(\"growth_score\")),\n                    to_int(triage.get(\"valuation_score\")),\n                    to_int(triage.get(\"health_score\")),\n                    to_int(triage.get(\"consensus_score\")),\n                    to_text(triage.get(\"horizon\")),\n                    to_float(triage.get(\"current_price\")),\n                    to_float(triage.get(\"target_price\")),\n                    to_float(triage.get(\"upside_pct\")),\n                    to_text(triage.get(\"recommendation\")),\n                    to_int(triage.get(\"analyst_count\")),\n                    to_text(triage.get(\"valuation\")),\n                    to_text(triage.get(\"why\")),\n                    to_text(triage.get(\"risks\")),\n                    to_text(triage.get(\"nextSteps\")),\n                    to_float(triage.get(\"data_coverage_pct\")),\n                    to_text(triage.get(\"strategy_version\")),\n                    to_text(triage.get(\"config_version\")),\n                ],\n            )\n\n        if consensus and consensus.get(\"RecordId\"):\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO analyst_consensus_history (\n                  record_id, run_id, updated_at, as_of_date, symbol, name, sector, recommendation,\n                  recommendation_mean, analyst_count, current_price, target_mean_price, target_high_price,\n                  target_low_price, upside_pct, dispersion_pct, confidence_proxy, risk_proxy,\n                  source, source_url, status, error, horizon, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    to_text(consensus.get(\"RecordId\")),\n                    run_id,\n                    to_text(consensus.get(\"UpdatedAt\")),\n                    to_text(consensus.get(\"AsOfDate\")),\n                    to_text(consensus.get(\"Symbol\")) or symbol,\n                    to_text(consensus.get(\"Name\")),\n                    to_text(consensus.get(\"Sector\")),\n                    to_text(consensus.get(\"recommendation\")),\n                    to_float(consensus.get(\"recommendationMean\")),\n                    to_int(consensus.get(\"analystCount\")),\n                    to_float(consensus.get(\"currentPrice\")),\n                    to_float(consensus.get(\"targetMeanPrice\")),\n                    to_float(consensus.get(\"targetHighPrice\")),\n                    to_float(consensus.get(\"targetLowPrice\")),\n                    to_float(consensus.get(\"upsidePct\")),\n                    to_float(consensus.get(\"dispersionPct\")),\n                    to_int(consensus.get(\"confidenceProxy\")),\n                    to_int(consensus.get(\"riskProxy\")),\n                    to_text(consensus.get(\"Source\")),\n                    to_text(consensus.get(\"SourceUrl\")),\n                    to_text(consensus.get(\"Status\")),\n                    to_text(consensus.get(\"Error\")),\n                    to_text(consensus.get(\"horizon\")),\n                ],\n            )\n\n        for m in metric_rows:\n            rid = to_text(m.get(\"RecordId\"))\n            if not rid:\n                continue\n            raw_val = m.get(\"Value\")\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO fundamental_metrics_history (\n                  record_id, run_id, extracted_at, as_of_date, symbol, boursorama_ref, data_type,\n                  section, metric, period, value_num, value_text, unit, source_url, sig_hash,\n                  title, author, excerpt, raw_text, signal, score, currency, title_or_label, notes, updated_row_at\n                )\n                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    rid,\n                    run_id,\n                    to_text(m.get(\"ExtractedAt\")),\n                    to_text(m.get(\"AsOfDate\")),\n                    to_text(m.get(\"Symbol\")) or symbol,\n                    to_text(m.get(\"BoursoramaRef\")),\n                    to_text(m.get(\"DataType\")),\n                    to_text(m.get(\"Section\")),\n                    to_text(m.get(\"Metric\")),\n                    to_text(m.get(\"Period\")),\n                    to_float(raw_val),\n                    to_text(raw_val),\n                    to_text(m.get(\"Unit\")),\n                    to_text(m.get(\"SourceUrl\")),\n                    to_text(m.get(\"SigHash\")),\n                    to_text(m.get(\"Title\")),\n                    to_text(m.get(\"Author\")),\n                    to_text(m.get(\"Excerpt\")),\n                    to_text(m.get(\"RawText\")),\n                    to_text(m.get(\"Signal\")),\n                    to_float(m.get(\"Score\")),\n                    to_text(m.get(\"Currency\")),\n                    to_text(m.get(\"TitleOrLabel\")),\n                    to_text(m.get(\"Notes\")),\n                ],\n            )\n\nreturn items\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       560,
+                                       -144
+                                   ],
+                      "id":  "568aee73-8511-4db6-885d-f90e85dc7ca8",
+                      "name":  "AG3V2.07 - Write Fundamentals DuckDB"
+                  },
+                  {
+                      "parameters":  {
+                                         "amount":  0.4,
+                                         "unit":  "seconds"
+                                     },
+                      "type":  "n8n-nodes-base.wait",
+                      "typeVersion":  1.1,
+                      "position":  [
+                                       768,
+                                       -144
+                                   ],
+                      "id":  "51f057cb-5dcb-4bc9-95a7-a8161eb45f7b",
+                      "name":  "AG3V2.08 - Wait Rate Limit"
+                  },
+                  {
+                      "parameters":  {
+                                         "language":  "pythonNative",
+                                         "pythonCode":  "import duckdb, time, gc\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt \u003c retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\") or \"\").strip()\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\"SELECT run_id FROM run_log WHERE status=\u0027RUNNING\u0027 ORDER BY started_at DESC LIMIT 1\").fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\", \"run_id\": \"\", \"db_path\": db_path}}]\n\n    r = con.execute(\"SELECT COALESCE(symbols_total, 0) FROM run_log WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_total = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_snapshot WHERE run_id = ?\", [run_id]).fetchone()\n    snapshot_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_snapshot WHERE run_id = ? AND status = \u0027OK\u0027\", [run_id]).fetchone()\n    symbols_ok = int(r[0]) if r else 0\n    symbols_error = max(snapshot_rows - symbols_ok, 0)\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamentals_triage_history WHERE run_id = ?\", [run_id]).fetchone()\n    triage_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM analyst_consensus_history WHERE run_id = ?\", [run_id]).fetchone()\n    consensus_rows = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM fundamental_metrics_history WHERE run_id = ?\", [run_id]).fetchone()\n    metric_rows = int(r[0]) if r else 0\n\n    if symbols_total == 0:\n        status = \"NO_DATA\"\n    elif symbols_ok == symbols_total and symbols_total \u003e 0:\n        status = \"SUCCESS\"\n    elif symbols_ok \u003e 0:\n        status = \"PARTIAL\"\n    else:\n        status = \"FAILED\"\n\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            status = ?,\n            symbols_ok = ?,\n            symbols_error = ?,\n            triage_rows = ?,\n            consensus_rows = ?,\n            metric_rows = ?,\n            snapshot_rows = ?,\n            error_detail = ?\n        WHERE run_id = ?\n        \"\"\",\n        [status, symbols_ok, symbols_error, triage_rows, consensus_rows, metric_rows, snapshot_rows, None, run_id],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"db_path\": db_path,\n            \"status\": status,\n            \"symbols_total\": symbols_total,\n            \"symbols_ok\": symbols_ok,\n            \"symbols_error\": symbols_error,\n            \"triage_rows\": triage_rows,\n            \"consensus_rows\": consensus_rows,\n            \"metric_rows\": metric_rows,\n            \"snapshot_rows\": snapshot_rows,\n        }\n    }\n]\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       -80,
+                                       64
+                                   ],
+                      "id":  "1a4ac7a0-e2ac-4eb0-bbc5-eb33f2533204",
+                      "name":  "AG3V2.09 - Finalize Run"
+                  },
+                  {
+                      "parameters":  {
+                                         "language":  "pythonNative",
+                                         "pythonCode":  "import duckdb, json, time, gc, re\nfrom contextlib import contextmanager\nfrom datetime import date, datetime\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt \u003c retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\ndef sanitize_id(value):\n    value = to_text(value)\n    return re.sub(r\"[^a-zA-Z0-9_-]\", \"_\", value)\n\n\ndef pick_run_id(items):\n    for it in items:\n        d = it.get(\"json\", {}) or {}\n        rid = to_text(d.get(\"run_id\"))\n        if rid:\n            return rid\n    return \"\"\n\n\ndef pick_db_path(items):\n    for it in items:\n        d = it.get(\"json\", {}) or {}\n        p = to_text(d.get(\"db_path\"))\n        if p:\n            return p\n    return DEFAULT_DB_PATH\n\n\ndef json_default(v):\n    if isinstance(v, (datetime, date)):\n        return v.isoformat()\n    return str(v)\n\n\ndef fmt_num(v, digits=2):\n    if v is None:\n        return \"n/a\"\n    try:\n        return f\"{float(v):.{digits}f}\"\n    except Exception:\n        return to_text(v) or \"n/a\"\n\n\ndef add_line(lines, value):\n    s = to_text(value)\n    if s:\n        lines.append(s)\n\n\ndef build_metrics_by_symbol(con, run_id):\n    rows = con.execute(\n        \"\"\"\n        SELECT symbol, section, metric, value_num, value_text, unit\n        FROM fundamental_metrics_history\n        WHERE run_id = ?\n        ORDER BY symbol, section, metric\n        \"\"\",\n        [run_id],\n    ).fetchall()\n\n    by_symbol = {}\n    for symbol, section, metric, value_num, value_text, unit in rows:\n        sym = to_text(symbol).upper()\n        if not sym:\n            continue\n        sec = to_text(section) or \"other\"\n        met = to_text(metric) or \"metric\"\n        value = value_num if value_num is not None else value_text\n        unit_txt = to_text(unit)\n        by_symbol.setdefault(sym, {}).setdefault(sec, []).append(\n            {\"metric\": met, \"value\": value, \"unit\": unit_txt}\n        )\n    return by_symbol\n\n\ndef render_vector_text(payload):\n    lines = []\n\n    add_line(lines, f\"[ENTITY] {payload.get(\u0027symbol\u0027)} ({payload.get(\u0027name\u0027) or payload.get(\u0027symbol\u0027)})\")\n    add_line(lines, f\"[RUN] {payload.get(\u0027run_id\u0027)} | [ASOF] {payload.get(\u0027as_of_date\u0027)}\")\n    add_line(lines, f\"[STATUS] {payload.get(\u0027status\u0027)} | horizon={payload.get(\u0027horizon\u0027)}\")\n    add_line(lines, \"\")\n\n    add_line(lines, \"[SCORES]\")\n    add_line(\n        lines,\n        \"triage={}/100 risk={}/100 quality={}/100 growth={}/100 valuation={}/100 health={}/100 consensus={}/100\".format(\n            payload.get(\"score\"),\n            payload.get(\"risk_score\"),\n            payload.get(\"quality_score\"),\n            payload.get(\"growth_score\"),\n            payload.get(\"valuation_score\"),\n            payload.get(\"health_score\"),\n            payload.get(\"consensus_score\"),\n        ),\n    )\n    add_line(lines, \"\")\n\n    add_line(lines, \"[THESIS]\")\n    add_line(lines, f\"why={payload.get(\u0027why\u0027)}\")\n    add_line(lines, f\"risks={payload.get(\u0027risks\u0027)}\")\n    add_line(lines, f\"next_steps={payload.get(\u0027next_steps\u0027)}\")\n    add_line(lines, \"\")\n\n    add_line(lines, \"[VALUATION]\")\n    add_line(\n        lines,\n        \"current_price={} target_price={} upside_pct={} analyst_count={} recommendation={}\".format(\n            fmt_num(payload.get(\"current_price\")),\n            fmt_num(payload.get(\"target_price\")),\n            fmt_num(payload.get(\"upside_pct\")),\n            payload.get(\"analyst_count\"),\n            payload.get(\"recommendation\"),\n        ),\n    )\n    add_line(lines, f\"scenario={payload.get(\u0027valuation\u0027)}\")\n    add_line(lines, \"\")\n\n    add_line(lines, \"[CONSENSUS]\")\n    add_line(\n        lines,\n        \"recommendation_mean={} target_low={} target_high={} dispersion_pct={}\".format(\n            fmt_num(payload.get(\"recommendation_mean\")),\n            fmt_num(payload.get(\"target_low_price\")),\n            fmt_num(payload.get(\"target_high_price\")),\n            fmt_num(payload.get(\"dispersion_pct\")),\n        ),\n    )\n    add_line(lines, \"\")\n\n    metrics = payload.get(\"metrics_by_section\") or {}\n    if metrics:\n        add_line(lines, \"[METRICS]\")\n        for section in sorted(metrics.keys()):\n            entries = metrics.get(section) or []\n            if not entries:\n                continue\n            rendered = []\n            for entry in entries[:12]:\n                metric = to_text(entry.get(\"metric\"))\n                value = entry.get(\"value\")\n                unit = to_text(entry.get(\"unit\"))\n                if value is None:\n                    continue\n                vv = fmt_num(value)\n                rendered.append(f\"{metric}:{vv}{unit}\")\n            if rendered:\n                add_line(lines, f\"{section} =\u003e \" + \", \".join(rendered))\n\n    return \"\\n\".join(lines).strip()\n\n\nitems = _items or []\nrun_id = pick_run_id(items)\ndb_path = pick_db_path(items)\n\nwith db_con(db_path) as con:\n    if not run_id:\n        row = con.execute(\n            \"SELECT run_id FROM run_log ORDER BY started_at DESC LIMIT 1\"\n        ).fetchone()\n        run_id = to_text(row[0]) if row else \"\"\n\n    if not run_id:\n        return []\n\n    rows = con.execute(\n        \"\"\"\n        SELECT\n          t.record_id,\n          t.run_id,\n          t.symbol,\n          t.name,\n          t.sector,\n          t.industry,\n          t.country,\n          t.status,\n          t.error,\n          t.as_of_date,\n          t.horizon,\n          t.score,\n          t.risk_score,\n          t.quality_score,\n          t.growth_score,\n          t.valuation_score,\n          t.health_score,\n          t.consensus_score,\n          t.current_price,\n          t.target_price,\n          t.upside_pct,\n          t.analyst_count,\n          t.recommendation,\n          t.valuation,\n          t.why,\n          t.risks,\n          t.next_steps,\n          t.data_coverage_pct,\n          t.strategy_version,\n          t.config_version,\n          c.recommendation_mean,\n          c.target_low_price,\n          c.target_high_price,\n          c.dispersion_pct\n        FROM fundamentals_triage_history t\n        LEFT JOIN analyst_consensus_history c\n          ON c.run_id = t.run_id AND c.symbol = t.symbol\n        WHERE t.run_id = ?\n          AND (t.vector_status IS NULL OR t.vector_status IN (\u0027PENDING\u0027,\u0027FAILED\u0027))\n        ORDER BY t.symbol\n        \"\"\",\n        [run_id],\n    ).fetchall()\n    cols = [d[0] for d in con.description]\n    metrics_by_symbol = build_metrics_by_symbol(con, run_id)\n\nout = []\nfor tup in rows:\n    row = dict(zip(cols, tup))\n    symbol = to_text(row.get(\"symbol\")).upper()\n    if not symbol:\n        continue\n\n    payload = {\n        \"schema_version\": \"VectorDoc_v2\",\n        \"record_id\": to_text(row.get(\"record_id\")),\n        \"run_id\": to_text(row.get(\"run_id\")),\n        \"symbol\": symbol,\n        \"name\": to_text(row.get(\"name\")),\n        \"sector\": to_text(row.get(\"sector\")),\n        \"industry\": to_text(row.get(\"industry\")),\n        \"country\": to_text(row.get(\"country\")),\n        \"status\": to_text(row.get(\"status\")),\n        \"error\": to_text(row.get(\"error\")),\n        \"as_of_date\": to_text(row.get(\"as_of_date\")),\n        \"horizon\": to_text(row.get(\"horizon\")),\n        \"score\": row.get(\"score\"),\n        \"risk_score\": row.get(\"risk_score\"),\n        \"quality_score\": row.get(\"quality_score\"),\n        \"growth_score\": row.get(\"growth_score\"),\n        \"valuation_score\": row.get(\"valuation_score\"),\n        \"health_score\": row.get(\"health_score\"),\n        \"consensus_score\": row.get(\"consensus_score\"),\n        \"current_price\": row.get(\"current_price\"),\n        \"target_price\": row.get(\"target_price\"),\n        \"upside_pct\": row.get(\"upside_pct\"),\n        \"analyst_count\": row.get(\"analyst_count\"),\n        \"recommendation\": to_text(row.get(\"recommendation\")),\n        \"valuation\": to_text(row.get(\"valuation\")),\n        \"why\": to_text(row.get(\"why\")),\n        \"risks\": to_text(row.get(\"risks\")),\n        \"next_steps\": to_text(row.get(\"next_steps\")),\n        \"data_coverage_pct\": row.get(\"data_coverage_pct\"),\n        \"strategy_version\": to_text(row.get(\"strategy_version\")),\n        \"config_version\": to_text(row.get(\"config_version\")),\n        \"recommendation_mean\": row.get(\"recommendation_mean\"),\n        \"target_low_price\": row.get(\"target_low_price\"),\n        \"target_high_price\": row.get(\"target_high_price\"),\n        \"dispersion_pct\": row.get(\"dispersion_pct\"),\n        \"metrics_by_section\": metrics_by_symbol.get(symbol, {}),\n    }\n\n    vector_text = render_vector_text(payload)\n    point_id = sanitize_id(payload.get(\"record_id\") or f\"{payload.get(\u0027run_id\u0027)}|{symbol}\")\n    metadata = {\n        \"id\": point_id,`n        \"doc_id\": point_id,`n        \"doc_kind\": \"FUNDA\",`n        \"schema_version\": \"VectorDoc_v2\",\n        \"record_id\": payload.get(\"record_id\"),\n        \"run_id\": payload.get(\"run_id\"),\n        \"symbol\": symbol,\n        \"name\": payload.get(\"name\"),\n        \"sector\": payload.get(\"sector\"),\n        \"status\": payload.get(\"status\"),\n        \"horizon\": payload.get(\"horizon\"),\n        \"score\": payload.get(\"score\"),\n        \"risk_score\": payload.get(\"risk_score\"),\n        \"valuation_score\": payload.get(\"valuation_score\"),\n        \"quality_score\": payload.get(\"quality_score\"),\n        \"health_score\": payload.get(\"health_score\"),\n        \"consensus_score\": payload.get(\"consensus_score\"),\n        \"upside_pct\": payload.get(\"upside_pct\"),\n        \"recommendation\": payload.get(\"recommendation\"),\n        \"analyst_count\": payload.get(\"analyst_count\"),\n        \"data_coverage_pct\": payload.get(\"data_coverage_pct\"),\n        \"as_of_date\": payload.get(\"as_of_date\"),\n        \"strategy_version\": payload.get(\"strategy_version\"),\n        \"config_version\": payload.get(\"config_version\"),\n        \"db_path\": db_path,\n        \"payload_json\": json.dumps(payload, ensure_ascii=False, default=json_default),\n    }\n\n    out.append({\"json\": {\"text\": vector_text, \"metadata\": metadata}})\n\nreturn out\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       128,
+                                       64
+                                   ],
+                      "id":  "5e6f56d1-1210-4ab7-9fec-f3aa5ec2f0e6",
+                      "name":  "AG3V2.10 - Build Vector Docs from DuckDB",
+                      "onError":  "continueRegularOutput"
+                  },
+                  {
+                      "parameters":  {
+                                         "options":  {
+                                                         "dimensions":  1536
+                                                     }
+                                     },
+                      "type":  "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+                      "typeVersion":  1.2,
+                      "position":  [
+                                       560,
+                                       -48
+                                   ],
+                      "id":  "0f4c4e5d-c8c7-41d9-a615-c2bfd2f6f7ba",
+                      "name":  "Embeddings OpenAI",
+                      "credentials":  {
+                                          "openAiApi":  {
+                                                            "id":  "rILpYjTayqc4jXXZ",
+                                                            "name":  "OpenAi account"
+                                                        }
+                                      }
+                  },
+                  {
+                      "parameters":  {
+                                         "chunkSize":  2000,
+                                         "chunkOverlap":  200,
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
+                      "typeVersion":  1,
+                      "position":  [
+                                       560,
+                                       224
+                                   ],
+                      "id":  "84fe2d6f-40f9-4b25-ab4e-3073958e359f",
+                      "name":  "Text Splitter"
+                  },
+                  {
+                      "parameters":  {
+                                         "jsonMode":  "expressionData",
+                                         "jsonData":  "={{ $json.text }}\n",
+                                         "options":  {
+                                                         "metadata":  {
+                                                                          "metadataValues":  [
+                                                                                                 {
+                                                                                                     "name":  "id",
+                                                                                                     "value":  "={{ $json.metadata.id }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "record_id",
+                                                                                                     "value":  "={{ $json.metadata.record_id }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "symbol",
+                                                                                                     "value":  "={{ $json.metadata.symbol }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "name",
+                                                                                                     "value":  "={{ $json.metadata.name }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "run_id",
+                                                                                                     "value":  "={{ $json.metadata.run_id }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "status",
+                                                                                                     "value":  "={{ $json.metadata.status }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "horizon",
+                                                                                                     "value":  "={{ $json.metadata.horizon }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "score",
+                                                                                                     "value":  "={{ $json.metadata.score }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "risk_score",
+                                                                                                     "value":  "={{ $json.metadata.risk_score }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "upside_pct",
+                                                                                                     "value":  "={{ $json.metadata.upside_pct }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "recommendation",
+                                                                                                     "value":  "={{ $json.metadata.recommendation }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "analyst_count",
+                                                                                                     "value":  "={{ $json.metadata.analyst_count }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "data_coverage_pct",
+                                                                                                     "value":  "={{ $json.metadata.data_coverage_pct }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "as_of_date",
+                                                                                                     "value":  "={{ $json.metadata.as_of_date }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "db_path",
+                                                                                                     "value":  "={{ $json.metadata.db_path }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "doc_id",
+                                                                                                     "value":  "={{ $json.metadata.id }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "schema_version",
+                                                                                                     "value":  "={{ $json.metadata.schema_version }}"
+                                                                                                 },
+                                                                                                 {
+                                                                                                     "name":  "doc_kind",
+                                                                                                     "value":  "={{ $json.metadata.doc_kind }}"
+                                                                                                 }
+                                                                                             ]
+                                                                      }
+                                                     }
+                                     },
+                      "type":  "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
+                      "typeVersion":  1,
+                      "position":  [
+                                       560,
+                                       416
+                                   ],
+                      "id":  "cb9b0d2b-9562-4e10-91f8-505eb3b39176",
+                      "name":  "Default Data Loader"
+                  },
+                  {
+                      "parameters":  {
+                                         "mode":  "insert",
+                                         "qdrantCollection":  {
+                                                                  "__rl":  true,
+                                                                  "mode":  "list",
+                                                                  "value":  "fundamental_analysis"
+                                                              },
+                                         "options":  {
+                                                         "collectionConfig":  {
+                                                                                  "similarity":  "Cosine"
+                                                                              }
+                                                     }
+                                     },
+                      "type":  "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+                      "typeVersion":  1.1,
+                      "position":  [
+                                       784,
+                                       64
+                                   ],
+                      "id":  "2b96ab39-6361-4763-a677-d1f883533901",
+                      "name":  "Qdrant Upsert",
+                      "credentials":  {
+                                          "qdrantApi":  {
+                                                            "id":  "q1CRmg2N6AmW6pC1",
+                                                            "name":  "QdrantApi account"
+                                                        }
+                                      }
+                  },
+                  {
+                      "parameters":  {
+                                         "language":  "pythonNative",
+                                         "pythonCode":  "import duckdb, time, gc\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt \u003c retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\nitems = _items or []\nif not items:\n    return []\n\nupdates = []\nrun_ids = set()\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    d = it.get(\"json\", {}) or {}\n    meta = d.get(\"metadata\") or {}\n\n    run_id = to_text(meta.get(\"run_id\") or d.get(\"run_id\"))\n    symbol = to_text(meta.get(\"symbol\") or d.get(\"symbol\")).upper()\n    record_id = to_text(meta.get(\"record_id\") or d.get(\"record_id\"))\n    vector_id = to_text(meta.get(\"doc_id\") or meta.get(\"id\") or record_id or f\"{run_id}|{symbol}\")\n\n    p = to_text(meta.get(\"db_path\") or d.get(\"db_path\"))\n    if p:\n        db_path = p\n\n    if run_id and symbol:\n        updates.append(\n            {\n                \"run_id\": run_id,\n                \"symbol\": symbol,\n                \"record_id\": record_id,\n                \"vector_id\": vector_id,\n            }\n        )\n        run_ids.add(run_id)\n\nif not updates:\n    return items\n\nwith db_con(db_path) as con:\n    for row in updates:\n        rid = row[\"record_id\"]\n        if rid:\n            con.execute(\n                \"\"\"\n                UPDATE fundamentals_triage_history\n                SET vector_status = \u0027DONE\u0027,\n                    vector_id = ?,\n                    vectorized_at = CURRENT_TIMESTAMP,\n                    updated_row_at = CURRENT_TIMESTAMP\n                WHERE record_id = ?\n                \"\"\",\n                [row[\"vector_id\"] or rid, rid],\n            )\n        else:\n            con.execute(\n                \"\"\"\n                UPDATE fundamentals_triage_history\n                SET vector_status = \u0027DONE\u0027,\n                    vector_id = ?,\n                    vectorized_at = CURRENT_TIMESTAMP,\n                    updated_row_at = CURRENT_TIMESTAMP\n                WHERE run_id = ? AND symbol = ?\n                \"\"\",\n                [row[\"vector_id\"] or f\"{row[\u0027run_id\u0027]}|{row[\u0027symbol\u0027]}\", row[\"run_id\"], row[\"symbol\"]],\n            )\n\n        con.execute(\n            \"\"\"\n            UPDATE fundamentals_snapshot\n            SET vector_status = \u0027DONE\u0027,\n                vector_id = ?,\n                vectorized_at = CURRENT_TIMESTAMP,\n                updated_at = CURRENT_TIMESTAMP\n            WHERE run_id = ? AND symbol = ?\n            \"\"\",\n            [row[\"vector_id\"] or f\"{row[\u0027run_id\u0027]}|{row[\u0027symbol\u0027]}\", row[\"run_id\"], row[\"symbol\"]],\n        )\n\n    for run_id in run_ids:\n        rec = con.execute(\n            \"\"\"\n            SELECT COUNT(*)\n            FROM fundamentals_triage_history\n            WHERE run_id = ? AND vector_status = \u0027DONE\u0027\n            \"\"\",\n            [run_id],\n        ).fetchone()\n        done_count = int(rec[0]) if rec else 0\n        con.execute(\n            \"UPDATE run_log SET vector_docs_written = ? WHERE run_id = ?\",\n            [done_count, run_id],\n        )\n\nreturn items\n"
+                                     },
+                      "type":  "n8n-nodes-base.code",
+                      "typeVersion":  2,
+                      "position":  [
+                                       1008,
+                                       64
+                                   ],
+                      "id":  "f4f72f66-5833-4ea6-83f6-a4d53e2d068c",
+                      "name":  "AG3V2.11 - Mark Vectorized",
+                      "onError":  "continueRegularOutput"
+                  },
+                  {
+                      "parameters":  {
+                                         "content":  "AG3-V2 (DuckDB-first): yfinance fundamentals -\u003e scoring -\u003e DuckDB + Qdrant (collection: fundamental_analysis).",
+                                         "height":  160,
+                                         "width":  1160,
+                                         "color":  5
+                                     },
+                      "type":  "n8n-nodes-base.stickyNote",
+                      "typeVersion":  1,
+                      "position":  [
+                                       -1488,
+                                       -336
+                                   ],
+                      "id":  "f46735a8-4b73-4685-9493-bf170c0afcb6",
+                      "name":  "AG3V2 - Note"
+                  },
+                  {
+                      "parameters":  {
+                                         "batchSize":  1,
+                                         "options":  {
+
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.splitInBatches",
+                      "typeVersion":  3,
+                      "position":  [
+                                       352,
+                                       64
+                                   ],
+                      "id":  "bfc636d7-d694-4d36-9a86-e79510ddf45b",
+                      "name":  "Split Vector Docs (FUNDA)"
+                  },
+                  {
+                      "parameters":  {
+                                         "method":  "POST",
+                                         "url":  "={{$env.QDRANT_URL}}/collections/fundamental_analysis/points/delete?wait=true\u0026ordering=strong",
+                                         "sendHeaders":  true,
+                                         "headerParameters":  {
+                                                                  "parameters":  [
+                                                                                     {
+                                                                                         "name":  "api-key",
+                                                                                         "value":  "={{$env.QDRANT_API_KEY}}"
+                                                                                     },
+                                                                                     {
+                                                                                         "name":  "Content-Type",
+                                                                                         "value":  "application/json"
+                                                                                     }
+                                                                                 ]
+                                                              },
+                                         "sendBody":  true,
+                                         "specifyBody":  "json",
+                                         "jsonBody":  "={{ { \"filter\": { \"must\": [ { \"key\": \"doc_id\", \"match\": { \"value\": $json.metadata.id } } ] } } }}",
+                                         "options":  {
+                                                         "timeout":  30000
+                                                     }
+                                     },
+                      "type":  "n8n-nodes-base.httpRequest",
+                      "typeVersion":  4,
+                      "position":  [
+                                       576,
+                                       64
+                                   ],
+                      "id":  "ec3e8703-8e8c-49dd-a7f2-a4bb8da3738a",
+                      "name":  "Qdrant Delete (FUNDA by doc_id)"
+                  }
+              ],
+    "connections":  {
+                        "Schedule Trigger":  {
+                                                 "main":  [
+                                                              [
+                                                                  {
+                                                                      "node":  "AG3V2.00 - Init Context",
+                                                                      "type":  "main",
+                                                                      "index":  0
+                                                                  }
+                                                              ]
+                                                          ]
+                                             },
+                        "Manual Trigger":  {
+                                               "main":  [
+                                                            [
+                                                                {
+                                                                    "node":  "AG3V2.00 - Init Context",
+                                                                    "type":  "main",
+                                                                    "index":  0
+                                                                }
+                                                            ]
+                                                        ]
+                                           },
+                        "AG3V2.00 - Init Context":  {
+                                                        "main":  [
+                                                                     [
+                                                                         {
+                                                                             "node":  "AG3V2.01 - Read Universe",
+                                                                             "type":  "main",
+                                                                             "index":  0
+                                                                         }
+                                                                     ]
+                                                                 ]
+                                                    },
+                        "AG3V2.01 - Read Universe":  {
+                                                         "main":  [
+                                                                      [
+                                                                          {
+                                                                              "node":  "AG3V2.02 - Build Queue",
+                                                                              "type":  "main",
+                                                                              "index":  0
+                                                                          }
+                                                                      ]
+                                                                  ]
+                                                     },
+                        "AG3V2.02 - Build Queue":  {
+                                                       "main":  [
+                                                                    [
+                                                                        {
+                                                                            "node":  "AG3V2.02B - DuckDB Init Run",
+                                                                            "type":  "main",
+                                                                            "index":  0
+                                                                        }
+                                                                    ]
+                                                                ]
+                                                   },
+                        "AG3V2.02B - DuckDB Init Run":  {
+                                                            "main":  [
+                                                                         [
+                                                                             {
+                                                                                 "node":  "AG3V2.03 - Split Symbols",
+                                                                                 "type":  "main",
+                                                                                 "index":  0
+                                                                             }
+                                                                         ]
+                                                                     ]
+                                                        },
+                        "AG3V2.03 - Split Symbols":  {
+                                                         "main":  [
+                                                                      [
+                                                                          {
+                                                                              "node":  "AG3V2.04 - HTTP Fundamentals",
+                                                                              "type":  "main",
+                                                                              "index":  0
+                                                                          },
+                                                                          {
+                                                                              "node":  "AG3V2.05 - Merge Queue + API",
+                                                                              "type":  "main",
+                                                                              "index":  1
+                                                                          }
+                                                                      ],
+                                                                      [
+                                                                          {
+                                                                              "node":  "AG3V2.09 - Finalize Run",
+                                                                              "type":  "main",
+                                                                              "index":  0
+                                                                          },
+                                                                          {
+                                                                              "node":  "AG3V2.10 - Build Vector Docs from DuckDB",
+                                                                              "type":  "main",
+                                                                              "index":  0
+                                                                          }
+                                                                      ]
+                                                                  ]
+                                                     },
+                        "AG3V2.04 - HTTP Fundamentals":  {
+                                                             "main":  [
+                                                                          [
+                                                                              {
+                                                                                  "node":  "AG3V2.05 - Merge Queue + API",
+                                                                                  "type":  "main",
+                                                                                  "index":  0
+                                                                              }
+                                                                          ]
+                                                                      ]
+                                                         },
+                        "AG3V2.05 - Merge Queue + API":  {
+                                                             "main":  [
+                                                                          [
+                                                                              {
+                                                                                  "node":  "AG3V2.06 - Score Fundamentals",
+                                                                                  "type":  "main",
+                                                                                  "index":  0
+                                                                              }
+                                                                          ]
+                                                                      ]
+                                                         },
+                        "AG3V2.06 - Score Fundamentals":  {
+                                                              "main":  [
+                                                                           [
+                                                                               {
+                                                                                   "node":  "AG3V2.07 - Write Fundamentals DuckDB",
+                                                                                   "type":  "main",
+                                                                                   "index":  0
+                                                                               }
+                                                                           ]
+                                                                       ]
+                                                          },
+                        "AG3V2.07 - Write Fundamentals DuckDB":  {
+                                                                     "main":  [
+                                                                                  [
+                                                                                      {
+                                                                                          "node":  "AG3V2.08 - Wait Rate Limit",
+                                                                                          "type":  "main",
+                                                                                          "index":  0
+                                                                                      }
+                                                                                  ]
+                                                                              ]
+                                                                 },
+                        "AG3V2.08 - Wait Rate Limit":  {
+                                                           "main":  [
+                                                                        [
+                                                                            {
+                                                                                "node":  "AG3V2.03 - Split Symbols",
+                                                                                "type":  "main",
+                                                                                "index":  0
+                                                                            }
+                                                                        ]
+                                                                    ]
+                                                       },
+                        "Embeddings OpenAI":  {
+                                                  "ai_embedding":  [
+                                                                       [
+                                                                           {
+                                                                               "node":  "Qdrant Upsert",
+                                                                               "type":  "ai_embedding",
+                                                                               "index":  0
+                                                                           }
+                                                                       ]
+                                                                   ]
+                                              },
+                        "Text Splitter":  {
+                                              "ai_textSplitter":  [
+                                                                      [
+                                                                          {
+                                                                              "node":  "Default Data Loader",
+                                                                              "type":  "ai_textSplitter",
+                                                                              "index":  0
+                                                                          }
+                                                                      ]
+                                                                  ]
+                                          },
+                        "Default Data Loader":  {
+                                                    "ai_document":  [
+                                                                        [
+                                                                            {
+                                                                                "node":  "Qdrant Upsert",
+                                                                                "type":  "ai_document",
+                                                                                "index":  0
+                                                                            }
+                                                                        ]
+                                                                    ]
+                                                },
+                        "Split Vector Docs (FUNDA)":  {
+                                                          "main":  [
+                                                                       [
+                                                                           {
+                                                                               "node":  "Qdrant Delete (FUNDA by doc_id)",
+                                                                               "type":  "main",
+                                                                               "index":  0
+                                                                           }
+                                                                       ],
+                                                                       [
+
+                                                                       ]
+                                                                   ]
+                                                      },
+                        "AG3V2.10 - Build Vector Docs from DuckDB":  {
+                                                                         "main":  [
+                                                                                      [
+                                                                                          {
+                                                                                              "node":  "Split Vector Docs (FUNDA)",
+                                                                                              "type":  "main",
+                                                                                              "index":  0
+                                                                                          }
+                                                                                      ]
+                                                                                  ]
+                                                                     },
+                        "Qdrant Delete (FUNDA by doc_id)":  {
+                                                                "main":  [
+                                                                             [
+                                                                                 {
+                                                                                     "node":  "Qdrant Upsert",
+                                                                                     "type":  "main",
+                                                                                     "index":  0
+                                                                                 }
+                                                                             ]
+                                                                         ]
+                                                            },
+                        "Qdrant Upsert":  {
+                                              "main":  [
+                                                           [
+                                                               {
+                                                                   "node":  "AG3V2.11 - Mark Vectorized",
+                                                                   "type":  "main",
+                                                                   "index":  0
+                                                               }
+                                                           ]
+                                                       ]
+                                          },
+                        "AG3V2.11 - Mark Vectorized":  {
+                                                           "main":  [
+                                                                        [
+                                                                            {
+                                                                                "node":  "Split Vector Docs (FUNDA)",
+                                                                                "type":  "main",
+                                                                                "index":  0
+                                                                            }
+                                                                        ]
+                                                                    ]
+                                                       }
+                    },
+    "settings":  {
+                     "executionOrder":  "v1"
+                 },
+    "pinData":  {
+
+                },
+    "meta":  {
+                 "templateCredsSetupCompleted":  true
+             }
 }
