@@ -1,12 +1,15 @@
 import duckdb
 import gc
 import json
+import os
 import re
 import time
 from contextlib import contextmanager
 from datetime import date, datetime
 
 DEFAULT_DB_PATH = "/files/duckdb/ag4_spe_v2.duckdb"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333").rstrip("/")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 
 
 @contextmanager
@@ -77,7 +80,8 @@ def build_text(payload):
     lines = []
 
     add_line(lines, f"[TARGET] {payload.get('symbol')} ({payload.get('company_name') or payload.get('symbol')})")
-    add_line(lines, f"[RUN] {payload.get('run_id')} | [DATE] {payload.get('published_at')}")
+    add_line(lines, "[DOC_KIND] NEWS")
+    add_line(lines, f"[RUN] {payload.get('run_id')} | [ASOF] {payload.get('published_at')}")
     add_line(lines, f"[SOURCE] {payload.get('source')} | urgency={payload.get('urgency')} | horizon={payload.get('horizon')}")
     add_line(lines, "")
 
@@ -162,7 +166,7 @@ with db_con(db_path) as con:
           analyzed_at
         FROM news_history
         WHERE run_id = ?
-          AND vector_status = 'PENDING'
+          AND (vector_status IS NULL OR vector_status IN ('PENDING','FAILED'))
           AND action = 'analyze'
           AND COALESCE(is_relevant, TRUE) = TRUE
           AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0
@@ -180,7 +184,7 @@ for tup in rows:
         continue
 
     payload = {k: row.get(k) for k in cols}
-    payload["schema_version"] = "ag4_spe_news_vector_v1"
+    payload["schema_version"] = "VectorDoc_v2"
     payload["db_path"] = db_path
 
     point_id = sanitize_id(f"news_{news_id}")
@@ -188,6 +192,10 @@ for tup in rows:
 
     metadata = {
         "id": point_id,
+        "doc_id": point_id,
+        "doc_kind": "NEWS",
+        "asof_date": to_text(payload.get("published_at")),
+        "schema_version": "VectorDoc_v2",
         "news_id": news_id,
         "run_id": to_text(payload.get("run_id")),
         "symbol": to_text(payload.get("symbol")),
@@ -202,6 +210,8 @@ for tup in rows:
         "urgency": to_text(payload.get("urgency")),
         "horizon": to_text(payload.get("horizon")),
         "is_relevant": bool(payload.get("is_relevant")),
+        "qdrant_url": QDRANT_URL,
+        "qdrant_api_key": QDRANT_API_KEY,
         "db_path": db_path,
         "payload_json": json.dumps(payload, ensure_ascii=False, default=json_default),
     }

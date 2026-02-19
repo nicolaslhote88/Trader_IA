@@ -32,7 +32,7 @@ with db_con() as con:
         d = it.get("json", {}) or {}
         meta = d.get("metadata") or {}
         signal_id = meta.get("signal_id") or d.get("signal_id") or ""
-        vector_id = d.get("id") or ""
+        vector_id = meta.get("doc_id") or meta.get("id") or signal_id or ""
 
         if signal_id and vector_id:
             con.execute(

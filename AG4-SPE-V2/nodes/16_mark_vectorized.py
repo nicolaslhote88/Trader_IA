@@ -49,7 +49,7 @@ for it in items:
 
     news_id = to_text(meta.get("news_id") or d.get("news_id"))
     run_id = to_text(meta.get("run_id") or d.get("run_id"))
-    vector_id = to_text(d.get("id") or meta.get("id"))
+    vector_id = to_text(meta.get("doc_id") or meta.get("id") or news_id)
     local_db_path = to_text(meta.get("db_path") or d.get("db_path"))
 
     if local_db_path:
@@ -102,4 +102,3 @@ with db_con(db_path) as con:
         )
 
 return items
-

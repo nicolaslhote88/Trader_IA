@@ -48,7 +48,7 @@ for it in items:
     run_id = to_text(meta.get("run_id") or d.get("run_id"))
     symbol = to_text(meta.get("symbol") or d.get("symbol")).upper()
     record_id = to_text(meta.get("record_id") or d.get("record_id"))
-    vector_id = to_text(d.get("id") or meta.get("id"))
+    vector_id = to_text(meta.get("doc_id") or meta.get("id") or record_id or f"{run_id}|{symbol}")
 
     p = to_text(meta.get("db_path") or d.get("db_path"))
     if p:

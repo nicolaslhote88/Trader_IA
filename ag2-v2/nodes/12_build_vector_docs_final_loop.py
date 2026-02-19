@@ -1,8 +1,16 @@
-import duckdb, json, time, gc, re
+import duckdb
+import gc
+import json
+import os
+import re
+import time
 from contextlib import contextmanager
 from datetime import date, datetime
 
 DB_PATH = "/files/duckdb/ag2_v2.duckdb"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333").rstrip("/")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
+
 
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
@@ -11,8 +19,8 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
         try:
             con = duckdb.connect(path, read_only=True)
             break
-        except Exception as e:
-            if "lock" in str(e).lower() and attempt < retries - 1:
+        except Exception as exc:
+            if "lock" in str(exc).lower() and attempt < retries - 1:
                 time.sleep(delay * (2 ** attempt))
             else:
                 raise
@@ -26,17 +34,19 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
                 pass
         gc.collect()
 
-def sanitize_id(s):
-    s = str(s or "")
-    return re.sub(r"[^a-zA-Z0-9_-]", "_", s)
+
+def sanitize_id(value):
+    return re.sub(r"[^a-zA-Z0-9_-]", "_", str(value or ""))
+
 
 def pick_run_id(items):
     for it in items:
         d = it.get("json", {}) or {}
-        rid = str(d.get("run_id", "") or "").strip()
-        if rid:
-            return rid
+        run_id = str(d.get("run_id", "") or "").strip()
+        if run_id:
+            return run_id
     return ""
+
 
 def prefixed(row, prefix):
     out = {}
@@ -46,13 +56,12 @@ def prefixed(row, prefix):
             out[k[len(p):]] = v
     return out
 
+
 def json_default(v):
     if isinstance(v, (datetime, date)):
         return v.isoformat()
     return str(v)
 
-def is_blank(v):
-    return v is None or (isinstance(v, str) and v.strip() == "")
 
 def fmt(v, nd=2):
     if v is None:
@@ -60,7 +69,7 @@ def fmt(v, nd=2):
     try:
         if isinstance(v, bool):
             return str(v).lower()
-        if isinstance(v, (int,)):
+        if isinstance(v, int):
             return str(v)
         if isinstance(v, float):
             return f"{v:.{nd}f}"
@@ -68,16 +77,16 @@ def fmt(v, nd=2):
     except Exception:
         return str(v)
 
-def add_line(lines, s):
-    if s is None:
+
+def add_line(lines, value):
+    if value is None:
         return
-    s = str(s)
+    s = str(value)
     if not s.strip():
         return
     lines.append(s)
 
-# Pour éviter d'exploser ton stockage Qdrant (bars arrays / réponses complètes / ai_raw),
-# on garde un "row compact" par défaut.
+
 DROP_KEYS = {
     "h1_bars_60",
     "bars_h1",
@@ -86,22 +95,19 @@ DROP_KEYS = {
     "ai_raw",
 }
 
+
 def prune_row(row):
     out = {}
     for k, v in row.items():
         if k in DROP_KEYS:
             continue
-        # Optionnel: filtrer aussi les très gros objets
         if isinstance(v, (list, dict)) and k.endswith("_response"):
             continue
         out[k] = v
     return out
 
+
 def render_vector_text(payload):
-    """
-    Produit un texte "rendu" (meilleur pour embeddings que du JSON brut),
-    en gardant les infos clés + chiffres utiles. Pas de gros tableaux/bars.
-    """
     lines = []
 
     sym = payload.get("symbol")
@@ -110,19 +116,17 @@ def render_vector_text(payload):
     workflow_date = payload.get("workflow_date")
 
     add_line(lines, f"[ENTITY] {sym}" + (f" ({sym_name})" if sym_name else ""))
+    add_line(lines, "[DOC_KIND] TECH")
     add_line(lines, f"[RUN] {run_id} | [ASOF] {workflow_date}")
     add_line(lines, "")
 
-    # H1
     h1 = payload.get("h1", {}) or {}
-    h1m = (h1.get("meta") or {})
-    h1s = (h1.get("signal") or {})
-    h1i = (h1.get("indicators") or {})
-
+    h1m = h1.get("meta") or {}
+    h1s = h1.get("signal") or {}
+    h1i = h1.get("indicators") or {}
     add_line(lines, "[H1]")
     add_line(lines, f"date={h1m.get('date')} source={h1m.get('source')} status={h1m.get('status')}")
     add_line(lines, f"action={h1s.get('action')} score={h1s.get('score')} conf={h1s.get('confidence')} rationale={h1s.get('rationale')}")
-    # Quelques indicateurs clés
     key_h1 = {
         "last_close": h1i.get("last_close"),
         "sma50": h1i.get("sma50"),
@@ -137,12 +141,10 @@ def render_vector_text(payload):
     add_line(lines, "indicators=" + ", ".join([f"{k}:{fmt(v)}" for k, v in key_h1.items() if v is not None]))
     add_line(lines, "")
 
-    # D1
     d1 = payload.get("d1", {}) or {}
-    d1m = (d1.get("meta") or {})
-    d1s = (d1.get("signal") or {})
-    d1i = (d1.get("indicators") or {})
-
+    d1m = d1.get("meta") or {}
+    d1s = d1.get("signal") or {}
+    d1i = d1.get("indicators") or {}
     add_line(lines, "[D1]")
     add_line(lines, f"date={d1m.get('date')} source={d1m.get('source')} status={d1m.get('status')}")
     add_line(lines, f"action={d1s.get('action')} score={d1s.get('score')} conf={d1s.get('confidence')} rationale={d1s.get('rationale')}")
@@ -161,41 +163,39 @@ def render_vector_text(payload):
     add_line(lines, "indicators=" + ", ".join([f"{k}:{fmt(v)}" for k, v in key_d1.items() if v is not None]))
     add_line(lines, "")
 
-    # AI
     ai = payload.get("ai")
     if ai:
         add_line(lines, "[AI]")
         add_line(lines, f"decision={ai.get('decision')} validated={ai.get('validated')} quality={ai.get('quality')} rr={ai.get('rr_theoretical')}")
         add_line(lines, f"stop_loss={ai.get('stop_loss')} stop_basis={ai.get('stop_basis')} bias_sma200={ai.get('bias_sma200')} regime_d1={ai.get('regime_d1')} alignment={ai.get('alignment')}")
-        # Reasoning utile, mais peut être long
         reasoning = ai.get("reasoning")
         if reasoning:
-            # on limite un peu pour éviter d'exploser (optionnel)
             reasoning = str(reasoning)
             if len(reasoning) > 800:
-                reasoning = reasoning[:800] + "…"
+                reasoning = reasoning[:800] + "..."
             add_line(lines, f"reasoning={reasoning}")
         add_line(lines, "")
 
-    # Processing / gouvernance
     pr = payload.get("processing", {}) or {}
     add_line(lines, "[PROCESSING]")
-    add_line(lines, " ".join([
-        f"filter_reason={pr.get('filter_reason')}",
-        f"pass_ai={pr.get('pass_ai')}",
-        f"pass_pm={pr.get('pass_pm')}",
-        f"call_ai={pr.get('call_ai')}",
-        f"dedup_reason={pr.get('dedup_reason')}",
-        f"sig_hash={pr.get('sig_hash')}",
-        f"vector_status={pr.get('vector_status')}",
-    ]).strip())
+    add_line(
+        lines,
+        " ".join(
+            [
+                f"filter_reason={pr.get('filter_reason')}",
+                f"pass_ai={pr.get('pass_ai')}",
+                f"pass_pm={pr.get('pass_pm')}",
+                f"call_ai={pr.get('call_ai')}",
+                f"dedup_reason={pr.get('dedup_reason')}",
+                f"sig_hash={pr.get('sig_hash')}",
+                f"vector_status={pr.get('vector_status')}",
+            ]
+        ).strip(),
+    )
 
     return "\n".join(lines).strip()
 
 
-# -----------------------
-# MAIN
-# -----------------------
 items = _items or []
 run_id = pick_run_id(items)
 
@@ -215,6 +215,7 @@ with db_con() as con:
         FROM technical_signals ts
         LEFT JOIN universe u ON u.symbol = ts.symbol
         WHERE ts.run_id = ?
+          AND (ts.vector_status IS NULL OR ts.vector_status IN ('PENDING','FAILED'))
         ORDER BY ts.symbol
         """,
         [run_id],
@@ -222,7 +223,6 @@ with db_con() as con:
     cols = [d[0] for d in con.description]
 
 out = []
-
 for tup in rows:
     row = dict(zip(cols, tup))
 
@@ -230,17 +230,16 @@ for tup in rows:
     symbol = str(row.get("symbol", "") or "")
     symbol_name = str(row.get("symbol_name", "") or "")
 
-    # Respect de ta logique: si should_vectorize est False -> on skip
-    # (sinon tu remplis Qdrant de "REJECT" / non-signaux)
     should_vectorize = row.get("should_vectorize")
     if should_vectorize is False:
         continue
 
     ai_decision = str(row.get("ai_decision", "") or "").strip()
     has_ai = ai_decision not in ("", "SKIP")
+    doc_id = sanitize_id(signal_id)
 
     payload = {
-        "schema_version": "ag2_vector_full_v1",
+        "schema_version": "VectorDoc_v2",
         "signal_id": signal_id,
         "run_id": row.get("run_id"),
         "workflow_date": str(row.get("workflow_date", "") or ""),
@@ -285,7 +284,9 @@ for tup in rows:
             "sig_hash": row.get("sig_hash"),
             "vector_status": row.get("vector_status"),
         },
-        "ai": None if not has_ai else {
+        "ai": None
+        if not has_ai
+        else {
             "decision": row.get("ai_decision"),
             "validated": row.get("ai_validated"),
             "quality": row.get("ai_quality"),
@@ -301,23 +302,16 @@ for tup in rows:
             "output_ref": row.get("ai_output_ref"),
             "rr_theoretical": row.get("ai_rr_theoretical"),
         },
-        # On garde un row compact en payload (évite bars/ai_raw énormes)
         "technical_signals_row": prune_row(row),
-        # Et une référence DB si tu veux recharger du full sans l'indexer
-        "raw_ref": {
-            "db": "ag2_v2.duckdb",
-            "table": "technical_signals",
-            "id": signal_id
-        }
+        "raw_ref": {"db": "ag2_v2.duckdb", "table": "technical_signals", "id": signal_id},
     }
 
-    vector_text = render_vector_text(payload)
-
-    # IMPORTANT: pour éviter les micro-docs,
-    # on sort UNIQUEMENT "text" + "metadata" en top-level.
-    # L'ID stable doit être dans metadata (pas au root).
     metadata = {
-        "id": sanitize_id(signal_id),      # ID stable pour Qdrant (si le node le supporte)
+        "id": doc_id,
+        "doc_id": doc_id,
+        "doc_kind": "TECH",
+        "asof_date": str(row.get("workflow_date", "") or ""),
+        "schema_version": "VectorDoc_v2",
         "signal_id": signal_id,
         "run_id": str(row.get("run_id", "") or ""),
         "symbol": symbol,
@@ -331,15 +325,11 @@ for tup in rows:
         "ai_quality": row.get("ai_quality"),
         "has_ai": has_ai,
         "sig_hash": str(row.get("sig_hash", "") or ""),
-        # Optionnel: stocker le payload complet (attention taille)
+        "qdrant_url": QDRANT_URL,
+        "qdrant_api_key": QDRANT_API_KEY,
         "payload_json": json.dumps(payload, ensure_ascii=False, default=json_default),
     }
 
-    out.append({
-        "json": {
-            "text": vector_text,     # <= SEUL champ à vectoriser
-            "metadata": metadata     # <= SEUL payload filtrable
-        }
-    })
+    out.append({"json": {"text": render_vector_text(payload), "metadata": metadata}})
 
 return out

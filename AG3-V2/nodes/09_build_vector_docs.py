@@ -1,8 +1,10 @@
-import duckdb, json, time, gc, re
+import duckdb, json, time, gc, re, os
 from contextlib import contextmanager
 from datetime import date, datetime
 
 DEFAULT_DB_PATH = "/files/duckdb/ag3_v2.duckdb"
+QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333").rstrip("/")
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY", "")
 
 
 @contextmanager
@@ -108,6 +110,7 @@ def render_vector_text(payload):
     lines = []
 
     add_line(lines, f"[ENTITY] {payload.get('symbol')} ({payload.get('name') or payload.get('symbol')})")
+    add_line(lines, "[DOC_KIND] FUNDA")
     add_line(lines, f"[RUN] {payload.get('run_id')} | [ASOF] {payload.get('as_of_date')}")
     add_line(lines, f"[STATUS] {payload.get('status')} | horizon={payload.get('horizon')}")
     add_line(lines, "")
@@ -236,6 +239,7 @@ with db_con(db_path) as con:
         LEFT JOIN analyst_consensus_history c
           ON c.run_id = t.run_id AND c.symbol = t.symbol
         WHERE t.run_id = ?
+          AND (t.vector_status IS NULL OR t.vector_status IN ('PENDING','FAILED'))
         ORDER BY t.symbol
         """,
         [run_id],
@@ -251,7 +255,7 @@ for tup in rows:
         continue
 
     payload = {
-        "schema_version": "ag3_vector_fundamentals_v1",
+        "schema_version": "VectorDoc_v2",
         "record_id": to_text(row.get("record_id")),
         "run_id": to_text(row.get("run_id")),
         "symbol": symbol,
@@ -293,6 +297,9 @@ for tup in rows:
     point_id = sanitize_id(payload.get("record_id") or f"{payload.get('run_id')}|{symbol}")
     metadata = {
         "id": point_id,
+        "doc_id": point_id,
+        "doc_kind": "FUNDA",
+        "schema_version": "VectorDoc_v2",
         "record_id": payload.get("record_id"),
         "run_id": payload.get("run_id"),
         "symbol": symbol,
@@ -313,6 +320,8 @@ for tup in rows:
         "as_of_date": payload.get("as_of_date"),
         "strategy_version": payload.get("strategy_version"),
         "config_version": payload.get("config_version"),
+        "qdrant_url": QDRANT_URL,
+        "qdrant_api_key": QDRANT_API_KEY,
         "db_path": db_path,
         "payload_json": json.dumps(payload, ensure_ascii=False, default=json_default),
     }
