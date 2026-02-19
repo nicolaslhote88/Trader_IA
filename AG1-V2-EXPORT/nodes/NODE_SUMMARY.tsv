@@ -10,3 +10,6 @@ merge7	bd985750-0a6f-4382-84bb-00526f800fbf	Merge7	n8n-nodes-base.merge	0
 ag1_00_assemble_input_packs	21206129-5a81-4e80-8fb1-11026a8446b4	AG1.00 — Assemble Input Packs	n8n-nodes-base.code	2474
 agent_1_portfolio_manager	577dd790-2f60-4d30-9a94-f4add6866aab	Agent #1 - Portfolio manager	@n8n/n8n-nodes-langchain.agent	0
 information_extractor	a05c7914-51df-4e1f-ab3b-d27d033788ac	Information Extractor	@n8n/n8n-nodes-langchain.informationExtractor	0
+build_duckdb_bundle	00d6828c-6cac-4f2a-a84b-68a1e594ec4d	8 - Build DuckDB Bundle	n8n-nodes-base.code	14083
+upsert_run_bundle_duckdb	9dce7840-4d9a-4f9c-b26a-9c7a4510b0a1	9 - Upsert Run Bundle (DuckDB)	n8n-nodes-base.code	2202
+post_run_health_duckdb	fd390b6f-2392-4f34-b8dc-6d2c9b50f8f2	10 - Post-Run Health (DuckDB)	n8n-nodes-base.code	3037

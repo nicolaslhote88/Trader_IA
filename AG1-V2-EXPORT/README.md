@@ -8,6 +8,9 @@ This folder contains a GitHub-ready export of the updated AG1 workflow.
 - `nodes/NODE_SUMMARY.tsv`
 - `nodes/pre_agent/*`
 - `nodes/agent_input/*`
+- `nodes/post_agent/*`
+- `sql/portfolio_ledger_schema_v2.sql`
+- `docs/POST_AGENT_DUCKDB_LEDGER.md`
 - `export_to_github.ps1`
 
 ## Included updates
@@ -22,6 +25,8 @@ This folder contains a GitHub-ready export of the updated AG1 workflow.
 - `opportunity_pack`
 - `opportunity_stats`
 - `matrix_thresholds`
+- Post-agent migration to DuckDB ledger (`runs/orders/fills/cash_ledger/position_lots/snapshots`).
+- Google Sheets append/upsert nodes in the post-agent branch are disabled in workflow export.
 
 ## Expected env vars
 
@@ -31,6 +36,8 @@ This folder contains a GitHub-ready export of the updated AG1 workflow.
 - `AG4_DUCKDB_PATH=/files/duckdb/ag4_v2.duckdb`
 - `AG4_SPE_DUCKDB_PATH=/files/duckdb/ag4_spe_v2.duckdb`
 - `YF_ENRICH_DUCKDB_PATH=/files/duckdb/yf_enrichment_v1.duckdb`
+- `AG1_DUCKDB_WRITER_PATH=/files/AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py` (recommended)
+- `AG1_LEDGER_SCHEMA_PATH=/files/AG1-V2-EXPORT/sql/portfolio_ledger_schema_v2.sql` (optional override)
 
 ## n8n import
 
