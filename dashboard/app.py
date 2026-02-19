@@ -1,5 +1,6 @@
 import json
 import hashlib
+import html
 import os
 import re
 import sys
@@ -2968,18 +2969,22 @@ def _gate_badge_html(
         st_norm = "N/A"
     else:
         bg = "#dc3545"
+    label_txt = safe_text(label, default="Gate")
+    detail_txt = safe_text(detail, default="")
     gate_type_norm = safe_text(gate_type, default="-")
-    txt = f"{label}: {st_norm} [{gate_type_norm}]"
-    if detail:
-        txt += f" ({detail})"
+    txt = f"{label_txt}: {st_norm} [{gate_type_norm}]"
+    if detail_txt:
+        txt += f" ({detail_txt})"
     tooltip = (
-        f"Règle : {safe_text(rule, default='N/A')}&#10;"
-        f"Type : {gate_type_norm}&#10;"
+        f"Règle : {safe_text(rule, default='N/A')}\n"
+        f"Type : {gate_type_norm}\n"
         f"Conséquence : {safe_text(consequence, default='N/A')}"
     )
+    tooltip_esc = html.escape(tooltip, quote=True)
+    txt_esc = html.escape(txt, quote=False)
     return (
-        f"<span title='{tooltip}' style='display:inline-block;margin:2px 6px 2px 0;padding:4px 8px;border-radius:6px;"
-        f"background:{bg};color:white;font-size:0.85rem;font-weight:600;'>{txt}</span>"
+        f"<span title=\"{tooltip_esc}\" style=\"display:inline-block;margin:2px 6px 2px 0;padding:4px 8px;border-radius:6px;"
+        f"background:{bg};color:white;font-size:0.85rem;font-weight:600;\">{txt_esc}</span>"
     )
 
 
