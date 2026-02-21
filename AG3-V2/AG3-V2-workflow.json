@@ -15,8 +15,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.3,
       "position": [
-        -1424,
-        -224
+        64,
+        112
       ],
       "id": "dcd6b2a3-cc74-4f03-8588-b8a24fe9908d",
       "name": "Schedule Trigger"
@@ -26,8 +26,8 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        -1424,
-        -64
+        64,
+        272
       ],
       "id": "092be7cc-16e7-4904-8d73-bf0ae727f25a",
       "name": "Manual Trigger"
@@ -39,8 +39,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1184,
-        -144
+        304,
+        192
       ],
       "id": "013e013b-4655-4bdb-8f2b-66fdffb09e95",
       "name": "AG3V2.00 - Init Context"
@@ -56,12 +56,11 @@
         },
         "sheetName": {
           "__rl": true,
+          "value": 1078848687,
           "mode": "list",
-          "value": "Universe",
           "cachedResultName": "Universe",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
         },
-        "options": {},
         "filtersUI": {
           "values": [
             {
@@ -69,13 +68,14 @@
               "lookupValue": "true"
             }
           ]
-        }
+        },
+        "options": {}
       },
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
       "position": [
-        -960,
-        -144
+        528,
+        192
       ],
       "id": "8e3a18ed-9e2d-43f1-8b12-a90ff3daa49f",
       "name": "AG3V2.01 - Read Universe",
@@ -88,13 +88,13 @@
     },
     {
       "parameters": {
-        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst out = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  out.push({\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      Symbol: symbol,\n      Name: name,\n      Sector: sector,\n      BoursoramaRef: boursoramaRef,\n      UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n    },\n  });\n}\n\nif (ctx.max_symbols && Number(ctx.max_symbols) > 0) {\n  return out.slice(0, Number(ctx.max_symbols));\n}\nreturn out;\n"
+        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst BATCH_SIZE = 50;\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst queue = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  queue.push({\n    run_id: ctx.run_id || null,\n    nowIso: ctx.nowIso || new Date().toISOString(),\n    asOfDate: ctx.asOfDate || null,\n    api_base: ctx.api_base || \"http://yfinance-api:8080\",\n    db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n    strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n    config_version: ctx.config_version || \"ag3_v2_default\",\n    Symbol: symbol,\n    Name: name,\n    Sector: sector,\n    BoursoramaRef: boursoramaRef,\n    UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n  });\n}\n\n// Deterministic order for batch rotation.\nqueue.sort((a, b) => String(a.Symbol).localeCompare(String(b.Symbol)));\n\nconst maxSymbols = Number(ctx.max_symbols || 0);\nconst finalQueue = Number.isFinite(maxSymbols) && maxSymbols > 0 ? queue.slice(0, Math.floor(maxSymbols)) : queue;\n\nreturn [\n  {\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      max_symbols: Number.isFinite(maxSymbols) && maxSymbols > 0 ? Math.floor(maxSymbols) : 0,\n      batch_size: BATCH_SIZE,\n      _all_queue: finalQueue,\n      _total_pool: finalQueue.length,\n    },\n  },\n];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -736,
-        -144
+        752,
+        192
       ],
       "id": "d7dc6bbd-c6b9-402f-b2da-21594941e731",
       "name": "AG3V2.02 - Build Queue"
@@ -102,13 +102,13 @@
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\nWORKFLOW_VERSION = \"2.1.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nfirst = items[0].get(\"json\", {}) if items else {}\nrun_id = str(first.get(\"run_id\") or f\"AG3V2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\")\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\n\nschema_stmts = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      triage_rows INTEGER DEFAULT 0,\n      consensus_rows INTEGER DEFAULT 0,\n      metric_rows INTEGER DEFAULT 0,\n      snapshot_rows INTEGER DEFAULT 0,\n      vector_docs_written INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.1.0'\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (\n      snapshot_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      as_of_date DATE,\n      fetched_at TIMESTAMP,\n      status VARCHAR,\n      error VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      data_coverage_pct DOUBLE,\n      profile_json VARCHAR,\n      price_json VARCHAR,\n      valuation_json VARCHAR,\n      profitability_json VARCHAR,\n      growth_json VARCHAR,\n      financial_health_json VARCHAR,\n      consensus_json VARCHAR,\n      dividends_json VARCHAR,\n      vector_status VARCHAR DEFAULT 'PENDING',\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_triage_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      as_of_date DATE,\n      status VARCHAR,\n      error VARCHAR,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      score INTEGER,\n      funda_conf INTEGER,\n      risk_score INTEGER,\n      quality_score INTEGER,\n      growth_score INTEGER,\n      valuation_score INTEGER,\n      health_score INTEGER,\n      consensus_score INTEGER,\n      horizon VARCHAR,\n      current_price DOUBLE,\n      target_price DOUBLE,\n      upside_pct DOUBLE,\n      recommendation VARCHAR,\n      analyst_count INTEGER,\n      valuation VARCHAR,\n      why VARCHAR,\n      risks VARCHAR,\n      next_steps VARCHAR,\n      data_coverage_pct DOUBLE,\n      strategy_version VARCHAR,\n      config_version VARCHAR,\n      vector_status VARCHAR DEFAULT 'PENDING',\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS analyst_consensus_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      recommendation VARCHAR,\n      recommendation_mean DOUBLE,\n      analyst_count INTEGER,\n      current_price DOUBLE,\n      target_mean_price DOUBLE,\n      target_high_price DOUBLE,\n      target_low_price DOUBLE,\n      upside_pct DOUBLE,\n      dispersion_pct DOUBLE,\n      confidence_proxy INTEGER,\n      risk_proxy INTEGER,\n      source VARCHAR,\n      source_url VARCHAR,\n      status VARCHAR,\n      error VARCHAR,\n      horizon VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamental_metrics_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      extracted_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      boursorama_ref VARCHAR,\n      data_type VARCHAR,\n      section VARCHAR,\n      metric VARCHAR,\n      period VARCHAR,\n      value_num DOUBLE,\n      value_text VARCHAR,\n      unit VARCHAR,\n      source_url VARCHAR,\n      sig_hash VARCHAR,\n      title VARCHAR,\n      author VARCHAR,\n      excerpt VARCHAR,\n      raw_text VARCHAR,\n      signal VARCHAR,\n      score DOUBLE,\n      currency VARCHAR,\n      title_or_label VARCHAR,\n      notes VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_triage AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT t.*,\n             ROW_NUMBER() OVER (PARTITION BY t.symbol ORDER BY t.updated_at DESC, t.created_at DESC) AS rn\n      FROM fundamentals_triage_history t\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_consensus AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT c.*,\n             ROW_NUMBER() OVER (PARTITION BY c.symbol ORDER BY c.updated_at DESC, c.created_at DESC) AS rn\n      FROM analyst_consensus_history c\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"ALTER TABLE run_log ADD COLUMN IF NOT EXISTS vector_docs_written INTEGER DEFAULT 0\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n]\n\nwith db_con(db_path) as con:\n    for stmt in schema_stmts:\n        con.execute(stmt)\n\n    total = len(items)\n    if total == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, total, WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n"
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag3_v2.duckdb\"\nWORKFLOW_VERSION = \"2.1.0\"\nDEFAULT_BATCH_SIZE = 50\nBATCH_STATE_KEY = \"ag3_v2_last_index\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\ndef to_int(v, default=0):\n    try:\n        return int(v)\n    except Exception:\n        return default\n\n\ndef normalize_queue(items):\n    first = items[0].get(\"json\", {}) if items else {}\n    raw = first.get(\"_all_queue\")\n    if isinstance(raw, list):\n        source = raw\n    else:\n        source = [it.get(\"json\", {}) or {} for it in items]\n\n    out = []\n    seen = set()\n    for row in source:\n        if not isinstance(row, dict):\n            continue\n        symbol = to_text(row.get(\"Symbol\") or row.get(\"symbol\")).upper()\n        if not symbol or symbol in seen:\n            continue\n        seen.add(symbol)\n        j = dict(row)\n        j[\"Symbol\"] = symbol\n        out.append(j)\n\n    out.sort(key=lambda x: x.get(\"Symbol\", \"\"))\n    return out\n\n\nitems = _items or []\nfirst = items[0].get(\"json\", {}) if items else {}\nrun_id = str(first.get(\"run_id\") or f\"AG3V2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\")\ndb_path = str(first.get(\"db_path\") or DEFAULT_DB_PATH)\nbatch_size = to_int(first.get(\"batch_size\"), DEFAULT_BATCH_SIZE)\nif batch_size <= 0:\n    batch_size = DEFAULT_BATCH_SIZE\n\nqueue = normalize_queue(items)\nmax_symbols = to_int(first.get(\"max_symbols\"), 0)\nif max_symbols > 0:\n    queue = queue[:max_symbols]\n\nschema_stmts = [\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS run_log (\n      run_id VARCHAR PRIMARY KEY,\n      started_at TIMESTAMP NOT NULL,\n      finished_at TIMESTAMP,\n      status VARCHAR DEFAULT 'RUNNING',\n      symbols_total INTEGER DEFAULT 0,\n      symbols_ok INTEGER DEFAULT 0,\n      symbols_error INTEGER DEFAULT 0,\n      triage_rows INTEGER DEFAULT 0,\n      consensus_rows INTEGER DEFAULT 0,\n      metric_rows INTEGER DEFAULT 0,\n      snapshot_rows INTEGER DEFAULT 0,\n      vector_docs_written INTEGER DEFAULT 0,\n      error_detail VARCHAR,\n      version VARCHAR DEFAULT '2.1.0'\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_snapshot (\n      snapshot_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      as_of_date DATE,\n      fetched_at TIMESTAMP,\n      status VARCHAR,\n      error VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      data_coverage_pct DOUBLE,\n      profile_json VARCHAR,\n      price_json VARCHAR,\n      valuation_json VARCHAR,\n      profitability_json VARCHAR,\n      growth_json VARCHAR,\n      financial_health_json VARCHAR,\n      consensus_json VARCHAR,\n      dividends_json VARCHAR,\n      vector_status VARCHAR DEFAULT 'PENDING',\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamentals_triage_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      fetched_at TIMESTAMP,\n      as_of_date DATE,\n      status VARCHAR,\n      error VARCHAR,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      industry VARCHAR,\n      country VARCHAR,\n      boursorama_ref VARCHAR,\n      source VARCHAR,\n      source_url VARCHAR,\n      score INTEGER,\n      funda_conf INTEGER,\n      risk_score INTEGER,\n      quality_score INTEGER,\n      growth_score INTEGER,\n      valuation_score INTEGER,\n      health_score INTEGER,\n      consensus_score INTEGER,\n      horizon VARCHAR,\n      current_price DOUBLE,\n      target_price DOUBLE,\n      upside_pct DOUBLE,\n      recommendation VARCHAR,\n      analyst_count INTEGER,\n      valuation VARCHAR,\n      why VARCHAR,\n      risks VARCHAR,\n      next_steps VARCHAR,\n      data_coverage_pct DOUBLE,\n      strategy_version VARCHAR,\n      config_version VARCHAR,\n      vector_status VARCHAR DEFAULT 'PENDING',\n      vector_id VARCHAR,\n      vectorized_at TIMESTAMP,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS analyst_consensus_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      updated_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      name VARCHAR,\n      sector VARCHAR,\n      recommendation VARCHAR,\n      recommendation_mean DOUBLE,\n      analyst_count INTEGER,\n      current_price DOUBLE,\n      target_mean_price DOUBLE,\n      target_high_price DOUBLE,\n      target_low_price DOUBLE,\n      upside_pct DOUBLE,\n      dispersion_pct DOUBLE,\n      confidence_proxy INTEGER,\n      risk_proxy INTEGER,\n      source VARCHAR,\n      source_url VARCHAR,\n      status VARCHAR,\n      error VARCHAR,\n      horizon VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS fundamental_metrics_history (\n      record_id VARCHAR PRIMARY KEY,\n      run_id VARCHAR NOT NULL,\n      extracted_at TIMESTAMP,\n      as_of_date DATE,\n      symbol VARCHAR NOT NULL,\n      boursorama_ref VARCHAR,\n      data_type VARCHAR,\n      section VARCHAR,\n      metric VARCHAR,\n      period VARCHAR,\n      value_num DOUBLE,\n      value_text VARCHAR,\n      unit VARCHAR,\n      source_url VARCHAR,\n      sig_hash VARCHAR,\n      title VARCHAR,\n      author VARCHAR,\n      excerpt VARCHAR,\n      raw_text VARCHAR,\n      signal VARCHAR,\n      score DOUBLE,\n      currency VARCHAR,\n      title_or_label VARCHAR,\n      notes VARCHAR,\n      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n      updated_row_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_triage AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT t.*,\n             ROW_NUMBER() OVER (PARTITION BY t.symbol ORDER BY t.updated_at DESC, t.created_at DESC) AS rn\n      FROM fundamentals_triage_history t\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"\"\"\n    CREATE VIEW IF NOT EXISTS v_latest_consensus AS\n    SELECT * EXCLUDE(rn)\n    FROM (\n      SELECT c.*,\n             ROW_NUMBER() OVER (PARTITION BY c.symbol ORDER BY c.updated_at DESC, c.created_at DESC) AS rn\n      FROM analyst_consensus_history c\n    )\n    WHERE rn = 1\n    \"\"\",\n    \"\"\"\n    CREATE TABLE IF NOT EXISTS batch_state (\n      key VARCHAR PRIMARY KEY,\n      value INTEGER NOT NULL,\n      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n    )\n    \"\"\",\n    \"ALTER TABLE run_log ADD COLUMN IF NOT EXISTS vector_docs_written INTEGER DEFAULT 0\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_snapshot ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_status VARCHAR DEFAULT 'PENDING'\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vector_id VARCHAR\",\n    \"ALTER TABLE fundamentals_triage_history ADD COLUMN IF NOT EXISTS vectorized_at TIMESTAMP\",\n]\n\nwith db_con(db_path) as con:\n    for stmt in schema_stmts:\n        con.execute(stmt)\n\n    total_pool = len(queue)\n    if total_pool == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    row = con.execute(\n        \"SELECT value FROM batch_state WHERE key = ?\",\n        [BATCH_STATE_KEY],\n    ).fetchone()\n    start_idx = to_int(row[0], 0) if row else 0\n    if start_idx >= total_pool or start_idx < 0:\n        start_idx = 0\n\n    batch = queue[start_idx : start_idx + batch_size]\n    next_idx = 0 if (start_idx + batch_size >= total_pool) else (start_idx + batch_size)\n    con.execute(\n        \"INSERT OR REPLACE INTO batch_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)\",\n        [BATCH_STATE_KEY, next_idx],\n    )\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          triage_rows, consensus_rows, metric_rows, snapshot_rows, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, len(batch), WORKFLOW_VERSION],\n    )\n\nout = []\nfor i, row in enumerate(batch):\n    j = dict(row)\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    j[\"batch_info\"] = {\n        \"start\": start_idx,\n        \"size\": len(batch),\n        \"batch_size\": batch_size,\n        \"total_pool\": len(queue),\n        \"next_start\": next_idx,\n    }\n    j[\"_index\"] = i\n    out.append({\"json\": j})\n\nreturn out\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -512,
-        -144
+        976,
+        192
       ],
       "id": "d75538b7-502e-463e-ad73-69b940339f2c",
       "name": "AG3V2.02B - DuckDB Init Run"
@@ -120,8 +120,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        -304,
-        -144
+        1184,
+        192
       ],
       "id": "b3f5f89f-7c85-49ad-907f-f715ea79754a",
       "name": "AG3V2.03 - Split Symbols"
@@ -145,8 +145,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        -80,
-        -256
+        1520,
+        144
       ],
       "id": "3208f39c-278d-4a0d-b3a6-c7f89f2e6f50",
       "name": "AG3V2.04 - HTTP Fundamentals",
@@ -165,8 +165,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        128,
-        -144
+        1728,
+        256
       ],
       "id": "045b4a91-afca-4c67-b1d9-03b7f0107f3a",
       "name": "AG3V2.05 - Merge Queue + API"
@@ -178,8 +178,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        336,
-        -144
+        1936,
+        256
       ],
       "id": "f21995ee-8c01-43dc-b90a-fcf877539f61",
       "name": "AG3V2.06 - Score Fundamentals"
@@ -192,8 +192,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        560,
-        -144
+        2160,
+        256
       ],
       "id": "568aee73-8511-4db6-885d-f90e85dc7ca8",
       "name": "AG3V2.07 - Write Fundamentals DuckDB"
@@ -206,8 +206,8 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        768,
-        -144
+        2384,
+        320
       ],
       "id": "51f057cb-5dcb-4bc9-95a7-a8161eb45f7b",
       "name": "AG3V2.08 - Wait Rate Limit"
@@ -220,8 +220,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -80,
-        64
+        1568,
+        -32
       ],
       "id": "1a4ac7a0-e2ac-4eb0-bbc5-eb33f2533204",
       "name": "AG3V2.09 - Finalize Run"
@@ -234,8 +234,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        128,
-        64
+        1680,
+        -512
       ],
       "id": "5e6f56d1-1210-4ab7-9fec-f3aa5ec2f0e6",
       "name": "AG3V2.10 - Build Vector Docs from DuckDB",
@@ -250,8 +250,8 @@
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
       "position": [
-        560,
-        -48
+        2256,
+        -224
       ],
       "id": "0f4c4e5d-c8c7-41d9-a615-c2bfd2f6f7ba",
       "name": "Embeddings OpenAI",
@@ -271,8 +271,8 @@
       "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
       "typeVersion": 1,
       "position": [
-        560,
-        224
+        2400,
+        -96
       ],
       "id": "84fe2d6f-40f9-4b25-ab4e-3073958e359f",
       "name": "Text Splitter"
@@ -363,8 +363,8 @@
       "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
       "typeVersion": 1,
       "position": [
-        560,
-        416
+        2400,
+        -256
       ],
       "id": "cb9b0d2b-9562-4e10-91f8-505eb3b39176",
       "name": "Default Data Loader"
@@ -386,8 +386,8 @@
       "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
       "typeVersion": 1.1,
       "position": [
-        784,
-        64
+        2336,
+        -512
       ],
       "id": "2b96ab39-6361-4763-a677-d1f883533901",
       "name": "Qdrant Upsert",
@@ -396,7 +396,8 @@
           "id": "q1CRmg2N6AmW6pC1",
           "name": "QdrantApi account"
         }
-      }
+      },
+      "alwaysOutputData": true
     },
     {
       "parameters": {
@@ -406,8 +407,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1008,
-        64
+        2784,
+        -144
       ],
       "id": "f4f72f66-5833-4ea6-83f6-a4d53e2d068c",
       "name": "AG3V2.11 - Mark Vectorized",
@@ -423,8 +424,8 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -1488,
-        -336
+        -128,
+        -544
       ],
       "id": "f46735a8-4b73-4685-9493-bf170c0afcb6",
       "name": "AG3V2 - Note"
@@ -437,8 +438,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        352,
-        64
+        1904,
+        -544
       ],
       "id": "bfc636d7-d694-4d36-9a86-e79510ddf45b",
       "name": "Split Vector Docs (FUNDA)"
@@ -452,7 +453,7 @@
           "parameters": [
             {
               "name": "api-key",
-              "value": "={{ ($json.metadata && $json.metadata.qdrant_api_key) || '' }}"
+              "value": "37f80c95cd31e3dc396413cf57a6e33629990bfe9606482e7c3dfcc1ee152ac9"
             },
             {
               "name": "Content-Type",
@@ -470,11 +471,26 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        576,
-        64
+        2128,
+        -512
       ],
       "id": "ec3e8703-8e8c-49dd-a7f2-a4bb8da3738a",
       "name": "Qdrant Delete (FUNDA by doc_id)"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2240,
+        -512
+      ],
+      "id": "c0c37f6e-7501-4cb6-9c2f-fb1bbd16fe80",
+      "name": "Merge Vector Doc + Delete (FUNDA)"
     }
   ],
   "connections": {
@@ -668,6 +684,11 @@
             "node": "Qdrant Delete (FUNDA by doc_id)",
             "type": "main",
             "index": 0
+          },
+          {
+            "node": "Merge Vector Doc + Delete (FUNDA)",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -687,9 +708,9 @@
       "main": [
         [
           {
-            "node": "Qdrant Upsert",
+            "node": "Merge Vector Doc + Delete (FUNDA)",
             "type": "main",
-            "index": 0
+            "index": 1
           }
         ]
       ]
@@ -710,6 +731,17 @@
         [
           {
             "node": "Split Vector Docs (FUNDA)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Vector Doc + Delete (FUNDA)": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Upsert",
             "type": "main",
             "index": 0
           }

@@ -79,6 +79,7 @@ def build() -> dict:
                     'cachedResultName': 'Universe',
                     'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687',
                 },
+                'filtersUI': {'values': [{'lookupColumn': 'Enabled', 'lookupValue': 'true'}]},
                 'options': {},
             },
             'type': 'n8n-nodes-base.googleSheets',
@@ -96,7 +97,7 @@ def build() -> dict:
             'typeVersion': 2,
             'position': [-416, -256],
             'id': 'aa3b664f-c1c6-4f42-b8be-4dc52f427077',
-            'name': '20A2 - Build Symbol Directory',
+            'name': '20A2 - Build Sector Dictionary',
         },
         {
             'parameters': {'jsCode': load_code('01_normalize_sources.js')},
@@ -240,7 +241,7 @@ def build() -> dict:
             'typeVersion': 2,
             'position': [752, 48],
             'id': '2c32056e-567a-4676-a836-fcb4cf6994f0',
-            'name': '20F1 - Tag Symbols',
+            'name': '20F1 - Tag Sectors',
         },
         {
             'parameters': {'jsCode': load_code('07_prescore.js')},
@@ -326,11 +327,9 @@ def build() -> dict:
                             'content': (
                                 '=Analyse cette news:\n{{ $json.llmInput }}\n\n'
                                 'Regles de normalisation obligatoires:\n'
-                                '- Utilise uniquement cette liste de secteurs (canonique): '
-                                '[Communication Services, Consumer Discretionary, Consumer Staples, Energy, '
-                                'Financials, Health Care, Industrials, Information Technology, Materials, '
-                                'Real Estate, Utilities].\n'
-                                '- Mappe tout synonyme vers un secteur canonique.\n'
+                                '- Utilise uniquement les valeurs du champ universeSectors du JSON.\n'
+                                "- N'utilise jamais des industries; seulement des secteurs.\n"
+                                '- Si un secteur propose ne matche pas universeSectors, ne le retourne pas.\n'
                                 '- Max 5 secteurs par liste (sectors_bullish, sectors_bearish).\n'
                                 '- Si pas de lien macro/secteur clair -> '
                                 'isActionable=false, impact_score=0, urgency=low, market_regime=Neutral, '
@@ -519,7 +518,7 @@ def build() -> dict:
                 [],
             ]
         },
-        '20A1 - Load Universe': {'main': [[{'node': '20A2 - Build Symbol Directory', 'type': 'main', 'index': 0}]]},
+        '20A1 - Load Universe': {'main': [[{'node': '20A2 - Build Sector Dictionary', 'type': 'main', 'index': 0}]]},
         '20DB0 - DuckDB Init': {
             'main': [
                 [
@@ -552,11 +551,11 @@ def build() -> dict:
         '20G0 - Add Keys': {'main': [[{'node': '20G_FILTER - Block Bad Items', 'type': 'main', 'index': 0}]]},
         '20G_FILTER - Block Bad Items': {
             'main': [
-                [{'node': '20F1 - Tag Symbols', 'type': 'main', 'index': 0}],
+                [{'node': '20F1 - Tag Sectors', 'type': 'main', 'index': 0}],
                 [{'node': 'SplitInBatches ITEMS', 'type': 'main', 'index': 0}],
             ]
         },
-        '20F1 - Tag Symbols': {'main': [[{'node': '20G1C - Pre-score', 'type': 'main', 'index': 0}]]},
+        '20F1 - Tag Sectors': {'main': [[{'node': '20G1C - Pre-score', 'type': 'main', 'index': 0}]]},
         '20G1C - Pre-score': {'main': [[{'node': '20G2 - Route new vs seen', 'type': 'main', 'index': 0}]]},
         '20G2 - Route new vs seen': {'main': [[{'node': '20G3 - Router analyze vs skip', 'type': 'main', 'index': 0}]]},
         '20G3 - Router analyze vs skip': {

@@ -81,6 +81,14 @@
           "cachedResultName": "Universe",
           "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
         },
+        "filtersUI": {
+          "values": [
+            {
+              "lookupColumn": "Enabled",
+              "lookupValue": "true"
+            }
+          ]
+        },
         "options": {}
       },
       "type": "n8n-nodes-base.googleSheets",
@@ -100,7 +108,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 20A2 — Build Symbol Directory from Universe sheet (V2)\nfunction normName(s) {\n  return String(s || '')\n    .trim()\n    .replace(/\\s+/g, ' ');\n}\n\nconst rows = $input.all().map(i => i.json || {});\nconst out = [];\n\nfor (const r of rows) {\n  const symbol = String(r.Symbol || r.symbol || '').trim();\n  if (!symbol) continue;\n  const name = normName(r.Name || r.name || '');\n  out.push({ symbol, name });\n}\n\nreturn [{\n  json: {\n    symbolDirectory: out,\n    count: out.length,\n    generatedAt: new Date().toISOString(),\n  }\n}];\n"
+        "jsCode": "// 20A2 - Build Sector Dictionary from Universe sheet (V2)\nfunction cleanText(s) {\n  return String(s || '')\n    .trim()\n    .replace(/\\s+/g, ' ');\n}\n\nfunction pickSector(row) {\n  return (\n    row.Sector ??\n    row.sector ??\n    row['GICS Sector'] ??\n    row.gics_sector ??\n    row['Sector Name'] ??\n    row['sector_name'] ??\n    ''\n  );\n}\n\nconst rows = $input.all().map((i) => i.json || {});\nconst uniq = new Map();\n\nfor (const row of rows) {\n  const sector = cleanText(pickSector(row));\n  if (!sector) continue;\n  const key = sector.toLowerCase();\n  if (!uniq.has(key)) uniq.set(key, sector);\n}\n\nconst sectorDictionary = Array.from(uniq.values()).sort((a, b) => a.localeCompare(b));\n\nreturn [{\n  json: {\n    sectorDictionary,\n    count: sectorDictionary.length,\n    generatedAt: new Date().toISOString(),\n  },\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -109,7 +117,7 @@
         -256
       ],
       "id": "aa3b664f-c1c6-4f42-b8be-4dc52f427077",
-      "name": "20A2 - Build Symbol Directory"
+      "name": "20A2 - Build Sector Dictionary"
     },
     {
       "parameters": {
@@ -333,7 +341,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 20F1 — Tag Symbols from Universe (V2)\nfunction norm(s) {\n  return String(s || '').toLowerCase();\n}\n\nfunction unique(arr) {\n  return Array.from(new Set((arr || []).filter(Boolean)));\n}\n\nfunction safeParse(v) {\n  if (Array.isArray(v)) return v;\n  if (typeof v === 'string') {\n    try { const j = JSON.parse(v); return Array.isArray(j) ? j : []; } catch { return []; }\n  }\n  return [];\n}\n\nlet symbolDirectory = [];\ntry {\n  const d = $items('20A2 - Build Symbol Directory')[0]?.json?.symbolDirectory;\n  symbolDirectory = safeParse(d).slice(0, 2000);\n} catch {\n  symbolDirectory = [];\n}\n\nconst bySymbol = new Set(symbolDirectory.map(x => String(x.symbol || '').trim()).filter(Boolean));\nconst byName = symbolDirectory\n  .map(x => ({ symbol: String(x.symbol || '').trim(), name: norm(x.name || '') }))\n  .filter(x => x.symbol && x.name.length >= 4);\n\nreturn $input.all().map(item => {\n  const j = item.json || {};\n  const text = `${j.title || ''} ${j.snippet || ''}`;\n  const textNorm = norm(text);\n\n  const found = [];\n\n  // Pattern tickers like MC.PA / AIR.PA / ABC.DE\n  const tickerMatches = text.match(/\\b[A-Z]{1,6}\\.(PA|AS|BR|MI|DE|L|SW|MC)\\b/g) || [];\n  for (const t of tickerMatches) {\n    if (bySymbol.has(t)) found.push(t);\n  }\n\n  // Company name contains\n  for (const row of byName) {\n    if (textNorm.includes(row.name)) found.push(row.symbol);\n  }\n\n  const symbols = unique(found).slice(0, 8);\n\n  return {\n    json: {\n      ...j,\n      symbols,\n      type: symbols.length ? 'symbol' : 'macro',\n    }\n  };\n});\n"
+        "jsCode": "// 20F1 - Attach sector dictionary + detect sector hints (V2)\nfunction normalizeText(s) {\n  return String(s || '')\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction unique(arr) {\n  return Array.from(new Set((arr || []).filter(Boolean)));\n}\n\nfunction safeParseArray(v) {\n  if (Array.isArray(v)) return v;\n  if (typeof v === 'string') {\n    try {\n      const parsed = JSON.parse(v);\n      return Array.isArray(parsed) ? parsed : [];\n    } catch {\n      return [];\n    }\n  }\n  return [];\n}\n\nlet sectorDictionary = [];\ntry {\n  const raw = $items('20A2 - Build Sector Dictionary')[0]?.json?.sectorDictionary;\n  sectorDictionary = safeParseArray(raw).map((x) => String(x || '').trim()).filter(Boolean);\n} catch {\n  sectorDictionary = [];\n}\n\nconst sectorMatchers = sectorDictionary.map((sector) => ({\n  label: sector,\n  norm: normalizeText(sector),\n})).filter((x) => x.norm.length >= 3);\n\nreturn $input.all().map((item) => {\n  const j = item.json || {};\n  const textNorm = normalizeText(`${j.title || ''} ${j.snippet || ''}`);\n\n  const candidateSectors = [];\n  for (const m of sectorMatchers) {\n    if (textNorm.includes(m.norm)) candidateSectors.push(m.label);\n  }\n\n  return {\n    json: {\n      ...j,\n      symbols: [],\n      type: 'macro',\n      universeSectors: sectorDictionary,\n      candidateSectors: unique(candidateSectors).slice(0, 5),\n    },\n    pairedItem: item.pairedItem,\n  };\n});\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -342,11 +350,11 @@
         48
       ],
       "id": "2c32056e-567a-4676-a836-fcb4cf6994f0",
-      "name": "20F1 - Tag Symbols"
+      "name": "20F1 - Tag Sectors"
     },
     {
       "parameters": {
-        "jsCode": "// 20G1C — Pre-score heuristic impact (V2)\nconst HIGH = [\n  'inflation', 'cpi', 'ppi', 'ecb', 'fed', 'taux', 'rate', 'yield',\n  'recession', 'gdp', 'pmi', 'chomage', 'unemployment', 'war', 'tariff',\n  'oil', 'opec', 'sanction', 'guidance', 'profit warning', 'default',\n  'downgrade', 'bankruptcy', 'acquisition', 'merger', 'earnings'\n];\n\nconst MID = ['forecast', 'outlook', 'results', 'macro', 'sector', 'dividend', 'buyback'];\n\nfunction scoreText(text) {\n  const t = String(text || '').toLowerCase();\n  let s = 0;\n  for (const k of HIGH) if (t.includes(k)) s += 2;\n  for (const k of MID) if (t.includes(k)) s += 1;\n  return s;\n}\n\nreturn $input.all().map(i => {\n  const j = i.json || {};\n  const text = `${j.title || ''} ${j.snippet || ''}`;\n  const kw = scoreText(text);\n\n  let score = Math.min(10, kw + (Array.isArray(j.symbols) && j.symbols.length ? 2 : 1));\n  score += Number(j.sourceTier === 1 ? 2 : (j.sourceTier === 2 ? 1 : 0));\n  score = Math.min(10, score);\n\n  const urgency = score >= 8 ? 'immediate' : score >= 6 ? 'today' : score >= 4 ? 'this_week' : 'low';\n\n  return {\n    json: {\n      ...j,\n      preImpactScore: score,\n      preUrgency: urgency,\n      preAnalyzeHint: score >= 4,\n    }\n  };\n});\n"
+        "jsCode": "// 20G1C - Pre-score heuristic impact (V2)\nconst HIGH = [\n  'inflation', 'cpi', 'ppi', 'ecb', 'fed', 'taux', 'rate', 'yield',\n  'recession', 'gdp', 'pmi', 'chomage', 'unemployment', 'war', 'tariff',\n  'oil', 'opec', 'sanction', 'guidance', 'profit warning', 'default',\n  'downgrade', 'bankruptcy', 'acquisition', 'merger', 'earnings'\n];\n\nconst MID = ['forecast', 'outlook', 'results', 'macro', 'sector', 'dividend', 'buyback'];\n\nfunction scoreText(text) {\n  const t = String(text || '').toLowerCase();\n  let s = 0;\n  for (const k of HIGH) if (t.includes(k)) s += 2;\n  for (const k of MID) if (t.includes(k)) s += 1;\n  return s;\n}\n\nreturn $input.all().map((i) => {\n  const j = i.json || {};\n  const text = `${j.title || ''} ${j.snippet || ''}`;\n  const kw = scoreText(text);\n  const hasSectorHint = Array.isArray(j.candidateSectors) && j.candidateSectors.length > 0;\n\n  let score = Math.min(10, kw + (hasSectorHint ? 2 : 1));\n  score += Number(j.sourceTier === 1 ? 2 : (j.sourceTier === 2 ? 1 : 0));\n  score = Math.min(10, score);\n\n  const urgency = score >= 8 ? 'immediate' : score >= 6 ? 'today' : score >= 4 ? 'this_week' : 'low';\n\n  return {\n    json: {\n      ...j,\n      preImpactScore: score,\n      preUrgency: urgency,\n      preAnalyzeHint: score >= 4,\n    },\n    pairedItem: i.pairedItem,\n  };\n});\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -434,7 +442,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 20H0 — Prepare LLM input (V2)\nfunction stripHtml(s) {\n  if (!s) return '';\n  return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nfunction toIso(x) {\n  if (!x || x === 'unknown') return 'unknown';\n  const d = new Date(x);\n  return isNaN(d.getTime()) ? 'unknown' : d.toISOString();\n}\n\nlet symbolDirectory = [];\ntry {\n  symbolDirectory = $items('20A2 - Build Symbol Directory')[0]?.json?.symbolDirectory || [];\n} catch {\n  symbolDirectory = [];\n}\n\nconst j = $json || {};\nconst symbols = Array.isArray(j.symbols) ? j.symbols : [];\n\nconst payload = {\n  id: j.id || 'unknown',\n  dedupeKey: j.dedupeKey,\n  eventKey: j.eventKey,\n  title: stripHtml(j.title || 'unknown'),\n  snippet: stripHtml(j.snippet || ''),\n  url: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n  publishedAt: toIso(j.publishedAtNormalized || j.publishedAt || 'unknown'),\n  source: j.source || 'unknown',\n  symbols,\n  type: symbols.length ? 'symbol' : (j.type || 'macro'),\n  preImpactScore: j.preImpactScore ?? 0,\n  preUrgency: j.preUrgency || 'low',\n  universeSymbolDirectory: symbolDirectory,\n};\n\nreturn {\n  ...j,\n  llmInput: JSON.stringify(payload),\n};\n"
+        "jsCode": "// 20H0 - Prepare LLM input (V2)\nfunction stripHtml(s) {\n  if (!s) return '';\n  return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nfunction toIso(x) {\n  if (!x || x === 'unknown') return 'unknown';\n  const d = new Date(x);\n  return Number.isNaN(d.getTime()) ? 'unknown' : d.toISOString();\n}\n\nfunction toArray(v) {\n  if (Array.isArray(v)) return v;\n  if (typeof v === 'string') {\n    try {\n      const parsed = JSON.parse(v);\n      return Array.isArray(parsed) ? parsed : [];\n    } catch {\n      return [];\n    }\n  }\n  return [];\n}\n\nlet sectorDictionary = [];\ntry {\n  const raw = $items('20A2 - Build Sector Dictionary')[0]?.json?.sectorDictionary;\n  sectorDictionary = toArray(raw).map((x) => String(x || '').trim()).filter(Boolean);\n} catch {\n  sectorDictionary = [];\n}\n\nconst j = $json || {};\nconst candidateSectors = toArray(j.candidateSectors).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 5);\n\nconst payload = {\n  id: j.id || 'unknown',\n  dedupeKey: j.dedupeKey,\n  eventKey: j.eventKey,\n  title: stripHtml(j.title || 'unknown'),\n  snippet: stripHtml(j.snippet || ''),\n  url: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n  publishedAt: toIso(j.publishedAtNormalized || j.publishedAt || 'unknown'),\n  source: j.source || 'unknown',\n  type: 'macro',\n  preImpactScore: j.preImpactScore ?? 0,\n  preUrgency: j.preUrgency || 'low',\n  candidateSectors,\n  universeSectors: sectorDictionary,\n};\n\nreturn {\n  ...j,\n  symbols: [],\n  type: 'macro',\n  universeSectors: sectorDictionary,\n  candidateSectors,\n  llmInput: JSON.stringify(payload),\n};\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -460,7 +468,7 @@
               "content": "Tu es le Chief Market Strategist. Tu analyses une news pour decision portefeuille. Objectif: extraire regime de marche, theme macro, secteurs gagnants/perdants, resume actionnable. Reponds uniquement en JSON valide selon le schema."
             },
             {
-              "content": "=Analyse cette news:\n{{ $json.llmInput }}\n\nRegles de normalisation obligatoires:\n- Utilise uniquement cette liste de secteurs (canonique): [Communication Services, Consumer Discretionary, Consumer Staples, Energy, Financials, Health Care, Industrials, Information Technology, Materials, Real Estate, Utilities].\n- Mappe tout synonyme vers un secteur canonique.\n- Max 5 secteurs par liste (sectors_bullish, sectors_bearish).\n- Si pas de lien macro/secteur clair -> isActionable=false, impact_score=0, urgency=low, market_regime=Neutral, macro_theme=Resultats/Micro, notes=Noise.\n- Sinon, isActionable=true."
+              "content": "=Analyse cette news:\n{{ $json.llmInput }}\n\nRegles de normalisation obligatoires:\n- Utilise uniquement les valeurs du champ universeSectors du JSON.\n- N'utilise jamais des industries; seulement des secteurs.\n- Si un secteur propose ne matche pas universeSectors, ne le retourne pas.\n- Max 5 secteurs par liste (sectors_bullish, sectors_bearish).\n- Si pas de lien macro/secteur clair -> isActionable=false, impact_score=0, urgency=low, market_regime=Neutral, macro_theme=Resultats/Micro, notes=Noise.\n- Sinon, isActionable=true."
             }
           ]
         },
@@ -508,7 +516,7 @@
     },
     {
       "parameters": {
-        "jsCode": "﻿// 20H2 - Parse model output + flatten final row (V2)\nfunction safeJsonParse(str) {\n  try {\n    if (typeof str === 'object' && str !== null) return str;\n    return JSON.parse(str);\n  } catch {\n    return {};\n  }\n}\n\nfunction clamp01(n, d = 0.5) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(1, v));\n}\n\nfunction clamp10(n, d = 0) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(10, Math.round(v)));\n}\n\nfunction joinList(arr) {\n  if (Array.isArray(arr)) return arr.join(', ');\n  return arr || '';\n}\n\nfunction toBool(v, d = true) {\n  if (typeof v === 'boolean') return v;\n  if (typeof v === 'number') return v !== 0;\n  if (typeof v === 'string') {\n    const s = v.trim().toLowerCase();\n    if (['true', '1', 'yes', 'y'].includes(s)) return true;\n    if (['false', '0', 'no', 'n'].includes(s)) return false;\n  }\n  return d;\n}\n\nfunction normalizeSectorList(v) {\n  const raw = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);\n  return raw\n    .map((x) => String(x || '').trim())\n    .filter(Boolean)\n    .slice(0, 5);\n}\n\nconst j = $json || {};\nconst llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';\nconst ai = safeJsonParse(llmRaw);\nconst now = new Date().toISOString();\n\nconst symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');\nconst isActionable = toBool(ai.isActionable, true);\nconst winners = normalizeSectorList(ai.sectors_bullish);\nconst losers = normalizeSectorList(ai.sectors_bearish);\nconst notes = isActionable ? (ai.notes || '') : 'Noise';\n\nreturn [{\n  json: {\n    run_id: j.run_id || '',\n    sourceTier: j.sourceTier ?? null,\n    sourceId: j.sourceId || '',\n    dedupeKey: j.dedupeKey,\n    eventKey: j.eventKey || '',\n    canonicalUrl: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n    publishedAt: j.publishedAtNormalized || j.publishedAt || now,\n    title: j.title || 'unknown',\n    source: j.source || 'unknown',\n    feedUrl: j.feedUrl || '',\n    symbols,\n    type: j.type || (symbols ? 'symbol' : 'macro'),\n    notes,\n    isActionable,\n    ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,\n    confidence: clamp01(ai.confidence, 0.5),\n    urgency: isActionable ? (ai.urgency || j.preUrgency || 'low') : 'low',\n    Snippet: j.snippet || '',\n    firstSeenAt: j.seenNowAt || now,\n    Strategy: ai.strategic_summary || '',\n    Losers: isActionable ? joinList(losers) : '',\n    Winners: isActionable ? joinList(winners) : '',\n    Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',\n    Regime: isActionable ? (ai.market_regime || 'Neutral') : 'Neutral',\n    analyzedAt: now,\n    _action: 'analyze',\n    _reason: j._reason || '',\n  }\n}];\n"
+        "jsCode": "// 20H2 - Parse model output + flatten final row (V2)\nfunction safeJsonParse(str) {\n  try {\n    if (typeof str === 'object' && str !== null) return str;\n    return JSON.parse(str);\n  } catch {\n    return {};\n  }\n}\n\nfunction toArray(v) {\n  if (Array.isArray(v)) return v;\n  if (typeof v === 'string') {\n    return v.split(',').map((x) => String(x || '').trim()).filter(Boolean);\n  }\n  return [];\n}\n\nfunction normalizeKey(s) {\n  return String(s || '')\n    .toLowerCase()\n    .normalize('NFD')\n    .replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction clamp01(n, d = 0.5) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(1, v));\n}\n\nfunction clamp10(n, d = 0) {\n  const v = Number(n);\n  if (!Number.isFinite(v)) return d;\n  return Math.max(0, Math.min(10, Math.round(v)));\n}\n\nfunction toBool(v, d = true) {\n  if (typeof v === 'boolean') return v;\n  if (typeof v === 'number') return v !== 0;\n  if (typeof v === 'string') {\n    const s = v.trim().toLowerCase();\n    if (['true', '1', 'yes', 'y'].includes(s)) return true;\n    if (['false', '0', 'no', 'n'].includes(s)) return false;\n  }\n  return d;\n}\n\nfunction buildAllowedSectors(rawList) {\n  const out = [];\n  const seen = new Set();\n  for (const v of toArray(rawList)) {\n    const label = String(v || '').trim();\n    if (!label) continue;\n    const key = normalizeKey(label);\n    if (!key || seen.has(key)) continue;\n    seen.add(key);\n    out.push({ key, label });\n  }\n  return out;\n}\n\nfunction normalizeSectorList(raw, allowed) {\n  const out = [];\n  const seen = new Set();\n\n  for (const value of toArray(raw)) {\n    const key = normalizeKey(value);\n    if (!key) continue;\n\n    let match = allowed.find((s) => s.key === key);\n    if (!match) {\n      match = allowed.find((s) => key.includes(s.key) || s.key.includes(key));\n    }\n\n    if (!match) continue;\n    if (seen.has(match.key)) continue;\n    seen.add(match.key);\n    out.push(match.label);\n\n    if (out.length >= 5) break;\n  }\n\n  return out;\n}\n\nconst j = $json || {};\nconst llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';\nconst ai = safeJsonParse(llmRaw);\nconst now = new Date().toISOString();\n\nconst allowedSectors = buildAllowedSectors(j.universeSectors);\nconst winners = normalizeSectorList(ai.sectors_bullish, allowedSectors);\nconst losers = normalizeSectorList(ai.sectors_bearish, allowedSectors);\n\nconst modelActionable = toBool(ai.isActionable, true);\nconst hasSectorImpact = winners.length > 0 || losers.length > 0;\nconst isActionable = modelActionable && hasSectorImpact;\nconst notes = isActionable ? (ai.notes || '') : 'Noise';\n\nreturn [{\n  json: {\n    run_id: j.run_id || '',\n    sourceTier: j.sourceTier ?? null,\n    sourceId: j.sourceId || '',\n    dedupeKey: j.dedupeKey,\n    eventKey: j.eventKey || '',\n    canonicalUrl: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n    publishedAt: j.publishedAtNormalized || j.publishedAt || now,\n    title: j.title || 'unknown',\n    source: j.source || 'unknown',\n    feedUrl: j.feedUrl || '',\n    symbols: '',\n    type: 'macro',\n    notes,\n    isActionable,\n    ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,\n    confidence: clamp01(ai.confidence, 0.5),\n    urgency: isActionable ? (ai.urgency || j.preUrgency || 'low') : 'low',\n    Snippet: j.snippet || '',\n    firstSeenAt: j.seenNowAt || now,\n    Strategy: ai.strategic_summary || '',\n    Losers: isActionable ? losers.join(', ') : '',\n    Winners: isActionable ? winners.join(', ') : '',\n    Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',\n    Regime: isActionable ? (ai.market_regime || 'Neutral') : 'Neutral',\n    analyzedAt: now,\n    _action: 'analyze',\n    _reason: j._reason || '',\n  },\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -736,7 +744,7 @@
       "main": [
         [
           {
-            "node": "20A2 - Build Symbol Directory",
+            "node": "20A2 - Build Sector Dictionary",
             "type": "main",
             "index": 0
           }
@@ -861,7 +869,7 @@
       "main": [
         [
           {
-            "node": "20F1 - Tag Symbols",
+            "node": "20F1 - Tag Sectors",
             "type": "main",
             "index": 0
           }
@@ -875,7 +883,7 @@
         ]
       ]
     },
-    "20F1 - Tag Symbols": {
+    "20F1 - Tag Sectors": {
       "main": [
         [
           {
