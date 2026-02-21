@@ -1,10 +1,17 @@
-from datetime import datetime, timedelta, timezone
+import gc
+import os
 import re
+import time
 import unicodedata
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
 
-# --- CONFIGURATION ---
-LOOKBACK_DAYS = 20  # On regarde la tendance des 2 dernières semaines
-MIN_IMPACT = 2      # On ignore les news anecdotiques
+import duckdb
+
+LOOKBACK_DAYS = 20
+MIN_IMPACT = 2
+AG2_DB_PATH = os.getenv("AG2_DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
+
 
 def safe_float(val):
     try:
@@ -12,33 +19,23 @@ def safe_float(val):
     except Exception:
         return 0.0
 
+
 def parse_dt(val):
-    """
-    Parse dates tolérant:
-    - ISO 8601 (avec 'Z' ou offset)
-    - 'YYYY-MM-DD HH:MM[:SS]' (sans tz => UTC)
-    - 'YYYY-MM-DD'
-    Retourne datetime timezone-aware UTC, ou None.
-    """
     if val is None:
         return None
-
     if isinstance(val, datetime):
         dt = val
     else:
         s = str(val).strip()
         if not s:
             return None
-
         if s.endswith("Z"):
             s = s[:-1] + "+00:00"
-
         dt = None
         try:
             dt = datetime.fromisoformat(s)
         except Exception:
             pass
-
         if dt is None:
             fmts = (
                 "%Y-%m-%d %H:%M:%S%z",
@@ -53,51 +50,103 @@ def parse_dt(val):
                     break
                 except Exception:
                     dt = None
-
         if dt is None:
             return None
-
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-
     return dt.astimezone(timezone.utc)
 
-def strip_accents(s: str) -> str:
-    # "Énergie" -> "Energie" pour éviter doublons
-    nfkd = unicodedata.normalize("NFKD", s)
+
+def strip_accents(s):
+    nfkd = unicodedata.normalize("NFKD", str(s or ""))
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
-def norm_key(label: str) -> str:
-    """
-    Normalisation robuste pour dédoublonner :
-    - trim
-    - suppression accents
-    - casefold
-    - harmonisation séparateurs
-    - collapse espaces
-    """
+
+def norm_key(label):
     s = str(label or "").strip()
     if not s:
         return ""
     s = strip_accents(s)
-    s = s.replace("’", "'")  # apostrophes
+    s = s.replace("’", "'").replace("`", "'")
     s = re.sub(r"[\t\r\n]+", " ", s)
     s = re.sub(r"\s+", " ", s).strip()
-    # Optionnel : uniformiser quelques séparateurs/punctuations
     s = s.replace(" / ", "/").replace(" - ", "-")
     return s.casefold()
 
-def split_sectors(txt):
-    """
-    Retourne une liste de labels (string) en tolérant divers séparateurs.
-    """
+
+def split_labels(txt):
     if not isinstance(txt, str):
         return []
-    s = txt.replace("|", ",").replace(";", ",").replace("/", ",")
+    s = txt.replace("|", ",").replace(";", ",")
     parts = [p.strip() for p in s.split(",")]
     return [p for p in parts if p]
 
-# 1) Récupération des données depuis l'input n8n
+
+@contextmanager
+def db_con(path, retries=5, delay=0.25):
+    con = None
+    for i in range(retries):
+        try:
+            con = duckdb.connect(path, read_only=True)
+            break
+        except Exception as exc:
+            msg = str(exc).lower()
+            if ("lock" in msg or "busy" in msg) and i < retries - 1:
+                time.sleep(delay * (2 ** i))
+                continue
+            con = None
+            break
+    try:
+        yield con
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+        gc.collect()
+
+
+def load_universe_sector_map(db_path):
+    out = {}
+    with db_con(db_path) as con:
+        if con is None:
+            return out
+        try:
+            rows = con.execute(
+                """
+                SELECT DISTINCT TRIM(sector) AS sector
+                FROM universe
+                WHERE sector IS NOT NULL AND TRIM(sector) <> ''
+                ORDER BY sector
+                """
+            ).fetchall()
+        except Exception:
+            return out
+
+    for row in rows:
+        label = str(row[0] or "").strip()
+        key = norm_key(label)
+        if key and key not in out:
+            out[key] = label
+    return out
+
+
+def match_allowed_sector(label, allowed_map):
+    key = norm_key(label)
+    if not key:
+        return ""
+
+    exact = allowed_map.get(key)
+    if exact:
+        return exact
+
+    for allowed_key, allowed_label in allowed_map.items():
+        if key in allowed_key or allowed_key in key:
+            return allowed_label
+    return ""
+
+
 items = _items or []
 rows = []
 for item in items:
@@ -108,22 +157,26 @@ for item in items:
 if not rows:
     return [{"json": {"sector_brief": "No recent news data available."}}]
 
+allowed_sector_map = load_universe_sector_map(AG2_DB_PATH)
+allowed_sector_count = len(allowed_sector_map)
+
 now = datetime.now(timezone.utc)
 cutoff = now - timedelta(days=LOOKBACK_DAYS)
 
-# 2) Scores sectoriels + mapping display
-sector_scores = {}    # key_norm -> score
-sector_counts = {}    # key_norm -> nb news
-sector_display = {}   # key_norm -> label affichage (premier rencontré)
+sector_scores = {}
+sector_counts = {}
+sector_display = {}
+filtered_out = 0
 
-def register_label(label: str):
-    k = norm_key(label)
-    if not k:
+
+def register_label(label):
+    key = norm_key(label)
+    if not key:
         return None
-    if k not in sector_display:
-        # Conserve le 1er label rencontré (souvent déjà "bien")
-        sector_display[k] = label.strip()
-    return k
+    if key not in sector_display:
+        sector_display[key] = str(label).strip()
+    return key
+
 
 for row in rows:
     published = parse_dt(row.get("publishedAt"))
@@ -134,33 +187,51 @@ for row in rows:
     if abs(impact) < MIN_IMPACT:
         continue
 
-    winners = split_sectors(row.get("Winners"))
-    losers = split_sectors(row.get("Losers"))
+    winners = split_labels(row.get("Winners"))
+    losers = split_labels(row.get("Losers"))
 
-    for w in winners:
-        k = register_label(w)
-        if not k:
+    for raw in winners:
+        matched = match_allowed_sector(raw, allowed_sector_map)
+        if not matched:
+            filtered_out += 1
             continue
-        sector_scores[k] = sector_scores.get(k, 0.0) + abs(impact)
-        sector_counts[k] = sector_counts.get(k, 0) + 1
-
-    for l in losers:
-        k = register_label(l)
-        if not k:
+        key = register_label(matched)
+        if not key:
             continue
-        sector_scores[k] = sector_scores.get(k, 0.0) - abs(impact)
-        sector_counts[k] = sector_counts.get(k, 0) + 1
+        sector_scores[key] = sector_scores.get(key, 0.0) + abs(impact)
+        sector_counts[key] = sector_counts.get(key, 0) + 1
 
-# 3) Génération du briefing
+    for raw in losers:
+        matched = match_allowed_sector(raw, allowed_sector_map)
+        if not matched:
+            filtered_out += 1
+            continue
+        key = register_label(matched)
+        if not key:
+            continue
+        sector_scores[key] = sector_scores.get(key, 0.0) - abs(impact)
+        sector_counts[key] = sector_counts.get(key, 0) + 1
+
+
 if not sector_scores:
-    brief = f"MARKET REGIME: Neutral/Quiet. No significant sector divergence detected in the last {LOOKBACK_DAYS} days."
+    reason = (
+        "Universe sector list unavailable."
+        if allowed_sector_count == 0
+        else "No significant universe-sector divergence detected."
+    )
+    brief = (
+        f"MARKET REGIME: Neutral/Quiet. {reason} "
+        f"Window={LOOKBACK_DAYS}d. AllowedSectors={allowed_sector_count}."
+    )
 else:
     sorted_sectors = sorted(sector_scores.items(), key=lambda x: x[1], reverse=True)
 
-    bullish, bearish, neutral = [], [], []
-    for k, score in sorted_sectors:
-        label = sector_display.get(k, k)
-        count = sector_counts.get(k, 0)
+    bullish = []
+    bearish = []
+    neutral = []
+    for key, score in sorted_sectors:
+        label = sector_display.get(key, key)
+        count = sector_counts.get(key, 0)
         entry = f"{label} (Score: {score:+.0f}, Vol: {count} news)"
 
         if score >= 10:
@@ -170,7 +241,10 @@ else:
         else:
             neutral.append(entry)
 
-    lines = [f"=== SECTOR MOMENTUM REPORT (Last {LOOKBACK_DAYS} Days) ==="]
+    lines = [f"=== SECTOR MOMENTUM REPORT (Universe sectors only, last {LOOKBACK_DAYS} days) ==="]
+    lines.append(f"Universe sectors considered: {allowed_sector_count}")
+    if filtered_out > 0:
+        lines.append(f"Filtered non-universe labels: {filtered_out}")
 
     if bullish:
         lines.append("\nLEADERS (Strong Buying Pressure):")
