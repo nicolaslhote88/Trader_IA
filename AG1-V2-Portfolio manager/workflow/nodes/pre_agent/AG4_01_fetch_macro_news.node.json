@@ -1,0 +1,15 @@
+{
+  "parameters": {
+    "language": "pythonNative",
+    "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone, timedelta, date\n\nDB_PATH = \"/files/duckdb/ag4_v2.duckdb\"\nLOOKBACK_DAYS = 20\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef to_iso(v):\n    if v is None:\n        return \"\"\n    if isinstance(v, (datetime, date)):\n        return v.isoformat()\n    return str(v)\n\ndef to_num(v):\n    try:\n        if v is None or v == \"\":\n            return 0\n        return float(v)\n    except Exception:\n        return 0\n\nitems = _items or []\ndb_path = DB_PATH\nlookback_days = LOOKBACK_DAYS\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n    if j.get(\"lookbackDays\") is not None:\n        try:\n            lookback_days = max(1, int(float(j.get(\"lookbackDays\"))))\n        except Exception:\n            pass\n\ncutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)\nout = []\n\nwith db_con(db_path) as con:\n    rows = con.execute(\n        \"\"\"\n        SELECT\n          COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) AS published_at_eff,\n          impact_score,\n          winners,\n          losers\n        FROM news_history\n        WHERE COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) >= ?\n          AND (COALESCE(impact_score, 0) <> 0 OR COALESCE(winners, '') <> '' OR COALESCE(losers, '') <> '')\n        ORDER BY published_at_eff DESC, updated_at DESC\n        \"\"\",\n        [cutoff],\n    ).fetchall()\n\nfor row in rows:\n    out.append({\n        \"json\": {\n            \"publishedAt\": to_iso(row[0]),\n            \"ImpactScore\": to_num(row[1]),\n            \"Winners\": row[2] or \"\",\n            \"Losers\": row[3] or \"\",\n        }\n    })\n\nif not out:\n    return [{\"json\": {\"publishedAt\": \"\", \"ImpactScore\": 0, \"Winners\": \"\", \"Losers\": \"\", \"_emptyNews\": True}}]\n\nreturn out\n"
+  },
+  "type": "n8n-nodes-base.code",
+  "typeVersion": 2,
+  "position": [
+    1712,
+    11920
+  ],
+  "id": "64186756-2813-4b4e-b273-749beb57f7f6",
+  "name": "AG4.01 - Récupération des news générales",
+  "alwaysOutputData": true
+}
