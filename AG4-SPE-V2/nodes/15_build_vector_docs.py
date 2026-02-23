@@ -64,6 +64,35 @@ def pick_db_path(items):
     return DEFAULT_DB_PATH
 
 
+def to_bool(v, default=False):
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return default
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "y", "on"):
+        return True
+    if s in ("0", "false", "no", "n", "off"):
+        return False
+    return default
+
+
+def pick_full_resync(items):
+    keys = (
+        "vector_full_resync",
+        "full_resync",
+        "resync_all",
+        "qdrant_resync_all",
+        "qdrant_force_resync",
+    )
+    for it in items:
+        d = it.get("json", {}) or {}
+        for k in keys:
+            if k in d:
+                return to_bool(d.get(k), False)
+    return False
+
+
 def json_default(v):
     if isinstance(v, (datetime, date)):
         return v.isoformat()
@@ -112,68 +141,115 @@ def build_text(payload):
 items = _items or []
 run_id = pick_run_id(items)
 db_path = pick_db_path(items)
+full_resync = pick_full_resync(items)
 
 with db_con(db_path) as con:
-    if not run_id:
+    if not full_resync and not run_id:
         row = con.execute("SELECT run_id FROM run_log ORDER BY started_at DESC LIMIT 1").fetchone()
         run_id = to_text(row[0]) if row else ""
 
-    if not run_id:
+    if not full_resync and not run_id:
         return []
 
-    stats = con.execute(
-        """
-        SELECT
-          COUNT(*) AS total_rows,
-          SUM(CASE WHEN action = 'analyze' THEN 1 ELSE 0 END) AS analyzed_rows,
-          SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE THEN 1 ELSE 0 END) AS relevant_analyzed_rows,
-          SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE
-                    AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0 THEN 1 ELSE 0 END) AS with_content_rows,
-          SUM(CASE WHEN vector_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_rows
-        FROM news_history
-        WHERE run_id = ?
-        """,
-        [run_id],
-    ).fetchone()
+    if full_resync:
+        stats = con.execute(
+            """
+            SELECT
+              COUNT(*) AS total_rows,
+              SUM(CASE WHEN action = 'analyze' THEN 1 ELSE 0 END) AS analyzed_rows,
+              SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE THEN 1 ELSE 0 END) AS relevant_analyzed_rows,
+              SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE
+                        AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0 THEN 1 ELSE 0 END) AS with_content_rows,
+              SUM(CASE WHEN vector_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_rows
+            FROM news_history
+            """
+        ).fetchone()
 
-    rows = con.execute(
-        """
-        SELECT
-          news_id,
-          run_id,
-          symbol,
-          company_name,
-          source,
-          boursorama_ref,
-          url,
-          canonical_url,
-          title,
-          published_at,
-          snippet,
-          text,
-          summary,
-          category,
-          impact_score,
-          sentiment,
-          confidence_score,
-          horizon,
-          urgency,
-          suggested_signal,
-          key_drivers,
-          needs_follow_up,
-          is_relevant,
-          relevance_reason,
-          analyzed_at
-        FROM news_history
-        WHERE run_id = ?
-          AND (vector_status IS NULL OR vector_status IN ('PENDING','FAILED'))
-          AND action = 'analyze'
-          AND COALESCE(is_relevant, TRUE) = TRUE
-          AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0
-        ORDER BY analyzed_at DESC, news_id
-        """,
-        [run_id],
-    ).fetchall()
+        rows = con.execute(
+            """
+            SELECT
+              news_id,
+              run_id,
+              symbol,
+              company_name,
+              source,
+              boursorama_ref,
+              url,
+              canonical_url,
+              title,
+              published_at,
+              snippet,
+              text,
+              summary,
+              category,
+              impact_score,
+              sentiment,
+              confidence_score,
+              horizon,
+              urgency,
+              suggested_signal,
+              key_drivers,
+              needs_follow_up,
+              is_relevant,
+              relevance_reason,
+              analyzed_at
+            FROM news_history
+            WHERE LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0
+            ORDER BY analyzed_at DESC, news_id
+            """
+        ).fetchall()
+    else:
+        stats = con.execute(
+            """
+            SELECT
+              COUNT(*) AS total_rows,
+              SUM(CASE WHEN action = 'analyze' THEN 1 ELSE 0 END) AS analyzed_rows,
+              SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE THEN 1 ELSE 0 END) AS relevant_analyzed_rows,
+              SUM(CASE WHEN action = 'analyze' AND COALESCE(is_relevant, TRUE) = TRUE
+                        AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0 THEN 1 ELSE 0 END) AS with_content_rows,
+              SUM(CASE WHEN vector_status = 'PENDING' THEN 1 ELSE 0 END) AS pending_rows
+            FROM news_history
+            WHERE run_id = ?
+            """,
+            [run_id],
+        ).fetchone()
+
+        rows = con.execute(
+            """
+            SELECT
+              news_id,
+              run_id,
+              symbol,
+              company_name,
+              source,
+              boursorama_ref,
+              url,
+              canonical_url,
+              title,
+              published_at,
+              snippet,
+              text,
+              summary,
+              category,
+              impact_score,
+              sentiment,
+              confidence_score,
+              horizon,
+              urgency,
+              suggested_signal,
+              key_drivers,
+              needs_follow_up,
+              is_relevant,
+              relevance_reason,
+              analyzed_at
+            FROM news_history
+            WHERE run_id = ?
+              AND (vector_status IS NULL OR vector_status IN ('PENDING','FAILED'))
+              AND LENGTH(TRIM(COALESCE(text, summary, snippet, ''))) > 0
+            ORDER BY analyzed_at DESC, news_id
+            """,
+            [run_id],
+        ).fetchall()
     cols = [d[0] for d in con.description]
 
 out = []
@@ -225,6 +301,7 @@ if len(out) == 0:
                 "_vectorNoop": True,
                 "run_id": run_id,
                 "db_path": db_path,
+                "full_resync": full_resync,
                 "vectorStats": {
                     "totalRows": int(stats[0]) if stats and stats[0] is not None else 0,
                     "analyzedRows": int(stats[1]) if stats and stats[1] is not None else 0,
@@ -232,7 +309,11 @@ if len(out) == 0:
                     "withContentRows": int(stats[3]) if stats and stats[3] is not None else 0,
                     "pendingRows": int(stats[4]) if stats and stats[4] is not None else 0,
                 },
-                "message": "No vector docs for this run (nothing with vector_status=PENDING and relevant analyzed content).",
+                "message": (
+                    "No vector docs found for full resync scope."
+                    if full_resync
+                    else "No vector docs for this run (nothing with vector_status=PENDING/FAILED and non-empty content)."
+                ),
             }
         }
     ]

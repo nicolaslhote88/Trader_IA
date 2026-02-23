@@ -110,6 +110,9 @@ services:
       - QDRANT_API_KEY=${QDRANT_API_KEY}
       - TRANSCRIPT_API_BASE=${TRANSCRIPT_API_BASE}
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - AG1_DUCKDB_PATH=/files/duckdb/ag1_v2.duckdb
+      - AG1_DUCKDB_WRITER_PATH=/files/AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V2-EXPORT/sql/portfolio_ledger_schema_v2.sql
       - EXECUTIONS_DATA_MAX_AGE=72   # Garde l'historique 72h (3 jours). Ajustez selon vos besoins.
       - DB_SQLITE_VACUUM_ON_STARTUP=false # Très important : Force le fichier à réduire sa taille au redémarrage
     dns:
@@ -121,6 +124,7 @@ services:
     volumes:
       - n8n_data:/home/node/.n8n
       - /local-files:/files
+      - /opt/trader-ia/AG1-V2-EXPORT:/files/AG1-V2-EXPORT:ro
     depends_on:
       - yfinance-api
       - yf-enrichment
@@ -141,6 +145,9 @@ services:
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
       - TRANSCRIPT_API_BASE=${TRANSCRIPT_API_BASE}
       - N8N_RUNNERS_PYTHON_ALLOW_LIST=duckdb,pandas,numpy,datetime,math,json
+      - AG1_DUCKDB_PATH=/files/duckdb/ag1_v2.duckdb
+      - AG1_DUCKDB_WRITER_PATH=/files/AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V2-EXPORT/sql/portfolio_ledger_schema_v2.sql
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -149,6 +156,7 @@ services:
       - /opt/trader-ia/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
       - /opt/trader-ia/duckdb_home:/home/runner/.duckdb:rw
       - /local-files:/files:rw
+      - /opt/trader-ia/AG1-V2-EXPORT:/files/AG1-V2-EXPORT:ro
     depends_on:
       - n8n
     networks:

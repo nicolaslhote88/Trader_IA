@@ -161,7 +161,7 @@ with db_con(db_path) as con:
         existing_vectorized_at = parse_ts(existing[3]) if existing and existing[3] is not None else None
         existing_chunk_total = to_int(existing[4], None) if existing and existing[4] is not None else None
 
-        should_vectorize = action == "analyze" and is_relevant and bool((text or "").strip() or (summary or "").strip() or (snippet or "").strip())
+        should_vectorize = bool((text or "").strip() or (summary or "").strip() or (snippet or "").strip())
         vector_status = "PENDING" if should_vectorize else "SKIPPED"
         if existing_vector_status in ("DONE", "PENDING"):
             vector_status = existing_vector_status

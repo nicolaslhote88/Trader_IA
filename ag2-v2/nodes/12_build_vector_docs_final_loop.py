@@ -215,7 +215,7 @@ with db_con() as con:
         FROM technical_signals ts
         LEFT JOIN universe u ON u.symbol = ts.symbol
         WHERE ts.run_id = ?
-          AND (ts.vector_status IS NULL OR ts.vector_status IN ('PENDING','FAILED'))
+          AND (ts.vector_status IS NULL OR ts.vector_status IN ('PENDING','FAILED','SKIPPED'))
         ORDER BY ts.symbol
         """,
         [run_id],
@@ -229,10 +229,6 @@ for tup in rows:
     signal_id = str(row.get("id", "") or f"{row.get('run_id','')}|{row.get('symbol','')}")
     symbol = str(row.get("symbol", "") or "")
     symbol_name = str(row.get("symbol_name", "") or "")
-
-    should_vectorize = row.get("should_vectorize")
-    if should_vectorize is False:
-        continue
 
     ai_decision = str(row.get("ai_decision", "") or "").strip()
     has_ai = ai_decision not in ("", "SKIP")
