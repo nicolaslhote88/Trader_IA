@@ -1,0 +1,93 @@
+[1mdiff --git a/dashboard/app_modules/core.py b/dashboard/app_modules/core.py[m
+[1mindex 545ae49..b5709f8 100644[m
+[1m--- a/dashboard/app_modules/core.py[m
+[1m+++ b/dashboard/app_modules/core.py[m
+[36m@@ -35,6 +35,54 @@[m [mdef safe_float_series(series: pd.Series) -> pd.Series:[m
+     return series.map(safe_float).astype(float)[m
+ [m
+ [m
+[32m+[m[32mdef _split_sector_cell(value: object) -> list[str]:[m
+[32m+[m[32m    """Parse sector cells from CSV text, JSON arrays, or Python-list-like strings."""[m
+[32m+[m[32m    if value is None or (isinstance(value, float) and pd.isna(value)):[m
+[32m+[m[32m        return [][m
+[32m+[m
+[32m+[m[32m    if isinstance(value, (list, tuple, set)):[m
+[32m+[m[32m        raw_items = list(value)[m
+[32m+[m[32m    else:[m
+[32m+[m[32m        s = str(value).strip()[m
+[32m+[m[32m        if not s or s.lower() in {"nan", "none", "null"}:[m
+[32m+[m[32m            return [][m
+[32m+[m
+[32m+[m[32m        raw_items: list[object][m
+[32m+[m[32m        parsed = None[m
+[32m+[m[32m        if s.startswith("[") and s.endswith("]"):[m
+[32m+[m[32m            try:[m
+[32m+[m[32m                parsed = json.loads(s)[m
+[32m+[m[32m            except Exception:[m
+[32m+[m[32m                parsed = None[m
+[32m+[m
+[32m+[m[32m            # Handles strings like "['Industrials', 'Energy']" (single quotes).[m
+[32m+[m[32m            if not isinstance(parsed, list):[m
+[32m+[m[32m                inner = s[1:-1].strip()[m
+[32m+[m[32m                raw_items = [] if not inner else inner.split(",")[m
+[32m+[m[32m            else:[m
+[32m+[m[32m                raw_items = parsed[m
+[32m+[m[32m        else:[m
+[32m+[m[32m            raw_items = s.split(",")[m
+[32m+[m
+[32m+[m[32m    out: list[str] = [][m
+[32m+[m[32m    seen: set[str] = set()[m
+[32m+[m[32m    for item in raw_items:[m
+[32m+[m[32m        label = str(item).strip()[m
+[32m+[m[32m        if not label:[m
+[32m+[m[32m            continue[m
+[32m+[m[32m        label = re.sub(r"^[\[\(\{]+|[\]\)\}]+$", "", label).strip()[m
+[32m+[m[32m        label = label.strip("\"'")[m
+[32m+[m[32m        label = re.sub(r"\s+", " ", label).strip()[m
+[32m+[m[32m        if not label:[m
+[32m+[m[32m            continue[m
+[32m+[m[32m        key = label.casefold()[m
+[32m+[m[32m        if key in seen:[m
+[32m+[m[32m            continue[m
+[32m+[m[32m        seen.add(key)[m
+[32m+[m[32m        out.append(label)[m
+[32m+[m[32m    return out[m
+[32m+[m
+[32m+[m
+ TRUTHY_VALUES = {"TRUE", "1", "OUI", "YES"}[m
+ [m
+ [m
+[36m@@ -223,12 +271,10 @@[m [mdef calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -[m
+         if "sectors_bullish" in df_recent.columns[m
+         else (df_recent["winners"] if "winners" in df_recent.columns else pd.Series("", index=df_recent.index))[m
+     )[m
+[31m-    winners = ([m
+[31m-        df_recent.assign(Sector=winners_col.fillna("").astype(str).str.split(","))[m
+[31m-        .explode("Sector")[m
+[31m-    )[m
+[31m-    winners["Sector"] = winners["Sector"].astype(str).str.strip().str.title()[m
+[31m-    winners = winners[winners["Sector"] != ""][m
+[32m+[m[32m    winners = df_recent.assign(Sector=winners_col.map(_split_sector_cell)).explode("Sector")[m
+[32m+[m[32m    winners = winners.dropna(subset=["Sector"])[m
+[32m+[m[32m    winners["Sector"] = winners["Sector"].astype(str).str.strip()[m
+[32m+[m[32m    winners = winners[~winners["Sector"].str.lower().isin(["", "nan", "none", "null"])][m
+     winners["NetScore"] = winners["_impact"][m
+     winners = winners[["Sector", "NetScore"]][m
+ [m
+[36m@@ -237,12 +283,10 @@[m [mdef calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -[m
+         if "sectors_bearish" in df_recent.columns[m
+         else (df_recent["losers"] if "losers" in df_recent.columns else pd.Series("", index=df_recent.index))[m
+     )[m
+[31m-    losers = ([m
+[31m-        df_recent.assign(Sector=losers_col.fillna("").astype(str).str.split(","))[m
+[31m-        .explode("Sector")[m
+[31m-    )[m
+[31m-    losers["Sector"] = losers["Sector"].astype(str).str.strip().str.title()[m
+[31m-    losers = losers[losers["Sector"] != ""][m
+[32m+[m[32m    losers = df_recent.assign(Sector=losers_col.map(_split_sector_cell)).explode("Sector")[m
+[32m+[m[32m    losers = losers.dropna(subset=["Sector"])[m
+[32m+[m[32m    losers["Sector"] = losers["Sector"].astype(str).str.strip()[m
+[32m+[m[32m    losers = losers[~losers["Sector"].str.lower().isin(["", "nan", "none", "null"])][m
+     losers["NetScore"] = -losers["_impact"][m
+     losers = losers[["Sector", "NetScore"]][m
+ [m
