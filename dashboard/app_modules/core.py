@@ -270,13 +270,6 @@ def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -
         df_recent["sectors_bullish"]
         if "sectors_bullish" in df_recent.columns
         else (df_recent["winners"] if "winners" in df_recent.columns else pd.Series("", index=df_recent.index))
-<<<<<<< HEAD
-    )
-    winners = (
-        df_recent.assign(Sector=winners_col.fillna("").astype(str).str.split(","))
-        .explode("Sector")
-=======
->>>>>>> 6bae2a1 (AG4-V2: support sectors_bullish/sectors_bearish in workflow + dashboard)
     )
     winners = df_recent.assign(Sector=winners_col.map(_split_sector_cell)).explode("Sector")
     winners = winners.dropna(subset=["Sector"])
@@ -289,13 +282,6 @@ def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -
         df_recent["sectors_bearish"]
         if "sectors_bearish" in df_recent.columns
         else (df_recent["losers"] if "losers" in df_recent.columns else pd.Series("", index=df_recent.index))
-<<<<<<< HEAD
-    )
-    losers = (
-        df_recent.assign(Sector=losers_col.fillna("").astype(str).str.split(","))
-        .explode("Sector")
-=======
->>>>>>> 6bae2a1 (AG4-V2: support sectors_bullish/sectors_bearish in workflow + dashboard)
     )
     losers = df_recent.assign(Sector=losers_col.map(_split_sector_cell)).explode("Sector")
     losers = losers.dropna(subset=["Sector"])
