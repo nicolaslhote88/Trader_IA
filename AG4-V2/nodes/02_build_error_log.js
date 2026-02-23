@@ -46,6 +46,8 @@ return $input.all().map((i, idx) => {
       Snippet: `RSS fetch error on ${feedUrl}`,
       firstSeenAt: occurredAt,
       Strategy: '',
+      sectors_bearish: '',
+      sectors_bullish: '',
       Losers: '',
       Winners: '',
       Theme: 'Pipeline/Error',

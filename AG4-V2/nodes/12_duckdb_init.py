@@ -51,6 +51,8 @@ SCHEMA = [
       strategy VARCHAR,
       losers VARCHAR,
       winners VARCHAR,
+      sectors_bullish VARCHAR,
+      sectors_bearish VARCHAR,
       theme VARCHAR,
       regime VARCHAR,
       analyzed_at TIMESTAMP,
@@ -99,6 +101,13 @@ run_id = f"AG4V2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 with db_con() as con:
     for stmt in SCHEMA:
         con.execute(stmt)
+
+    # Lightweight schema migration for existing databases (backward compatible).
+    cols = {str(r[1]).lower() for r in con.execute("PRAGMA table_info('news_history')").fetchall()}
+    if "sectors_bullish" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN sectors_bullish VARCHAR")
+    if "sectors_bearish" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN sectors_bearish VARCHAR")
 
     con.execute(
         """

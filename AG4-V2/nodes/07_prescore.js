@@ -1,4 +1,4 @@
-// 20G1C — Pre-score heuristic impact (V2)
+// 20G1C - Pre-score heuristic impact (V2)
 const HIGH = [
   'inflation', 'cpi', 'ppi', 'ecb', 'fed', 'taux', 'rate', 'yield',
   'recession', 'gdp', 'pmi', 'chomage', 'unemployment', 'war', 'tariff',
@@ -16,12 +16,13 @@ function scoreText(text) {
   return s;
 }
 
-return $input.all().map(i => {
+return $input.all().map((i) => {
   const j = i.json || {};
   const text = `${j.title || ''} ${j.snippet || ''}`;
   const kw = scoreText(text);
+  const hasSectorHint = Array.isArray(j.candidateSectors) && j.candidateSectors.length > 0;
 
-  let score = Math.min(10, kw + (Array.isArray(j.symbols) && j.symbols.length ? 2 : 1));
+  let score = Math.min(10, kw + (hasSectorHint ? 2 : 1));
   score += Number(j.sourceTier === 1 ? 2 : (j.sourceTier === 2 ? 1 : 0));
   score = Math.min(10, score);
 
@@ -33,6 +34,7 @@ return $input.all().map(i => {
       preImpactScore: score,
       preUrgency: urgency,
       preAnalyzeHint: score >= 4,
-    }
+    },
+    pairedItem: i.pairedItem,
   };
 });

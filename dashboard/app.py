@@ -2823,7 +2823,22 @@ def _estimate_scenario_probabilities(score: float, risk: float, upside_pct: floa
 
 
 def _normalize_macro_news_df(df_macro: pd.DataFrame) -> pd.DataFrame:
-    cols = ["publishedat", "impactscore", "winners", "losers", "theme", "regime", "title", "snippet", "notes", "source", "action", "reason"]
+    cols = [
+        "publishedat",
+        "impactscore",
+        "sectors_bullish",
+        "sectors_bearish",
+        "winners",
+        "losers",
+        "theme",
+        "regime",
+        "title",
+        "snippet",
+        "notes",
+        "source",
+        "action",
+        "reason",
+    ]
     if df_macro is None or df_macro.empty:
         return pd.DataFrame(columns=cols)
 
@@ -2837,7 +2852,15 @@ def _normalize_macro_news_df(df_macro: pd.DataFrame) -> pd.DataFrame:
     wk["publishedat"] = pd.to_datetime(wk[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
     wk["impactscore"] = safe_float_series(wk[impact_col]) if impact_col else 0.0
 
-    for c in ["winners", "losers", "theme", "regime", "title", "snippet", "notes", "source", "action", "reason"]:
+    bullish_col = _first_existing_column(wk, ["sectors_bullish", "winners"])
+    bearish_col = _first_existing_column(wk, ["sectors_bearish", "losers"])
+    wk["sectors_bullish"] = wk[bullish_col].fillna("").astype(str) if bullish_col else ""
+    wk["sectors_bearish"] = wk[bearish_col].fillna("").astype(str) if bearish_col else ""
+    # Legacy aliases kept for the rest of the dashboard code.
+    wk["winners"] = wk["sectors_bullish"]
+    wk["losers"] = wk["sectors_bearish"]
+
+    for c in ["theme", "regime", "title", "snippet", "notes", "source", "action", "reason"]:
         if c not in wk.columns:
             wk[c] = ""
         wk[c] = wk[c].fillna("").astype(str)

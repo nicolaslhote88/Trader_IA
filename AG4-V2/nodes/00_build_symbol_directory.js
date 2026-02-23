@@ -1,24 +1,38 @@
-// 20A2 — Build Symbol Directory from Universe sheet (V2)
-function normName(s) {
+// 20A2 - Build Sector Dictionary from Universe sheet (V2)
+function cleanText(s) {
   return String(s || '')
     .trim()
     .replace(/\s+/g, ' ');
 }
 
-const rows = $input.all().map(i => i.json || {});
-const out = [];
-
-for (const r of rows) {
-  const symbol = String(r.Symbol || r.symbol || '').trim();
-  if (!symbol) continue;
-  const name = normName(r.Name || r.name || '');
-  out.push({ symbol, name });
+function pickSector(row) {
+  return (
+    row.Sector ??
+    row.sector ??
+    row['GICS Sector'] ??
+    row.gics_sector ??
+    row['Sector Name'] ??
+    row['sector_name'] ??
+    ''
+  );
 }
+
+const rows = $input.all().map((i) => i.json || {});
+const uniq = new Map();
+
+for (const row of rows) {
+  const sector = cleanText(pickSector(row));
+  if (!sector) continue;
+  const key = sector.toLowerCase();
+  if (!uniq.has(key)) uniq.set(key, sector);
+}
+
+const sectorDictionary = Array.from(uniq.values()).sort((a, b) => a.localeCompare(b));
 
 return [{
   json: {
-    symbolDirectory: out,
-    count: out.length,
+    sectorDictionary,
+    count: sectorDictionary.length,
     generatedAt: new Date().toISOString(),
-  }
+  },
 }];

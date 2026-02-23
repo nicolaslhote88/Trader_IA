@@ -112,8 +112,10 @@ with db_con(db_path) as con:
         now_utc = datetime.now(timezone.utc)
         new_first_seen = parse_ts(j.get("firstSeenAt")) or published_at or now_utc
         strategy = str(j.get("Strategy", "") or "")
-        losers = str(j.get("Losers", "") or "")
-        winners = str(j.get("Winners", "") or "")
+        sectors_bearish = to_text(j.get("sectors_bearish", j.get("Losers", "")))
+        sectors_bullish = to_text(j.get("sectors_bullish", j.get("Winners", "")))
+        losers = str(j.get("Losers", "") or sectors_bearish)
+        winners = str(j.get("Winners", "") or sectors_bullish)
         theme = str(j.get("Theme", "") or "Resultats/Micro")
         regime = str(j.get("Regime", "") or "Neutral")
         analyzed_at = parse_ts(j.get("analyzedAt")) or now_utc
@@ -137,14 +139,16 @@ with db_con(db_path) as con:
             INSERT OR REPLACE INTO news_history (
               dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,
               symbols, type, notes, impact_score, confidence, urgency, snippet, first_seen_at,
-              strategy, losers, winners, theme, regime, analyzed_at, last_seen_at,
+              strategy, losers, winners, sectors_bullish, sectors_bearish,
+              theme, regime, analyzed_at, last_seen_at,
               source_tier, action, reason, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [
                 dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,
                 symbols, typ, notes, impact_score, confidence, urgency, snippet, first_seen_at,
-                strategy, losers, winners, theme, regime, analyzed_at, last_seen_at,
+                strategy, losers, winners, sectors_bullish, sectors_bearish,
+                theme, regime, analyzed_at, last_seen_at,
                 source_tier, action, reason,
             ],
         )

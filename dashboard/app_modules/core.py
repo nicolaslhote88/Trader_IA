@@ -35,6 +35,54 @@ def safe_float_series(series: pd.Series) -> pd.Series:
     return series.map(safe_float).astype(float)
 
 
+def _split_sector_cell(value: object) -> list[str]:
+    """Parse sector cells from CSV text, JSON arrays, or Python-list-like strings."""
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return []
+
+    if isinstance(value, (list, tuple, set)):
+        raw_items = list(value)
+    else:
+        s = str(value).strip()
+        if not s or s.lower() in {"nan", "none", "null"}:
+            return []
+
+        raw_items: list[object]
+        parsed = None
+        if s.startswith("[") and s.endswith("]"):
+            try:
+                parsed = json.loads(s)
+            except Exception:
+                parsed = None
+
+            # Handles strings like "['Industrials', 'Energy']" (single quotes).
+            if not isinstance(parsed, list):
+                inner = s[1:-1].strip()
+                raw_items = [] if not inner else inner.split(",")
+            else:
+                raw_items = parsed
+        else:
+            raw_items = s.split(",")
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw_items:
+        label = str(item).strip()
+        if not label:
+            continue
+        label = re.sub(r"^[\[\(\{]+|[\]\)\}]+$", "", label).strip()
+        label = label.strip("\"'")
+        label = re.sub(r"\s+", " ", label).strip()
+        if not label:
+            continue
+        key = label.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(label)
+    return out
+
+
 TRUTHY_VALUES = {"TRUE", "1", "OUI", "YES"}
 
 
@@ -198,7 +246,7 @@ def extract_valuation_scenarios(text: object) -> dict:
 
 
 def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -> pd.DataFrame:
-    """Barometre sectoriel base sur News_History (publishedat, impactscore, winners, losers)."""
+    """Barometre sectoriel base sur News_History (sectors_bullish/sectors_bearish, fallback winners/losers)."""
     if df_news is None or df_news.empty:
         return pd.DataFrame()
     if "publishedat" not in df_news.columns:
@@ -218,23 +266,41 @@ def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -
     if df_recent.empty:
         return pd.DataFrame()
 
-    winners_col = df_recent["winners"] if "winners" in df_recent.columns else pd.Series("", index=df_recent.index)
+    winners_col = (
+        df_recent["sectors_bullish"]
+        if "sectors_bullish" in df_recent.columns
+        else (df_recent["winners"] if "winners" in df_recent.columns else pd.Series("", index=df_recent.index))
+<<<<<<< HEAD
+    )
     winners = (
         df_recent.assign(Sector=winners_col.fillna("").astype(str).str.split(","))
         .explode("Sector")
+=======
+>>>>>>> 6bae2a1 (AG4-V2: support sectors_bullish/sectors_bearish in workflow + dashboard)
     )
-    winners["Sector"] = winners["Sector"].astype(str).str.strip().str.title()
-    winners = winners[winners["Sector"] != ""]
+    winners = df_recent.assign(Sector=winners_col.map(_split_sector_cell)).explode("Sector")
+    winners = winners.dropna(subset=["Sector"])
+    winners["Sector"] = winners["Sector"].astype(str).str.strip()
+    winners = winners[~winners["Sector"].str.lower().isin(["", "nan", "none", "null"])]
     winners["NetScore"] = winners["_impact"]
     winners = winners[["Sector", "NetScore"]]
 
-    losers_col = df_recent["losers"] if "losers" in df_recent.columns else pd.Series("", index=df_recent.index)
+    losers_col = (
+        df_recent["sectors_bearish"]
+        if "sectors_bearish" in df_recent.columns
+        else (df_recent["losers"] if "losers" in df_recent.columns else pd.Series("", index=df_recent.index))
+<<<<<<< HEAD
+    )
     losers = (
         df_recent.assign(Sector=losers_col.fillna("").astype(str).str.split(","))
         .explode("Sector")
+=======
+>>>>>>> 6bae2a1 (AG4-V2: support sectors_bullish/sectors_bearish in workflow + dashboard)
     )
-    losers["Sector"] = losers["Sector"].astype(str).str.strip().str.title()
-    losers = losers[losers["Sector"] != ""]
+    losers = df_recent.assign(Sector=losers_col.map(_split_sector_cell)).explode("Sector")
+    losers = losers.dropna(subset=["Sector"])
+    losers["Sector"] = losers["Sector"].astype(str).str.strip()
+    losers = losers[~losers["Sector"].str.lower().isin(["", "nan", "none", "null"])]
     losers["NetScore"] = -losers["_impact"]
     losers = losers[["Sector", "NetScore"]]
 

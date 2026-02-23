@@ -3,6 +3,8 @@ const j = $json || {};
 const now = new Date().toISOString();
 
 const symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');
+const sectorsBullish = j.sectors_bullish || j.Winners || '';
+const sectorsBearish = j.sectors_bearish || j.Losers || '';
 
 return [{
   json: {
@@ -25,8 +27,10 @@ return [{
     Snippet: j.Snippet || j.snippet || '',
     firstSeenAt: j.firstSeenAt || j.seenNowAt || now,
     Strategy: j.Strategy || '',
-    Losers: j.Losers || '',
-    Winners: j.Winners || '',
+    sectors_bearish: sectorsBearish,
+    sectors_bullish: sectorsBullish,
+    Losers: j.Losers || sectorsBearish,
+    Winners: j.Winners || sectorsBullish,
     Theme: j.Theme || 'Resultats/Micro',
     Regime: j.Regime || 'Neutral',
     analyzedAt: j.analyzedAt || now,

@@ -55,7 +55,10 @@ with db_con(db_path) as con:
         SELECT
           dedupe_key, event_key, canonical_url, published_at, title, source, feed_url,
           symbols, type, notes, impact_score, confidence, urgency, snippet,
-          first_seen_at, strategy, losers, winners, theme, regime, analyzed_at
+          first_seen_at, strategy, losers, winners,
+          COALESCE(sectors_bullish, winners) AS sectors_bullish,
+          COALESCE(sectors_bearish, losers) AS sectors_bearish,
+          theme, regime, analyzed_at
         FROM news_history
         WHERE COALESCE(last_seen_at, first_seen_at, published_at, analyzed_at, updated_at, created_at)
               >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_DAYS} days'
@@ -81,11 +84,13 @@ for idx, row in enumerate(rows, start=1):
         "Snippet": row[13] or "",
         "firstSeenAt": to_iso(row[14]),
         "Strategy": row[15] or "",
-        "Losers": row[16] or "",
-        "Winners": row[17] or "",
-        "Theme": row[18] or "Resultats/Micro",
-        "Regime": row[19] or "Neutral",
-        "analyzedAt": to_iso(row[20]),
+        "Losers": row[16] or row[19] or "",
+        "Winners": row[17] or row[18] or "",
+        "sectors_bullish": row[18] or "",
+        "sectors_bearish": row[19] or "",
+        "Theme": row[20] or "Resultats/Micro",
+        "Regime": row[21] or "Neutral",
+        "analyzedAt": to_iso(row[22]),
         "row_number": idx,
     }
 

@@ -1,58 +1,61 @@
-// 20F1 — Tag Symbols from Universe (V2)
-function norm(s) {
-  return String(s || '').toLowerCase();
+// 20F1 - Attach sector dictionary + detect sector hints (V2)
+function normalizeText(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function unique(arr) {
   return Array.from(new Set((arr || []).filter(Boolean)));
 }
 
-function safeParse(v) {
+function safeParseArray(v) {
   if (Array.isArray(v)) return v;
   if (typeof v === 'string') {
-    try { const j = JSON.parse(v); return Array.isArray(j) ? j : []; } catch { return []; }
+    try {
+      const parsed = JSON.parse(v);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   }
   return [];
 }
 
-let symbolDirectory = [];
+let sectorDictionary = [];
 try {
-  const d = $items('20A2 - Build Symbol Directory')[0]?.json?.symbolDirectory;
-  symbolDirectory = safeParse(d).slice(0, 2000);
+  const raw = $items('20A2 - Build Sector Dictionary')[0]?.json?.sectorDictionary;
+  sectorDictionary = safeParseArray(raw).map((x) => String(x || '').trim()).filter(Boolean);
 } catch {
-  symbolDirectory = [];
+  sectorDictionary = [];
 }
 
-const bySymbol = new Set(symbolDirectory.map(x => String(x.symbol || '').trim()).filter(Boolean));
-const byName = symbolDirectory
-  .map(x => ({ symbol: String(x.symbol || '').trim(), name: norm(x.name || '') }))
-  .filter(x => x.symbol && x.name.length >= 4);
+const sectorMatchers = sectorDictionary.map((sector) => ({
+  label: sector,
+  norm: normalizeText(sector),
+})).filter((x) => x.norm.length >= 3);
 
-return $input.all().map(item => {
+return $input.all().map((item) => {
   const j = item.json || {};
-  const text = `${j.title || ''} ${j.snippet || ''}`;
-  const textNorm = norm(text);
+  const textNorm = normalizeText(`${j.title || ''} ${j.snippet || ''}`);
 
-  const found = [];
-
-  // Pattern tickers like MC.PA / AIR.PA / ABC.DE
-  const tickerMatches = text.match(/\b[A-Z]{1,6}\.(PA|AS|BR|MI|DE|L|SW|MC)\b/g) || [];
-  for (const t of tickerMatches) {
-    if (bySymbol.has(t)) found.push(t);
+  const candidateSectors = [];
+  for (const m of sectorMatchers) {
+    if (textNorm.includes(m.norm)) candidateSectors.push(m.label);
   }
-
-  // Company name contains
-  for (const row of byName) {
-    if (textNorm.includes(row.name)) found.push(row.symbol);
-  }
-
-  const symbols = unique(found).slice(0, 8);
 
   return {
     json: {
       ...j,
-      symbols,
-      type: symbols.length ? 'symbol' : 'macro',
-    }
+      symbols: [],
+      type: 'macro',
+      universeSectors: sectorDictionary,
+      candidateSectors: unique(candidateSectors).slice(0, 5),
+    },
+    pairedItem: item.pairedItem,
   };
 });

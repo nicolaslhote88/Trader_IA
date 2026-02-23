@@ -63,7 +63,10 @@ with db_con(db_path) as con:
         SELECT
           dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,
           symbols, type, notes, impact_score, confidence, urgency, snippet, first_seen_at,
-          strategy, losers, winners, theme, regime, analyzed_at
+          strategy, losers, winners,
+          COALESCE(sectors_bullish, winners) AS sectors_bullish,
+          COALESCE(sectors_bearish, losers) AS sectors_bearish,
+          theme, regime, analyzed_at
         FROM news_history
         WHERE run_id = ?
         ORDER BY COALESCE(published_at, analyzed_at) DESC, updated_at DESC
@@ -93,9 +96,11 @@ with db_con(db_path) as con:
                 "Strategy": fmt(r[16]),
                 "Losers": fmt(r[17]),
                 "Winners": fmt(r[18]),
-                "Theme": fmt(r[19]),
-                "Regime": fmt(r[20]),
-                "analyzedAt": fmt(r[21]),
+                "sectors_bullish": fmt(r[19]),
+                "sectors_bearish": fmt(r[20]),
+                "Theme": fmt(r[21]),
+                "Regime": fmt(r[22]),
+                "analyzedAt": fmt(r[23]),
             }
         })
 
@@ -134,6 +139,8 @@ with db_con(db_path) as con:
                 "Strategy": "",
                 "Losers": "",
                 "Winners": "",
+                "sectors_bullish": "",
+                "sectors_bearish": "",
                 "Theme": "Pipeline/Error",
                 "Regime": "Neutral",
                 "analyzedAt": occurred,

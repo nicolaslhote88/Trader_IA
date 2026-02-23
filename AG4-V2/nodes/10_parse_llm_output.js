@@ -1,4 +1,4 @@
-﻿// 20H2 - Parse model output + flatten final row (V2)
+// 20H2 - Parse model output + flatten final row (V2)
 function safeJsonParse(str) {
   try {
     if (typeof str === 'object' && str !== null) return str;
@@ -6,6 +6,24 @@ function safeJsonParse(str) {
   } catch {
     return {};
   }
+}
+
+function toArray(v) {
+  if (Array.isArray(v)) return v;
+  if (typeof v === 'string') {
+    return v.split(',').map((x) => String(x || '').trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function normalizeKey(s) {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function clamp01(n, d = 0.5) {
@@ -20,11 +38,6 @@ function clamp10(n, d = 0) {
   return Math.max(0, Math.min(10, Math.round(v)));
 }
 
-function joinList(arr) {
-  if (Array.isArray(arr)) return arr.join(', ');
-  return arr || '';
-}
-
 function toBool(v, d = true) {
   if (typeof v === 'boolean') return v;
   if (typeof v === 'number') return v !== 0;
@@ -36,12 +49,42 @@ function toBool(v, d = true) {
   return d;
 }
 
-function normalizeSectorList(v) {
-  const raw = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);
-  return raw
-    .map((x) => String(x || '').trim())
-    .filter(Boolean)
-    .slice(0, 5);
+function buildAllowedSectors(rawList) {
+  const out = [];
+  const seen = new Set();
+  for (const v of toArray(rawList)) {
+    const label = String(v || '').trim();
+    if (!label) continue;
+    const key = normalizeKey(label);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ key, label });
+  }
+  return out;
+}
+
+function normalizeSectorList(raw, allowed) {
+  const out = [];
+  const seen = new Set();
+
+  for (const value of toArray(raw)) {
+    const key = normalizeKey(value);
+    if (!key) continue;
+
+    let match = allowed.find((s) => s.key === key);
+    if (!match) {
+      match = allowed.find((s) => key.includes(s.key) || s.key.includes(key));
+    }
+
+    if (!match) continue;
+    if (seen.has(match.key)) continue;
+    seen.add(match.key);
+    out.push(match.label);
+
+    if (out.length >= 5) break;
+  }
+
+  return out;
 }
 
 const j = $json || {};
@@ -49,10 +92,15 @@ const llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';
 const ai = safeJsonParse(llmRaw);
 const now = new Date().toISOString();
 
-const symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');
-const isActionable = toBool(ai.isActionable, true);
-const winners = normalizeSectorList(ai.sectors_bullish);
-const losers = normalizeSectorList(ai.sectors_bearish);
+const allowedSectors = buildAllowedSectors(j.universeSectors);
+const winners = normalizeSectorList(ai.sectors_bullish, allowedSectors);
+const losers = normalizeSectorList(ai.sectors_bearish, allowedSectors);
+const winnersText = winners.join(', ');
+const losersText = losers.join(', ');
+
+const modelActionable = toBool(ai.isActionable, true);
+const hasSectorImpact = winners.length > 0 || losers.length > 0;
+const isActionable = modelActionable && hasSectorImpact;
 const notes = isActionable ? (ai.notes || '') : 'Noise';
 
 return [{
@@ -67,8 +115,8 @@ return [{
     title: j.title || 'unknown',
     source: j.source || 'unknown',
     feedUrl: j.feedUrl || '',
-    symbols,
-    type: j.type || (symbols ? 'symbol' : 'macro'),
+    symbols: '',
+    type: 'macro',
     notes,
     isActionable,
     ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,
@@ -77,12 +125,14 @@ return [{
     Snippet: j.snippet || '',
     firstSeenAt: j.seenNowAt || now,
     Strategy: ai.strategic_summary || '',
-    Losers: isActionable ? joinList(losers) : '',
-    Winners: isActionable ? joinList(winners) : '',
+    sectors_bearish: isActionable ? losersText : '',
+    sectors_bullish: isActionable ? winnersText : '',
+    Losers: isActionable ? losersText : '',
+    Winners: isActionable ? winnersText : '',
     Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',
     Regime: isActionable ? (ai.market_regime || 'Neutral') : 'Neutral',
     analyzedAt: now,
     _action: 'analyze',
     _reason: j._reason || '',
-  }
+  },
 }];
