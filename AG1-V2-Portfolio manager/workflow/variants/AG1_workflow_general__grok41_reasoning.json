@@ -1,0 +1,1162 @@
+{
+  "name": "AG1 - Workflow général - Grok 4.1 Reasoning",
+  "nodes": [
+    {
+      "parameters": {
+        "triggerTimes": {
+          "item": [
+            {}
+          ]
+        }
+      },
+      "id": "a392eab3-8ab6-4f1b-a6c1-f6846cf0eaa3",
+      "name": "1 - Hourly Trigger",
+      "type": "n8n-nodes-base.cron",
+      "typeVersion": 1,
+      "position": [
+        768,
+        11760
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Node 7 — Validate & Enforce Safety (v5 - Qty-first, Backward Compatible)\n// Mode: Run Once for All Items\n// Output: [{ json: { decision, commentary, agentDecision, orders, metrics, warnings, ctx } }]\n\n// -------------------- HELPERS --------------------\nfunction isObj(x) {\n  return x && typeof x === \"object\" && !Array.isArray(x);\n}\n\nfunction safeJsonParse(s) {\n  try { return JSON.parse(s); } catch { return null; }\n}\n\nfunction toNumOrNull(x) {\n  const n = Number(x);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction clampText(s, n) {\n  return String(s ?? \"\").replace(/\\s+/g, \" \").trim().slice(0, n);\n}\n\nfunction normSymbol(v) {\n  return String(v ?? \"\").trim();\n}\n\nfunction uniq(arr) {\n  return Array.from(new Set((arr || []).filter(Boolean)));\n}\n\nfunction deepClone(obj) {\n  try { return JSON.parse(JSON.stringify(obj)); } catch { return obj; }\n}\n\nfunction pickFirstRelevantInput(all) {\n  for (const it of all) {\n    const j = it?.json ?? {};\n    if (j.portfolioSummary || j.portfolioRows || j.ctx?.portfolioSummary) return j;\n  }\n  return all[0]?.json ?? {};\n}\n\nfunction extractNewsItems(input) {\n  const candidates = [\n    input?.market?.newsItems,\n    input?.market?.marketNewsPack?.newsItems,\n    input?.market?.marketNewsPack?.topItems,\n    input?.market?.marketNewsPack?.items,\n    input?.marketNewsPack?.newsItems,\n    input?.marketNewsPack?.topItems,\n    input?.marketNewsPack?.items,\n    input?.newsItems,\n    input?.news,\n    input?.market?.news,\n  ];\n  for (const c of candidates) {\n    if (Array.isArray(c) && c.length) return c;\n  }\n  return [];\n}\n\nfunction getPortfolioPositionsSymbols(portfolioSummary) {\n  const pos = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n  return uniq(\n    pos\n      .map((p) => normSymbol(p.Symbol ?? p.symbol))\n      .filter((s) => s && s !== \"CASH_EUR\" && s !== \"__META__\")\n  );\n}\n\nfunction buildPricesFallbackFromPortfolio(portfolioSummary) {\n  const pricesFallback = {};\n  const posArr = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n\n  for (const p of posArr) {\n    const s = normSymbol(p.Symbol ?? p.symbol);\n    if (!s || s === \"CASH_EUR\" || s === \"__META__\") continue;\n\n    let last = Number(p.LastPrice ?? NaN);\n    if (!Number.isFinite(last) || last <= 0) {\n      const q = Number(p.Quantity ?? NaN);\n      const mv = Number(p.MarketValue ?? NaN);\n      if (Number.isFinite(q) && q > 0 && Number.isFinite(mv)) last = mv / q;\n    }\n\n    if (Number.isFinite(last) && last > 0) {\n      pricesFallback[s] = {\n        lastPrice: last,\n        source: \"portfolio_lastPrice\",\n        ts: String(p.UpdatedAt ?? \"\"),\n        stale: false,\n      };\n    }\n  }\n  return pricesFallback;\n}\n\n// -------------------- AGENT DECISION PARSING --------------------\nfunction extractAgentDecisionObject(input) {\n  // 1) Already a structured object at input.output\n  if (\n    isObj(input.output) &&\n    (Array.isArray(input.output.actions) || isObj(input.output.portfolioPlan) || isObj(input.output.decisionMeta))\n  ) {\n    return { ...input.output, _parseStatus: \"OK_OBJECT_OUTPUT\" };\n  }\n\n  // 2) Already a structured object at input.agentDecision\n  if (isObj(input.agentDecision)) {\n    return { ...input.agentDecision, _parseStatus: \"OK_AGENTDECISION\" };\n  }\n\n  // 3) Information Extractor can return actions[] directly\n  if (\n    Array.isArray(input.output) &&\n    input.output.length > 0 &&\n    input.output.every((x) => isObj(x) && String(x.action ?? \"\").length)\n  ) {\n    return {\n      actions: input.output,\n      dataCaveats: [],\n      backfillRequests: [],\n      _parseStatus: \"OK_ACTIONS_ARRAY_OUTPUT\",\n    };\n  }\n\n  // 4) LangChain / OpenAI-ish message envelopes\n  const msg0 = Array.isArray(input.output) ? input.output[0] : null;\n  const content0 = msg0 && Array.isArray(msg0.content) ? msg0.content[0] : null;\n  let decisionRaw = content0?.text ?? content0?.text?.text ?? null;\n\n  if (isObj(decisionRaw)) return { ...decisionRaw, _parseStatus: \"OK_OPENAI_OBJECT\" };\n\n  if (typeof decisionRaw === \"string\") {\n    const parsed = safeJsonParse(decisionRaw);\n    if (isObj(parsed)) return { ...parsed, _parseStatus: \"OK_OPENAI_TEXT_JSON\" };\n    return { _rawText: decisionRaw, _parseStatus: \"TEXT_NOT_JSON\" };\n  }\n\n  if (decisionRaw == null) {\n    return { _parseStatus: \"MISSING_DECISION\", _why: \"No decision payload found.\" };\n  }\n\n  return { _rawValue: decisionRaw, _parseStatus: \"UNEXPECTED_TYPE\" };\n}\n\nfunction coerceAgentDecisionToExpectedShape(agentDecision) {\n  if (!isObj(agentDecision)) {\n    return { _parseStatus: \"NOT_OBJECT\", actions: [], dataCaveats: [], backfillRequests: [] };\n  }\n  const d = deepClone(agentDecision);\n  if (!Array.isArray(d.actions)) d.actions = [];\n  if (!Array.isArray(d.dataCaveats)) d.dataCaveats = [];\n  if (!Array.isArray(d.backfillRequests)) d.backfillRequests = [];\n  return d;\n}\n\n// -------------------- PORTFOLIO/PRICES --------------------\nfunction computeTotalPortfolioValueEUR(portfolioSummary, prices) {\n  const explicit = Number(portfolioSummary?.totalPortfolioValueEUR ?? portfolioSummary?.totalValueEUR ?? NaN);\n  if (Number.isFinite(explicit) && explicit > 0) return explicit;\n\n  const cash = Number(portfolioSummary?.cashEUR ?? 0);\n  const posArr = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n  let equity = 0;\n\n  for (const p of posArr) {\n    const s = normSymbol(p.Symbol ?? p.symbol);\n    if (!s || s === \"CASH_EUR\" || s === \"__META__\") continue;\n\n    const q = Number(p.Quantity ?? 0);\n    if (!Number.isFinite(q) || q === 0) continue;\n\n    const last = Number(prices?.[s]?.lastPrice ?? p.LastPrice ?? NaN);\n    if (Number.isFinite(last) && last > 0) equity += q * last;\n    else {\n      const mv = Number(p.MarketValue ?? NaN);\n      if (Number.isFinite(mv)) equity += mv;\n    }\n  }\n  return cash + equity;\n}\n\nfunction buildHoldingsMap(portfolioSummary, prices) {\n  const map = {};\n  const posArr = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];\n\n  for (const p of posArr) {\n    const s = normSymbol(p.Symbol ?? p.symbol);\n    if (!s || s === \"CASH_EUR\" || s === \"__META__\") continue;\n\n    const qty = Number(p.Quantity ?? 0);\n    const last = Number(prices?.[s]?.lastPrice ?? p.LastPrice ?? NaN);\n\n    map[s] = {\n      Symbol: s,\n      Quantity: Number.isFinite(qty) ? qty : 0,\n      LastPrice: Number.isFinite(last) ? last : null,\n    };\n  }\n  return map;\n}\n\n// -------------------- ORDER GENERATION (QTY-FIRST) --------------------\nfunction generateOrdersFromActions(agentDecision, portfolioSummary, prices, feesConfig) {\n  const warnings = [];\n  const ordersSell = [];\n  const ordersBuy = [];\n\n  const actions = Array.isArray(agentDecision?.actions) ? agentDecision.actions : [];\n  const holdings = buildHoldingsMap(portfolioSummary, prices);\n\n  // Needed for legacy sizing via targetWeightPct\n  const totalValue = computeTotalPortfolioValueEUR(portfolioSummary, prices);\n  if (!Number.isFinite(totalValue) || totalValue <= 0) {\n    warnings.push(\"PORTFOLIO_VALUE_INVALID: cannot size orders.\");\n    return { orders: [], warnings };\n  }\n\n  // Cash simulation to gate buys\n  let cashSim = Number(portfolioSummary?.cashEUR ?? 0);\n  const fixed = Number(feesConfig?.orderFeeFixedEUR ?? 0);\n  const pct = Number(feesConfig?.orderFeePct ?? 0);\n\n  // Helper: resolve current qty (0 if not held)\n  const currentQty = (sym) => {\n    const h = holdings[sym];\n    const q = Number(h?.Quantity ?? 0);\n    return Number.isFinite(q) ? q : 0;\n  };\n\n  for (const a of actions) {\n    const sym = normSymbol(a?.symbol);\n    const act = String(a?.action ?? \"\").toUpperCase();\n    if (!sym) continue;\n    if (![\"OPEN\", \"INCREASE\", \"DECREASE\", \"CLOSE\"].includes(act)) continue;\n\n    const px = Number(prices?.[sym]?.lastPrice ?? NaN);\n    if (!Number.isFinite(px) || px <= 0) {\n      warnings.push(`SKIP_NO_PRICE:${sym}:${act}`);\n      continue;\n    }\n\n    const q0 = currentQty(sym);\n\n    const entryPlan = isObj(a?.entryPlan) ? a.entryPlan : {};\n    const riskPlan = isObj(a?.riskPlan) ? a.riskPlan : {};\n\n    // --- QTY-FIRST TARGET RESOLUTION (backward compatible) ---\n    const targetQtyExplicit = toNumOrNull(a?.targetQty ?? a?.targetQuantity ?? null);\n    const targetNotionalExplicit = toNumOrNull(a?.targetNotionalEUR ?? a?.targetNotional ?? null);\n\n    let targetQty = null;\n\n    if (act === \"CLOSE\") {\n      targetQty = 0;\n    } else if (targetQtyExplicit != null) {\n      targetQty = targetQtyExplicit;\n    } else if (targetNotionalExplicit != null) {\n      targetQty = targetNotionalExplicit / px;\n    } else if (a?.targetWeightPct != null) {\n      const targetNotional = (Number(a.targetWeightPct) / 100) * totalValue;\n      if (Number.isFinite(targetNotional)) targetQty = targetNotional / px;\n    }\n\n    if (targetQty == null || !Number.isFinite(targetQty)) {\n      warnings.push(`SKIP_NO_TARGET:${sym}:${act}`);\n      continue;\n    }\n\n    // Orders are integer quantities by design\n    // - SELL: ceil to ensure reaching targetQty or below\n    // - BUY : floor to avoid cash overshoot\n    if (act === \"DECREASE\" || act === \"CLOSE\") {\n      if (q0 <= 0) continue;\n\n      const rawSell = q0 - targetQty;\n      const qtyToSell = Math.min(q0, Math.ceil(rawSell));\n\n      if (qtyToSell >= 1) {\n        ordersSell.push({\n          symbol: sym,\n          side: \"SELL\",\n          quantity: qtyToSell,\n          price: null,\n          rationale: clampText(a?.rationale, 240),\n          orderType: String(entryPlan.orderType || \"MARKET\"),\n          limitPrice: toNumOrNull(entryPlan.limitPrice),\n          stopLossPct: toNumOrNull(riskPlan.stopLossPct),\n          confidence: a?.confidence,\n          priority: a?.priority,\n        });\n      }\n    }\n\n    if (act === \"OPEN\" || act === \"INCREASE\") {\n      const rawBuy = targetQty - q0;\n      const qtyToBuy = Math.floor(rawBuy);\n\n      if (qtyToBuy >= 1) {\n        ordersBuy.push({\n          symbol: sym,\n          side: \"BUY\",\n          quantity: qtyToBuy,\n          price: null,\n          rationale: clampText(a?.rationale, 240),\n          orderType: String(entryPlan.orderType || \"MARKET\"),\n          limitPrice: toNumOrNull(entryPlan.limitPrice),\n          stopLossPct: toNumOrNull(riskPlan.stopLossPct),\n          confidence: a?.confidence,\n          priority: a?.priority,\n        });\n      }\n    }\n  }\n\n  // Execution simulation: sells first, then buys if cash is sufficient\n  const finalOrders = [];\n\n  for (const o of ordersSell) {\n    finalOrders.push(o);\n    const px = Number(prices?.[o.symbol]?.lastPrice ?? NaN);\n    if (Number.isFinite(px) && px > 0) {\n      const proceeds = (o.quantity * px) * (1 - pct) - fixed;\n      cashSim += proceeds;\n    }\n  }\n\n  for (const o of ordersBuy) {\n    const px = Number(prices?.[o.symbol]?.lastPrice ?? NaN);\n    if (Number.isFinite(px) && px > 0) {\n      const cost = (o.quantity * px) * (1 + pct) + fixed;\n      if (cashSim >= cost) {\n        finalOrders.push(o);\n        cashSim -= cost;\n      } else {\n        warnings.push(`SKIP_INSUFFICIENT_CASH:${o.symbol}`);\n      }\n    }\n  }\n\n  return { orders: finalOrders, warnings };\n}\n\nfunction estimateFeesEUR(orders, feesConfig, prices) {\n  const fixed = Number(feesConfig?.orderFeeFixedEUR ?? 0);\n  const pct = Number(feesConfig?.orderFeePct ?? 0);\n  let total = 0;\n\n  for (const o of orders) {\n    const s = normSymbol(o.symbol);\n    const q = Number(o.quantity ?? NaN);\n    if (!s || !Number.isFinite(q) || q <= 0) continue;\n    const px = Number(o.price ?? prices?.[s]?.lastPrice ?? NaN);\n    if (!Number.isFinite(px) || px <= 0) continue;\n    total += fixed + pct * (q * px);\n  }\n  return total;\n}\n\n// -------------------- MAIN --------------------\nconst all = $input.all();\nconst input = pickFirstRelevantInput(all);\n\nconst now = new Date();\nconst ts = now.toISOString();\n\nconst portfolioSummary = input.portfolioSummary ?? input.ctx?.portfolioSummary ?? { cashEUR: 0, positions: [] };\nconst meta0 = input.meta ?? input.ctx?.meta ?? {};\nconst config0 = input.config ?? input.ctx?.config ?? {};\nconst feesConfig = input.feesConfig ?? input.ctx?.feesConfig ?? { orderFeeFixedEUR: 0, orderFeePct: 0 };\n\nconst market0 = input.market ?? input.ctx?.market ?? {};\nconst upstreamPrices = isObj(market0.prices) ? market0.prices : {};\nconst upstreamNewsItems = extractNewsItems(input);\n\n// Agent decision parsing\nlet agentDecision = extractAgentDecisionObject(input);\nagentDecision = coerceAgentDecisionToExpectedShape(agentDecision);\n\n// Prices merge (fallback from portfolio)\nconst pricesFallback = buildPricesFallbackFromPortfolio(portfolioSummary);\nconst mergedPrices = { ...pricesFallback, ...upstreamPrices };\n\n// --- PATCH : INJECT LIMIT PRICES AS PROXY (only if missing market price) ---\nconst injectedPrices = [];\nif (Array.isArray(agentDecision.actions)) {\n  for (const action of agentDecision.actions) {\n    const sym = normSymbol(action.symbol);\n    const limit = toNumOrNull(action.entryPlan?.limitPrice);\n    if (sym && limit && limit > 0) {\n      const currentPrice = mergedPrices[sym]?.lastPrice;\n      if (!Number.isFinite(Number(currentPrice)) || Number(currentPrice) <= 0) {\n        mergedPrices[sym] = { lastPrice: limit, source: \"agent_limit_proxy\", stale: false };\n        injectedPrices.push(sym);\n      }\n    }\n  }\n}\n\n// Universe + coverage check\nconst heldSymbols = getPortfolioPositionsSymbols(portfolioSummary);\nconst tradeSymbols = uniq(\n  (Array.isArray(agentDecision?.actions) ? agentDecision.actions : [])\n    .filter((a) => [\"OPEN\", \"INCREASE\", \"DECREASE\", \"CLOSE\"].includes(String(a?.action ?? \"\").toUpperCase()))\n    .map((a) => normSymbol(a?.symbol))\n);\n\nlet pricedForRequested = 0;\nconst missingRequested = [];\nfor (const s of tradeSymbols) {\n  const px = Number(mergedPrices?.[s]?.lastPrice ?? NaN);\n  if (Number.isFinite(px) && px > 0) pricedForRequested += 1;\n  else missingRequested.push(s);\n}\n\nconst requestedSymbolsCount = tradeSymbols.length;\nconst okForTrading = requestedSymbolsCount ? (pricedForRequested === requestedSymbolsCount) : true;\nconst pricesCoverageRequested = requestedSymbolsCount ? (pricedForRequested / requestedSymbolsCount) : 1;\n\n// Generate orders (qty-first)\nlet { orders, warnings: orderWarnings } = generateOrdersFromActions(\n  agentDecision,\n  portfolioSummary,\n  mergedPrices,\n  feesConfig\n);\n\n// Safety veto (hard gate)\nconst safetyWarnings = [];\nif (!okForTrading) {\n  if (tradeSymbols.length) {\n    safetyWarnings.push(`SAFETY_VETO_MISSING_PRICES:${missingRequested.join(\",\")}`);\n    orders = [];\n  }\n}\n\nif (injectedPrices.length > 0) {\n  safetyWarnings.push(`NOTICE: Used agent limit price as proxy for: ${injectedPrices.join(\", \")}`);\n}\n\n// Warnings aggregation\nconst warnings = [];\n\n// Parse problems\nif (agentDecision?._parseStatus && !String(agentDecision._parseStatus).startsWith(\"OK\")) {\n  warnings.push(`AGENT_DECISION_PARSE:${agentDecision._parseStatus}`);\n  if (agentDecision?._why) warnings.push(`AGENT_DECISION_PARSE_WHY:${agentDecision._why}`);\n}\n\n// Carry caveats\nif (Array.isArray(agentDecision?.dataCaveats)) {\n  for (const c of agentDecision.dataCaveats) warnings.push(String(c));\n}\n\n// Missing prices for held positions (informational)\nfor (const s of heldSymbols) {\n  const px = Number(mergedPrices?.[s]?.lastPrice ?? NaN);\n  if (!Number.isFinite(px) || px <= 0) warnings.push(`MISSING_PRICE_FOR_HELD:${s}`);\n}\n\nfor (const w of orderWarnings) warnings.push(String(w));\nfor (const w of safetyWarnings) warnings.push(String(w));\n\n// Metrics\nconst aiCostEUR = Number(input?.metrics?.aiCostEUR ?? 0);\nconst expectedFeesEUR = estimateFeesEUR(orders, feesConfig, mergedPrices);\n\n// Decision\nconst decision = orders.length ? \"TRADE\" : \"NO_TRADE\";\n\n// Build ctx for downstream nodes (8 / 8B / Sheets)\nconst runId =\n  String(input?.runId ?? input?.ctx?.run?.runId ?? \"\").trim() ||\n  String(agentDecision?.decisionMeta?.run_id ?? \"\").trim() ||\n  \"\";\n\nconst promptVersion =\n  String(input?.promptVersion ?? input?.ctx?.run?.promptVersion ?? \"\").trim() ||\n  String(agentDecision?.decisionMeta?.strategy_version ?? \"\").trim() ||\n  \"prompt_v1\";\n\nconst model =\n  String(input?.model ?? input?.ctx?.run?.model ?? \"\").trim() ||\n  String(agentDecision?.decisionMeta?.model ?? \"\").trim() ||\n  \"gpt-5.2\";\n\n// Data quality object consumed by Node 8B\nconst dataQuality = {\n  okForTrading: !!okForTrading,\n  requestedSymbolsCount,\n  pricedSymbolsCount: pricedForRequested,\n  pricesCoverageRequested, // 0..1\n  missingRequested,\n  injectedPrices,\n};\n\nconst ctx = {\n  sheetId: input.sheetId ?? input.ctx?.sheetId,\n  meta: meta0,\n  config: config0,\n  feesConfig,\n  run: {\n    runId,\n    timestampParis: ts,\n    model,\n    promptVersion,\n  },\n  portfolioSummary,\n  market: {\n    prices: mergedPrices,\n    newsItems: upstreamNewsItems,\n    dataQuality,\n  },\n};\n\nconst cash0 = Number(portfolioSummary?.cashEUR ?? 0);\nconst actionsCount = Array.isArray(agentDecision?.actions) ? agentDecision.actions.length : 0;\nconst caveatsCount = Array.isArray(agentDecision?.dataCaveats) ? agentDecision.dataCaveats.length : 0;\n\nconst commentary = `PM_DECISION=${decision} | orders=${orders.length} | actions=${actionsCount} | cash0=${cash0} | caveats=${caveatsCount} | priceCoverage=${Math.round(pricesCoverageRequested * 1000) / 10}%`;\n\nreturn [\n  {\n    json: {\n      decision,\n      commentary,\n      agentDecision,\n      orders,\n      metrics: {\n        aiCostEUR: Number.isFinite(aiCostEUR) ? aiCostEUR : 0,\n        expectedFeesEUR: Number.isFinite(expectedFeesEUR) ? expectedFeesEUR : 0,\n      },\n      warnings,\n      ctx,\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4576,
+        11584
+      ],
+      "id": "6227fed2-bce6-452f-ac55-62d14067d316",
+      "name": "7 - Validate & Enforce Safety"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4368,
+        11584
+      ],
+      "id": "f36b4637-110f-4664-9f5c-852d4f6cb1ef",
+      "name": "merge"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 8 - Build DuckDB Bundle (Portfolio Ledger v2)\n// Input: Node 7 output (decision, orders, warnings, ctx, agentDecision, metrics)\n// Output: [{ json: { run_id, db_path, bundle, summary } }]\n\nfunction isObj(x) {\n  return x && typeof x === \"object\" && !Array.isArray(x);\n}\n\nfunction toNum(v, d = null) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : d;\n}\n\nfunction toInt(v, d = null) {\n  const n = toNum(v, d);\n  return Number.isFinite(n) ? Math.round(n) : d;\n}\n\nfunction clampText(v, max = 0) {\n  const s = String(v ?? \"\").replace(/\\s+/g, \" \").trim();\n  return max > 0 ? s.slice(0, max) : s;\n}\n\nfunction normSymbol(v) {\n  return String(v ?? \"\").trim().toUpperCase();\n}\n\nfunction uniq(arr) {\n  return Array.from(new Set((arr || []).filter(Boolean)));\n}\n\nfunction normPctTo100(v) {\n  const n = toNum(v, null);\n  if (n == null) return null;\n  if (n <= 1) return Math.max(0, Math.min(100, n * 100));\n  return Math.max(0, Math.min(100, n));\n}\n\nfunction clamp0100(v) {\n  const n = toNum(v, null);\n  if (n == null) return null;\n  return Math.max(0, Math.min(100, Math.round(n)));\n}\n\nfunction makeId(prefix, ...parts) {\n  const tokens = [prefix, ...parts]\n    .map((x) => clampText(x, 80).replace(/[^\\w.\\-:]/g, \"_\"))\n    .filter(Boolean);\n  return tokens.join(\"|\");\n}\n\nfunction parseAgentDecision(input) {\n  if (isObj(input.agentDecision)) return input.agentDecision;\n  if (isObj(input.output)) return input.output;\n  return {};\n}\n\nfunction buildRunId(ctxRun, agentDecision, nowIso, executionId) {\n  const c1 = clampText(ctxRun?.runId, 96);\n  if (c1) return c1;\n  const c2 = clampText(agentDecision?.decisionMeta?.run_id, 96);\n  if (c2) return c2;\n  const stampBase = clampText(ctxRun?.timestampParis, 64) || nowIso;\n  const stamp = stampBase.replace(/[-:.TZ]/g, \"\").slice(0, 14);\n  const exec = clampText(executionId, 32).replace(/[^\\w.\\-:]/g, \"_\") || \"NOEXEC\";\n  return `RUN_${stamp}_${exec}`;\n}\n\nfunction getOrderActionMap(actions) {\n  const out = new Map();\n  for (const a of actions || []) {\n    const s = normSymbol(a?.symbol);\n    if (!s || out.has(s)) continue;\n    out.set(s, String(a?.action ?? \"\").toUpperCase());\n  }\n  return out;\n}\n\nfunction mapIntent(action, side) {\n  const a = String(action || \"\").toUpperCase();\n  if (a === \"OPEN\") return \"OPEN\";\n  if (a === \"INCREASE\") return \"INCREASE\";\n  if (a === \"DECREASE\") return \"REDUCE\";\n  if (a === \"CLOSE\") return \"CLOSE\";\n  return side === \"BUY\" ? \"OPEN\" : \"REDUCE\";\n}\n\nfunction mapSignal(action) {\n  const a = String(action || \"\").toUpperCase();\n  if (a === \"OPEN\" || a === \"INCREASE\" || a === \"BUY\") return \"BUY\";\n  if (a === \"DECREASE\" || a === \"CLOSE\" || a === \"SELL\") return \"SELL\";\n  if (a === \"WATCH\") return \"WATCH\";\n  if (a === \"HOLD\") return \"HOLD\";\n  return \"NEUTRAL\";\n}\n\nfunction extractPrice(symbol, order, prices) {\n  const pOrder = toNum(order?.price, null);\n  if (pOrder != null && pOrder > 0) return { price: pOrder, source: \"order.price\" };\n  const pCtx = toNum(prices?.[symbol]?.lastPrice, null);\n  if (pCtx != null && pCtx > 0) return { price: pCtx, source: \"market.lastPrice\" };\n  const pLimit = toNum(order?.limitPrice, null);\n  if (pLimit != null && pLimit > 0) return { price: pLimit, source: \"order.limitPrice\" };\n  return { price: null, source: \"missing\" };\n}\n\nfunction buildSymbolRegex() {\n  return /\\b[A-Z0-9]{1,10}(?:\\.[A-Z]{1,4})?\\b/g;\n}\n\nconst input = $json || {};\nconst ctx = input.ctx || {};\nconst runCtx = ctx.run || {};\nconst market = ctx.market || {};\nconst prices = isObj(market.prices) ? market.prices : {};\nconst dataQuality = isObj(market.dataQuality) ? market.dataQuality : {};\nconst nowIso = new Date().toISOString();\nconst n8nExecutionId =\n  typeof $execution !== \"undefined\" && $execution && $execution.id != null\n    ? clampText($execution.id, 128)\n    : null;\n\nconst agentDecision = parseAgentDecision(input);\nconst actions = Array.isArray(agentDecision.actions) ? agentDecision.actions : [];\nconst ordersIn = Array.isArray(input.orders) ? input.orders : [];\nconst warnings = Array.isArray(input.warnings) ? input.warnings.map((x) => String(x)) : [];\nconst hasSafetyVeto = warnings.some((w) => String(w).startsWith(\"SAFETY_VETO_\"));\nconst decision = clampText(input.decision, 32) || \"NO_TRADE\";\nconst commentary = clampText(input.commentary, 600);\n\nconst run_id = buildRunId(runCtx, agentDecision, nowIso, n8nExecutionId);\nconst ts_start = clampText(runCtx.timestampParis, 64) || nowIso;\nconst ts_end = nowIso;\n\nconst config = isObj(ctx.config) ? ctx.config : {};\nconst feesConfig = isObj(ctx.feesConfig) ? ctx.feesConfig : {};\nconst fixedFee = Math.max(0, toNum(feesConfig.orderFeeFixedEUR, 0));\nconst pctFee = Math.max(0, toNum(feesConfig.orderFeePct, 0));\n\nconst strategyVersion =\n  clampText(config.strategyVersion, 64) ||\n  clampText(agentDecision?.decisionMeta?.strategy_version, 64) ||\n  \"strategy_v1\";\nconst configVersion = clampText(config.configVersion, 64) || \"config_v1\";\nconst promptVersion =\n  clampText(runCtx.promptVersion, 64) ||\n  clampText(agentDecision?.decisionMeta?.prompt_version, 64) ||\n  \"prompt_v1\";\nconst model =\n  clampText(runCtx.model, 64) ||\n  clampText(agentDecision?.decisionMeta?.model, 64) ||\n  \"gpt-5.2\";\n\nconst coveragePct = normPctTo100(dataQuality?.pricesCoverageRequested);\nconst newsCount = Array.isArray(market.newsItems) ? market.newsItems.length : 0;\nconst aiCost = Math.max(0, toNum(input?.metrics?.aiCostEUR, 0));\nconst expectedFees = Math.max(0, toNum(input?.metrics?.expectedFeesEUR, 0));\nconst dataOkForTrading = !!(dataQuality?.okForTrading ?? !hasSafetyVeto);\n\nconst run = {\n  run_id,\n  ts_start,\n  ts_end,\n  tz: \"Europe/Paris\",\n  strategy_version: strategyVersion,\n  config_version: configVersion,\n  prompt_version: promptVersion,\n  model,\n  n8n_execution_id: n8nExecutionId || null,\n  decision_summary: `${decision} | orders=${ordersIn.length}`,\n  data_ok_for_trading: dataOkForTrading,\n  price_coverage_pct: coveragePct,\n  news_count: newsCount,\n  ai_cost_eur: aiCost,\n  expected_fees_eur: expectedFees,\n  warnings_json: warnings,\n  agent_output_json: agentDecision,\n  risk_gate_json: {\n    ok_for_trading: dataOkForTrading,\n    data_quality: dataQuality,\n    decision,\n  },\n};\n\nconst actionBySymbol = getOrderActionMap(actions);\n\nconst orders = [];\nconst fills = [];\nconst cash_ledger = [];\nconst alerts = [];\nconst ai_signals = [];\nconst market_prices = [];\n\nfor (let i = 0; i < ordersIn.length; i++) {\n  const o = ordersIn[i] || {};\n  const symbol = normSymbol(o.symbol);\n  const side = clampText(o.side, 8).toUpperCase();\n  const qty = toNum(o.quantity, null);\n  if (!symbol || ![\"BUY\", \"SELL\"].includes(side) || qty == null || qty <= 0) continue;\n\n  const action = actionBySymbol.get(symbol) || \"\";\n  const order_id = makeId(\"ORD\", run_id, String(i + 1).padStart(3, \"0\"), symbol, side);\n  const order_type = clampText(o.orderType, 16).toUpperCase() || \"MARKET\";\n\n  const baseOrder = {\n    order_id,\n    run_id,\n    ts_created: ts_end,\n    symbol,\n    side,\n    intent: mapIntent(action, side),\n    order_type,\n    qty,\n    limit_price: toNum(o.limitPrice, null),\n    stop_price: toNum(o.stopPrice, null),\n    tif: clampText(o.timeInForce, 8) || \"DAY\",\n    status: \"PLANNED\",\n    broker: clampText(o.broker, 24) || \"SIM\",\n    reason: clampText(o.reason, 160) || null,\n    rationale_json: {\n      confidence: clamp0100(o.confidence),\n      priority: toInt(o.priority, null),\n      stop_loss_pct: toNum(o.stopLossPct, null),\n      rationale: clampText(o.rationale, 600),\n      action,\n    },\n  };\n\n  const px = extractPrice(symbol, o, prices);\n  if (px.price == null || px.price <= 0) {\n    baseOrder.status = \"SKIPPED\";\n    baseOrder.reason = baseOrder.reason || \"NO_EXEC_PRICE\";\n    orders.push(baseOrder);\n    alerts.push({\n      alert_id: makeId(\"ALT\", run_id, \"NO_PRICE\", symbol, String(i + 1)),\n      run_id,\n      ts: ts_end,\n      severity: \"WARN\",\n      category: \"EXECUTION\",\n      symbol,\n      message: `Order skipped: no execution price for ${symbol}`,\n      code: \"ORDER_SKIPPED_NO_PRICE\",\n      payload_json: { order_id },\n    });\n    continue;\n  }\n\n  baseOrder.status = \"FILLED\";\n  orders.push(baseOrder);\n\n  const fill_id = makeId(\"FIL\", order_id, \"1\");\n  const notional = qty * px.price;\n  const fees_eur = fixedFee + pctFee * notional;\n\n  fills.push({\n    fill_id,\n    order_id,\n    run_id,\n    ts_fill: ts_end,\n    qty,\n    price: px.price,\n    fees_eur,\n    slippage_bps: 0,\n    liquidity: \"UNKNOWN\",\n    raw_fill_json: {\n      mode: \"SIM\",\n      price_source: px.source,\n      decision,\n    },\n  });\n\n  cash_ledger.push({\n    cash_tx_id: makeId(\"TX\", run_id, fill_id, \"NOTIONAL\"),\n    run_id,\n    ts: ts_end,\n    currency: \"EUR\",\n    amount: side === \"BUY\" ? -notional : notional,\n    type: \"TRADE_NOTIONAL\",\n    symbol,\n    ref_id: fill_id,\n    notes: `${side} ${qty} ${symbol} @ ${px.price}`,\n    payload_json: { order_id, fill_id },\n  });\n\n  if (fees_eur > 0) {\n    cash_ledger.push({\n      cash_tx_id: makeId(\"TX\", run_id, fill_id, \"FEE\"),\n      run_id,\n      ts: ts_end,\n      currency: \"EUR\",\n      amount: -fees_eur,\n      type: \"FEE\",\n      symbol,\n      ref_id: fill_id,\n      notes: `Execution fee ${symbol}`,\n      payload_json: { order_id, fill_id },\n    });\n  }\n}\n\nif (aiCost > 0) {\n  cash_ledger.push({\n    cash_tx_id: makeId(\"TX\", run_id, \"AI_COST\"),\n    run_id,\n    ts: ts_end,\n    currency: \"EUR\",\n    amount: -aiCost,\n    type: \"AI_COST\",\n    symbol: null,\n    ref_id: run_id,\n    notes: \"LLM cost for run\",\n    payload_json: { model, promptVersion },\n  });\n}\n\nfor (let i = 0; i < actions.length; i++) {\n  const a = actions[i] || {};\n  const symbol = normSymbol(a.symbol);\n  if (!symbol) continue;\n  const entryPlan = isObj(a.entryPlan) ? a.entryPlan : {};\n  const riskPlan = isObj(a.riskPlan) ? a.riskPlan : {};\n  const confidence = clamp0100(a.confidence);\n  ai_signals.push({\n    signal_id: makeId(\"SIG\", run_id, String(i + 1).padStart(3, \"0\"), symbol),\n    run_id,\n    ts: ts_end,\n    symbol,\n    signal: mapSignal(a.action),\n    confidence,\n    horizon: clampText(a.horizon || \"\", 24) || (toInt(a.horizonDays, null) ? `D${toInt(a.horizonDays, 0)}` : null),\n    entry_zone: clampText(entryPlan.entryZone || \"\", 120) || null,\n    stop_loss: toNum(entryPlan.stopLoss ?? riskPlan.stopLoss ?? riskPlan.stopLossPct, null),\n    take_profit: toNum(entryPlan.takeProfit ?? riskPlan.takeProfit ?? riskPlan.takeProfitPct, null),\n    risk_score: confidence == null ? null : 100 - confidence,\n    catalyst: clampText(a.catalyst || \"\", 240) || null,\n    rationale: clampText(a.rationale || \"\", 800) || null,\n    payload_json: a,\n  });\n}\n\nfor (const [sym, p] of Object.entries(prices)) {\n  const symbol = normSymbol(sym);\n  if (!symbol) continue;\n  market_prices.push({\n    ts: ts_end,\n    symbol,\n    open: toNum(p?.open, null),\n    high: toNum(p?.high, null),\n    low: toNum(p?.low, null),\n    close: toNum(p?.lastPrice ?? p?.close, null),\n    adj_close: toNum(p?.adjClose, null),\n    volume: toInt(p?.volume, null),\n    source: clampText(p?.source, 32) || \"YF\",\n    asof: clampText(p?.ts, 64) || ts_end,\n  });\n}\n\nconst symbolRegex = buildSymbolRegex();\nif (!dataOkForTrading) {\n  alerts.push({\n    alert_id: makeId(\"ALT\", run_id, \"DATA_GATE\"),\n    run_id,\n    ts: ts_end,\n    severity: \"CRITICAL\",\n    category: \"DATA\",\n    symbol: \"GLOBAL\",\n    message: \"Market data safety gate failed\",\n    code: \"DATA_GATE_FAIL\",\n    payload_json: dataQuality,\n  });\n}\n\nfor (let i = 0; i < warnings.length; i++) {\n  const w = warnings[i];\n  const m = w.match(symbolRegex);\n  alerts.push({\n    alert_id: makeId(\"ALT\", run_id, \"WARN\", String(i + 1).padStart(3, \"0\")),\n    run_id,\n    ts: ts_end,\n    severity: \"WARN\",\n    category: \"AGENT\",\n    symbol: (m && m[0]) || \"GLOBAL\",\n    message: clampText(w, 2048),\n    code: \"AGENT_WARNING\",\n    payload_json: { warning: w },\n  });\n}\n\nconst backfill_queue = [];\nconst backfills = Array.isArray(agentDecision.backfillRequests) ? agentDecision.backfillRequests : [];\nfor (const bf of backfills) {\n  const symbol = normSymbol(bf?.symbol);\n  const needsArr = Array.isArray(bf?.needs) ? uniq(bf.needs.map((x) => clampText(x, 24)).filter(Boolean)) : [];\n  if (!symbol || !needsArr.length) continue;\n  const needsCsv = needsArr.join(\",\");\n  backfill_queue.push({\n    request_id: makeId(\"BF\", symbol, needsCsv),\n    run_id,\n    ts: ts_end,\n    symbol,\n    needs: needsCsv,\n    severity: \"MEDIUM\",\n    status: \"OPEN\",\n    why: clampText(bf?.why, 700) || null,\n    completed_at: null,\n    response_json: null,\n    notes: null,\n  });\n}\n\nconst positions = Array.isArray(ctx?.portfolioSummary?.positions) ? ctx.portfolioSummary.positions : [];\nconst symbolsFromPositions = positions\n  .map((p) => normSymbol(p.Symbol ?? p.symbol))\n  .filter((s) => s && s !== \"CASH_EUR\" && s !== \"__META__\");\nconst symbolsAll = uniq([\n  ...symbolsFromPositions,\n  ...orders.map((o) => o.symbol),\n  ...ai_signals.map((s) => s.symbol),\n  ...market_prices.map((m) => m.symbol),\n  ...backfill_queue.map((b) => b.symbol),\n]);\n\nconst instruments = symbolsAll.map((symbol) => {\n  const p = positions.find((x) => normSymbol(x.Symbol ?? x.symbol) === symbol) || {};\n  return {\n    symbol,\n    name: clampText(p.Name ?? p.name, 240) || null,\n    asset_class: clampText(p.AssetClass ?? p.assetClass, 64) || \"Equity\",\n    currency: \"EUR\",\n    isin: clampText(p.ISIN ?? p.isin, 64) || null,\n    sector: clampText(p.Sector ?? p.sector, 120) || null,\n    industry: clampText(p.Industry ?? p.industry, 120) || null,\n  };\n});\n\nconst bundle = {\n  run,\n  instruments,\n  orders,\n  fills,\n  cash_ledger,\n  ai_signals,\n  market_prices,\n  alerts,\n  backfill_queue,\n  snapshots: {},\n};\n\nconst db_path =\n  clampText(input?.db_path, 240) ||\n  clampText(ctx?.db_path, 240) ||\n  clampText(config?.ag1DbPath, 240) ||\n  \"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\";\n\nreturn [\n  {\n    json: {\n      run_id,\n      db_path,\n      bundle,\n      summary: {\n        decision,\n        commentary,\n        orders: orders.length,\n        fills: fills.length,\n        cash_ledger: cash_ledger.length,\n        alerts: alerts.length,\n        backfill: backfill_queue.length,\n        ai_signals: ai_signals.length,\n      },\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4800,
+        11584
+      ],
+      "id": "5e44caa2-132c-4c2f-a987-56c0591ce018",
+      "name": "8 - Build DuckDB Bundle"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDB_PATH_DEFAULT = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\")\n\ndef to_num(v):\n    try:\n        if v is None or v == \"\":\n            return None\n        s = str(v).replace(\"€\", \"\").replace(\"\\u00a0\", \"\").replace(\"\\u202f\", \"\").replace(\" \", \"\").replace(\",\", \".\")\n        n = float(s)\n        return n if n == n else None\n    except Exception:\n        return None\n\ndef to_iso(v):\n    try:\n        if v is None:\n            return \"unknown\"\n        if isinstance(v, datetime):\n            dt = v\n        else:\n            s = str(v).strip()\n            if not s:\n                return \"unknown\"\n            if s.endswith(\"Z\"):\n                s = s[:-1] + \"+00:00\"\n            dt = datetime.fromisoformat(s)\n        if dt.tzinfo is None:\n            dt = dt.replace(tzinfo=timezone.utc)\n        return dt.astimezone(timezone.utc).isoformat()\n    except Exception:\n        return str(v) if v is not None else \"unknown\"\n\ndef _norm_text(v):\n    return str(v or \"\").strip().upper()\n\ndef is_cash_row(r):\n    sym = _norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = _norm_text(r.get(\"Name\") or r.get(\"name\"))\n    asset = _norm_text(r.get(\"AssetClass\") or r.get(\"assetClass\") or r.get(\"asset_class\"))\n    sector = _norm_text(r.get(\"Sector\") or r.get(\"sector\"))\n    return (\n        sym in (\"CASH_EUR\", \"CASH\", \"EUR_CASH\", \"LIQUIDITE\", \"LIQUIDITES\")\n        or \"CASH\" in name\n        or \"LIQUIDITE\" in name\n        or asset == \"CASH\"\n        or sector == \"CASH\"\n    )\n\ndef is_meta_row(r):\n    sym = _norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = _norm_text(r.get(\"Name\") or r.get(\"name\"))\n    return sym == \"__META__\" or name == \"__META__\"\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if (\"lock\" in str(e).lower() or \"busy\" in str(e).lower()) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef load_rows_from_duckdb(db_path):\n    rows = []\n    with db_con(db_path) as con:\n        if con is None:\n            return rows\n        sql_with_review = \"\"\"\n            SELECT\n              symbol,\n              name,\n              asset_class,\n              sector,\n              industry,\n              isin,\n              quantity,\n              avg_price,\n              last_price,\n              market_value,\n              unrealized_pnl,\n              updated_at,\n              next_review_date\n            FROM portfolio_positions_mtm_latest\n            ORDER BY market_value DESC NULLS LAST, symbol\n        \"\"\"\n        sql_fallback = \"\"\"\n            SELECT\n              symbol,\n              name,\n              asset_class,\n              sector,\n              industry,\n              isin,\n              quantity,\n              avg_price,\n              last_price,\n              market_value,\n              unrealized_pnl,\n              updated_at\n            FROM portfolio_positions_mtm_latest\n            ORDER BY market_value DESC NULLS LAST, symbol\n        \"\"\"\n        out = []\n        try:\n            cur = con.execute(sql_with_review)\n            cols = [d[0] for d in cur.description]\n            out = [dict(zip(cols, r)) for r in cur.fetchall()]\n        except Exception:\n            try:\n                cur = con.execute(sql_fallback)\n                cols = [d[0] for d in cur.description]\n                out = [dict(zip(cols, r)) for r in cur.fetchall()]\n            except Exception:\n                out = []\n\n        for idx, r in enumerate(out, start=1):\n            rows.append({\n                \"row_number\": idx,\n                \"Symbol\": str(r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"asset_class\") or \"\").strip(),\n                \"Sector\": str(r.get(\"sector\") or \"Unknown\").strip() or \"Unknown\",\n                \"Industry\": str(r.get(\"industry\") or \"\").strip(),\n                \"ISIN\": str(r.get(\"isin\") or \"\").strip(),\n                \"Quantity\": to_num(r.get(\"quantity\")),\n                \"AvgPrice\": to_num(r.get(\"avg_price\")),\n                \"LastPrice\": to_num(r.get(\"last_price\")),\n                \"MarketValue\": to_num(r.get(\"market_value\")),\n                \"UnrealizedPnL\": to_num(r.get(\"unrealized_pnl\")),\n                \"UpdatedAt\": to_iso(r.get(\"updated_at\")),\n                \"NextReviewDate\": to_iso(r.get(\"next_review_date\")) if r.get(\"next_review_date\") is not None else None,\n            })\n    return rows\n\n\nincoming = _items or []\n\ndb_path = DB_PATH_DEFAULT\nfor it in incoming:\n    j = it.get(\"json\", {}) if isinstance(it, dict) else {}\n    if isinstance(j, dict) and j.get(\"ag1_db_path\"):\n        db_path = str(j.get(\"ag1_db_path\"))\n\nrows = load_rows_from_duckdb(db_path)\nsource = \"duckdb\"\n\nif not rows:\n    source = \"duckdb_empty\"\n    rows = []\n\ncash_row = next((r for r in rows if is_cash_row(r)), None)\nmeta_row = next((r for r in rows if is_meta_row(r)), None)\n\ncash_eur = to_num(cash_row.get(\"MarketValue\")) if cash_row else 0.0\ncash_eur = cash_eur if cash_eur is not None else 0.0\n\npositions = []\nfor r in rows:\n    if is_cash_row(r) or is_meta_row(r):\n        continue\n    positions.append(r)\n\npositions_market_value = 0.0\nfor p in positions:\n    mv = to_num(p.get(\"MarketValue\"))\n    positions_market_value += mv if mv is not None else 0.0\n\ntotal_value = cash_eur + positions_market_value\ninitial_capital = to_num(meta_row.get(\"MarketValue\")) if meta_row else None\nif initial_capital is None or initial_capital <= 0:\n    initial_capital = 50000\n\nmeta = {\n    \"startDate\": datetime.now(timezone.utc).isoformat(),\n    \"initialCapitalEUR\": initial_capital,\n    \"cumFeesEUR\": 0,\n    \"cumAiCostEUR\": 0,\n}\n\nportfolio_summary = {\n    \"cashEUR\": cash_eur,\n    \"positionsCount\": len(positions),\n    \"positionsMarketValueEUR\": positions_market_value,\n    \"totalPortfolioValueEUR\": total_value,\n    \"positions\": positions,\n}\n\nreturn [{\n    \"json\": {\n        \"portfolioRows\": rows,\n        \"portfolioSummary\": portfolio_summary,\n        \"meta\": meta,\n        \"portfolioSource\": source,\n    }\n}]"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1392,
+        11504
+      ],
+      "id": "bae45771-922b-41c3-989a-39eb8c6dcade",
+      "name": "4B – Build Portfolio Context"
+    },
+    {
+      "parameters": {
+        "content": "## Agent #1 : Le Portfolio Manager",
+        "height": 4752,
+        "width": 2240,
+        "color": 6
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2032,
+        8864
+      ],
+      "id": "dbf30b48-7190-4ba9-94a2-d853d7618a16",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Agent #5 risk manager",
+        "height": 304,
+        "width": 416,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4272,
+        11488
+      ],
+      "id": "e2b82a58-492c-43cc-958f-8fec0c8a5e02",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "content": "## Agent #6 \"Execution Trader\" (L'Exécuteur)\nApplication des décisions dans la base de donnée (portefeuille virtuel)",
+        "height": 304,
+        "width": 800,
+        "color": 2
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        4688,
+        11488
+      ],
+      "id": "912acea7-cf2d-45d2-92b6-223f355f3b20",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 2B - Init Run Context\n// Code node (typeVersion 2)\n// Output: enrichit la config avec run { runId, timestampParis, timestampUtc, tz, executionId, versions }\n\nconst cfg = $json ?? {};\nconst tz = String(cfg.timezone || \"Europe/Paris\");\n\nconst now = new Date();\n\nconst pad2 = (n) => String(n).padStart(2, \"0\");\n\n// Construit un \"local ISO\" en timezone Europe/Paris via Intl (sans librairie externe)\nconst partsToObj = (parts) =>\n  parts\n    .filter((p) => p.type !== \"literal\")\n    .reduce((acc, p) => ((acc[p.type] = p.value), acc), {});\n\nconst dtf = new Intl.DateTimeFormat(\"en-GB\", {\n  timeZone: tz,\n  hour12: false,\n  year: \"numeric\",\n  month: \"2-digit\",\n  day: \"2-digit\",\n  hour: \"2-digit\",\n  minute: \"2-digit\",\n  second: \"2-digit\",\n});\n\nconst parts = partsToObj(dtf.formatToParts(now));\nconst isoLocal = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;\n\n// Calcule l’offset (minutes) entre UTC et Europe/Paris à cet instant\n// Astuce : on interprète l'heure \"Paris\" comme UTC, et on compare à l'instant réel.\nconst msLocalAsUtc = Date.parse(`${isoLocal}Z`);\nconst offsetMin = Math.round((msLocalAsUtc - now.getTime()) / 60000);\nconst sign = offsetMin >= 0 ? \"+\" : \"-\";\nconst abs = Math.abs(offsetMin);\nconst offsetStr = `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`;\n\nconst timestampParis = `${isoLocal}${offsetStr}`;\nconst timestampUtc = now.toISOString();\n\nconst executionId = cfg.execution_id ? String(cfg.execution_id) : null;\n\n// run_id: RUN_YYYYMMDD_HHMMSS_<executionId|rand>\nconst yyyymmdd = `${parts.year}${parts.month}${parts.day}`;\nconst hhmmss = `${parts.hour}${parts.minute}${parts.second}`;\nconst rand = Math.random().toString(16).slice(2, 10) + Math.random().toString(16).slice(2, 10);\nconst runId = `RUN_${yyyymmdd}_${hhmmss}_${executionId ?? rand}`;\n\nreturn [\n  {\n    json: {\n      ...cfg,\n      run: {\n        runId,\n        timestampParis,\n        timestampUtc,\n        tz,\n        offsetMin,\n        executionId,\n        strategyVersion: String(cfg.strategy_version || \"strategy_v1\"),\n        configVersion: String(cfg.config_version || \"config_v2\"),\n        promptVersion: String(cfg.prompt_version || \"prompt_v2\"),\n        model: String(cfg.model || \"gpt-5.2\"),\n      },\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        11856
+      ],
+      "id": "8beefb94-cbc1-45c9-9662-cabb22d8d85c",
+      "name": "2B - Init Run Context"
+    },
+    {
+      "parameters": {
+        "content": "## Agent #4 (The News Watcher)\n extraction des news marchés",
+        "height": 368,
+        "width": 896,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        11744
+      ],
+      "id": "cc35d336-92b5-46fd-8282-14d2713d6f69",
+      "name": "Sticky Note5"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDB_PATH_DEFAULT = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\")\n\n\ndef to_num(v, default=0.0):\n    try:\n        if v is None or v == \"\":\n            return default\n        s = str(v).replace(\"EUR\", \"\").replace(\"€\", \"\").replace(\"\\u00a0\", \"\").replace(\"\\u202f\", \"\").replace(\" \", \"\").replace(\",\", \".\")\n        n = float(s)\n        return n if n == n else default\n    except Exception:\n        return default\n\n\ndef round2(v):\n    return round(float(v or 0.0), 2)\n\n\ndef norm_text(v):\n    return str(v or \"\").strip().upper()\n\n\ndef is_cash_row(r):\n    sym = norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = norm_text(r.get(\"Name\") or r.get(\"name\"))\n    asset = norm_text(r.get(\"AssetClass\") or r.get(\"assetClass\") or r.get(\"asset_class\"))\n    sector = norm_text(r.get(\"Sector\") or r.get(\"sector\"))\n    return (\n        sym in (\"CASH_EUR\", \"CASH\", \"EUR_CASH\", \"LIQUIDITE\", \"LIQUIDITES\")\n        or \"CASH\" in name\n        or \"LIQUIDITE\" in name\n        or asset == \"CASH\"\n        or sector == \"CASH\"\n    )\n\n\ndef is_meta_row(r):\n    sym = norm_text(r.get(\"Symbol\") or r.get(\"symbol\"))\n    name = norm_text(r.get(\"Name\") or r.get(\"name\"))\n    return sym == \"__META__\" or name == \"__META__\"\n\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if (\"lock\" in str(e).lower() or \"busy\" in str(e).lower()) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef load_rows_from_duckdb(db_path):\n    with db_con(db_path) as con:\n        if con is None:\n            return []\n        try:\n            cur = con.execute(\n                \"\"\"\n                SELECT\n                  symbol,\n                  name,\n                  asset_class,\n                  sector,\n                  industry,\n                  quantity,\n                  last_price,\n                  market_value,\n                  unrealized_pnl,\n                  updated_at\n                FROM portfolio_positions_mtm_latest\n                ORDER BY market_value DESC NULLS LAST, symbol\n                \"\"\"\n            )\n            cols = [d[0] for d in cur.description]\n            return [dict(zip(cols, r)) for r in cur.fetchall()]\n        except Exception:\n            return []\n\n\nincoming = _items or []\ninput0 = incoming[0].get(\"json\", {}) if incoming else {}\nrows_from_4b = input0.get(\"portfolioRows\", []) if isinstance(input0, dict) else []\nportfolio_summary_in = input0.get(\"portfolioSummary\", {}) if isinstance(input0, dict) else {}\ndb_path = input0.get(\"ag1_db_path\", DB_PATH_DEFAULT) if isinstance(input0, dict) else DB_PATH_DEFAULT\n\ndb_rows = load_rows_from_duckdb(str(db_path))\n\nrows = []\nsource = \"duckdb\" if db_rows else \"4b_fallback\"\n\nif db_rows:\n    for r in db_rows:\n        rows.append(\n            {\n                \"Symbol\": str(r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"asset_class\") or \"Equity\"),\n                \"Sector\": str(r.get(\"sector\") or \"Unknown\"),\n                \"Industry\": str(r.get(\"industry\") or \"Unknown\"),\n                \"Quantity\": to_num(r.get(\"quantity\"), 0.0),\n                \"LastPrice\": to_num(r.get(\"last_price\"), 0.0),\n                \"MarketValue\": to_num(r.get(\"market_value\"), 0.0),\n                \"UnrealizedPnL\": to_num(r.get(\"unrealized_pnl\"), 0.0),\n            }\n        )\nelse:\n    for r in rows_from_4b:\n        rows.append(\n            {\n                \"Symbol\": str(r.get(\"Symbol\") or r.get(\"symbol\") or \"\").strip().upper(),\n                \"Name\": str(r.get(\"Name\") or r.get(\"name\") or \"\").strip(),\n                \"AssetClass\": str(r.get(\"AssetClass\") or r.get(\"assetClass\") or \"Equity\"),\n                \"Sector\": str(r.get(\"Sector\") or r.get(\"sector\") or \"Unknown\"),\n                \"Industry\": str(r.get(\"Industry\") or r.get(\"industry\") or \"Unknown\"),\n                \"Quantity\": to_num(r.get(\"Quantity\"), 0.0),\n                \"LastPrice\": to_num(r.get(\"LastPrice\"), 0.0),\n                \"MarketValue\": to_num(r.get(\"MarketValue\"), 0.0),\n                \"UnrealizedPnL\": to_num(r.get(\"UnrealizedPnL\"), 0.0),\n            }\n        )\n\ncash_value = 0.0\ncash_found = False\nvalid_positions = []\ncalculated_positions_value = 0.0\nfallback_cash = to_num(portfolio_summary_in.get(\"cashEUR\"), 0.0) if isinstance(portfolio_summary_in, dict) else 0.0\n\nfor row in rows:\n    sym = norm_text(row.get(\"Symbol\"))\n    if is_cash_row(row):\n        cash_value = max(cash_value, round2(row.get(\"MarketValue\")))\n        cash_found = True\n        continue\n    if is_meta_row(row):\n        continue\n\n    qty = to_num(row.get(\"Quantity\"), 0.0)\n    price = round2(row.get(\"LastPrice\"))\n    pnl = round2(row.get(\"UnrealizedPnL\"))\n    val = round2(qty * price) if qty > 0 and price > 0 else round2(row.get(\"MarketValue\"))\n\n    if qty > 0 or val > 0:\n        calculated_positions_value += val\n        valid_positions.append(\n            {\n                \"symbol\": sym,\n                \"name\": row.get(\"Name\") or sym,\n                \"sector\": row.get(\"Sector\") or \"Unknown\",\n                \"industry\": row.get(\"Industry\") or \"Unknown\",\n                \"assetClass\": row.get(\"AssetClass\") or \"Equity\",\n                \"qty\": qty,\n                \"price\": price,\n                \"value\": val,\n                \"pnl\": pnl,\n            }\n        )\n\nif (not cash_found) and abs(fallback_cash) > 0:\n    cash_value = round2(fallback_cash)\n    source = source + \"+summary_cash\"\n\ntotal_value = round2(cash_value + calculated_positions_value)\nexposure_pct = int(round((calculated_positions_value / total_value) * 100)) if total_value > 0 else 0\n\nportfolio_text = (\n    \"ETAT DU PORTEFEUILLE:\\n\"\n    f\"- VALEUR TOTALE : {total_value} EUR\\n\"\n    f\"- CASH DISPONIBLE : {cash_value} EUR\\n\"\n    f\"- EXPOSITION ACTIONS : {exposure_pct}%\\n\\n\"\n    \"POSITIONS ACTUELLES :\"\n)\n\nif not valid_positions:\n    portfolio_text += \"\\n(Aucune position, portefeuille liquide)\"\nelse:\n    for p in valid_positions:\n        sign = \"+\" if p['pnl'] > 0 else \"\"\n        portfolio_text += (\n            f\"\\n- {p['symbol']} ({p['name']}) [{p['sector']}]: {p['qty']} titres @ {p['price']} EUR \"\n            f\"(Val: {p['value']} EUR) | PnL: {sign}{p['pnl']} EUR\"\n        )\n\nreturn [\n    {\n        \"json\": {\n            \"portfolioBrief\": {\n                \"generatedAt\": datetime.now(timezone.utc).isoformat(),\n                \"totalValue\": total_value,\n                \"cash\": cash_value,\n                \"exposurePct\": exposure_pct,\n                \"agentBriefingText\": portfolio_text,\n                \"positions\": valid_positions,\n                \"source\": source,\n            }\n        }\n    }\n]"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        11584
+      ],
+      "id": "37e8ffda-d099-4168-b1f7-76ba652754cd",
+      "name": "4C — Enrich Portfolio with Market Prices"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport re\nimport unicodedata\nfrom datetime import datetime, timedelta, timezone\n\n# --- CONFIGURATION ---\nLOOKBACK_DAYS_DEFAULT = 20\nMIN_IMPACT = 2.0  # Ignore anecdotal news\n\n# Canonical sector list (Yahoo-style labels used in AG4 universe normalization).\nCANONICAL_SECTORS = [\n    \"Basic Materials\",\n    \"Communication Services\",\n    \"Consumer Cyclical\",\n    \"Consumer Defensive\",\n    \"Energy\",\n    \"Financial Services\",\n    \"Healthcare\",\n    \"Industrials\",\n    \"Real Estate\",\n    \"Technology\",\n    \"Utilities\",\n    \"Unknown\",\n]\n\n\ndef safe_float(val):\n    try:\n        return float(val)\n    except Exception:\n        return 0.0\n\n\ndef safe_int(val, default):\n    try:\n        if val is None or val == \"\":\n            return default\n        return int(float(val))\n    except Exception:\n        return default\n\n\ndef parse_dt(val):\n    \"\"\"\n    Parse dates tolerating:\n    - ISO 8601 (with 'Z' or offset)\n    - 'YYYY-MM-DD HH:MM[:SS]' (naive => UTC)\n    - 'YYYY-MM-DD'\n    Returns UTC-aware datetime, or None.\n    \"\"\"\n    if val is None:\n        return None\n\n    if isinstance(val, datetime):\n        dt = val\n    else:\n        s = str(val).strip()\n        if not s:\n            return None\n\n        if s.endswith(\"Z\"):\n            s = s[:-1] + \"+00:00\"\n\n        dt = None\n        try:\n            dt = datetime.fromisoformat(s)\n        except Exception:\n            dt = None\n\n        if dt is None:\n            for fmt in (\n                \"%Y-%m-%d %H:%M:%S%z\",\n                \"%Y-%m-%d %H:%M:%S\",\n                \"%Y-%m-%d %H:%M%z\",\n                \"%Y-%m-%d %H:%M\",\n                \"%Y-%m-%d\",\n            ):\n                try:\n                    dt = datetime.strptime(s, fmt)\n                    break\n                except Exception:\n                    dt = None\n\n        if dt is None:\n            return None\n\n    if dt.tzinfo is None:\n        dt = dt.replace(tzinfo=timezone.utc)\n    return dt.astimezone(timezone.utc)\n\n\ndef strip_accents(s):\n    nfkd = unicodedata.normalize(\"NFKD\", str(s or \"\"))\n    return \"\".join(c for c in nfkd if not unicodedata.combining(c))\n\n\ndef norm_key(label):\n    s = str(label or \"\").strip()\n    if not s:\n        return \"\"\n    s = strip_accents(s)\n    s = s.replace(\"’\", \"'\").replace(\"`\", \"'\")\n    s = re.sub(r\"[\\t\\r\\n]+\", \" \", s)\n    s = re.sub(r\"\\s+\", \" \", s).strip()\n    s = s.replace(\" / \", \"/\").replace(\" - \", \"-\")\n    return s.casefold()\n\n\ndef split_labels(raw):\n    \"\"\"\n    Parse lists from:\n    - JSON arrays\n    - Python-like stringified lists (single quotes)\n    - Comma/pipe/semicolon-separated strings\n    - Native arrays\n    \"\"\"\n    if raw is None:\n        return []\n\n    if isinstance(raw, (list, tuple, set)):\n        values = list(raw)\n    else:\n        s = str(raw).strip()\n        if not s or s.lower() in (\"nan\", \"none\", \"null\"):\n            return []\n\n        values = None\n        if s.startswith(\"[\") and s.endswith(\"]\"):\n            try:\n                parsed = json.loads(s)\n                if isinstance(parsed, list):\n                    values = parsed\n            except Exception:\n                values = None\n\n            if values is None:\n                inner = s[1:-1].strip()\n                values = [] if not inner else re.split(r\"[|;,]\", inner)\n        else:\n            values = re.split(r\"[|;,]\", s)\n\n    out = []\n    seen = set()\n    for v in values:\n        x = str(v or \"\").strip()\n        if not x:\n            continue\n        x = re.sub(r\"^[\\[\\(\\{]+|[\\]\\)\\}]+$\", \"\", x).strip()\n        x = x.strip(\"\\\"'\")\n        x = re.sub(r\"\\s+\", \" \", x).strip()\n        if not x:\n            continue\n        k = norm_key(x)\n        if not k or k in seen:\n            continue\n        seen.add(k)\n        out.append(x)\n    return out\n\n\ndef build_allowed_sector_list(rows):\n    # If an upstream node ever provides `universeSectors`, prefer it.\n    detected = []\n    seen = set()\n    for row in rows:\n        for label in split_labels(row.get(\"universeSectors\")):\n            k = norm_key(label)\n            if not k or k in seen:\n                continue\n            seen.add(k)\n            detected.append(label)\n    if detected:\n        return detected\n    return list(CANONICAL_SECTORS)\n\n\ndef build_allowed_maps(allowed_labels):\n    display_by_key = {}\n    for label in allowed_labels:\n        k = norm_key(label)\n        if k and k not in display_by_key:\n            display_by_key[k] = str(label).strip()\n\n    # Common aliases (English + a few French variants) to canonical labels.\n    aliases = {\n        \"basic materials\": \"Basic Materials\",\n        \"materials\": \"Basic Materials\",\n        \"materiaux de base\": \"Basic Materials\",\n        \"communication services\": \"Communication Services\",\n        \"telecommunication services\": \"Communication Services\",\n        \"telecom services\": \"Communication Services\",\n        \"services de communication\": \"Communication Services\",\n        \"consumer cyclical\": \"Consumer Cyclical\",\n        \"consumer discretionary\": \"Consumer Cyclical\",\n        \"consommation cyclique\": \"Consumer Cyclical\",\n        \"consumer defensive\": \"Consumer Defensive\",\n        \"consumer staples\": \"Consumer Defensive\",\n        \"consommation defensive\": \"Consumer Defensive\",\n        \"energy\": \"Energy\",\n        \"energie\": \"Energy\",\n        \"financial services\": \"Financial Services\",\n        \"financials\": \"Financial Services\",\n        \"finance\": \"Financial Services\",\n        \"services financiers\": \"Financial Services\",\n        \"healthcare\": \"Healthcare\",\n        \"health care\": \"Healthcare\",\n        \"sante\": \"Healthcare\",\n        \"industrials\": \"Industrials\",\n        \"industrie\": \"Industrials\",\n        \"real estate\": \"Real Estate\",\n        \"immobilier\": \"Real Estate\",\n        \"technology\": \"Technology\",\n        \"information technology\": \"Technology\",\n        \"technologie\": \"Technology\",\n        \"utilities\": \"Utilities\",\n        \"services publics\": \"Utilities\",\n        \"unknown\": \"Unknown\",\n    }\n\n    alias_to_allowed = {}\n    for alias, canonical in aliases.items():\n        alias_k = norm_key(alias)\n        canonical_k = norm_key(canonical)\n        if alias_k and canonical_k in display_by_key:\n            alias_to_allowed[alias_k] = display_by_key[canonical_k]\n\n    heuristic_rules = [\n        (\"communication\", \"Communication Services\"),\n        (\"telecom\", \"Communication Services\"),\n        (\"financial\", \"Financial Services\"),\n        (\"bank\", \"Financial Services\"),\n        (\"insurance\", \"Financial Services\"),\n        (\"health\", \"Healthcare\"),\n        (\"pharma\", \"Healthcare\"),\n        (\"biotech\", \"Healthcare\"),\n        (\"industrial\", \"Industrials\"),\n        (\"aerospace\", \"Industrials\"),\n        (\"defense\", \"Industrials\"),\n        (\"technology\", \"Technology\"),\n        (\"software\", \"Technology\"),\n        (\"semiconductor\", \"Technology\"),\n        (\"energy\", \"Energy\"),\n        (\"oil\", \"Energy\"),\n        (\"gas\", \"Energy\"),\n        (\"utility\", \"Utilities\"),\n        (\"real estate\", \"Real Estate\"),\n        (\"reit\", \"Real Estate\"),\n        (\"consumer cyc\", \"Consumer Cyclical\"),\n        (\"discretionary\", \"Consumer Cyclical\"),\n        (\"consumer def\", \"Consumer Defensive\"),\n        (\"staples\", \"Consumer Defensive\"),\n        (\"materials\", \"Basic Materials\"),\n    ]\n\n    return display_by_key, alias_to_allowed, heuristic_rules\n\n\ndef match_sector(label, display_by_key, alias_to_allowed, heuristic_rules):\n    raw = str(label or \"\").strip()\n    if not raw:\n        return None\n    k = norm_key(raw)\n    if not k:\n        return None\n\n    if k in display_by_key:\n        return display_by_key[k]\n    if k in alias_to_allowed:\n        return alias_to_allowed[k]\n\n    # Conservative cleanup match for labels with extra wrappers/punctuation.\n    for allowed_k, allowed_label in display_by_key.items():\n        if k == allowed_k:\n            return allowed_label\n\n    # Heuristic fallback for legacy winners/losers that may contain industry labels.\n    for token, canonical in heuristic_rules:\n        if token in k:\n            canonical_k = norm_key(canonical)\n            if canonical_k in display_by_key:\n                return display_by_key[canonical_k]\n\n    return None\n\n\n# 1) Collect input rows from n8n\nitems = _items or []\nrows = []\nfor item in items:\n    j = (item or {}).get(\"json\") or {}\n    if isinstance(j, dict) and j:\n        rows.append(j)\n\nif not rows:\n    return [\n        {\n            \"json\": {\n                \"sector_brief\": \"No recent macro news data available.\",\n                \"sector_momentum_window_days\": LOOKBACK_DAYS_DEFAULT,\n                \"sector_momentum_universe\": CANONICAL_SECTORS,\n                \"sector_momentum_scores\": [],\n                \"sector_momentum_meta\": {\"rows_total\": 0, \"rows_used\": 0, \"dropped_labels\": 0},\n            }\n        }\n    ]\n\nlookback_days = LOOKBACK_DAYS_DEFAULT\nfor row in rows:\n    if row.get(\"lookbackDays\") is not None:\n        lookback_days = max(1, safe_int(row.get(\"lookbackDays\"), LOOKBACK_DAYS_DEFAULT))\n        break\n\nnow = datetime.now(timezone.utc)\ncutoff = now - timedelta(days=lookback_days)\n\nallowed_sectors = build_allowed_sector_list(rows)\ndisplay_by_key, alias_to_allowed, heuristic_rules = build_allowed_maps(allowed_sectors)\n\n# Track all sectors from universe even if net score is zero.\nstats = {}\nfor label in allowed_sectors:\n    k = norm_key(label)\n    if not k:\n        continue\n    stats[k] = {\n        \"sector\": str(label).strip(),\n        \"net\": 0.0,\n        \"bull_score\": 0.0,\n        \"bear_score\": 0.0,\n        \"mentions\": 0,\n        \"bull_mentions\": 0,\n        \"bear_mentions\": 0,\n    }\n\nrows_used = 0\ndropped_labels = 0\nraw_mentions = 0\n\nfor row in rows:\n    if row.get(\"_emptyNews\"):\n        continue\n\n    published = parse_dt(row.get(\"publishedAt\"))\n    if published is None or published < cutoff:\n        continue\n\n    impact = abs(safe_float(row.get(\"ImpactScore\", 0)))\n    if impact < MIN_IMPACT:\n        continue\n\n    rows_used += 1\n\n    winners_raw = row.get(\"sectors_bullish\")\n    losers_raw = row.get(\"sectors_bearish\")\n    if winners_raw in (None, \"\"):\n        winners_raw = row.get(\"Winners\")\n    if losers_raw in (None, \"\"):\n        losers_raw = row.get(\"Losers\")\n\n    winners = []\n    seen_w = set()\n    for lbl in split_labels(winners_raw):\n        raw_mentions += 1\n        sector = match_sector(lbl, display_by_key, alias_to_allowed, heuristic_rules)\n        if not sector:\n            dropped_labels += 1\n            continue\n        sk = norm_key(sector)\n        if sk in seen_w:\n            continue\n        seen_w.add(sk)\n        winners.append(sk)\n\n    losers = []\n    seen_l = set()\n    for lbl in split_labels(losers_raw):\n        raw_mentions += 1\n        sector = match_sector(lbl, display_by_key, alias_to_allowed, heuristic_rules)\n        if not sector:\n            dropped_labels += 1\n            continue\n        sk = norm_key(sector)\n        if sk in seen_l:\n            continue\n        seen_l.add(sk)\n        losers.append(sk)\n\n    for sk in winners:\n        if sk not in stats:\n            continue\n        stats[sk][\"net\"] += impact\n        stats[sk][\"bull_score\"] += impact\n        stats[sk][\"mentions\"] += 1\n        stats[sk][\"bull_mentions\"] += 1\n\n    for sk in losers:\n        if sk not in stats:\n            continue\n        stats[sk][\"net\"] -= impact\n        stats[sk][\"bear_score\"] += impact\n        stats[sk][\"mentions\"] += 1\n        stats[sk][\"bear_mentions\"] += 1\n\n\nscore_rows = list(stats.values())\nfor row in score_rows:\n    row[\"netScore\"] = round(row.pop(\"net\"), 2)\n    row[\"bullScore\"] = round(row.pop(\"bull_score\"), 2)\n    row[\"bearScore\"] = round(row.pop(\"bear_score\"), 2)\n\nscore_rows.sort(key=lambda r: (r[\"netScore\"], r[\"mentions\"], r[\"sector\"]), reverse=True)\n\nactive_rows = [r for r in score_rows if abs(r[\"netScore\"]) > 0 or r[\"mentions\"] > 0]\nleaders = [r for r in active_rows if r[\"netScore\"] >= 10]\nlaggards = [\n    r\n    for r in sorted(active_rows, key=lambda r: (r[\"netScore\"], r[\"mentions\"], r[\"sector\"]))\n    if r[\"netScore\"] <= -10\n]\nmixed = [r for r in active_rows if -10 < r[\"netScore\"] < 10]\n\nif not active_rows:\n    brief = (\n        f\"MARKET REGIME: Neutral/Quiet. No significant sector divergence detected in the last \"\n        f\"{lookback_days} days (universe-aligned sectors only).\"\n    )\nelse:\n    lines = [f\"=== SECTOR MOMENTUM REPORT (Last {lookback_days} Days | Universe Sectors Only) ===\"]\n    lines.append(f\"Tracked sectors: {len(score_rows)} | Active sectors: {len(active_rows)} | Rows used: {rows_used}\")\n    if raw_mentions > 0:\n        lines.append(f\"Filtered non-sector/legacy labels: {dropped_labels}/{raw_mentions}\")\n\n    def fmt_entry(r):\n        return (\n            f\"{r['sector']} (Net: {r['netScore']:+.0f}, \"\n            f\"Bull: {r['bullScore']:.0f}, Bear: {r['bearScore']:.0f}, \"\n            f\"Mentions: {r['mentions']})\"\n        )\n\n    if leaders:\n        lines.append(\"\")\n        lines.append(\"LEADERS (Strong Positive Flows):\")\n        lines.extend([f\"- {fmt_entry(r)}\" for r in leaders[:6]])\n\n    if laggards:\n        lines.append(\"\")\n        lines.append(\"LAGGARDS (Strong Negative Flows):\")\n        lines.extend([f\"- {fmt_entry(r)}\" for r in laggards[:6]])\n\n    if mixed:\n        lines.append(\"\")\n        lines.append(\"MIXED / NEUTRAL (Universe sectors with conflicting or weak flows):\")\n        lines.extend([f\"- {fmt_entry(r)}\" for r in sorted(mixed, key=lambda r: abs(r['netScore']), reverse=True)[:6]])\n\n    brief = \"\\n\".join(lines)\n\n\nreturn [\n    {\n        \"json\": {\n            \"sector_brief\": brief,\n            \"sector_momentum_window_days\": lookback_days,\n            \"sector_momentum_universe\": [r[\"sector\"] for r in score_rows],\n            \"sector_momentum_scores\": score_rows,\n            \"sector_momentum_meta\": {\n                \"rows_total\": len(rows),\n                \"rows_used\": rows_used,\n                \"lookback_days\": lookback_days,\n                \"min_impact\": MIN_IMPACT,\n                \"raw_mentions\": raw_mentions,\n                \"dropped_labels\": dropped_labels,\n            },\n        }\n    }\n]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1616,
+        11888
+      ],
+      "id": "9f3dac04-531d-4d3a-b2ad-e7e50f7ffb96",
+      "name": "20J_FINAL — Build MarketNewsPack Final",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        768,
+        11968
+      ],
+      "id": "1662b7d5-0c5f-42bc-bba2-93e24d951b03",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "content": "## Le portefeuille",
+        "height": 288,
+        "width": 896,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        11456
+      ],
+      "id": "6ee07bb9-cadc-49bf-b313-0c7db5286843",
+      "name": "Sticky Note6"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone, timedelta, date\n\nDB_PATH = \"/files/duckdb/ag4_v2.duckdb\"\nLOOKBACK_DAYS = 20\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_iso(v):\n    if v is None:\n        return \"\"\n    if isinstance(v, (datetime, date)):\n        return v.isoformat()\n    return str(v)\n\n\ndef to_num(v):\n    try:\n        if v is None or v == \"\":\n            return 0.0\n        return float(v)\n    except Exception:\n        return 0.0\n\n\ndef fetch_news_rows(con, cutoff):\n    # Preferred path: use AG4-V2 normalized sector columns (aligned to AG4 universe sectors).\n    sql_v2 = \"\"\"\n        SELECT\n          COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) AS published_at_eff,\n          impact_score,\n          COALESCE(sectors_bullish, winners, '') AS sectors_bullish,\n          COALESCE(sectors_bearish, losers, '') AS sectors_bearish,\n          COALESCE(winners, '') AS winners,\n          COALESCE(losers, '') AS losers\n        FROM news_history\n        WHERE COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) >= ?\n          AND COALESCE(type, 'macro') = 'macro'\n          AND (\n            COALESCE(impact_score, 0) <> 0\n            OR COALESCE(sectors_bullish, '') <> ''\n            OR COALESCE(sectors_bearish, '') <> ''\n            OR COALESCE(winners, '') <> ''\n            OR COALESCE(losers, '') <> ''\n          )\n        ORDER BY published_at_eff DESC, updated_at DESC\n    \"\"\"\n\n    sql_legacy = \"\"\"\n        SELECT\n          COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) AS published_at_eff,\n          impact_score,\n          COALESCE(winners, '') AS winners,\n          COALESCE(losers, '') AS losers\n        FROM news_history\n        WHERE COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) >= ?\n          AND COALESCE(type, 'macro') = 'macro'\n          AND (COALESCE(impact_score, 0) <> 0 OR COALESCE(winners, '') <> '' OR COALESCE(losers, '') <> '')\n        ORDER BY published_at_eff DESC, updated_at DESC\n    \"\"\"\n\n    try:\n        rows = con.execute(sql_v2, [cutoff]).fetchall()\n        return rows, \"sectors_bullish_bearish\"\n    except Exception:\n        rows = con.execute(sql_legacy, [cutoff]).fetchall()\n        return rows, \"winners_losers_legacy\"\n\n\nitems = _items or []\ndb_path = DB_PATH\nlookback_days = LOOKBACK_DAYS\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n    if j.get(\"lookbackDays\") is not None:\n        try:\n            lookback_days = max(1, int(float(j.get(\"lookbackDays\"))))\n        except Exception:\n            pass\n\ncutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)\nout = []\n\nwith db_con(db_path) as con:\n    rows, sector_field_source = fetch_news_rows(con, cutoff)\n\nfor row in rows:\n    if sector_field_source == \"sectors_bullish_bearish\":\n        sectors_bullish = row[2] or \"\"\n        sectors_bearish = row[3] or \"\"\n        winners = row[4] or sectors_bullish\n        losers = row[5] or sectors_bearish\n    else:\n        sectors_bullish = row[2] or \"\"\n        sectors_bearish = row[3] or \"\"\n        winners = row[2] or \"\"\n        losers = row[3] or \"\"\n\n    out.append(\n        {\n            \"json\": {\n                \"publishedAt\": to_iso(row[0]),\n                \"ImpactScore\": to_num(row[1]),\n                \"sectors_bullish\": sectors_bullish,\n                \"sectors_bearish\": sectors_bearish,\n                \"Winners\": winners,\n                \"Losers\": losers,\n                \"lookbackDays\": lookback_days,\n                \"_sectorFieldSource\": sector_field_source,\n            }\n        }\n    )\n\nif not out:\n    return [\n        {\n            \"json\": {\n                \"publishedAt\": \"\",\n                \"ImpactScore\": 0,\n                \"sectors_bullish\": \"\",\n                \"sectors_bearish\": \"\",\n                \"Winners\": \"\",\n                \"Losers\": \"\",\n                \"lookbackDays\": lookback_days,\n                \"_sectorFieldSource\": \"none\",\n                \"_emptyNews\": True,\n            }\n        }\n    ]\n\nreturn out\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        11888
+      ],
+      "id": "64186756-2813-4b4e-b273-749beb57f7f6",
+      "name": "AG4.01 - Récupération des news générales",
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport re\nimport gc\nimport time\nimport duckdb\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone, timedelta, date\n\nDEFAULTS = {\n    \"ag1_db_path\": os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\"),\n    \"ag2_db_path\": os.getenv(\"AG2_DUCKDB_PATH\", \"/files/duckdb/ag2_v2.duckdb\"),\n    \"ag3_db_path\": os.getenv(\"AG3_DUCKDB_PATH\", \"/files/duckdb/ag3_v2.duckdb\"),\n    \"ag4_db_path\": os.getenv(\"AG4_DUCKDB_PATH\", \"/files/duckdb/ag4_v2.duckdb\"),\n    \"ag4_spe_db_path\": os.getenv(\"AG4_SPE_DUCKDB_PATH\", \"/files/duckdb/ag4_spe_v2.duckdb\"),\n    \"yf_enrich_db_path\": os.getenv(\"YF_ENRICH_DUCKDB_PATH\", \"/files/duckdb/yf_enrichment_v1.duckdb\"),\n}\nLOOKBACK_NEWS_DAYS = 30\n\n\ndef safe_float(v, default=0.0):\n    try:\n        if v is None:\n            return default\n        if isinstance(v, (int, float)):\n            return float(v)\n        s = str(v).strip().replace(\",\", \".\")\n        if s == \"\":\n            return default\n        return float(s)\n    except Exception:\n        return default\n\n\ndef parse_dt(v):\n    if v is None:\n        return None\n    if isinstance(v, datetime):\n        dt = v\n    elif isinstance(v, date):\n        dt = datetime(v.year, v.month, v.day)\n    else:\n        s = str(v).strip()\n        if not s:\n            return None\n        if s.endswith(\"Z\"):\n            s = s[:-1] + \"+00:00\"\n        dt = None\n        try:\n            dt = datetime.fromisoformat(s)\n        except Exception:\n            pass\n        if dt is None and re.fullmatch(r\"\\d{10,13}\", s):\n            try:\n                n = int(s)\n                if len(s) == 13:\n                    n = n / 1000.0\n                dt = datetime.fromtimestamp(n, tz=timezone.utc)\n            except Exception:\n                dt = None\n        if dt is None:\n            fmts = (\n                \"%Y-%m-%d %H:%M:%S%z\",\n                \"%Y-%m-%d %H:%M:%S\",\n                \"%Y-%m-%d %H:%M%z\",\n                \"%Y-%m-%d %H:%M\",\n                \"%Y-%m-%d\",\n            )\n            for fmt in fmts:\n                try:\n                    dt = datetime.strptime(s, fmt)\n                    break\n                except Exception:\n                    dt = None\n    if dt is None:\n        return None\n    if dt.tzinfo is None:\n        dt = dt.replace(tzinfo=timezone.utc)\n    else:\n        dt = dt.astimezone(timezone.utc)\n    return dt\n\n\ndef to_iso(v):\n    dt = parse_dt(v)\n    return dt.isoformat() if dt is not None else \"\"\n\n\ndef norm_token(v):\n    s = str(v or \"\").strip().lower()\n    if s in (\"\", \"n/a\", \"na\", \"nan\", \"none\", \"unknown\", \"indefini\", \"indefinie\", \"indef\"):\n        return \"\"\n    return s\n\n\ndef truthy(v):\n    s = str(v or \"\").strip().lower()\n    return s in (\"1\", \"true\", \"yes\", \"y\", \"ok\")\n\n\n@contextmanager\ndef db_con(path, retries=5, delay=0.25):\n    con = None\n    for i in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            msg = str(e).lower()\n            if (\"lock\" in msg or \"busy\" in msg) and i < retries - 1:\n                time.sleep(delay * (2 ** i))\n            else:\n                con = None\n                break\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef run_query(path, sql, params=None):\n    if not path:\n        return []\n    with db_con(path) as con:\n        if con is None:\n            return []\n        try:\n            cur = con.execute(sql, params or [])\n            cols = [d[0] for d in (cur.description or [])]\n            out = []\n            for row in cur.fetchall():\n                out.append({cols[i]: row[i] for i in range(len(cols))})\n            return out\n        except Exception:\n            return []\n\n\ndef pick_cfg(items):\n    cfg = {}\n    for it in (items or []):\n        j = it.get(\"json\", {}) if isinstance(it, dict) else {}\n        if not isinstance(j, dict):\n            continue\n        for k in DEFAULTS.keys():\n            if j.get(k):\n                cfg[k] = str(j.get(k))\n    return cfg\n\n\nitems = _items or []\ncfg = dict(DEFAULTS)\ncfg.update(pick_cfg(items))\n\nnow = datetime.now(timezone.utc)\ncut30 = now - timedelta(days=LOOKBACK_NEWS_DAYS)\ncut7 = now - timedelta(days=7)\n\nuniverse_rows = run_query(\n    cfg[\"ag2_db_path\"],\n    \"\"\"\n    SELECT UPPER(TRIM(symbol)) AS symbol,\n           COALESCE(name, '') AS name,\n           COALESCE(sector, '') AS sector,\n           COALESCE(industry, '') AS industry\n    FROM universe\n    WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''\n    ORDER BY symbol\n    \"\"\",\n)\n\ntech_rows = run_query(\n    cfg[\"ag2_db_path\"],\n    \"\"\"\n    SELECT ts.symbol,\n           ts.d1_action,\n           ts.d1_score,\n           ts.d1_rsi14,\n           ts.d1_atr_pct,\n           ts.d1_resistance,\n           ts.d1_support,\n           ts.d1_dist_res_pct,\n           ts.d1_dist_sup_pct,\n           ts.ai_stop_loss,\n           ts.ai_rr_theoretical,\n           ts.ai_alignment,\n           ts.ai_regime_d1,\n           ts.last_close,\n           ts.data_age_h1_hours,\n           ts.data_age_d1_hours,\n           COALESCE(ts.workflow_date, ts.updated_at, ts.created_at) AS tech_ts\n    FROM technical_signals ts\n    INNER JOIN (\n      SELECT symbol, MAX(COALESCE(workflow_date, updated_at, created_at)) AS latest_ts\n      FROM technical_signals\n      GROUP BY symbol\n    ) latest\n      ON ts.symbol = latest.symbol\n     AND COALESCE(ts.workflow_date, ts.updated_at, ts.created_at) = latest.latest_ts\n    \"\"\",\n)\n\nfunda_rows = run_query(\n    cfg[\"ag3_db_path\"],\n    \"\"\"\n    SELECT UPPER(TRIM(symbol)) AS symbol,\n           score,\n           risk_score,\n           upside_pct,\n           recommendation,\n           target_price,\n           horizon,\n           COALESCE(updated_at, fetched_at, created_at) AS funda_ts\n    FROM v_latest_triage\n    ORDER BY symbol\n    \"\"\",\n)\n\nif not funda_rows:\n    funda_rows = run_query(\n        cfg[\"ag3_db_path\"],\n        \"\"\"\n        SELECT * EXCLUDE(rn)\n        FROM (\n          SELECT UPPER(TRIM(symbol)) AS symbol,\n                 score,\n                 risk_score,\n                 upside_pct,\n                 recommendation,\n                 target_price,\n                 horizon,\n                 COALESCE(updated_at, fetched_at, created_at) AS funda_ts,\n                 ROW_NUMBER() OVER (\n                   PARTITION BY symbol\n                   ORDER BY COALESCE(updated_at, fetched_at, created_at) DESC\n                 ) AS rn\n          FROM fundamentals_triage_history\n        )\n        WHERE rn = 1\n        ORDER BY symbol\n        \"\"\",\n    )\n\nmacro_rows = run_query(\n    cfg[\"ag4_db_path\"],\n    \"\"\"\n    SELECT\n      COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,\n      COALESCE(impact_score, 0) AS impactscore,\n      COALESCE(theme, '') AS theme,\n      COALESCE(title, '') AS title,\n      COALESCE(snippet, '') AS snippet,\n      COALESCE(notes, '') AS notes,\n      COALESCE(winners, '') AS winners,\n      COALESCE(losers, '') AS losers,\n      COALESCE(regime, '') AS regime\n    FROM news_history\n    WHERE COALESCE(type, 'macro') = 'macro'\n    ORDER BY publishedat DESC\n    \"\"\",\n)\n\nsymbol_news_rows = run_query(\n    cfg[\"ag4_spe_db_path\"],\n    \"\"\"\n    SELECT\n      UPPER(TRIM(symbol)) AS symbol,\n      COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) AS publishedat,\n      COALESCE(impact_score, 0) AS impactscore,\n      COALESCE(sentiment, '') AS sentiment,\n      COALESCE(urgency, '') AS urgency,\n      COALESCE(confidence, 0) AS confidence,\n      COALESCE(title, '') AS title,\n      COALESCE(summary, '') AS summary\n    FROM news_history\n    WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''\n    ORDER BY publishedat DESC, symbol\n    \"\"\",\n)\n\nif not symbol_news_rows:\n    symbol_news_rows = run_query(\n        cfg[\"ag4_db_path\"],\n        \"\"\"\n        SELECT\n          UPPER(TRIM(symbol)) AS symbol,\n          COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,\n          COALESCE(impact_score, 0) AS impactscore,\n          COALESCE(sentiment, '') AS sentiment,\n          COALESCE(urgency, '') AS urgency,\n          COALESCE(confidence, 0) AS confidence,\n          COALESCE(title, '') AS title,\n          COALESCE(summary, '') AS summary\n        FROM news_history\n        WHERE COALESCE(type, '') = 'symbol'\n          AND symbol IS NOT NULL AND TRIM(symbol) <> ''\n        ORDER BY publishedat DESC, symbol\n        \"\"\",\n    )\n\nyf_rows = run_query(\n    cfg[\"yf_enrich_db_path\"],\n    \"\"\"\n    SELECT\n      UPPER(TRIM(symbol)) AS symbol,\n      regular_market_price,\n      spread_pct,\n      slippage_proxy_pct,\n      iv_atm,\n      options_ok,\n      options_error,\n      options_warning,\n      next_earnings_date,\n      days_to_earnings,\n      fetched_at,\n      options_fetched_at\n    FROM v_latest_symbol_enrichment\n    ORDER BY symbol\n    \"\"\",\n)\n\nif not yf_rows:\n    yf_rows = run_query(\n        cfg[\"yf_enrich_db_path\"],\n        \"\"\"\n        SELECT * EXCLUDE(rn)\n        FROM (\n          SELECT UPPER(TRIM(symbol)) AS symbol,\n                 regular_market_price,\n                 spread_pct,\n                 slippage_proxy_pct,\n                 iv_atm,\n                 options_ok,\n                 options_error,\n                 options_warning,\n                 next_earnings_date,\n                 days_to_earnings,\n                 fetched_at,\n                 options_fetched_at,\n                 ROW_NUMBER() OVER (\n                   PARTITION BY symbol\n                   ORDER BY COALESCE(fetched_at, created_at) DESC\n                 ) AS rn\n          FROM yf_symbol_enrichment_history\n        )\n        WHERE rn = 1\n        ORDER BY symbol\n        \"\"\",\n    )\n\npf_rows = run_query(\n    cfg[\"ag1_db_path\"],\n    \"\"\"\n    SELECT UPPER(TRIM(symbol)) AS symbol,\n           COALESCE(sector, '') AS sector,\n           COALESCE(market_value, 0) AS market_value\n    FROM portfolio_positions_mtm_latest\n    WHERE symbol IS NOT NULL\n      AND UPPER(TRIM(symbol)) NOT IN ('CASH_EUR', '__META__')\n    \"\"\",\n)\n\nsym_weight = {}\nsec_weight = {}\ntotal_mv = 0.0\nfor r in pf_rows:\n    total_mv += max(0.0, safe_float(r.get(\"market_value\"), 0.0))\nif total_mv > 0:\n    for r in pf_rows:\n        sym = str(r.get(\"symbol\") or \"\").strip().upper()\n        sec = str(r.get(\"sector\") or \"\").strip()\n        mv = max(0.0, safe_float(r.get(\"market_value\"), 0.0))\n        if not sym:\n            continue\n        pct = (mv / total_mv) * 100.0\n        sym_weight[sym] = sym_weight.get(sym, 0.0) + pct\n        sec_weight[sec] = sec_weight.get(sec, 0.0) + pct\n\nuniverse = {}\nfor r in universe_rows:\n    sym = str(r.get(\"symbol\") or \"\").strip().upper()\n    if not sym:\n        continue\n    universe[sym] = {\n        \"name\": str(r.get(\"name\") or \"\").strip(),\n        \"sector\": str(r.get(\"sector\") or \"\").strip(),\n        \"industry\": str(r.get(\"industry\") or \"\").strip(),\n    }\n\ntech_map = {}\nfor r in tech_rows:\n    sym = str(r.get(\"symbol\") or \"\").strip().upper()\n    if not sym:\n        continue\n    prev = tech_map.get(sym)\n    cur_ts = parse_dt(r.get(\"tech_ts\"))\n    old_ts = parse_dt(prev.get(\"tech_ts\")) if prev else None\n    if (prev is None) or (old_ts is None) or (cur_ts is not None and cur_ts >= old_ts):\n        tech_map[sym] = dict(r)\n\nfunda_map = {}\nfor r in funda_rows:\n    sym = str(r.get(\"symbol\") or \"\").strip().upper()\n    if not sym:\n        continue\n    prev = funda_map.get(sym)\n    cur_ts = parse_dt(r.get(\"funda_ts\"))\n    old_ts = parse_dt(prev.get(\"funda_ts\")) if prev else None\n    if (prev is None) or (old_ts is None) or (cur_ts is not None and cur_ts >= old_ts):\n        funda_map[sym] = dict(r)\n\nyf_map = {}\nfor r in yf_rows:\n    sym = str(r.get(\"symbol\") or \"\").strip().upper()\n    if not sym:\n        continue\n    prev = yf_map.get(sym)\n    cur_ts = parse_dt(r.get(\"fetched_at\"))\n    old_ts = parse_dt(prev.get(\"fetched_at\")) if prev else None\n    if (prev is None) or (old_ts is None) or (cur_ts is not None and cur_ts >= old_ts):\n        yf_map[sym] = dict(r)\n\nsym_news_agg = {}\nfor r in symbol_news_rows:\n    sym = str(r.get(\"symbol\") or \"\").strip().upper()\n    if not sym:\n        continue\n    dt = parse_dt(r.get(\"publishedat\"))\n    impact = safe_float(r.get(\"impactscore\"), 0.0)\n    rec = sym_news_agg.get(sym)\n    if rec is None:\n        rec = {\n            \"count_7d\": 0,\n            \"count_30d\": 0,\n            \"impact_7d\": 0.0,\n            \"impact_30d\": 0.0,\n            \"last_news_date\": None,\n        }\n        sym_news_agg[sym] = rec\n    if dt is not None:\n        if rec[\"last_news_date\"] is None or dt > rec[\"last_news_date\"]:\n            rec[\"last_news_date\"] = dt\n        if dt >= cut30:\n            rec[\"count_30d\"] += 1\n            rec[\"impact_30d\"] += impact\n        if dt >= cut7:\n            rec[\"count_7d\"] += 1\n            rec[\"impact_7d\"] += impact\n\nmacro_recent = []\nfor r in macro_rows:\n    dt = parse_dt(r.get(\"publishedat\"))\n    if dt is None or dt < cut30:\n        continue\n    text = \" \".join(\n        [\n            str(r.get(\"theme\") or \"\"),\n            str(r.get(\"title\") or \"\"),\n            str(r.get(\"snippet\") or \"\"),\n            str(r.get(\"notes\") or \"\"),\n            str(r.get(\"winners\") or \"\"),\n            str(r.get(\"losers\") or \"\"),\n            str(r.get(\"regime\") or \"\"),\n        ]\n    ).lower()\n    macro_recent.append(\n        {\n            \"publishedat\": dt,\n            \"impactscore\": safe_float(r.get(\"impactscore\"), 0.0),\n            \"theme\": str(r.get(\"theme\") or \"\").strip(),\n            \"ctx\": text,\n        }\n    )\n\nsymbols = set()\nsymbols.update(universe.keys())\nsymbols.update(tech_map.keys())\nsymbols.update(funda_map.keys())\nsymbols.update(sym_news_agg.keys())\nsymbols.update(yf_map.keys())\n\nout = []\nfor sym in sorted(symbols):\n    u = universe.get(sym, {})\n    t = tech_map.get(sym, {})\n    f = funda_map.get(sym, {})\n    sn = sym_news_agg.get(sym, {})\n    yf = yf_map.get(sym, {})\n\n    name = str(u.get(\"name\") or \"\").strip() or sym\n    sector = str(u.get(\"sector\") or \"\").strip()\n    industry = str(u.get(\"industry\") or \"\").strip()\n\n    sec_tok = norm_token(sector)\n    ind_tok = norm_token(industry)\n\n    macro_matches = []\n    for m in macro_recent:\n        ctx = m[\"ctx\"]\n        hit = False\n        if sec_tok and sec_tok in ctx:\n            hit = True\n        if ind_tok and ind_tok != sec_tok and ind_tok in ctx:\n            hit = True\n        if hit:\n            macro_matches.append(m)\n\n    macro_impact = sum(m.get(\"impactscore\", 0.0) for m in macro_matches)\n    macro_count = len(macro_matches)\n    macro_last = max((m.get(\"publishedat\") for m in macro_matches), default=None)\n\n    theme_count = {}\n    for m in macro_matches:\n        th = str(m.get(\"theme\") or \"\").strip()\n        if not th:\n            continue\n        theme_count[th] = theme_count.get(th, 0) + 1\n    top_themes = [k for k, _ in sorted(theme_count.items(), key=lambda kv: kv[1], reverse=True)[:2]]\n\n    sym_news_last = sn.get(\"last_news_date\")\n    last_news = sym_news_last if sym_news_last is not None else macro_last\n\n    out.append(\n        {\n            \"Symbol\": sym,\n            \"Name\": name,\n            \"Sector\": sector,\n            \"Industry\": industry,\n            \"Tech_Action\": str(t.get(\"d1_action\") or \"\").upper().strip(),\n            \"Tech_Confidence\": safe_float(t.get(\"d1_score\"), 0.0),\n            \"Last_Close\": safe_float(t.get(\"last_close\"), 0.0),\n            \"D1_RSI14\": safe_float(t.get(\"d1_rsi14\"), 0.0),\n            \"D1_ATR_Pct\": safe_float(t.get(\"d1_atr_pct\"), 0.0),\n            \"D1_Resistance\": safe_float(t.get(\"d1_resistance\"), 0.0),\n            \"D1_Support\": safe_float(t.get(\"d1_support\"), 0.0),\n            \"D1_Dist_Res_Pct\": safe_float(t.get(\"d1_dist_res_pct\"), 0.0),\n            \"D1_Dist_Sup_Pct\": safe_float(t.get(\"d1_dist_sup_pct\"), 0.0),\n            \"AI_Stop_Loss\": safe_float(t.get(\"ai_stop_loss\"), 0.0),\n            \"AI_RR_Theoretical\": safe_float(t.get(\"ai_rr_theoretical\"), 0.0),\n            \"AI_Alignment\": str(t.get(\"ai_alignment\") or \"\").strip(),\n            \"AI_Regime_D1\": str(t.get(\"ai_regime_d1\") or \"\").strip(),\n            \"Data_Age_H1_Hours\": safe_float(t.get(\"data_age_h1_hours\"), 0.0),\n            \"Data_Age_D1_Hours\": safe_float(t.get(\"data_age_d1_hours\"), 0.0),\n            \"Last_Tech_Date\": to_iso(t.get(\"tech_ts\")),\n            \"Funda_Score\": safe_float(f.get(\"score\"), 50.0),\n            \"Funda_Risk\": safe_float(f.get(\"risk_score\"), 50.0),\n            \"Funda_Upside\": safe_float(f.get(\"upside_pct\"), 0.0),\n            \"Recommendation\": str(f.get(\"recommendation\") or \"\").strip(),\n            \"Target_Price\": safe_float(f.get(\"target_price\"), 0.0),\n            \"Funda_Horizon\": str(f.get(\"horizon\") or \"\").strip(),\n            \"Last_Funda_Date\": to_iso(f.get(\"funda_ts\")),\n            \"Symbol_News_Count_7d\": int(sn.get(\"count_7d\", 0)),\n            \"Symbol_News_Count_30d\": int(sn.get(\"count_30d\", 0)),\n            \"Symbol_News_Impact_7d\": safe_float(sn.get(\"impact_7d\"), 0.0),\n            \"Symbol_News_Impact_30d\": safe_float(sn.get(\"impact_30d\"), 0.0),\n            \"Symbol_News_Last_Date\": to_iso(sym_news_last),\n            \"Macro_News_Count_30d\": int(macro_count),\n            \"Macro_Impact_30d\": safe_float(macro_impact, 0.0),\n            \"Macro_Last_Date\": to_iso(macro_last),\n            \"Macro_Themes\": \", \".join(top_themes),\n            \"Last_News_Date\": to_iso(last_news),\n            \"Regular_Market_Price\": safe_float(yf.get(\"regular_market_price\"), 0.0),\n            \"SpreadPct\": safe_float(yf.get(\"spread_pct\"), 0.0),\n            \"SlippageProxyPct\": safe_float(yf.get(\"slippage_proxy_pct\"), 0.0),\n            \"IV_ATM\": safe_float(yf.get(\"iv_atm\"), 0.0),\n            \"Options_Ok\": truthy(yf.get(\"options_ok\")),\n            \"Options_Error\": str(yf.get(\"options_error\") or \"\").strip(),\n            \"Options_Warning\": str(yf.get(\"options_warning\") or \"\").strip(),\n            \"Next_Earnings_Date\": to_iso(yf.get(\"next_earnings_date\")),\n            \"Days_To_Earnings\": yf.get(\"days_to_earnings\"),\n            \"YF_Fetched_At\": to_iso(yf.get(\"fetched_at\")),\n            \"Sector_Weight_Pct\": safe_float(sec_weight.get(sector, 0.0), 0.0),\n            \"Symbol_Weight_Pct\": safe_float(sym_weight.get(sym, 0.0), 0.0),\n        }\n    )\n\nif not out:\n    return [{\"json\": {\"_empty\": True, \"_error\": \"NO_SYMBOLS_AVAILABLE\", \"config\": cfg}}]\n\nreturn [{\"json\": r} for r in out]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1392,
+        12176
+      ],
+      "id": "7ae6efb0-c933-4b22-9884-29e92b0e3a97",
+      "name": "R8 — Data Prep for Matrix (Fusion Filter)"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "from datetime import datetime, timezone\nimport math\nimport re\n\n\ndef safe_float(v, default=0.0):\n    try:\n        if v is None:\n            return default\n        if isinstance(v, (int, float)):\n            x = float(v)\n            return x if math.isfinite(x) else default\n        s = str(v).strip().replace(\",\", \".\")\n        if s == \"\":\n            return default\n        x = float(s)\n        return x if math.isfinite(x) else default\n    except Exception:\n        return default\n\n\ndef parse_dt(v):\n    if v is None:\n        return None\n    if isinstance(v, datetime):\n        dt = v\n    else:\n        s = str(v).strip()\n        if not s:\n            return None\n        if s.endswith(\"Z\"):\n            s = s[:-1] + \"+00:00\"\n        dt = None\n        try:\n            dt = datetime.fromisoformat(s)\n        except Exception:\n            pass\n        if dt is None and re.fullmatch(r\"\\d{10,13}\", s):\n            try:\n                n = int(s)\n                if len(s) == 13:\n                    n = n / 1000.0\n                dt = datetime.fromtimestamp(n, tz=timezone.utc)\n            except Exception:\n                dt = None\n    if dt is None:\n        return None\n    if dt.tzinfo is None:\n        dt = dt.replace(tzinfo=timezone.utc)\n    else:\n        dt = dt.astimezone(timezone.utc)\n    return dt\n\n\ndef clamp(v, lo, hi):\n    return max(lo, min(hi, v))\n\n\ndef quantile(values, q, fallback=50.0):\n    arr = []\n    for x in values:\n        v = safe_float(x, None)\n        if v is not None and math.isfinite(v):\n            arr.append(v)\n    arr.sort()\n    if not arr:\n        return fallback\n    if len(arr) == 1:\n        return arr[0]\n    pos = (len(arr) - 1) * q\n    lo = int(math.floor(pos))\n    hi = int(math.ceil(pos))\n    if lo == hi:\n        return arr[lo]\n    frac = pos - lo\n    return arr[lo] + (arr[hi] - arr[lo]) * frac\n\n\ndef score_unit(v):\n    return int(round(clamp(safe_float(v, 0.0), 0.0, 100.0)))\n\n\ndef truthy(v):\n    s = str(v or \"\").strip().lower()\n    return s in (\"1\", \"true\", \"yes\", \"y\", \"ok\")\n\n\ndef fmt_date(v):\n    dt = parse_dt(v)\n    if dt is None:\n        return \"\"\n    return dt.isoformat()\n\n\nitems = _items or []\nrows_in = []\nfor it in items:\n    j = it.get(\"json\", {}) if isinstance(it, dict) else {}\n    if isinstance(j, dict):\n        rows_in.append(j)\n\nif not rows_in:\n    return [{\"json\": {\"opportunity_brief\": \"Aucune donnée reçue pour construire la matrice.\"}}]\n\nif rows_in and rows_in[0].get(\"_empty\"):\n    return [{\"json\": {\"opportunity_brief\": f\"Pipeline matrice vide: {rows_in[0].get('_error', 'UNKNOWN')}\"}}]\n\nrows_by_sym = {}\nfor r in rows_in:\n    sym = str(r.get(\"Symbol\") or r.get(\"symbol\") or \"\").strip().upper()\n    if not sym:\n        continue\n    prev = rows_by_sym.get(sym)\n    if prev is None:\n        rows_by_sym[sym] = dict(r)\n        continue\n    merged = dict(prev)\n    for k, v in r.items():\n        if (merged.get(k) in (None, \"\", 0, 0.0, \"0\")) and (v not in (None, \"\", \"0\")):\n            merged[k] = v\n    for dk in [\"Last_Tech_Date\", \"Last_Funda_Date\", \"Last_News_Date\", \"YF_Fetched_At\"]:\n        d_new = parse_dt(r.get(dk))\n        d_old = parse_dt(merged.get(dk))\n        if d_old is None or (d_new is not None and d_new > d_old):\n            merged[dk] = r.get(dk)\n    rows_by_sym[sym] = merged\n\nrows = list(rows_by_sym.values())\nnow = datetime.now(timezone.utc)\n\nmatrix_rows = []\nfor r in rows:\n    symbol = str(r.get(\"Symbol\") or \"\").strip().upper()\n    if not symbol:\n        continue\n\n    name = str(r.get(\"Name\") or symbol).strip() or symbol\n    sector = str(r.get(\"Sector\") or \"N/A\").strip() or \"N/A\"\n\n    entry = safe_float(r.get(\"Last_Close\"), 0.0)\n    quote_px = safe_float(r.get(\"Regular_Market_Price\"), 0.0)\n    if entry <= 0 and quote_px > 0:\n        entry = quote_px\n    if entry <= 0:\n        entry = safe_float(r.get(\"Target_Price\"), 0.0)\n\n    stop = safe_float(r.get(\"AI_Stop_Loss\"), 0.0)\n    d1_support = safe_float(r.get(\"D1_Support\"), 0.0)\n    d1_dist_sup = safe_float(r.get(\"D1_Dist_Sup_Pct\"), 0.0)\n    d1_atr_pct = safe_float(r.get(\"D1_ATR_Pct\"), 0.0)\n\n    if entry > 0:\n        if stop <= 0 or stop >= entry:\n            if d1_support > 0 and d1_support < entry:\n                stop = d1_support * 0.998\n            else:\n                fallback_risk = max(2.0, d1_dist_sup if d1_dist_sup > 0 else d1_atr_pct * 2.0)\n                stop = entry * (1.0 - fallback_risk / 100.0)\n\n    d1_res = safe_float(r.get(\"D1_Resistance\"), 0.0)\n    d1_dist_res = safe_float(r.get(\"D1_Dist_Res_Pct\"), 0.0)\n    funda_upside = safe_float(r.get(\"Funda_Upside\"), 0.0)\n    target_price = safe_float(r.get(\"Target_Price\"), 0.0)\n\n    tp_candidates = []\n    if entry > 0 and d1_res > entry:\n        tp_candidates.append(d1_res)\n    if entry > 0 and funda_upside > 0:\n        tp_candidates.append(entry * (1.0 + funda_upside / 100.0))\n    if entry > 0 and target_price > entry:\n        tp_candidates.append(target_price)\n    if entry > 0 and not tp_candidates and d1_dist_res > 0:\n        tp_candidates.append(entry * (1.0 + d1_dist_res / 100.0))\n    if entry > 0 and not tp_candidates:\n        tp_candidates.append(entry * 1.03)\n    tp = min(tp_candidates) if tp_candidates else 0.0\n\n    reward_pct = ((tp - entry) / entry * 100.0) if entry > 0 else 0.0\n    risk_pct_raw = ((entry - stop) / entry * 100.0) if entry > 0 else 0.0\n    atr_stop_floor_pct = max(0.8 * d1_atr_pct, 0.75 if d1_atr_pct > 0 else 1.2)\n    risk_pct_effective = max(0.1, risk_pct_raw, atr_stop_floor_pct)\n\n    r_multiple_raw = reward_pct / max(0.1, risk_pct_raw) if reward_pct > 0 else 0.0\n    r_multiple = reward_pct / risk_pct_effective if reward_pct > 0 else 0.0\n    r_multiple_capped = clamp(r_multiple, 0.0, 6.0)\n    rr_outlier = bool(r_multiple_raw > 6.0 or (risk_pct_raw > 0 and risk_pct_raw < atr_stop_floor_pct * 0.85))\n\n    funda_risk = safe_float(r.get(\"Funda_Risk\"), 50.0)\n    spread_pct = safe_float(r.get(\"SpreadPct\"), 0.0)\n    slip_pct = safe_float(r.get(\"SlippageProxyPct\"), 0.0)\n    symbol_news_impact = safe_float(r.get(\"Symbol_News_Impact_7d\"), 0.0)\n    macro_impact = safe_float(r.get(\"Macro_Impact_30d\"), 0.0)\n    sector_weight = safe_float(r.get(\"Sector_Weight_Pct\"), 0.0)\n    symbol_weight = safe_float(r.get(\"Symbol_Weight_Pct\"), 0.0)\n\n    raw_days_to_earnings = r.get(\"Days_To_Earnings\")\n    next_earnings_ts = parse_dt(r.get(\"Next_Earnings_Date\"))\n\n    days_to_next_earnings = None\n    days_since_last_earnings = None\n    if next_earnings_ts is not None:\n        delta_days = (next_earnings_ts - now).total_seconds() / 86400.0\n        if delta_days >= -0.4:\n            days_to_next_earnings = max(0.0, round(delta_days, 1))\n        else:\n            days_since_last_earnings = round(abs(delta_days), 1)\n    else:\n        d = safe_float(raw_days_to_earnings, None)\n        if d is not None:\n            if d >= 0:\n                days_to_next_earnings = round(d, 1)\n            else:\n                days_since_last_earnings = round(abs(d), 1)\n\n    if days_to_next_earnings is not None:\n        d = clamp(days_to_next_earnings, 0.0, 30.0)\n        event_risk = 20.0 + ((30.0 - d) / 30.0) * 75.0\n    elif days_since_last_earnings is not None:\n        d = clamp(days_since_last_earnings, 0.0, 30.0)\n        event_risk = min(45.0, 25.0 + d * 0.5)\n    else:\n        event_risk = 42.0\n\n    vol_risk = clamp(d1_atr_pct * 20.0, 0.0, 100.0)\n    liq_risk = clamp(spread_pct * 35.0 + slip_pct * 20.0, 0.0, 100.0)\n    news_risk = clamp(max(0.0, -symbol_news_impact) * 8.0 + max(0.0, -macro_impact) * 3.0, 0.0, 100.0)\n    concentration_risk = clamp(sector_weight * 1.3 + symbol_weight * 1.1, 0.0, 100.0)\n\n    iv_atm = safe_float(r.get(\"IV_ATM\"), 0.0)\n    options_ok = truthy(r.get(\"Options_Ok\"))\n    options_error = str(r.get(\"Options_Error\") or \"\").strip()\n    options_warning = str(r.get(\"Options_Warning\") or \"\").strip()\n    options_state_text = (options_error + \" \" + options_warning).lower()\n    invalid_options_state = any(tok in options_state_text for tok in (\"_global.json.tmp\", \"global.json.tmp\", \"/data/state/\", \"invalid_options_state\"))\n    options_missing_known = any(tok in options_state_text for tok in (\"no_expirations_available\", \"skipped_recent_no_expirations\"))\n\n    options_has_iv = options_ok and iv_atm > 0\n    if options_has_iv:\n        iv_as_pct = iv_atm * 100.0 if iv_atm <= 3 else iv_atm\n        options_risk = clamp(iv_as_pct * 1.8, 0.0, 100.0)\n    else:\n        options_risk = 35.0\n\n    if invalid_options_state:\n        options_coverage_quality = 0.0\n    elif options_has_iv:\n        options_coverage_quality = 100.0\n    elif options_ok:\n        options_coverage_quality = 70.0\n    elif options_missing_known:\n        options_coverage_quality = 35.0\n    else:\n        options_coverage_quality = 20.0\n\n    yf_fetched = parse_dt(r.get(\"YF_Fetched_At\"))\n    yf_age_h = None\n    if yf_fetched is not None:\n        yf_age_h = (now - yf_fetched).total_seconds() / 3600.0\n\n    if yf_age_h is not None:\n        if yf_age_h <= 24:\n            freshness_quality = 100.0\n        elif yf_age_h <= 48:\n            freshness_quality = 85.0\n        elif yf_age_h <= 72:\n            freshness_quality = 70.0\n        elif yf_age_h <= 120:\n            freshness_quality = 50.0\n        else:\n            freshness_quality = 30.0\n    else:\n        freshness_quality = 50.0\n\n    stale_penalty = 0.0\n    if yf_age_h is not None:\n        if yf_age_h > 72:\n            stale_penalty = 12.0\n        elif yf_age_h > 36:\n            stale_penalty = 6.0\n        elif yf_age_h > 24:\n            stale_penalty = 3.0\n\n    has_quote = entry > 0\n    has_days_to_next_earnings = days_to_next_earnings is not None\n\n    core_fields = [\n        r.get(\"Tech_Action\"),\n        r.get(\"Tech_Confidence\"),\n        r.get(\"Funda_Score\"),\n        r.get(\"Funda_Risk\"),\n        r.get(\"Funda_Upside\"),\n        r.get(\"Symbol_News_Impact_7d\"),\n        r.get(\"Macro_Impact_30d\"),\n        r.get(\"D1_ATR_Pct\"),\n        r.get(\"D1_Dist_Res_Pct\"),\n        r.get(\"D1_Dist_Sup_Pct\"),\n    ]\n    core_present = 0\n    for fv in core_fields:\n        if fv is None:\n            continue\n        if isinstance(fv, str) and not fv.strip():\n            continue\n        core_present += 1\n    feature_quality = (core_present / len(core_fields)) * 100.0 if core_fields else 50.0\n\n    earnings_quality = 100.0 if has_days_to_next_earnings else 40.0\n    data_quality_score = (\n        0.20 * (100.0 if has_quote else 30.0)\n        + 0.25 * options_coverage_quality\n        + 0.15 * earnings_quality\n        + 0.20 * freshness_quality\n        + 0.20 * feature_quality\n    )\n    if invalid_options_state:\n        data_quality_score = 0.0\n    data_quality_score = clamp(data_quality_score, 0.0, 100.0)\n\n    risk_weights = {\n        \"funda\": 0.30,\n        \"vol\": 0.18,\n        \"liq\": 0.14,\n        \"event\": 0.14,\n        \"news\": 0.10,\n        \"concentration\": 0.09,\n        \"options\": 0.05 if options_has_iv else 0.01,\n    }\n    risk_values = {\n        \"funda\": clamp(funda_risk, 0.0, 100.0),\n        \"vol\": vol_risk,\n        \"liq\": liq_risk,\n        \"event\": event_risk,\n        \"news\": news_risk,\n        \"concentration\": concentration_risk,\n        \"options\": options_risk,\n    }\n    wsum = sum(risk_weights.values())\n    risk_core = sum(risk_values[k] * risk_weights[k] for k in risk_weights) / wsum if wsum > 0 else 50.0\n    risk_score_100 = clamp(risk_core + stale_penalty, 0.0, 100.0)\n\n    reward_r = clamp(r_multiple_capped * 35.0, 0.0, 100.0)\n    reward_upside = clamp(funda_upside * 3.0, 0.0, 100.0)\n    reward_space = clamp(d1_dist_res * 4.0, 0.0, 100.0)\n    reward_catalyst = clamp(max(0.0, symbol_news_impact) * 6.0 + max(0.0, macro_impact) * 2.0, 0.0, 100.0)\n\n    tech_action = str(r.get(\"Tech_Action\") or \"\").upper().strip()\n    tech_conf = safe_float(r.get(\"Tech_Confidence\"), 0.0)\n    if tech_action == \"BUY\":\n        trend_bonus = min(100.0, 55.0 + tech_conf * 0.45)\n    elif tech_action == \"SELL\":\n        trend_bonus = max(0.0, 35.0 - tech_conf * 0.25)\n    else:\n        trend_bonus = 45.0\n\n    reward_score_100 = clamp(\n        0.36 * reward_r\n        + 0.22 * reward_upside\n        + 0.14 * reward_space\n        + 0.18 * reward_catalyst\n        + 0.10 * trend_bonus,\n        0.0,\n        100.0,\n    )\n\n    funda_score = safe_float(r.get(\"Funda_Score\"), 50.0)\n    tech_prob = 50.0 + (8.0 if tech_action == \"BUY\" else (-8.0 if tech_action == \"SELL\" else 0.0)) + (tech_conf - 50.0) * 0.20\n    funda_prob = 0.7 * funda_score + 0.3 * (100.0 - funda_risk)\n    sentiment_prob = clamp(50.0 + symbol_news_impact * 4.0 + macro_impact * 1.5, 0.0, 100.0)\n\n    regime = str(r.get(\"AI_Regime_D1\") or \"\").upper().strip()\n    alignment = str(r.get(\"AI_Alignment\") or \"\").upper().strip()\n    regime_adj = 8.0 if regime == \"BULLISH\" else (-6.0 if regime == \"BEARISH\" else 0.0)\n    align_adj = 6.0 if alignment == \"WITH_BIAS\" else (-6.0 if alignment == \"AGAINST_BIAS\" else 0.0)\n\n    prob_score = clamp(\n        0.36 * tech_prob\n        + 0.34 * funda_prob\n        + 0.20 * sentiment_prob\n        + 0.10 * (50.0 + regime_adj + align_adj),\n        0.0,\n        100.0,\n    )\n\n    p_win = clamp(prob_score / 100.0, 0.05, 0.95)\n    ev_r = (p_win * max(0.0, r_multiple_capped)) - (1.0 - p_win)\n\n    risk_u = score_unit(risk_score_100)\n    reward_u = score_unit(reward_score_100)\n\n    data_quality_gate_ok = data_quality_score >= 60.0\n    earnings_gate_block = days_to_next_earnings is not None and days_to_next_earnings <= 7.0\n    liquidity_gate_block = liq_risk >= 85.0\n    invalid_options_state_gate = invalid_options_state\n\n    gates = []\n    if not data_quality_gate_ok:\n        gates.append(\"DATA_QUALITY_LOW\")\n    if earnings_gate_block:\n        gates.append(\"EARNINGS_IMMINENT\")\n    if liquidity_gate_block:\n        gates.append(\"LIQUIDITY_STRESS\")\n    if invalid_options_state_gate:\n        gates.append(\"INVALID_OPTIONS_STATE\")\n    if rr_outlier:\n        gates.append(\"RR_OUTLIER\")\n\n    matrix_rows.append(\n        {\n            \"symbol\": symbol,\n            \"name\": name,\n            \"sector\": sector,\n            \"entry_price\": entry,\n            \"stop_price\": stop,\n            \"tp_price\": tp,\n            \"reward_pct\": reward_pct,\n            \"risk_pct\": risk_pct_effective,\n            \"risk_pct_raw\": risk_pct_raw,\n            \"atr_stop_floor_pct\": atr_stop_floor_pct,\n            \"r_multiple_raw\": r_multiple_raw,\n            \"r_multiple\": r_multiple_capped,\n            \"rr_outlier\": rr_outlier,\n            \"risk_score_u\": risk_u,\n            \"reward_score_u\": reward_u,\n            \"prob_score\": prob_score,\n            \"prob_score_for_grade\": (0.85 * prob_score + 0.15 * data_quality_score),\n            \"p_win\": p_win,\n            \"ev_r\": ev_r,\n            \"data_quality_score\": data_quality_score,\n            \"days_to_next_earnings\": days_to_next_earnings,\n            \"days_since_last_earnings\": days_since_last_earnings,\n            \"spread_pct\": spread_pct,\n            \"slippage_proxy_pct\": slip_pct,\n            \"iv_atm\": iv_atm if iv_atm > 0 else None,\n            \"options_ok\": options_ok,\n            \"options_note\": (\"INVALID_OPTIONS_STATE\" if invalid_options_state else (options_error or options_warning or \"\")),\n            \"event_risk_score\": event_risk,\n            \"vol_risk_score\": vol_risk,\n            \"liquidity_risk_score\": liq_risk,\n            \"news_risk_score\": news_risk,\n            \"concentration_risk_score\": concentration_risk,\n            \"options_risk_score\": options_risk,\n            \"reward_component_r\": reward_r,\n            \"reward_component_upside\": reward_upside,\n            \"reward_component_space\": reward_space,\n            \"reward_component_catalyst\": reward_catalyst,\n            \"reward_component_trend\": trend_bonus,\n            \"symbol_news_impact_7d\": symbol_news_impact,\n            \"macro_impact_30d\": macro_impact,\n            \"last_tech_date\": fmt_date(r.get(\"Last_Tech_Date\")),\n            \"last_funda_date\": fmt_date(r.get(\"Last_Funda_Date\")),\n            \"last_news_date\": fmt_date(r.get(\"Last_News_Date\")),\n            \"yf_fetched_at\": fmt_date(r.get(\"YF_Fetched_At\")),\n            \"gate_summary\": \"|\".join(gates),\n            \"tech_action\": tech_action,\n            \"tech_confidence\": tech_conf,\n            \"funda_score\": funda_score,\n            \"funda_risk\": funda_risk,\n            \"funda_upside\": funda_upside,\n            \"recommendation\": str(r.get(\"Recommendation\") or \"\").strip(),\n            \"target_price\": target_price,\n            \"funda_horizon\": str(r.get(\"Funda_Horizon\") or \"\").strip(),\n            \"macro_themes\": str(r.get(\"Macro_Themes\") or \"\").strip(),\n        }\n    )\n\nif not matrix_rows:\n    return [{\"json\": {\"opportunity_brief\": \"Aucune valeur exploitable après normalisation.\"}}]\n\nrisk_thr = int(round(clamp(quantile([r[\"risk_score_u\"] for r in matrix_rows], 0.60, 50.0), 20.0, 85.0)))\nreward_thr = int(round(clamp(quantile([r[\"reward_score_u\"] for r in matrix_rows], 0.60, 50.0), 20.0, 85.0)))\ngrade_a_thr = quantile([r[\"prob_score_for_grade\"] for r in matrix_rows], 0.90, 75.0)\ngrade_b_thr = quantile([r[\"prob_score_for_grade\"] for r in matrix_rows], 0.50, 55.0)\n\nfor r in matrix_rows:\n    score_g = safe_float(r.get(\"prob_score_for_grade\"), 50.0)\n    grade = \"A\" if score_g >= grade_a_thr else (\"B\" if score_g >= grade_b_thr else \"C\")\n\n    if safe_float(r.get(\"data_quality_score\"), 50.0) < 45.0 and grade == \"A\":\n        grade = \"B\"\n    if safe_float(r.get(\"data_quality_score\"), 50.0) < 45.0 and grade == \"B\":\n        grade = \"C\"\n    if r.get(\"rr_outlier\") and grade == \"A\":\n        grade = \"B\"\n    if r.get(\"days_to_next_earnings\") is not None and safe_float(r.get(\"days_to_next_earnings\"), 99.0) <= 7.0 and grade == \"A\":\n        grade = \"B\"\n    if \"INVALID_OPTIONS_STATE\" in str(r.get(\"gate_summary\") or \"\"):\n        grade = \"C\" if grade == \"B\" else (\"B\" if grade == \"A\" else \"C\")\n\n    risk_u = safe_float(r.get(\"risk_score_u\"), 50.0)\n    reward_u = safe_float(r.get(\"reward_score_u\"), 50.0)\n    ev_r = safe_float(r.get(\"ev_r\"), 0.0)\n    data_quality = safe_float(r.get(\"data_quality_score\"), 50.0)\n\n    quality_block = data_quality < 60.0\n    earnings_block = r.get(\"days_to_next_earnings\") is not None and safe_float(r.get(\"days_to_next_earnings\"), 99.0) <= 7.0\n    liquidity_block = safe_float(r.get(\"liquidity_risk_score\"), 0.0) >= 85.0\n    invalid_options_state = \"INVALID_OPTIONS_STATE\" in str(r.get(\"gate_summary\") or \"\")\n    rr_outlier = bool(r.get(\"rr_outlier\"))\n\n    if risk_u <= risk_thr and reward_u >= reward_thr:\n        quadrant = \"Q1 - Priorite\"\n    elif risk_u > risk_thr and reward_u >= reward_thr:\n        quadrant = \"Q2 - Speculatif\"\n    elif risk_u <= risk_thr and reward_u < reward_thr:\n        quadrant = \"Q3 - Defensif\"\n    else:\n        quadrant = \"Q4 - Sortie\"\n\n    enter_core = (ev_r >= 0.20 and reward_u >= reward_thr and risk_u <= risk_thr and grade in (\"A\", \"B\"))\n    reduce_core = (\n        ev_r < 0.0\n        or (risk_u >= min(95.0, risk_thr + 18.0) and reward_u <= max(5.0, reward_thr - 12.0))\n        or (liquidity_block and ev_r < 0.15)\n    )\n\n    reasons = []\n    if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state):\n        action = \"Entrer / Renforcer\"\n        reasons.append(\"SETUP_OK\")\n    elif reduce_core:\n        action = \"Reduire / Sortir\"\n        reasons.append(\"RISK_REWARD_UNFAVORABLE\")\n    else:\n        action = \"Surveiller\"\n        reasons.append(\"WAIT_CONFIRMATION\")\n        if quality_block:\n            reasons.append(\"DATA_QUALITY_GATE\")\n        if earnings_block:\n            reasons.append(\"EARNINGS_GATE\")\n        if rr_outlier:\n            reasons.append(\"RR_OUTLIER_GATE\")\n        if invalid_options_state:\n            reasons.append(\"INVALID_OPTIONS_STATE_GATE\")\n\n    ev_component = clamp((ev_r / 1.5) * 100.0, 0.0, 100.0)\n    risk_component = clamp(100.0 - risk_u, 0.0, 100.0)\n    size_score = 0.55 * ev_component + 0.25 * risk_component + 0.20 * data_quality\n\n    if action == \"Entrer / Renforcer\":\n        size_pct = clamp(size_score, 10.0, 100.0)\n    elif action == \"Surveiller\":\n        size_pct = clamp(size_score * 0.50, 0.0, 50.0)\n    else:\n        size_pct = 0.0\n    if earnings_block:\n        size_pct = min(size_pct, 30.0)\n    if invalid_options_state:\n        size_pct = min(size_pct, 20.0)\n\n    r[\"setup_grade\"] = grade\n    r[\"quadrant\"] = quadrant\n    r[\"matrix_action\"] = action\n    r[\"action_reason\"] = \"|\".join(reasons)\n    r[\"size_reco_pct\"] = round(size_pct, 1)\n\narank = {\"Entrer / Renforcer\": 0, \"Surveiller\": 1, \"Reduire / Sortir\": 2}\nkrank = {\"A\": 0, \"B\": 1, \"C\": 2}\nmatrix_rows.sort(\n    key=lambda r: (\n        arank.get(r.get(\"matrix_action\"), 9),\n        krank.get(r.get(\"setup_grade\"), 9),\n        -safe_float(r.get(\"ev_r\"), 0.0),\n        -safe_float(r.get(\"reward_score_u\"), 0.0),\n        safe_float(r.get(\"risk_score_u\"), 50.0),\n    )\n)\n\ntotal = len(matrix_rows)\ncount_enter = sum(1 for r in matrix_rows if r.get(\"matrix_action\") == \"Entrer / Renforcer\")\ncount_watch = sum(1 for r in matrix_rows if r.get(\"matrix_action\") == \"Surveiller\")\ncount_exit = sum(1 for r in matrix_rows if r.get(\"matrix_action\") == \"Reduire / Sortir\")\ncount_grade_a = sum(1 for r in matrix_rows if r.get(\"setup_grade\") == \"A\")\ncount_rr_out = sum(1 for r in matrix_rows if r.get(\"rr_outlier\"))\ncount_dq_low = sum(1 for r in matrix_rows if safe_float(r.get(\"data_quality_score\"), 0.0) < 60.0)\n\navg_ev = sum(safe_float(r.get(\"ev_r\"), 0.0) for r in matrix_rows) / total if total else 0.0\navg_pwin = (sum(safe_float(r.get(\"p_win\"), 0.0) for r in matrix_rows) / total * 100.0) if total else 0.0\n\n\ndef fmt_row(r):\n    gates = r.get(\"gate_summary\") or \"OK\"\n    return (\n        f\"- {r['symbol']} ({r['name']}) [{r['sector']}] | {r['matrix_action']} | G{r['setup_grade']} | \"\n        f\"Risk {int(r['risk_score_u'])}/100 | Reward {int(r['reward_score_u'])}/100 | \"\n        f\"R {safe_float(r['r_multiple']):.2f} | EV {safe_float(r['ev_r']):.2f} | pWin {safe_float(r['p_win'])*100:.1f}% | \"\n        f\"DataQ {safe_float(r['data_quality_score']):.0f}/100 | size {safe_float(r['size_reco_pct']):.1f}% | \"\n        f\"E {safe_float(r['entry_price']):.2f} S {safe_float(r['stop_price']):.2f} TP {safe_float(r['tp_price']):.2f} | gates={gates}\"\n    )\n\n\nenter_rows = [r for r in matrix_rows if r.get(\"matrix_action\") == \"Entrer / Renforcer\"]\nwatch_rows = [r for r in matrix_rows if r.get(\"matrix_action\") == \"Surveiller\"]\nexit_rows = [r for r in matrix_rows if r.get(\"matrix_action\") == \"Reduire / Sortir\"]\n\nTOP_ENTER = 30\nTOP_WATCH = 30\nTOP_EXIT = 25\n\nbrief_lines = []\nbrief_lines.append(\"=== MATRICE AG2+AG3+AG4 (PREP AGENT #1) ===\")\nbrief_lines.append(f\"GeneratedAt UTC: {datetime.now(timezone.utc).isoformat()}\")\nbrief_lines.append(\"\")\nbrief_lines.append(\"Legende:\")\nbrief_lines.append(\"- Risk (0-100): plus haut = plus risque.\")\nbrief_lines.append(\"- Reward (0-100): plus haut = potentiel plus attractif.\")\nbrief_lines.append(\"- R = Reward/Risk cape a 6 pour eviter les faux extremes.\")\nbrief_lines.append(\"- EV(R) = pWin*R - (1-pWin).\")\nbrief_lines.append(\"- Gates: DATA_QUALITY_LOW / EARNINGS_IMMINENT / LIQUIDITY_STRESS / RR_OUTLIER / INVALID_OPTIONS_STATE.\")\nbrief_lines.append(\"\")\nbrief_lines.append(\n    f\"Seuils dynamiques: Risk p60={risk_thr}, Reward p60={reward_thr}. \"\n    f\"Grades quantiles: A>={grade_a_thr:.1f}, B>={grade_b_thr:.1f}, sinon C.\"\n)\nbrief_lines.append(\n    f\"Univers={total} | Entrer={count_enter} | Surveiller={count_watch} | Reduire/Sortir={count_exit} | \"\n    f\"GradeA={count_grade_a} | RR_outliers={count_rr_out} | DataQ<60={count_dq_low}\"\n)\nbrief_lines.append(f\"EV(R) moyen={avg_ev:.2f} | Prob.win moyenne={avg_pwin:.1f}%\")\nbrief_lines.append(\"\")\nbrief_lines.append(\"Lecture des quadrants:\")\nbrief_lines.append(f\"- Q1 Priorite: Risk <= {risk_thr} et Reward >= {reward_thr} -> zone prioritaire (si gates ouverts).\")\nbrief_lines.append(f\"- Q2 Speculatif: Risk > {risk_thr} et Reward >= {reward_thr} -> execution selective, taille reduite.\")\nbrief_lines.append(f\"- Q3 Defensif: Risk <= {risk_thr} et Reward < {reward_thr} -> conservation / surveillance.\")\nbrief_lines.append(f\"- Q4 Sortie: Risk > {risk_thr} et Reward < {reward_thr} -> derisquage prioritaire.\")\nbrief_lines.append(\"\")\nbrief_lines.append(f\"TOP {TOP_ENTER} Entrer / Renforcer:\")\nbrief_lines.extend([fmt_row(r) for r in enter_rows[:TOP_ENTER]] or [\"- (aucun candidat)\"])\nbrief_lines.append(\"\")\nbrief_lines.append(f\"TOP {TOP_WATCH} Surveiller:\")\nbrief_lines.extend([fmt_row(r) for r in watch_rows[:TOP_WATCH]] or [\"- (aucun)\"])\nbrief_lines.append(\"\")\nbrief_lines.append(f\"TOP {TOP_EXIT} Reduire / Sortir:\")\nbrief_lines.extend([fmt_row(r) for r in exit_rows[:TOP_EXIT]] or [\"- (aucun)\"])\nbrief_lines.append(\"\")\nbrief_lines.append(\"Regles d'usage pour Agent #1:\")\nbrief_lines.append(\"- Ne proposer OPEN/INCREASE que sur Entrer/Renforcer sans gate bloquant.\")\nbrief_lines.append(\"- Si EARNINGS_IMMINENT ou INVALID_OPTIONS_STATE: privilegier WATCH/HOLD ou taille reduite.\")\nbrief_lines.append(\"- Si RR_OUTLIER: considerer setup non fiable tant que stop/target non recalibres.\")\n\nbrief = \"\\n\".join(brief_lines)\n\nstats = {\n    \"universe\": total,\n    \"enter_count\": count_enter,\n    \"watch_count\": count_watch,\n    \"exit_count\": count_exit,\n    \"grade_a\": count_grade_a,\n    \"rr_outliers\": count_rr_out,\n    \"data_quality_lt_60\": count_dq_low,\n    \"avg_ev_r\": round(avg_ev, 4),\n    \"avg_pwin_pct\": round(avg_pwin, 2),\n}\nthresholds = {\n    \"risk_p60\": risk_thr,\n    \"reward_p60\": reward_thr,\n    \"grade_a_min\": round(grade_a_thr, 3),\n    \"grade_b_min\": round(grade_b_thr, 3),\n}\n\npack_rows = []\nfor r in matrix_rows[:200]:\n    pack_rows.append(\n        {\n            \"symbol\": r[\"symbol\"],\n            \"name\": r[\"name\"],\n            \"sector\": r[\"sector\"],\n            \"decision\": r[\"matrix_action\"],\n            \"grade\": r[\"setup_grade\"],\n            \"risk\": int(r[\"risk_score_u\"]),\n            \"reward\": int(r[\"reward_score_u\"]),\n            \"r\": round(safe_float(r[\"r_multiple\"]), 4),\n            \"ev_r\": round(safe_float(r[\"ev_r\"]), 4),\n            \"p_win_pct\": round(safe_float(r[\"p_win\"]) * 100.0, 2),\n            \"data_quality\": round(safe_float(r[\"data_quality_score\"]), 2),\n            \"size_reco_pct\": round(safe_float(r[\"size_reco_pct\"]), 2),\n            \"gates\": r.get(\"gate_summary\") or \"OK\",\n            \"entry\": round(safe_float(r[\"entry_price\"]), 4),\n            \"stop\": round(safe_float(r[\"stop_price\"]), 4),\n            \"tp\": round(safe_float(r[\"tp_price\"]), 4),\n            \"days_to_next_earnings\": r.get(\"days_to_next_earnings\"),\n            \"iv_atm\": r.get(\"iv_atm\"),\n            \"spread_pct\": round(safe_float(r.get(\"spread_pct\"), 0.0), 4),\n            \"macro_themes\": r.get(\"macro_themes\") or \"\",\n            \"action_reason\": r.get(\"action_reason\") or \"\",\n        }\n    )\n\nopportunity_pack = {\n    \"generatedAt\": datetime.now(timezone.utc).isoformat(),\n    \"stats\": stats,\n    \"thresholds\": thresholds,\n    \"rows\": pack_rows,\n}\n\nreturn [\n    {\n        \"json\": {\n            \"opportunity_brief\": brief,\n            \"opportunity_pack\": opportunity_pack,\n            \"opportunity_stats\": stats,\n            \"matrix_thresholds\": thresholds,\n        }\n    }\n]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1600,
+        12176
+      ],
+      "id": "6c6eaf35-cb7c-4300-9588-17b4c0df3ec3",
+      "name": "Calcul Matrice & Briefing"
+    },
+    {
+      "parameters": {
+        "numberInputs": 4
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2064,
+        11680
+      ],
+      "id": "38b971ce-7627-4b08-bc89-70a51ac5916d",
+      "name": "Merge7"
+    },
+    {
+      "parameters": {
+        "jsCode": "// AG1.00 - Assemble Input Packs (clean + matrix pack support)\n// Mode: Run Once for All Items\n\nconst incoming = $input.all();\n\nconst out = {\n  run: null,\n  portfolioBrief: null,\n  sector_brief: \"\",\n  opportunity_brief: \"\",\n  opportunity_pack: null,\n  opportunity_stats: null,\n  matrix_thresholds: null,\n};\n\nfunction pickText(obj, keys) {\n  for (const k of keys) {\n    if (obj && typeof obj[k] === \"string\" && obj[k].trim()) return obj[k].trim();\n  }\n  return \"\";\n}\n\nfunction pickObject(obj, keys) {\n  for (const k of keys) {\n    if (obj && typeof obj[k] === \"object\" && obj[k] !== null) return obj[k];\n  }\n  return null;\n}\n\nfor (const it of incoming) {\n  const j = it.json || {};\n\n  if (!out.run) out.run = pickObject(j, [\"run\", \"Run\", \"decisionMeta\", \"meta\"]);\n  if (!out.portfolioBrief) out.portfolioBrief = pickObject(j, [\"portfolioBrief\", \"PortfolioBrief\"]);\n\n  if (!out.sector_brief) {\n    out.sector_brief = pickText(j, [\"sector_brief\", \"sectorBrief\", \"sector\", \"sector_momentum\"]);\n  }\n  if (!out.opportunity_brief) {\n    out.opportunity_brief = pickText(j, [\"opportunity_brief\", \"opportunityBrief\", \"opportunity\", \"matrix\"]);\n  }\n\n  if (!out.opportunity_pack && j && typeof j.opportunity_pack === \"object\") {\n    out.opportunity_pack = j.opportunity_pack;\n  }\n  if (!out.opportunity_stats && j && typeof j.opportunity_stats === \"object\") {\n    out.opportunity_stats = j.opportunity_stats;\n  }\n  if (!out.matrix_thresholds && j && typeof j.matrix_thresholds === \"object\") {\n    out.matrix_thresholds = j.matrix_thresholds;\n  }\n\n  if (!out.sector_brief) {\n    out.sector_brief = pickText(j, [\"text\", \"brief\", \"output\"]);\n  }\n  if (!out.opportunity_brief) {\n    out.opportunity_brief = pickText(j, [\"text\", \"brief\", \"output\"]);\n  }\n}\n\nif (!out.run) out.run = {};\nif (!out.portfolioBrief) out.portfolioBrief = {};\nif (!out.sector_brief) out.sector_brief = \"\";\nif (!out.opportunity_brief) out.opportunity_brief = \"\";\nif (!out.opportunity_pack && out.opportunity_brief) {\n  out.opportunity_pack = {\n    generatedAt: new Date().toISOString(),\n    rows: [],\n    stats: out.opportunity_stats || {},\n    thresholds: out.matrix_thresholds || {},\n  };\n}\n\nout.__debug = {\n  incomingItems: incoming.length,\n  has_run: !!Object.keys(out.run).length,\n  has_portfolioBrief: !!Object.keys(out.portfolioBrief).length,\n  has_sector_brief: !!out.sector_brief,\n  has_opportunity_brief: !!out.opportunity_brief,\n  has_opportunity_pack: !!out.opportunity_pack,\n};\n\nreturn [{ json: out }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        11712
+      ],
+      "id": "aecdb9d1-a8c7-4958-82cd-6e8b30f5a54a",
+      "name": "AG1.00 — Assemble Input Packs"
+    },
+    {
+      "parameters": {
+        "content": "## Préparation pack de brief : Matrice Risk/Reward",
+        "height": 256,
+        "width": 896
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        12112
+      ],
+      "id": "d121347c-0a4d-4a69-b4a1-540dd5a3ce7b",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import importlib.util\nimport os\nimport sys\nimport traceback\nfrom pathlib import Path\n\nDEFAULT_DB_PATH = os.getenv(\"AG1_DUCKDB_PATH\", \"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\")\nDEFAULT_WRITER_PATH = os.getenv(\n    \"AG1_DUCKDB_WRITER_PATH\",\n    \"/files/AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py\",\n)\nDEFAULT_SCHEMA_PATH = os.getenv(\n    \"AG1_LEDGER_SCHEMA_PATH\",\n    \"/files/AG1-V2-EXPORT/sql/portfolio_ledger_schema_v2.sql\",\n)\nSCHEMA_ENV = \"AG1_LEDGER_SCHEMA_PATH\"\n\ndef _resolve_schema_path():\n    schema_path = os.getenv(SCHEMA_ENV, \"\").strip()\n    if schema_path and Path(schema_path).is_file():\n        return schema_path\n\n    default_schema = Path(DEFAULT_SCHEMA_PATH)\n    if default_schema.is_file():\n        schema_path = str(default_schema)\n        os.environ[SCHEMA_ENV] = schema_path\n        return schema_path\n\n    return \"\"\n\ndef _load_writer_module(writer_path_text):\n    writer_path = Path(writer_path_text)\n    if not writer_path.is_file():\n        raise FileNotFoundError(\n            \"duckdb_writer.py not found at \"\n            f\"'{writer_path}'. \"\n            \"Mount AG1-V2-EXPORT in the runner and set AG1_DUCKDB_WRITER_PATH.\"\n        )\n\n    spec = importlib.util.spec_from_file_location(\"ag1_duckdb_writer\", str(writer_path))\n    if spec is None or spec.loader is None:\n        raise RuntimeError(f\"Cannot load module spec for '{writer_path}'.\")\n\n    module = importlib.util.module_from_spec(spec)\n    \n    # On enregistre le module pour que @dataclass fonctionne\n    sys.modules[\"ag1_duckdb_writer\"] = module\n    spec.loader.exec_module(module)\n\n    # --- LA CORRECTION EST ICI ---\n    # Nous avons totalement supprimé la vérification agressive qui fâchait n8n.\n    # On retourne le module directement. Python se chargera du reste !\n    # -----------------------------\n\n    return module, str(writer_path)\n\ntry:\n    items = _items or []\n    if not items:\n        return []\n\n    first_json = items[0].get(\"json\", {}) if isinstance(items[0], dict) else {}\n    writer_path = str(first_json.get(\"duckdb_writer_path\") or DEFAULT_WRITER_PATH).strip()\n    if not writer_path:\n        raise ValueError(\"AG1_DUCKDB_WRITER_PATH is empty.\")\n\n    schema_path = _resolve_schema_path()\n    writer, writer_path = _load_writer_module(writer_path)\n\n    out = []\n    for idx, it in enumerate(items, start=1):\n        incoming = it.get(\"json\", {}) if isinstance(it, dict) else {}\n        j = dict(incoming or {})\n\n        bundle = j.get(\"bundle\")\n        if not isinstance(bundle, dict):\n            bundle = j\n\n        db_path = str(j.get(\"db_path\") or DEFAULT_DB_PATH).strip()\n        if not db_path:\n            raise ValueError(\"Missing db_path and AG1_DUCKDB_PATH is empty.\")\n\n        # Appels directs aux fonctions (parfaitement autorisés par n8n)\n        init_res = writer.init_schema(db_path)\n        upsert_res = writer.upsert_run_bundle(db_path, bundle)\n\n        run_id = \"\"\n        if isinstance(upsert_res, dict):\n            run_id = str(upsert_res.get(\"run_id\") or \"\").strip()\n        if not run_id and isinstance(bundle, dict):\n            run_id = str((bundle.get(\"run\") or {}).get(\"run_id\") or \"\").strip()\n\n        snap_res = writer.compute_snapshots(db_path, run_id) if run_id else {}\n\n        out.append(\n            {\n                \"json\": {\n                    \"ok\": True,\n                    \"index\": idx,\n                    \"db_path\": db_path,\n                    \"writer_path\": writer_path,\n                    \"schema_path\": schema_path or os.getenv(SCHEMA_ENV, \"\"),\n                    \"run_id\": run_id,\n                    \"init\": init_res,\n                    \"upsert\": upsert_res,\n                    \"snapshots\": snap_res,\n                    \"bundle_summary\": j.get(\"summary\") or {},\n                },\n                \"pairedItem\": it.get(\"pairedItem\"),\n            }\n        )\n\n    return out\n\nexcept Exception as e:\n    return [{\n        \"json\": {\n            \"status\": \"FATAL_ERROR\",\n            \"error_message\": str(e),\n            \"traceback\": traceback.format_exc()\n        }\n    }]"
+      },
+      "id": "280869c6-b44f-4596-a38f-f68e8af9ea0a",
+      "name": "9 - Upsert Run Bundle (DuckDB)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5024,
+        11584
+      ]
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nfrom datetime import datetime, timezone\nimport duckdb\n\ndef utc_now_iso():\n    return datetime.now(timezone.utc).isoformat()\n\nitems = _items or []\nif not items:\n    return []\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n\n    # --- LE NOUVEAU DÉTECTEUR ---\n    # Si le Noeud 9 a échoué, on affiche SA vraie erreur et on s'arrête\n    if j.get(\"status\") == \"FATAL_ERROR\":\n        err_msg = j.get(\"error_message\", \"Erreur inconnue\")\n        trace = j.get(\"traceback\", \"\")\n        raise RuntimeError(f\"🔥 LE NOEUD 9 A ÉCHOUÉ :\\nErreur: {err_msg}\\nTrace:\\n{trace}\")\n    # ----------------------------\n\n    run_id = str(j.get(\"run_id\") or \"\").strip()\n    db_path = str(j.get(\"db_path\") or \"\").strip()\n    if not run_id:\n        raise ValueError(\"Post-Run Health: missing run_id\")\n    if not db_path:\n        raise ValueError(\"Post-Run Health: missing db_path\")\n\n    con = duckdb.connect(db_path)\n    try:\n        portfolio_row = con.execute(\n            \"\"\"\n            SELECT\n              COUNT(*) AS cnt,\n              COALESCE(MAX(CAST(equity_eur AS DOUBLE)), 0) AS equity_eur\n            FROM core.portfolio_snapshot\n            WHERE run_id = ?\n            \"\"\",\n            [run_id],\n        ).fetchone()\n        positions_row = con.execute(\n            \"SELECT COUNT(*) FROM core.positions_snapshot WHERE run_id = ?\",\n            [run_id],\n        ).fetchone()\n\n        portfolio_cnt = int(portfolio_row[0] or 0)\n        equity_eur = float(portfolio_row[1] or 0.0)\n        positions_cnt = int(positions_row[0] or 0)\n\n        health_ok = portfolio_cnt > 0 and (positions_cnt > 0 or equity_eur <= 0.0)\n        checks = {\n            \"portfolio_snapshot_count\": portfolio_cnt,\n            \"positions_snapshot_count\": positions_cnt,\n            \"equity_eur\": equity_eur,\n            \"rule\": \"portfolio must exist; positions may be empty only if equity is zero\",\n        }\n\n        if not health_ok:\n            alert_id = f\"ALT|{run_id}|POST_HEALTH\"\n            payload = json.dumps(checks, ensure_ascii=False)\n            ts = utc_now_iso()\n            con.execute(\n                \"\"\"\n                INSERT INTO core.alerts (\n                  alert_id, run_id, ts, severity, category, symbol, message, code, payload_json\n                )\n                VALUES (?, ?, ?, 'CRITICAL', 'SYSTEM', 'GLOBAL', ?, 'POST_RUN_HEALTH_FAIL', ?)\n                ON CONFLICT (alert_id) DO UPDATE SET\n                  ts = excluded.ts,\n                  message = excluded.message,\n                  payload_json = excluded.payload_json\n                \"\"\",\n                [\n                    alert_id,\n                    run_id,\n                    ts,\n                    \"Post-run health check failed: missing portfolio/positions snapshot for run\",\n                    payload,\n                ],\n            )\n\n        out.append(\n            {\n                \"json\": {\n                    \"run_id\": run_id,\n                    \"db_path\": db_path,\n                    \"health_ok\": health_ok,\n                    \"checks\": checks,\n                    \"writer\": j.get(\"writer_path\"),\n                    \"upsert\": j.get(\"upsert\"),\n                    \"snapshots\": j.get(\"snapshots\"),\n                },\n                \"pairedItem\": it.get(\"pairedItem\"),\n            }\n        )\n    finally:\n        try:\n            con.close()\n        except Exception:\n            pass\n\nreturn out"
+      },
+      "id": "4a46de80-f4bd-4162-856b-1f44504db279",
+      "name": "10 - Post-Run Health (DuckDB)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5216,
+        11584
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- SEED PORTFOLIO : MIGRATION HISTORIQUE COMPLETE ---\n\nconst run_id = \"RUN_MIGRATION_FULL_001\";\nconst now_ts = new Date().toISOString();\n\n// L'historique complet déduit de vos logs\nconst history = [\n  // Initialisation (les achats d'origine avant le 17 janvier)\n  { ts: \"2026-01-15T12:00:00.000Z\", sym: \"AI.PA\", side: \"BUY\", qty: 5, price: 170.00 },\n  { ts: \"2026-01-15T12:00:00.000Z\", sym: \"BNP.PA\", side: \"BUY\", qty: 20, price: 58.00 },\n  { ts: \"2026-01-15T12:00:00.000Z\", sym: \"OR.PA\", side: \"BUY\", qty: 3, price: 430.00 },\n  { ts: \"2026-01-15T12:00:00.000Z\", sym: \"MC.PA\", side: \"BUY\", qty: 1, price: 700.00 },\n  \n  // Vos logs de transactions exacts\n  { ts: \"2026-01-17T06:25:44.184Z\", sym: \"VIE.PA\", side: \"BUY\", qty: 67, price: 29.82 },\n  { ts: \"2026-01-17T10:32:54.801Z\", sym: \"OR.PA\", side: \"SELL\", qty: 2, price: 384.35 },\n  { ts: \"2026-01-17T10:32:54.801Z\", sym: \"BNP.PA\", side: \"SELL\", qty: 9, price: 86.82 },\n  { ts: \"2026-01-17T11:29:28.565Z\", sym: \"AMUN.PA\", side: \"BUY\", qty: 13, price: 75.05 },\n  { ts: \"2026-01-17T11:29:28.565Z\", sym: \"ALO.PA\", side: \"BUY\", qty: 19, price: 26.08 },\n  { ts: \"2026-01-19T21:06:03.771Z\", sym: \"BNP.PA\", side: \"BUY\", qty: 12, price: 86.82 },\n  { ts: \"2026-01-19T21:06:03.771Z\", sym: \"AMUN.PA\", side: \"BUY\", qty: 7, price: 75.05 },\n  { ts: \"2026-01-23T13:05:52.746Z\", sym: \"ELIOR.PA\", side: \"BUY\", qty: 172, price: 2.89 },\n  { ts: \"2026-01-28T13:05:14.145Z\", sym: \"ACA.PA\", side: \"BUY\", qty: 193, price: 18.20 },\n  { ts: \"2026-02-01T13:05:05.798Z\", sym: \"ACA.PA\", side: \"BUY\", qty: 84, price: 18.21 },\n  { ts: \"2026-02-03T13:05:51.706Z\", sym: \"ACA.PA\", side: \"BUY\", qty: 100, price: 18.82 },\n  { ts: \"2026-02-03T13:05:51.706Z\", sym: \"TTE.PA\", side: \"BUY\", qty: 86, price: 58.53 },\n  { ts: \"2026-02-04T13:05:33.160Z\", sym: \"AMUN.PA\", side: \"BUY\", qty: 18, price: 80.40 },\n  { ts: \"2026-02-05T13:06:41.075Z\", sym: \"ACA.PA\", side: \"BUY\", qty: 71, price: 18.19 },\n  { ts: \"2026-02-05T13:06:41.075Z\", sym: \"TTE.PA\", side: \"BUY\", qty: 43, price: 63.02 },\n  { ts: \"2026-02-08T13:05:50.704Z\", sym: \"AMUN.PA\", side: \"BUY\", qty: 12, price: 80.50 },\n  { ts: \"2026-02-08T13:05:50.704Z\", sym: \"ACA.PA\", side: \"BUY\", qty: 57, price: 18.19 },\n  { ts: \"2026-02-14T13:04:39.082Z\", sym: \"ACA.PA\", side: \"SELL\", qty: 92, price: 17.78 },\n  { ts: \"2026-02-15T13:05:06.067Z\", sym: \"MC.PA\", side: \"SELL\", qty: 1, price: 513.50 },\n  { ts: \"2026-02-15T13:05:06.067Z\", sym: \"ELIOR.PA\", side: \"SELL\", qty: 172, price: 2.68 },\n  { ts: \"2026-02-15T13:05:06.067Z\", sym: \"ACA.PA\", side: \"SELL\", qty: 128, price: 17.78 },\n  { ts: \"2026-02-15T13:05:06.067Z\", sym: \"AMUN.PA\", side: \"SELL\", qty: 17, price: 75.85 }\n];\n\nconst fills = [];\nconst cash_ledger = [];\nconst orders = [];\n\n// 1. Dépôt Initial de 50 000 € au 1er Janvier\ncash_ledger.push({\n  cash_tx_id: \"TX_SEED_DEPOSIT\",\n  run_id: run_id,\n  ts: \"2026-01-01T00:00:00.000Z\",\n  currency: \"EUR\",\n  amount: 50000.0,\n  type: \"DEPOSIT\",\n  symbol: null,\n  ref_id: null,\n  notes: \"Dépôt initial du capital\"\n});\n\n// 2. Traitement de l'historique\nlet idx = 1;\nfor (const h of history) {\n  const order_id = `ORD_HIST_${idx}`;\n  const fill_id = `FIL_HIST_${idx}`;\n  const notional = h.qty * h.price;\n  \n  // Si Achat -> impact cash négatif. Si Vente -> impact cash positif\n  const cashImpact = h.side === \"BUY\" ? -notional : notional;\n\n  orders.push({\n    order_id: order_id,\n    run_id: run_id,\n    ts_created: h.ts,\n    symbol: h.sym,\n    side: h.side,\n    intent: h.side === \"BUY\" ? \"OPEN\" : \"CLOSE\",\n    order_type: \"MARKET\",\n    qty: h.qty,\n    status: \"FILLED\",\n    broker: \"MIGRATION\",\n    reason: \"Importation historique complète\"\n  });\n\n  fills.push({\n    fill_id: fill_id,\n    order_id: order_id,\n    run_id: run_id,\n    ts_fill: h.ts,\n    qty: h.qty,\n    price: h.price,\n    fees_eur: 0,\n    raw_fill_json: { mode: \"MIGRATION\" }\n  });\n\n  cash_ledger.push({\n    cash_tx_id: `TX_HIST_${idx}`,\n    run_id: run_id,\n    ts: h.ts,\n    currency: \"EUR\",\n    amount: cashImpact,\n    type: \"TRADE_NOTIONAL\",\n    symbol: h.sym,\n    ref_id: fill_id,\n    notes: `${h.side} historique ${h.qty} ${h.sym} @ ${h.price}€`\n  });\n\n  idx++;\n}\n\n// 3. Derniers prix de marché pour le snapshot final\nconst market_prices = [\n  { ts: now_ts, symbol: \"TTE.PA\", close: 65.51, source: \"migration\" },\n  { ts: now_ts, symbol: \"ACA.PA\", close: 18.56, source: \"migration\" },\n  { ts: now_ts, symbol: \"AMUN.PA\", close: 79.05, source: \"migration\" },\n  { ts: now_ts, symbol: \"VIE.PA\", close: 34.48, source: \"migration\" },\n  { ts: now_ts, symbol: \"BNP.PA\", close: 94.55, source: \"migration\" },\n  { ts: now_ts, symbol: \"ALO.PA\", close: 29.95, source: \"migration\" },\n  { ts: now_ts, symbol: \"OR.PA\", close: 398.65, source: \"migration\" },\n  { ts: now_ts, symbol: \"AI.PA\", close: 174.78, source: \"migration\" }\n];\n\n// Construction du Bundle\nconst bundle = {\n  run: {\n    run_id: run_id,\n    ts_start: now_ts,\n    ts_end: now_ts,\n    tz: \"Europe/Paris\",\n    decision_summary: \"MIGRATION_HISTORIQUE\",\n    model: \"migration\"\n  },\n  orders: orders,\n  fills: fills,\n  cash_ledger: cash_ledger,\n  market_prices: market_prices\n};\n\nreturn [{\n  json: {\n    db_path: \"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\",\n    bundle: bundle,\n    summary: { commentary: \"Importation historique complète\" }\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4704,
+        11216
+      ],
+      "id": "2e7a10b5-f1ad-45d5-a57e-e93d3b15a2f4",
+      "name": "0 - SEED Portfolio"
+    },
+    {
+      "parameters": {
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "financial_news_v3_clean",
+          "mode": "list",
+          "cachedResultName": "financial_news_v3_clean"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "position": [
+        2640,
+        11792
+      ],
+      "id": "5b4629a6-642d-4c5b-b86d-69a8633600a0",
+      "name": "Qdrant Vector Store3",
+      "credentials": {
+        "qdrantApi": {
+          "id": "q1CRmg2N6AmW6pC1",
+          "name": "QdrantApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        2928,
+        11792
+      ],
+      "id": "fc96f7d1-e853-47fa-98bd-0afd871fd745",
+      "name": "OpenAI Chat Model4",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "fundamental_analysis",
+          "mode": "list",
+          "cachedResultName": "fundamental_analysis"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "position": [
+        3056,
+        11792
+      ],
+      "id": "c8f78150-1ddb-455a-a9d3-52754d8c20bc",
+      "name": "Qdrant Vector Store4",
+      "credentials": {
+        "qdrantApi": {
+          "id": "q1CRmg2N6AmW6pC1",
+          "name": "QdrantApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        3344,
+        11792
+      ],
+      "id": "b802ce41-890e-4b39-8199-494dc7e8d40c",
+      "name": "OpenAI Chat Model5",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "qdrantCollection": {
+          "__rl": true,
+          "value": "financial_tech_v1",
+          "mode": "list",
+          "cachedResultName": "financial_tech_v1"
+        },
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
+      "typeVersion": 1.3,
+      "position": [
+        3472,
+        11792
+      ],
+      "id": "130f94b9-5095-47cc-a2ff-8f481f6eb113",
+      "name": "Qdrant Vector Store5",
+      "credentials": {
+        "qdrantApi": {
+          "id": "q1CRmg2N6AmW6pC1",
+          "name": "QdrantApi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        3744,
+        11792
+      ],
+      "id": "0ea12fa6-15c5-411c-b2f7-5cca1780b5c4",
+      "name": "OpenAI Chat Model6",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "description": "Recherche RAG dans la base ‘financial_news_v3_clean’ pour retrouver des news récentes liées à un symbole (résultats datés, avec source + url). À utiliser quand les news du brainPack sont manquantes/insuffisantes, pour identifier catalyseurs, risques, événements corporate (résultats, guidance, M&A, litiges, régulation) et vérifier l’absence de news adverse avant OPEN/INCREASE.\n\nINPUT SCHEMA (MANDATORY): { \"input\": \"<SYMBOL> | <Name> | <keywords>\" }\n\nEXAMPLES :\n{ \"input\": \"AI.PA | AIR LIQUIDE | High Impact negative news scandal fraud profit warning downgrade last 7 days\" }\n\n{ \"input\": \"AI.PA | AIR LIQUIDE | High Impact positive news earnings merger acquisition contract upgrade\" }",
+        "topK": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolVectorStore",
+      "typeVersion": 1.1,
+      "position": [
+        2848,
+        11600
+      ],
+      "id": "cf54eb5a-242f-4247-9687-0705d9250f16",
+      "name": "get_specific_news1"
+    },
+    {
+      "parameters": {
+        "description": "Retrieves the full fundamental research report for a specific stock symbol.\nIncludes:\n1. Buy-Side Analysis: Executive Summary, Investment Thesis, Valuation Models, and Key Risks.\n2. Quantitative Scores: Composite score and confidence level.\n3. Sell-Side Consensus: Analyst targets, ratings, and detailed opinions.\n\nUSE THIS TOOL WHEN:\n- You are considering a BUY order on a stock and need to validate the thesis (Due Diligence).\n- You need to investigate a specific risk mentioned in the daily summary.\n- There is a contradiction between Technical signals and Fundamental scores.\n\nINPUT SCHEMA (MANDATORY): { \"input\": \"<SYMBOL> |  <Name> | <keywords>\" }\n\nEXAMPLES:\n { \"input\": \"AI.PA | AIR LIQUIDE | Detailed Trading Scenarios Matrix best entry plan stop loss score\" }\n\n{ \"input\": \"AI.PA | AIR LIQUIDE  | Market Consensus Verdict target price upside analyst coverage\" }\n\n{ \"input\": \"AI.PA | AIR LIQUIDE| Valuation Analysis Bear case downside risks invalidation\" }",
+        "topK": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolVectorStore",
+      "typeVersion": 1.1,
+      "position": [
+        3184,
+        11600
+      ],
+      "id": "ce19d7f2-2712-4d7b-8899-f060a21467b3",
+      "name": "get_fundamental_details1"
+    },
+    {
+      "parameters": {
+        "description": "Outil indispensable pour consulter l'ANALYSE TECHNIQUE récente d'une action avant toute décision.\nRetourne : Supports, Résistances, Tendance (H1/D1), RSI, Moyennes Mobiles et Signaux techniques.\nÀ utiliser pour valider le timing d'entrée/sortie et vérifier qu'on ne trade pas contre une résistance majeure.\n\nINPUT SCHEMA (MANDATORY): { \"input\": \"<SYMBOL> |  <Name> | <keywords>\" }\n\nEXAMPLEs : \n{ \"input\": \"AI.PA | AIR LIQUIDE | Validation Verdict Agent decision quality score reasoning\" }\n\n{ \"input\": \"AI.PA | AIR LIQUIDE | Technical Signals key levels support resistance invalidation\" }",
+        "topK": 10
+      },
+      "type": "@n8n/n8n-nodes-langchain.toolVectorStore",
+      "typeVersion": 1.1,
+      "position": [
+        3504,
+        11600
+      ],
+      "id": "bd586bd9-ad7c-4499-a42c-bf7c1807eb8a",
+      "name": "get_technical_details1"
+    },
+    {
+      "parameters": {
+        "options": {
+          "dimensions": 1536,
+          "batchSize": 512,
+          "stripNewLines": true,
+          "encodingFormat": "float"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        2640,
+        11984
+      ],
+      "id": "f0c197d0-0354-43c0-aaf0-10af7c5e6a0b",
+      "name": "Embeddings OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "==Tu dois produire UNIQUEMENT un JSON conforme AU SCHÉMA imposé (decisionMeta, portfolioPlan, actions, riskNotes, dataCaveats, backfillRequests). Aucune clé supplémentaire.\n\nCONTEXTE D'EXÉCUTION\n- run_id: {{ $json.run.runId || null }}\n- generatedAt: {{ $now.toISO() }}\n- strategy_version: {{ $json.run.strategyVersion || null }}\n- config_version: {{ $json.run.configVersion || null }}\n- model: {{ $json.run.model || \"\" }}\n\nLÉGENDE\nPM = Pass_PM (pré-filtre PM). YES = candidat actionnable; NO = à ignorer sauf exception.\nD1 = Daily; H1 = Hourly; conf = confiance (0/25/50/75%)\n\nMARKET CONTEXT (Momentum sectoriel basé sur news 20 derniers jours)\n<MARKET_CONTEXT>\n{{ $json.sector_brief }}\n\nANALYSE REQUISE\n1) Identifie le régime de marché actuel (Risk-On, Risk-Off, Rotation, Neutral).\n2) Note la divergence Leaders vs Laggards.\n3) Propose une allocation tactique :\n   - Secteurs à SURPONDÉRER (Overweight)\n   - Secteurs à SOUSPONDÉRER / Éviter (Underweight)\n\nCONFIG / CONTRAINTES (si disponible)\n{{ JSON.stringify($json.config || {}, null, 2) }}\n\nDONNÉES STRUCTURÉES (PRIORITAIRES -> elles font foi vs texte)\nPORTFOLIO_POSITIONS_JSON:\n{{ $json.portfolioBrief.agentBriefingText }}\n\nPACK MULTI-AGENTS (AG2+AG3+AG4)\n{{ $json.opportunity_brief }}\n\nRÈGLES PRIX (ANTI-FAUX MANQUANTS)\n- Pour un symbole issu de la MATRICE : utiliser la valeur \"E\" (Entry) indiquée pour cette action comme prix proxy.\n- Pour un symbole déjà en portefeuille : utiliser portfolioBrief.positions[].price comme prix proxy.\n- Pour un symbole présent dans les topsignals techniques : utiliser lastClose comme prix proxy.\n- Sinon : dependencies.needPrice=true + backfill PRICE.\n- Ne pas écrire \"Absence de prix\" si un proxy (\"E\" ou autre) existe.\n\nMISSION\nA) Remplir decisionMeta (avec inputSnapshot si présent ; sinon null).\nB) Construire portfolioPlan (targetExposure, maxPositions, rebalance, constraints) en appliquant config si présente, sinon defaults prudents.\nC) Produire actions[] actionnables :\n- action ∈ {OPEN, INCREASE, DECREASE, CLOSE, HOLD, WATCH}\n- priority 1..3\n- confidence 0..100 ou null\n- horizonDays: entier ou null\n- targetQty (quantité actions) : OBLIGATOIRE pour toute action OPEN|INCREASE|DECREASE|CLOSE\n  - Pour CLOSE : targetQty = 0 obligatoire\n  - Si tu ne peux pas justifier une quantité (prix/cash/données insuffisantes) => l'action doit être WATCH ou HOLD et targetQty=null\n- targetWeightPct: optionnel si cohérent (sinon null)\n- entryPlan: orderType/limitPrice/timeInForce (null si pas déterminable)\n- riskPlan: stopLossPct/takeProfitPct/maxLossEUR (null si pas calculable)\n- dependencies: needPrice/needNote/needNews/needTechnical/needConsensus (true si requis)\n- nextReviewDays: 1/3/5/7\n\nFIX CASH (OPÉRATIONNEL)\n- Si cash disponible <= 0 et marge/levier non autorisé :\n  - Ne propose PAS OPEN/INCREASE sauf si tu proposes aussi DECREASE/CLOSE dans le même run (switch pour financer).\n  - Si tu ne peux pas estimer la faisabilité (prix proxy manquant), bascule en WATCH/HOLD + dependencies.needPrice=true + backfill PRICE.\n\nD) Remplir riskNotes :\n- keyRisks (>=1), killSwitchRules (>=1), exposureAlerts (ou [])\n\nE) Remplir dataCaveats + backfillRequests :\n- Si dependencies.needX=true sur une action, ajouter backfillRequests correspondant avec needs ∈ {PRICE, NOTE, CONSENSUS, NEWS, TECHNICAL, PORTFOLIO_STATE} et why.\n- dataCaveats liste les limites (données manquantes/stale, ambiguïtés).\n\nPOLITIQUE D'ENQUÊTE (OUTILS)\nAgis comme un détective financier.\n- Utilise d'abord les outils RAG (news/funda/tech) pour combler ce qui manque.\n- Si RAG insuffisant : utilise l'outil de recherche web news_web_scan.\n\nPROCESSUS D'EXÉCUTION ET CONTRAINTE FINALE\n- ÉTAPE 1 (ENQUÊTE) : Tu as l'autorisation absolue d'appeler tes outils (get_technical_details, get_fundamental_details, etc.) en amont pour combler tes doutes. L'appel d'outil NE viole PAS la règle du format final.\n- ÉTAPE 2 (DÉCISION) : UNE FOIS ton enquête terminée et que tu es prêt à rendre ta décision, ta TOUTE DERNIÈRE réponse doit être UNIQUEMENT le JSON final conforme au schéma. Aucun texte hors JSON lors de cette soumission finale.",
+        "options": {
+          "systemMessage": "=TU ES\nAgent #1 \"Portfolio Manager\" (Actions Europe). Tu décides OPEN/INCREASE/DECREASE/CLOSE/HOLD/WATCH à partir de briefings multi-agents.\nObjectif : Maximiser la performance du portefeuille via une allocation tactique stricte.\n\nMÉTHODOLOGIE ET MONOLOGUE INTERNE\nEn tant que modèle de raisonnement, analyse la situation globale, le momentum sectoriel et le portefeuille avant de statuer sur chaque action.\nUne fois ton raisonnement terminé, ta sortie finale visible doit être STRICTEMENT et UNIQUEMENT le JSON valide.\n\nRÈGLES DE SIZING ET CASH (OPÉRATIONNEL)\n1. Règle de Sizing : Pour toute action OPEN, alloue par défaut 5% de la Valeur Totale du portefeuille.\n   Formule : targetQty = Arrondi((Valeur Totale Portfolio * 0.05) / Prix Proxy \"E\").\n2. CLOSE : targetQty = 0 (Obligatoire).\n3. Cash : Si le cash est insuffisant, interdiction de faire un OPEN/INCREASE sans proposer de CLOSE/DECREASE en parallèle.\n\nRÈGLES DE DÉCISION ET DÉLÉGATION (CRITIQUE)\n1) OPEN / INCREASE (Mode Délégation)\n- Si la matrice indique \"Entrer / Renforcer\" avec un Grade A ou B ET \"SETUP_OK\" : La diligence est DÉJÀ faite par les agents précédents. \n- Action obligatoire : Tu DOIS exécuter OPEN ou INCREASE. Calcule la targetQty. \n- Dépendances : Mets TOUS les besoins (needTechnical, needNews, etc.) à false. Ne lance pas de tool call pour ces valeurs.\n\n2) HOLD / WATCH (Mode Enquêteur)\n- Utilise ces statuts pour les positions existantes saines (HOLD) ou les candidats en attente de confirmation (WATCH).\n- Si tu as un doute sérieux sur une valeur (ex: momentum sectoriel négatif, ou \"WAIT_CONFIRMATION\" dans la matrice), tu AS LE DROIT d'utiliser tes outils (get_technical_details, get_specific_news) pour trancher.\n\n3) DECREASE / CLOSE (Mode Gestion des Risques)\n- Si le momentum sectoriel s'effondre, ou si l'analyse technique montre une cassure de support, priorise la sortie.\n\nRÈGLE SUR LES NEWS\nSi tu interroges l'outil de News et qu'il ne retourne rien d'impactant sur les 7 derniers jours, ou si la matrice n'indique aucun risque, c'est une VALIDATION POSITIVE (Feu vert).\n\nOUTILS DISPONIBLES (Format strict : { \"input\": \"<SYMBOL> | <Name> | <requête>\" })\n1. get_specific_news : Pour vérifier des catalyseurs/risques récents.\n2. get_fundamental_details : Pour le consensus et la valorisation.\n3. get_technical_details : Pour valider les supports/résistances.\n4. news_web_scan : Due diligence web générale.\nRappel : Tu n'es pas obligé d'utiliser les outils si la matrice te donne déjà le signal clair (SETUP_OK).\n\nFORMAT DE SORTIE (CONTRAT STRICT)\n- Réponds uniquement avec le JSON.\n- Aucun texte markdown (comme ```json) ni préambule.\n- Le schéma exact à respecter est le suivant :\n\n{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"required\": [\"decisionMeta\",\"portfolioPlan\",\"actions\",\"riskNotes\",\"dataCaveats\",\"backfillRequests\"],\n  \"properties\": {\n    \"decisionMeta\": {\n      \"type\": \"object\",\n      \"required\": [\"run_id\",\"generatedAt\",\"strategy_version\",\"config_version\",\"model\",\"inputSnapshot\"],\n      \"properties\": {\n        \"run_id\": { \"type\": [\"string\",\"null\"] },\n        \"generatedAt\": { \"type\": \"string\" },\n        \"strategy_version\": { \"type\": [\"string\",\"null\"] },\n        \"config_version\": { \"type\": [\"string\",\"null\"] },\n        \"model\": { \"type\": \"string\" },\n        \"inputSnapshot\": {\n          \"type\": \"object\",\n          \"required\": [\"portfolioUpdatedAt\",\"technicalUpdatedAt\",\"researchUpdatedAt\",\"newsGeneratedAt\"],\n          \"properties\": {\n            \"portfolioUpdatedAt\": { \"type\": [\"string\",\"null\"] },\n            \"technicalUpdatedAt\": { \"type\": [\"string\",\"null\"] },\n            \"researchUpdatedAt\": { \"type\": [\"string\",\"null\"] },\n            \"newsGeneratedAt\": { \"type\": [\"string\",\"null\"] }\n          }\n        }\n      }\n    },\n    \"portfolioPlan\": {\n      \"type\": \"object\",\n      \"required\": [\"targetExposure\",\"maxPositions\",\"rebalance\",\"constraints\"],\n      \"properties\": {\n        \"targetExposure\": {\n          \"type\": \"object\",\n          \"required\": [\"equitiesPct\",\"cashPct\"],\n          \"properties\": {\n            \"equitiesPct\": { \"type\": [\"number\",\"null\"] },\n            \"cashPct\": { \"type\": [\"number\",\"null\"] }\n          }\n        },\n        \"maxPositions\": { \"type\": [\"integer\",\"null\"] },\n        \"rebalance\": {\n          \"type\": \"object\",\n          \"required\": [\"enabled\",\"thresholdPct\"],\n          \"properties\": {\n            \"enabled\": { \"type\": \"boolean\" },\n            \"thresholdPct\": { \"type\": [\"number\",\"null\"] }\n          }\n        },\n        \"constraints\": {\n          \"type\": \"object\",\n          \"required\": [\"maxPositionPct\",\"maxSectorPct\",\"maxSingleNameRiskPct\"],\n          \"properties\": {\n            \"maxPositionPct\": { \"type\": [\"number\",\"null\"] },\n            \"maxSectorPct\": { \"type\": [\"number\",\"null\"] },\n            \"maxSingleNameRiskPct\": { \"type\": [\"number\",\"null\"] }\n          }\n        }\n      }\n    },\n    \"actions\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\"symbol\",\"action\",\"priority\",\"confidence\",\"horizonDays\",\"targetWeightPct\",\"targetQty\",\"rationale\",\"entryPlan\",\"riskPlan\",\"dependencies\",\"nextReviewDays\"],\n        \"properties\": {\n          \"symbol\": { \"type\": \"string\" },\n          \"action\": { \"type\": \"string\", \"enum\": [\"OPEN\",\"INCREASE\",\"DECREASE\",\"CLOSE\",\"HOLD\",\"WATCH\"] },\n          \"priority\": { \"type\": \"integer\" },\n          \"confidence\": { \"type\": [\"integer\",\"null\"] },\n          \"horizonDays\": { \"type\": [\"integer\",\"null\"] },\n          \"targetWeightPct\": { \"type\": [\"number\",\"null\"] },\n          \"targetQty\": { \"type\": [\"number\",\"null\"] },\n          \"rationale\": { \"type\": \"string\" },\n          \"entryPlan\": {\n            \"type\": \"object\",\n            \"required\": [\"orderType\",\"limitPrice\",\"timeInForce\"],\n            \"properties\": {\n              \"orderType\": { \"type\": [\"string\",\"null\"] },\n              \"limitPrice\": { \"type\": [\"number\",\"null\"] },\n              \"timeInForce\": { \"type\": [\"string\",\"null\"] }\n            }\n          },\n          \"riskPlan\": {\n            \"type\": \"object\",\n            \"required\": [\"stopLossPct\",\"takeProfitPct\",\"maxLossEUR\"],\n            \"properties\": {\n              \"stopLossPct\": { \"type\": [\"number\",\"null\"] },\n              \"takeProfitPct\": { \"type\": [\"number\",\"null\"] },\n              \"maxLossEUR\": { \"type\": [\"number\",\"null\"] }\n            }\n          },\n          \"dependencies\": {\n            \"type\": \"object\",\n            \"required\": [\"needPrice\",\"needNote\",\"needNews\",\"needTechnical\",\"needConsensus\"],\n            \"properties\": {\n              \"needPrice\": { \"type\": \"boolean\" },\n              \"needNote\": { \"type\": \"boolean\" },\n              \"needNews\": { \"type\": \"boolean\" },\n              \"needTechnical\": { \"type\": \"boolean\" },\n              \"needConsensus\": { \"type\": \"boolean\" }\n            }\n          },\n          \"nextReviewDays\": { \"type\": \"integer\" }\n        }\n      }\n    },\n    \"riskNotes\": {\n      \"type\": \"object\",\n      \"required\": [\"keyRisks\",\"killSwitchRules\",\"exposureAlerts\"],\n      \"properties\": {\n        \"keyRisks\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n        \"killSwitchRules\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n        \"exposureAlerts\": {\n          \"type\": \"array\",\n          \"items\": {\n            \"type\": \"object\",\n            \"required\": [\"type\",\"detail\"],\n            \"properties\": {\n              \"type\": { \"type\": \"string\" },\n              \"detail\": { \"type\": \"string\" }\n            }\n          }\n        }\n      }\n    },\n    \"dataCaveats\": { \"type\": \"array\", \"items\": { \"type\": \"string\" } },\n    \"backfillRequests\": {\n      \"type\": \"array\",\n      \"items\": {\n        \"type\": \"object\",\n        \"required\": [\"symbol\",\"needs\",\"why\"],\n        \"properties\": {\n          \"symbol\": { \"type\": \"string\" },\n          \"needs\": {\n            \"type\": \"array\",\n            \"items\": { \"type\": \"string\", \"enum\": [\"PRICE\",\"NOTE\",\"CONSENSUS\",\"NEWS\",\"TECHNICAL\",\"PORTFOLIO_STATE\"] }\n          },\n          \"why\": { \"type\": \"string\" }\n        }\n      }\n    }\n  }\n}",
+          "maxIterations": 20
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
+      "position": [
+        3008,
+        10992
+      ],
+      "id": "b277e6c4-5a8e-4c2f-9744-e6970ae3db99",
+      "name": "Agent #1 - Portfolio manager1"
+    },
+    {
+      "parameters": {
+        "text": "={{ $json.output }}",
+        "schemaType": "manual",
+        "inputSchema": "{\n  \"type\": \"array\",\n  \"items\": {\n    \"type\": \"object\",\n    \"additionalProperties\": false,\n    \"required\": [\n      \"symbol\",\n      \"action\",\n      \"priority\",\n      \"confidence\",\n      \"horizonDays\",\n      \"targetWeightPct\",\n      \"targetQty\",\n      \"rationale\",\n      \"entryPlan\",\n      \"riskPlan\",\n      \"dependencies\",\n      \"nextReviewDays\"\n    ],\n    \"properties\": {\n      \"symbol\": { \"type\": \"string\" },\n      \"action\": { \"type\": \"string\", \"enum\": [\"OPEN\",\"INCREASE\",\"DECREASE\",\"CLOSE\",\"HOLD\",\"WATCH\"] },\n      \"priority\": { \"type\": \"integer\" },\n      \"confidence\": { \"type\": [\"integer\",\"null\"] },\n      \"horizonDays\": { \"type\": [\"integer\",\"null\"] },\n      \"targetWeightPct\": { \"type\": [\"number\",\"null\"] },\n      \"targetQty\": { \"type\": [\"number\",\"null\"] },\n      \"rationale\": { \"type\": \"string\" },\n      \"entryPlan\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"required\": [\"orderType\",\"limitPrice\",\"timeInForce\"],\n        \"properties\": {\n          \"orderType\": { \"type\": [\"string\",\"null\"] },\n          \"limitPrice\": { \"type\": [\"number\",\"null\"] },\n          \"timeInForce\": { \"type\": [\"string\",\"null\"] }\n        }\n      },\n      \"riskPlan\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"required\": [\"stopLossPct\",\"takeProfitPct\",\"maxLossEUR\"],\n        \"properties\": {\n          \"stopLossPct\": { \"type\": [\"number\",\"null\"] },\n          \"takeProfitPct\": { \"type\": [\"number\",\"null\"] },\n          \"maxLossEUR\": { \"type\": [\"number\",\"null\"] }\n        }\n      },\n      \"dependencies\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"required\": [\"needPrice\",\"needNote\",\"needNews\",\"needTechnical\",\"needConsensus\"],\n        \"properties\": {\n          \"needPrice\": { \"type\": \"boolean\" },\n          \"needNote\": { \"type\": \"boolean\" },\n          \"needNews\": { \"type\": \"boolean\" },\n          \"needTechnical\": { \"type\": \"boolean\" },\n          \"needConsensus\": { \"type\": \"boolean\" }\n        }\n      },\n      \"nextReviewDays\": { \"type\": \"integer\" }\n    }\n  }\n}\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        3744,
+        11024
+      ],
+      "id": "f0eb278b-bda2-4767-996d-49f1a651eb1d",
+      "name": "Information Extractor1"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "value": "gpt-5-mini-2025-08-07",
+          "mode": "list",
+          "cachedResultName": "gpt-5-mini-2025-08-07"
+        },
+        "builtInTools": {},
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        3744,
+        11216
+      ],
+      "id": "72c7a322-96b7-40d6-9886-e89dad73c218",
+      "name": "OpenAI Chat Model7",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "dimensions": 1536,
+          "batchSize": 512,
+          "stripNewLines": true,
+          "encodingFormat": "float"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3056,
+        11984
+      ],
+      "id": "efdd3f66-a8f0-4056-ab76-2ddaf0451450",
+      "name": "Embeddings OpenAI4",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {
+          "dimensions": 1536,
+          "batchSize": 512,
+          "stripNewLines": true,
+          "encodingFormat": "float"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
+      "typeVersion": 1.2,
+      "position": [
+        3472,
+        11984
+      ],
+      "id": "553c15f3-d371-4c7d-bf84-f0395bbf8242",
+      "name": "Embeddings OpenAI5",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "##  Memoires vectorielles",
+        "height": 656,
+        "width": 1328,
+        "color": 5
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2576,
+        11504
+      ],
+      "id": "9c587b80-7a6a-48ff-9e8c-3a700a829208",
+      "name": "Sticky Note9"
+    },
+    {
+      "parameters": {
+        "toolDescription": "Agent de due diligence pré-trade. Il scanne le web et X (Twitter) pour détecter des événements récents et à fort impact sur un symbole ou un secteur, avant l’exécution d’un ordre par l’Agent n°1.\nEntrée attendue (contrat n8n) : un objet JSON avec un seul champ input dont la valeur suit le format strict \"<SYMBOL> | <NAME> | <QUERY>\".\n\nSYMBOL peut aussi être SECTOR=<Nom> pour un scan sectoriel.\n\nLa fenêtre temporelle est déduite de QUERY : last <N>h, last <N>d ou window=<N>h/d (défaut 72h).\n\nSi QUERY contient adverse only, ne remonter que les éléments négatifs (impact ≤ -4).\n\nSortie attendue (strict) : JSON NewsScan_v1 uniquement, sans texte additionnel, contenant:\n\nmeta (symbol, name|null, requestedAt ISO Europe/Paris, windowHours, query),\n\nsources ({web:true, x:true}),\n\nitems[] dédupliqués avec date ISO, source (web|x), author|null, headline, url, type (earnings/guidance/downgrade/upgrade/m&a/regulatory/litigation/scandal/product/macro/insider/rumor/other), impactScore [-10..10], sentiment [-10..10], isRelevant, freshnessMinutes, confidence [0..1], summary, entities[],\n\nverdict { hasHighAdverse, maxAdverseImpact, maxPositiveImpact, stance: BLOCK|CAUTION|OK, reason },\n\ncaveats[].",
+        "text": "=Tu reçois un objet JSON en entrée avec un seul champ `input` (compat n8n).\nValeur exacte de `input` :\n{{ $json.input }}\n\nFORMAT OBLIGATOIRE DE `input`\n\"<SYMBOL> | <NAME> | <QUERY>\"\n\nPARSING\n- SYMBOL = segment 1 (avant le 1er \"|\"), trim. Cas sectoriel autorisé : \"SECTOR=<X>\".\n- NAME   = segment 2 (si \"UNKNOWN\" ou vide => mets null dans la sortie).\n- QUERY  = texte libre après le 2e \"|\".\n- Déduis windowHours depuis QUERY (priorité) :\n  1) \"last <N>h\"  → N\n  2) \"last <N>d\"  → N*24\n  3) \"window=<N>h\" ou \"window=<N>d\"\n  4) défaut = 72\n- Si QUERY contient \"adverse only\" → ne garder que les items négatifs (impactScore ≤ -4).\n- Toujours tenter web + X ; si un canal est indisponible, mets son booléen `sources` à false et ajoute un caveat.\n\nTÂCHE\n- Scanner web + X selon SYMBOL/NAME/QUERY et la fenêtre déduite.\n- Dédoublonner, sourcer, horodater (Europe/Paris, ISO 8601).\n- Pour chaque item : renseigner obligatoirement\n  - type ∈ [\"earnings\",\"guidance\",\"downgrade\",\"upgrade\",\"m&a\",\"regulatory\",\"litigation\",\"scandal\",\"product\",\"macro\",\"insider\",\"rumor\",\"other\"]\n  - impactScore ∈ [-10..+10], ENTIER\n  - sentiment ∈ [-10..+10], ENTIER\n  - confidence ∈ [0..1]\n  - isRelevant, freshnessMinutes (number), author|null, url, entities[], summary\n\nVERDICT\n- stance = \"BLOCK\" si ≥1 item crédible (confidence ≥ 0,6) avec impactScore ≤ -7.\n- stance = \"CAUTION\" si signal négatif modéré (≤ -4) ou rumeur non confirmée.\n- stance = \"OK\" sinon.\n- reason = justification courte.\n- hasHighAdverse, maxAdverseImpact, maxPositiveImpact cohérents avec les items.\n\nSORTIE STRICTE (AUCUN TEXTE HORS JSON) — “NewsScan_v1 — contrat strict”\n{\n  \"meta\": {\n    \"symbol\": \"<SYMBOL>\",\n    \"name\": \"<NAME|null>\",\n    \"requestedAt\": \"{{ $now.toISO() }}\",\n    \"windowHours\": <number>,\n    \"query\": \"<QUERY>\"\n  },\n  \"sources\": { \"web\": true|false, \"x\": true|false },\n  \"items\": [ /* 0..n items selon définition ci-dessus */ ],\n  \"verdict\": {\n    \"hasHighAdverse\": <bool>,\n    \"maxAdverseImpact\": <int|null>,\n    \"maxPositiveImpact\": <int|null>,\n    \"stance\": \"BLOCK|CAUTION|OK\",\n    \"reason\": \"<string>\"\n  },\n  \"caveats\": [ \"<string>\", ... ]\n}\n\nCONSIGNES\n- ZÉRO hallucination. Si incertain : confidence bas, type=\"rumor\", caveat explicite.\n- Si rien de pertinent : items=[], stance=\"OK\", reason=\"No high-impact items in window\".\n- Si un canal (web ou X) n’a pas pu être interrogé : sources.<canal>=false + caveat.\n- NE RENVOIE QUE le JSON conforme à “NewsScan_v1 — contrat strict”.\n",
+        "options": {
+          "systemMessage": "=TU ES\n“Web & X Sentinel” — un agent de due diligence pré-trade. Tu explores le web ouvert et X (Twitter) pour repérer des éléments récents et significatifs sur un titre/secteur afin d’éviter des entrées risquées.\n\nOBJECTIF\nAvant toute décision d’achat/renfort, détecter et résumer les éléments à fort impact (positif ou négatif), horodatés, dédupliqués, sourcés, en renvoyant EXCLUSIVEMENT un JSON conforme au schéma “NewsScan_v1 — contrat strict”.\n\nPORTÉE & SOURCES\n- X (comptes crédibles, médias reconnus, sources officielles, insiders réglementés).\n- Web (communiqués, régulateurs, brokers, presse financière, IR).\n- Langues : FR/EN (si autre, résumer en FR).\n- Fenêtre temporelle : utiliser celle demandée (défaut 72h).\n\nRÈGLES D’ÉVALUATION (scoring discret)\n- impactScore ∈ [-10..+10], ENTIER (intensité attendue sur le titre/secteur).\n  ≤ -7 : alerte majeure (profit warning, fraude, sanction, deal cassé…)\n  -6..-4 : négatif significatif (downgrade multiple, guidance faible…)\n  -3..+3 : bruit/mixte/faible\n  +4..+6 : positif significatif (upgrade, bons prints, M&A crédible…)\n  ≥ +7 : catalyseur majeur (OPA, résultats très supérieurs, autorisation critique…)\n- sentiment ∈ [-10..+10], ENTIER (tonalité globale de l’item).\n- type ∈ [\"earnings\",\"guidance\",\"downgrade\",\"upgrade\",\"m&a\",\"regulatory\",\"litigation\",\"scandal\",\"product\",\"macro\",\"insider\",\"rumor\",\"other\"].\n- credibility : confidence ∈ [0..1].\n- Ajouter freshnessMinutes, auteur/source, URL, entities[], dédoublonnage strict.\n\nCONTRAINTES\n- ZÉRO hallucination. Si incertain : confidence faible, type=\"rumor\", ajouter caveat expliquant l’incertitude.\n- Horodatage ISO 8601, fuseau Europe/Paris.\n- La clé `sources` reflète réellement ce qui a été interrogé : { \"web\": true|false, \"x\": true|false }.\n\nRÈGLES DE VERDICT\n- stance = \"BLOCK\" si au moins un item CRÉDIBLE (confidence ≥ 0,6) avec impactScore ≤ -7.\n- stance = \"CAUTION\" si signaux adverses modérés (impactScore ≤ -4) OU rumeurs non confirmées.\n- stance = \"OK\" si aucun obstacle News détecté (sous réserve des autres briques).\n\nSORTIE OBLIGATOIRE — “NewsScan_v1 — contrat strict”\n{\n  \"meta\": {\n    \"symbol\": \"string\",\n    \"name\": \"string|null\",\n    \"requestedAt\": \"ISO string\",\n    \"windowHours\": \"number\",\n    \"query\": \"string\"\n  },\n  \"sources\": { \"web\": true|false, \"x\": true|false },\n  \"items\": [\n    {\n      \"date\": \"ISO string\",\n      \"source\": \"web|x\",\n      \"author\": \"string|null\",\n      \"headline\": \"string\",\n      \"url\": \"string\",\n      \"type\": \"earnings|guidance|downgrade|upgrade|m&a|regulatory|litigation|scandal|product|macro|insider|rumor|other\",\n      \"impactScore\": -10..10,       // ENTIER\n      \"sentiment\": -10..10,         // ENTIER\n      \"isRelevant\": true|false,\n      \"freshnessMinutes\": \"number\",\n      \"confidence\": \"number\",       // [0..1]\n      \"summary\": \"string\",\n      \"entities\": [\"string\", ...]\n    }\n  ],\n  \"verdict\": {\n    \"hasHighAdverse\": true|false,\n    \"maxAdverseImpact\": -10..0|null,   // ENTIER ou null\n    \"maxPositiveImpact\": 0..10|null,   // ENTIER ou null\n    \"stance\": \"BLOCK|CAUTION|OK\",\n    \"reason\": \"string\"\n  },\n  \"caveats\": [\"string\", ...]\n}\n\nNE FOURNIS QUE CE JSON. AUCUN TEXTE SUPPLÉMENTAIRE.\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agentTool",
+      "typeVersion": 3,
+      "position": [
+        3408,
+        11168
+      ],
+      "id": "1d59404c-8718-43b1-ae79-c30cd4f70cc1",
+      "name": "news_web_x_scan (Grok)1"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-1-fast-reasoning",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        2928,
+        11232
+      ],
+      "id": "8f5495b8-8789-47fa-9b65-d044149f292c",
+      "name": "xAI Grok Chat Model",
+      "credentials": {
+        "xAiApi": {
+          "id": "8nKnkigAO1POxfzs",
+          "name": "xAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## GROK\n",
+        "height": 1200,
+        "width": 1552,
+        "color": 3
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2480,
+        10976
+      ],
+      "id": "d703df96-20f2-4c39-a072-eadd8bf8674c",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "model": "grok-4-1-fast-non-reasoning",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+      "typeVersion": 1,
+      "position": [
+        3408,
+        11344
+      ],
+      "id": "16aea577-d8d8-448e-88c0-fbd6d822334c",
+      "name": "xAI Grok Chat Model1",
+      "credentials": {
+        "xAiApi": {
+          "id": "8nKnkigAO1POxfzs",
+          "name": "xAi account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "1 - Hourly Trigger": {
+      "main": [
+        [
+          {
+            "node": "2B - Init Run Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "merge": {
+      "main": [
+        [
+          {
+            "node": "7 - Validate & Enforce Safety",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "7 - Validate & Enforce Safety": {
+      "main": [
+        [
+          {
+            "node": "8 - Build DuckDB Bundle",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4B – Build Portfolio Context": {
+      "main": [
+        [
+          {
+            "node": "merge",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "4C — Enrich Portfolio with Market Prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "2B - Init Run Context": {
+      "main": [
+        [
+          {
+            "node": "4B – Build Portfolio Context",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG4.01 - Récupération des news générales",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge7",
+            "type": "main",
+            "index": 3
+          },
+          {
+            "node": "R8 — Data Prep for Matrix (Fusion Filter)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "4C — Enrich Portfolio with Market Prices": {
+      "main": [
+        [
+          {
+            "node": "Merge7",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20J_FINAL — Build MarketNewsPack Final": {
+      "main": [
+        [
+          {
+            "node": "Merge7",
+            "type": "main",
+            "index": 2
+          }
+        ]
+      ]
+    },
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "2B - Init Run Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG4.01 - Récupération des news générales": {
+      "main": [
+        [
+          {
+            "node": "20J_FINAL — Build MarketNewsPack Final",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "R8 — Data Prep for Matrix (Fusion Filter)": {
+      "main": [
+        [
+          {
+            "node": "Calcul Matrice & Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calcul Matrice & Briefing": {
+      "main": [
+        [
+          {
+            "node": "Merge7",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge7": {
+      "main": [
+        [
+          {
+            "node": "AG1.00 — Assemble Input Packs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG1.00 — Assemble Input Packs": {
+      "main": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "8 - Build DuckDB Bundle": {
+      "main": [
+        [
+          {
+            "node": "9 - Upsert Run Bundle (DuckDB)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "9 - Upsert Run Bundle (DuckDB)": {
+      "main": [
+        [
+          {
+            "node": "10 - Post-Run Health (DuckDB)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "0 - SEED Portfolio": {
+      "main": [
+        []
+      ]
+    },
+    "Qdrant Vector Store3": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "get_specific_news1",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model4": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "get_specific_news1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Store4": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "get_fundamental_details1",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "get_fundamental_details1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Qdrant Vector Store5": {
+      "ai_vectorStore": [
+        [
+          {
+            "node": "get_technical_details1",
+            "type": "ai_vectorStore",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model6": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "get_technical_details1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_specific_news1": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_fundamental_details1": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "get_technical_details1": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store3",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent #1 - Portfolio manager1": {
+      "main": [
+        [
+          {
+            "node": "Information Extractor1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Chat Model7": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Information Extractor1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI4": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store4",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Embeddings OpenAI5": {
+      "ai_embedding": [
+        [
+          {
+            "node": "Qdrant Vector Store5",
+            "type": "ai_embedding",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "news_web_x_scan (Grok)1": {
+      "ai_tool": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "ai_tool",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "xAI Grok Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "xAI Grok Chat Model1": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "news_web_x_scan (Grok)1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Information Extractor1": {
+      "main": [
+        [
+          {
+            "node": "merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "versionId": "275d85af-d523-42a7-aad2-d63f72702e5d",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"
+  },
+  "id": "ogcycPnSXOmkOeNokmOt7",
+  "tags": []
+}

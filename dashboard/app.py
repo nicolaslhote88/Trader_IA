@@ -28,11 +28,38 @@ SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
 DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
 AG1_DUCKDB_PATH = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v2.duckdb")
+AG1_CHATGPT52_DUCKDB_PATH = os.getenv("AG1_CHATGPT52_DUCKDB_PATH", "/files/duckdb/ag1_v2_chatgpt52.duckdb")
+AG1_GROK41_REASONING_DUCKDB_PATH = os.getenv(
+    "AG1_GROK41_REASONING_DUCKDB_PATH",
+    "/files/duckdb/ag1_v2_grok41_reasoning.duckdb",
+)
+AG1_GEMINI30_PRO_DUCKDB_PATH = os.getenv("AG1_GEMINI30_PRO_DUCKDB_PATH", "/files/duckdb/ag1_v2_gemini30_pro.duckdb")
 AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
 AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v2.duckdb")
 AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb")
 YF_ENRICH_DUCKDB_PATH = os.getenv("YF_ENRICH_DUCKDB_PATH", "/files/duckdb/yf_enrichment_v1.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
+
+AG1_MULTI_PORTFOLIO_CONFIG = {
+    "chatgpt52": {
+        "label": "ChatGPT 5.2",
+        "short_label": "GPT",
+        "db_path": AG1_CHATGPT52_DUCKDB_PATH,
+        "accent": "#10b981",
+    },
+    "grok41_reasoning": {
+        "label": "Grok 4.1 Reasoning",
+        "short_label": "Grok",
+        "db_path": AG1_GROK41_REASONING_DUCKDB_PATH,
+        "accent": "#f59e0b",
+    },
+    "gemini30_pro": {
+        "label": "Gemini 3.0 Pro",
+        "short_label": "Gemini",
+        "db_path": AG1_GEMINI30_PRO_DUCKDB_PATH,
+        "accent": "#60a5fa",
+    },
+}
 
 GRADE_COLOR_MAP = {"A": "#0072B2", "B": "#E69F00", "C": "#CC79A7"}
 GRADE_CONTOUR_WIDTH_MAP = {"A": 3.2, "B": 2.4, "C": 1.6}
@@ -3504,6 +3531,451 @@ def _prepare_multi_agent_view(
 
 
 # ============================================================
+# AG1 V2 - Multi-Portfolio Loader (ChatGPT / Grok / Gemini)
+# ============================================================
+
+
+def _duckdb_connect_readonly_retry(path: str):
+    max_retries = 8
+    base_delay = 0.25
+    max_delay = 3.0
+
+    try:
+        max_retries = max(3, int(os.getenv("DUCKDB_READ_RETRIES", "8")))
+        base_delay = max(0.1, float(os.getenv("DUCKDB_READ_BASE_DELAY_SEC", "0.25")))
+        max_delay = max(base_delay, float(os.getenv("DUCKDB_READ_MAX_DELAY_SEC", "3.0")))
+    except Exception:
+        pass
+
+    for attempt in range(max_retries):
+        try:
+            return duckdb.connect(path, read_only=True)
+        except Exception as exc:
+            msg = str(exc).lower()
+            is_lock_like = isinstance(exc, duckdb.IOException) or ("lock" in msg) or ("busy" in msg)
+            if is_lock_like and attempt < max_retries - 1:
+                time.sleep(min(base_delay * (2 ** attempt), max_delay))
+                continue
+            return None
+    return None
+
+
+def _ag1_fetchdf(conn, sql: str, params: list | None = None) -> pd.DataFrame:
+    try:
+        return conn.execute(sql, params or []).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+
+
+def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
+    return {
+        "key": key,
+        "label": cfg.get("label", key),
+        "short_label": cfg.get("short_label", key),
+        "db_path": cfg.get("db_path", ""),
+        "accent": cfg.get("accent", "#666"),
+        "status": "missing",
+        "error": "",
+        "summary": {
+            "init_cap": 50000.0,
+            "cash": 0.0,
+            "invest": 0.0,
+            "total_val": 0.0,
+            "roi": 0.0,
+            "cash_pct": 0.0,
+            "drawdown_pct": 0.0,
+            "cum_fees_eur": 0.0,
+            "cum_ai_cost_eur": 0.0,
+            "positions_count": 0,
+            "trades_this_run": 0,
+            "runs_count": 0,
+            "signals_24h": 0,
+            "alerts_24h": 0,
+            "last_run_id": "",
+            "last_model": "",
+            "last_update": pd.NaT,
+        },
+        "df_portfolio": pd.DataFrame(),
+        "df_performance": pd.DataFrame(),
+        "df_transactions": pd.DataFrame(),
+        "df_ai_signals": pd.DataFrame(),
+        "df_alerts": pd.DataFrame(),
+        "df_runs": pd.DataFrame(),
+    }
+
+
+def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str, object]:
+    payload = _ag1_default_payload(key, cfg)
+    db_path = str(cfg.get("db_path") or "").strip()
+    payload["db_path"] = db_path
+    if not db_path or not os.path.exists(db_path):
+        payload["status"] = "missing"
+        return payload
+
+    conn = _duckdb_connect_readonly_retry(db_path)
+    if conn is None:
+        payload["status"] = "error"
+        payload["error"] = "Impossible d'ouvrir la base DuckDB (lock/busy)."
+        return payload
+
+    try:
+        has_ledger = False
+        try:
+            chk = conn.execute(
+                """
+                SELECT COUNT(*) AS cnt
+                FROM information_schema.tables
+                WHERE table_schema = 'core'
+                  AND table_name = 'portfolio_snapshot'
+                """
+            ).fetchone()
+            has_ledger = bool(chk and chk[0] and int(chk[0]) > 0)
+        except Exception:
+            has_ledger = False
+
+        if not has_ledger:
+            payload["status"] = "error"
+            payload["error"] = "Schema AG1-V2 ledger non detecte (core.portfolio_snapshot absent)."
+            return payload
+
+        df_runs = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              run_id,
+              ts_start,
+              ts_end,
+              model,
+              decision_summary,
+              data_ok_for_trading,
+              price_coverage_pct,
+              news_count,
+              ai_cost_eur,
+              expected_fees_eur
+            FROM core.runs
+            ORDER BY COALESCE(ts_end, ts_start) DESC
+            """,
+        )
+
+        df_perf = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ps.ts AS timestamp,
+              ps.run_id AS run_id,
+              r.model AS model,
+              CAST(ps.total_value_eur AS DOUBLE) AS totalvalueeur,
+              CAST(ps.cash_eur AS DOUBLE) AS casheur,
+              CAST(ps.equity_eur AS DOUBLE) AS equityeur,
+              CAST(ps.cum_fees_eur AS DOUBLE) AS cum_fees_eur,
+              CAST(ps.cum_ai_cost_eur AS DOUBLE) AS cum_ai_cost_eur,
+              ps.trades_this_run AS trades_this_run,
+              CAST(ps.roi AS DOUBLE) AS roi,
+              CAST(ps.drawdown_pct AS DOUBLE) AS drawdown_pct
+            FROM core.portfolio_snapshot ps
+            LEFT JOIN core.runs r ON r.run_id = ps.run_id
+            ORDER BY ps.ts
+            """,
+        )
+
+        df_latest = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ps.ts AS snapshot_ts,
+              ps.run_id AS run_id,
+              r.model AS model,
+              CAST(ps.cash_eur AS DOUBLE) AS cash_eur,
+              CAST(ps.equity_eur AS DOUBLE) AS equity_eur,
+              CAST(ps.total_value_eur AS DOUBLE) AS total_value_eur,
+              CAST(ps.cum_fees_eur AS DOUBLE) AS cum_fees_eur,
+              CAST(ps.cum_ai_cost_eur AS DOUBLE) AS cum_ai_cost_eur,
+              ps.trades_this_run AS trades_this_run,
+              CAST(ps.roi AS DOUBLE) AS roi,
+              CAST(ps.drawdown_pct AS DOUBLE) AS drawdown_pct
+            FROM core.portfolio_snapshot ps
+            LEFT JOIN core.runs r ON r.run_id = ps.run_id
+            ORDER BY ps.ts DESC, COALESCE(r.ts_end, r.ts_start) DESC NULLS LAST
+            LIMIT 1
+            """,
+        )
+
+        df_pos = _ag1_fetchdf(
+            conn,
+            """
+            WITH latest AS (
+              SELECT run_id
+              FROM core.portfolio_snapshot
+              ORDER BY ts DESC
+              LIMIT 1
+            )
+            SELECT
+              p.run_id AS run_id,
+              p.ts AS updatedat,
+              p.symbol AS symbol,
+              COALESCE(i.name, p.symbol) AS name,
+              COALESCE(i.asset_class, 'Equity') AS assetclass,
+              COALESCE(i.sector, '') AS sector,
+              COALESCE(i.industry, '') AS industry,
+              COALESCE(i.isin, '') AS isin,
+              CAST(p.qty AS DOUBLE) AS quantity,
+              CAST(p.avg_cost AS DOUBLE) AS avgprice,
+              CAST(p.last_price AS DOUBLE) AS lastprice,
+              CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
+              CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
+            FROM core.positions_snapshot p
+            INNER JOIN latest l ON l.run_id = p.run_id
+            LEFT JOIN core.instruments i ON i.symbol = p.symbol
+            ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
+            """,
+        )
+
+        df_transactions = _ag1_fetchdf(
+            conn,
+            """
+            WITH lot_realized AS (
+              SELECT
+                close_fill_id AS fill_id,
+                CAST(SUM(COALESCE(realized_pnl_eur, 0)) AS DOUBLE) AS realizedpnl
+              FROM core.position_lots
+              WHERE close_fill_id IS NOT NULL
+              GROUP BY close_fill_id
+            )
+            SELECT
+              f.ts_fill AS timestamp,
+              f.run_id AS run_id,
+              r.model AS agent,
+              o.symbol AS symbol,
+              o.side AS side,
+              CAST(f.qty AS DOUBLE) AS quantity,
+              CAST(f.price AS DOUBLE) AS price,
+              CAST(CAST(f.qty AS DOUBLE) * CAST(f.price AS DOUBLE) AS DOUBLE) AS notional,
+              CAST(COALESCE(lr.realizedpnl, 0) AS DOUBLE) AS realizedpnl,
+              CAST(COALESCE(f.fees_eur, 0) AS DOUBLE) AS fees_eur,
+              o.order_type AS order_type,
+              o.status AS status,
+              o.reason AS reason
+            FROM core.fills f
+            LEFT JOIN core.orders o ON o.order_id = f.order_id
+            LEFT JOIN lot_realized lr ON lr.fill_id = f.fill_id
+            LEFT JOIN core.runs r ON r.run_id = f.run_id
+            ORDER BY f.ts_fill
+            """,
+        )
+
+        df_ai_signals = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              s.ts AS timestamp,
+              s.run_id AS run_id,
+              r.model AS model,
+              s.symbol AS symbol,
+              s.signal AS signal,
+              s.confidence AS confidence,
+              s.horizon AS horizon,
+              s.entry_zone AS entry_zone,
+              CAST(s.stop_loss AS DOUBLE) AS stop_loss,
+              CAST(s.take_profit AS DOUBLE) AS take_profit,
+              s.risk_score AS risk_score,
+              s.catalyst AS catalyst,
+              s.rationale AS rationale
+            FROM core.ai_signals s
+            LEFT JOIN core.runs r ON r.run_id = s.run_id
+            ORDER BY s.ts DESC
+            LIMIT 1000
+            """,
+        )
+
+        df_alerts = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              a.ts AS timestamp,
+              a.run_id AS run_id,
+              r.model AS model,
+              a.severity AS severity,
+              a.category AS category,
+              a.symbol AS symbol,
+              a.code AS code,
+              a.message AS message
+            FROM core.alerts a
+            LEFT JOIN core.runs r ON r.run_id = a.run_id
+            ORDER BY a.ts DESC
+            LIMIT 1000
+            """,
+        )
+
+        init_cap = 50000.0
+        cfg_cap = _ag1_fetchdf(
+            conn,
+            """
+            SELECT CAST(initial_capital_eur AS DOUBLE) AS initial_cap
+            FROM cfg.portfolio_config
+            WHERE initial_capital_eur IS NOT NULL
+            ORDER BY updated_at DESC NULLS LAST
+            LIMIT 1
+            """,
+        )
+        if not cfg_cap.empty and "initial_cap" in cfg_cap.columns:
+            init_cap_val = safe_float(cfg_cap.iloc[0].get("initial_cap"))
+            if init_cap_val > 0:
+                init_cap = init_cap_val
+        else:
+            dep_cap = _ag1_fetchdf(
+                conn,
+                """
+                SELECT CAST(SUM(COALESCE(amount, 0)) AS DOUBLE) AS initial_cap
+                FROM core.cash_ledger
+                WHERE UPPER(COALESCE(type, '')) = 'DEPOSIT'
+                """,
+            )
+            if not dep_cap.empty and "initial_cap" in dep_cap.columns:
+                init_cap_val = safe_float(dep_cap.iloc[0].get("initial_cap"))
+                if init_cap_val > 0:
+                    init_cap = init_cap_val
+
+        latest = df_latest.iloc[0].to_dict() if df_latest is not None and not df_latest.empty else {}
+        cash = safe_float(latest.get("cash_eur"))
+        invest = safe_float(latest.get("equity_eur"))
+        total_val = safe_float(latest.get("total_value_eur"))
+        if total_val <= 0 and (cash > 0 or invest > 0):
+            total_val = cash + invest
+        roi = float(latest.get("roi")) if pd.notna(latest.get("roi")) else ((total_val - init_cap) / init_cap if init_cap else 0.0)
+        cash_pct = (cash / total_val * 100.0) if total_val > 0 else 0.0
+        positions_count = int(len(df_pos)) if df_pos is not None and not df_pos.empty else 0
+
+        # Synthetise CASH_EUR / __META__ rows for compatibility with existing dashboard widgets.
+        if df_pos is None or df_pos.empty:
+            df_portfolio = pd.DataFrame(
+                columns=[
+                    "symbol",
+                    "name",
+                    "assetclass",
+                    "sector",
+                    "industry",
+                    "isin",
+                    "quantity",
+                    "avgprice",
+                    "lastprice",
+                    "marketvalue",
+                    "unrealizedpnl",
+                    "updatedat",
+                    "notes",
+                ]
+            )
+        else:
+            df_portfolio = df_pos.copy()
+            if "notes" not in df_portfolio.columns:
+                df_portfolio["notes"] = ""
+
+        snap_ts = pd.to_datetime(latest.get("snapshot_ts"), errors="coerce")
+        snap_ts_val = snap_ts if pd.notna(snap_ts) else pd.Timestamp.utcnow()
+        cash_row = pd.DataFrame(
+            [
+                {
+                    "symbol": "CASH_EUR",
+                    "name": "Cash EUR",
+                    "assetclass": "Cash",
+                    "sector": "Cash",
+                    "industry": "Cash",
+                    "isin": "",
+                    "quantity": 1.0,
+                    "avgprice": cash,
+                    "lastprice": cash,
+                    "marketvalue": cash,
+                    "unrealizedpnl": 0.0,
+                    "updatedat": snap_ts_val,
+                    "notes": "",
+                }
+            ]
+        )
+        meta_row = pd.DataFrame(
+            [
+                {
+                    "symbol": "__META__",
+                    "name": "__META__",
+                    "assetclass": "Meta",
+                    "sector": "Meta",
+                    "industry": "Meta",
+                    "isin": "",
+                    "quantity": 0.0,
+                    "avgprice": 0.0,
+                    "lastprice": 0.0,
+                    "marketvalue": init_cap,
+                    "unrealizedpnl": 0.0,
+                    "updatedat": snap_ts_val,
+                    "notes": json.dumps({"initialCapitalEUR": init_cap}, ensure_ascii=False),
+                }
+            ]
+        )
+        df_portfolio = pd.concat([df_portfolio, cash_row, meta_row], ignore_index=True)
+
+        # Signals/alerts activity in the last 24h for header.
+        now_utc = pd.Timestamp.now(tz="UTC")
+        signals_24h = 0
+        alerts_24h = 0
+        if df_ai_signals is not None and not df_ai_signals.empty and "timestamp" in df_ai_signals.columns:
+            ts_sig = pd.to_datetime(df_ai_signals["timestamp"], errors="coerce", utc=True)
+            signals_24h = int((ts_sig >= (now_utc - pd.Timedelta(hours=24))).sum())
+        if df_alerts is not None and not df_alerts.empty and "timestamp" in df_alerts.columns:
+            ts_alt = pd.to_datetime(df_alerts["timestamp"], errors="coerce", utc=True)
+            alerts_24h = int((ts_alt >= (now_utc - pd.Timedelta(hours=24))).sum())
+
+        summary = {
+            "init_cap": float(init_cap),
+            "cash": float(cash),
+            "invest": float(invest),
+            "total_val": float(total_val),
+            "roi": float(roi if pd.notna(roi) else 0.0),
+            "cash_pct": float(cash_pct),
+            "drawdown_pct": float(safe_float(latest.get("drawdown_pct"))),
+            "cum_fees_eur": float(safe_float(latest.get("cum_fees_eur"))),
+            "cum_ai_cost_eur": float(safe_float(latest.get("cum_ai_cost_eur"))),
+            "positions_count": int(positions_count),
+            "trades_this_run": int(safe_float(latest.get("trades_this_run"))),
+            "runs_count": int(len(df_runs)) if df_runs is not None else 0,
+            "signals_24h": int(signals_24h),
+            "alerts_24h": int(alerts_24h),
+            "last_run_id": str(latest.get("run_id") or ""),
+            "last_model": str(latest.get("model") or ""),
+            "last_update": pd.to_datetime(latest.get("snapshot_ts"), errors="coerce", utc=True),
+        }
+
+        payload.update(
+            {
+                "status": "ok",
+                "summary": summary,
+                "df_portfolio": normalize_cols(df_portfolio),
+                "df_performance": normalize_cols(df_perf) if df_perf is not None else pd.DataFrame(),
+                "df_transactions": normalize_cols(df_transactions) if df_transactions is not None else pd.DataFrame(),
+                "df_ai_signals": normalize_cols(df_ai_signals) if df_ai_signals is not None else pd.DataFrame(),
+                "df_alerts": normalize_cols(df_alerts) if df_alerts is not None else pd.DataFrame(),
+                "df_runs": normalize_cols(df_runs) if df_runs is not None else pd.DataFrame(),
+            }
+        )
+        return payload
+
+    except Exception as exc:
+        payload["status"] = "error"
+        payload["error"] = str(exc)
+        return payload
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+@st.cache_data(ttl=30)
+def load_ag1_multi_portfolios() -> dict[str, dict[str, object]]:
+    out: dict[str, dict[str, object]] = {}
+    for key, cfg in AG1_MULTI_PORTFOLIO_CONFIG.items():
+        out[key] = _ag1_load_single_portfolio_ledger(key, cfg)
+    return out
+
+
+# ============================================================
 # MAIN APP
 # ============================================================
 
@@ -3631,8 +4103,129 @@ if page == "Dashboard Trading":
     if st.button("Rafraichir"):
         load_data.clear()
         load_duckdb_data.clear()
+        load_ag1_multi_portfolios.clear()
         st.rerun()
 
+    ag1_multi = load_ag1_multi_portfolios()
+    available_keys = [
+        k for k, p in ag1_multi.items()
+        if isinstance(p, dict) and str(p.get("status", "")).lower() == "ok"
+    ]
+
+    # Fallback to legacy single-portfolio behavior if the new AG1-V2 ledgers are not available.
+    selected_portfolio_key = None
+    active_portfolio = None
+    if available_keys:
+        default_key = st.session_state.get("dashboard_active_portfolio", available_keys[0])
+        if default_key not in available_keys:
+            default_key = available_keys[0]
+
+        portfolio_labels = {k: ag1_multi[k].get("label", k) for k in available_keys}
+        selected_label = st.radio(
+            "Portefeuille actif (les 3 premiers onglets suivent cette selection)",
+            options=[portfolio_labels[k] for k in available_keys],
+            index=[portfolio_labels[k] for k in available_keys].index(portfolio_labels[default_key]),
+            horizontal=True,
+            key="dashboard_active_portfolio_label",
+        )
+        selected_portfolio_key = next(k for k in available_keys if portfolio_labels[k] == selected_label)
+        st.session_state["dashboard_active_portfolio"] = selected_portfolio_key
+        active_portfolio = ag1_multi[selected_portfolio_key]
+
+        # Comparative header cards (3 portfolios)
+        st.caption("Vue comparative AG1-V2 (ChatGPT 5.2 / Grok 4.1 Reasoning / Gemini 3.0 Pro)")
+        comp_cols = st.columns(len(available_keys))
+        comp_rows = []
+        for idx, key in enumerate(available_keys):
+            p = ag1_multi[key]
+            s = p.get("summary", {}) if isinstance(p, dict) else {}
+            total_v = safe_float(s.get("total_val", 0.0))
+            init_v = safe_float(s.get("init_cap", 50000.0))
+            roi_v = float(s.get("roi", 0.0) or 0.0)
+            cash_v = safe_float(s.get("cash", 0.0))
+            invest_v = safe_float(s.get("invest", 0.0))
+            cash_pct_v = float(s.get("cash_pct", 0.0) or 0.0)
+            last_update_v = pd.to_datetime(s.get("last_update"), errors="coerce", utc=True)
+            last_update_txt = (
+                last_update_v.tz_convert("Europe/Paris").strftime("%d/%m %H:%M")
+                if pd.notna(last_update_v)
+                else "N/A"
+            )
+            is_active = key == selected_portfolio_key
+            title = p.get("label", key)
+            with comp_cols[idx]:
+                with st.container(border=True):
+                    st.markdown(f"**{'[Actif] ' if is_active else ''}{title}**")
+                    st.metric("Valeur totale", f"{total_v:,.2f} EUR", delta=f"{total_v - init_v:,.2f} EUR")
+                    c_a, c_b = st.columns(2)
+                    c_a.metric("ROI", f"{roi_v * 100:.2f} %")
+                    c_b.metric("% Cash", f"{cash_pct_v:.1f} %")
+                    c_c, c_d = st.columns(2)
+                    c_c.metric("Cash", f"{cash_v:,.0f}")
+                    c_d.metric("Investi", f"{invest_v:,.0f}")
+                    st.caption(
+                        f"Pos: {int(s.get('positions_count', 0))} | Signaux 24h: {int(s.get('signals_24h', 0))} | "
+                        f"Alertes 24h: {int(s.get('alerts_24h', 0))} | MAJ: {last_update_txt}"
+                    )
+
+            comp_rows.append(
+                {
+                    "Modele": p.get("label", key),
+                    "Valeur Totale (EUR)": total_v,
+                    "P&L (EUR)": total_v - init_v,
+                    "ROI (%)": roi_v * 100.0,
+                    "Cash (%)": cash_pct_v,
+                    "Positions": int(s.get("positions_count", 0)),
+                    "Signaux 24h": int(s.get("signals_24h", 0)),
+                    "Alertes 24h": int(s.get("alerts_24h", 0)),
+                    "Drawdown (%)": float(s.get("drawdown_pct", 0.0) or 0.0),
+                }
+            )
+
+        if comp_rows:
+            comp_df = pd.DataFrame(comp_rows).sort_values("ROI (%)", ascending=False)
+            st.dataframe(comp_df, use_container_width=True)
+
+        # Override dashboard datasets/metrics with the selected AG1 portfolio.
+        selected_summary = active_portfolio.get("summary", {}) if isinstance(active_portfolio, dict) else {}
+        df_port = active_portfolio.get("df_portfolio", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_perf = active_portfolio.get("df_performance", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_trans = active_portfolio.get("df_transactions", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_sig_dashboard = active_portfolio.get("df_ai_signals", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_alt_dashboard = active_portfolio.get("df_alerts", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+
+        # Keep enrichment by Universe to preserve names/sector fallback if needed.
+        df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
+        df_trans = enrich_df_with_name(df_trans, df_univ) if df_trans is not None else pd.DataFrame()
+
+        init_cap = safe_float(selected_summary.get("init_cap", 50000.0)) or 50000.0
+        total_val = safe_float(selected_summary.get("total_val", 0.0))
+        cash = safe_float(selected_summary.get("cash", 0.0))
+        invest = safe_float(selected_summary.get("invest", 0.0))
+        roi = float(selected_summary.get("roi", 0.0) or 0.0)
+        cash_pct = float(selected_summary.get("cash_pct", 0.0) or 0.0)
+
+        last_model_txt = str(selected_summary.get("last_model", "") or "")
+        last_update_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+        last_update_txt = (
+            last_update_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
+            if pd.notna(last_update_ts)
+            else "N/A"
+        )
+        st.info(
+            f"Portefeuille actif: {active_portfolio.get('label', selected_portfolio_key)} | "
+            f"Dernier run: {selected_summary.get('last_run_id', 'N/A')} | "
+            f"Modele: {last_model_txt or 'N/A'} | MAJ: {last_update_txt}"
+        )
+    else:
+        st.warning(
+            "Aucune base AG1-V2 multi-portefeuille disponible. "
+            "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
+        )
+        df_sig_dashboard = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
+        df_alt_dashboard = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+
+    # Detailed KPI band (active portfolio / legacy fallback)
     c1, c2, c3, c4, c5, c6 = st.columns(6)
     c1.metric("Capital Depart", f"{init_cap:,.0f} EUR")
     c2.metric("Valeur Totale", f"{total_val:,.2f} EUR", delta=f"{total_val - init_cap:,.2f} EUR")
@@ -3641,7 +4234,14 @@ if page == "Dashboard Trading":
     c5.metric("ROI", f"{roi * 100:.2f} %")
     c6.metric("% Cash", f"{cash_pct:.1f} %")
 
-    t1, t2, t3, t4 = st.tabs(["Portefeuille", "Performance", "Cerveau IA", "Marche & Recherche"])
+    t1, t2, t3, t4 = st.tabs(
+        [
+            "Portefeuille (actif)",
+            "Performance (actif)",
+            "Cerveau IA (actif)",
+            "Marche & Recherche (global)",
+        ]
+    )
 
     # TAB 1: PORTEFEUILLE
     with t1:
@@ -3733,7 +4333,8 @@ if page == "Dashboard Trading":
             df_view = df_clean[cols_exist].copy()
             if "marketvalue" in df_view.columns:
                 df_view = df_view.sort_values("marketvalue", ascending=False)
-            render_interactive_table(df_view, key_suffix="positions", hide_index=True)
+            pos_key = f"positions_{selected_portfolio_key}" if selected_portfolio_key else "positions"
+            render_interactive_table(df_view, key_suffix=pos_key, hide_index=True)
         else:
             st.info("Portefeuille vide.")
 
@@ -4025,20 +4626,37 @@ if page == "Dashboard Trading":
 
     # TAB 3: CERVEAU IA
     with t3:
-        df_sig = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
-        df_alt = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+        if "df_sig_dashboard" in locals() and df_sig_dashboard is not None and not df_sig_dashboard.empty:
+            df_sig = enrich_df_with_name(df_sig_dashboard, df_univ)
+        else:
+            df_sig = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
+
+        if "df_alt_dashboard" in locals() and df_alt_dashboard is not None and not df_alt_dashboard.empty:
+            df_alt = enrich_df_with_name(df_alt_dashboard, df_univ)
+        else:
+            df_alt = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+
+        if selected_portfolio_key and active_portfolio:
+            st.caption(
+                f"Source AG1-V2: {active_portfolio.get('label', selected_portfolio_key)} "
+                f"({active_portfolio.get('db_path', '')})"
+            )
+        else:
+            st.caption("Source legacy (Google Sheets)")
 
         st.subheader("🚦 Signaux")
         if df_sig is not None and not df_sig.empty:
             if "rationale" in df_sig.columns:
                 df_sig["rationale"] = df_sig["rationale"].apply(clean_text)
-            render_interactive_table(df_sig, key_suffix="sig")
+            sig_key = f"sig_{selected_portfolio_key}" if selected_portfolio_key else "sig"
+            render_interactive_table(df_sig, key_suffix=sig_key)
         else:
             st.caption("Aucun signal.")
 
         st.subheader("Alertes")
         if df_alt is not None and not df_alt.empty:
-            render_interactive_table(df_alt, key_suffix="alt")
+            alt_key = f"alt_{selected_portfolio_key}" if selected_portfolio_key else "alt"
+            render_interactive_table(df_alt, key_suffix=alt_key)
         else:
             st.caption("RAS")
 
