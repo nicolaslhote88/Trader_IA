@@ -44,6 +44,10 @@ function getRowNum(r) {
   return Number.isFinite(n) ? n : null;
 }
 
+function normDbPath(v) {
+  return String(v ?? "").trim();
+}
+
 function loadConfig() {
   const candidates = ["PF.00 - Config", "PF.00", "Config"];
   for (const name of candidates) {
@@ -58,70 +62,85 @@ function loadConfig() {
 const cfg = loadConfig();
 const rows = $input.all().map(i => i.json || {});
 
-const metaRow = rows.find(r => normSymbol(r.Symbol) === "__META__") || null;
-const cashRow = rows.find(r => normSymbol(r.Symbol) === "CASH_EUR") || null;
+// Group rows by portfolio DB path so each portfolio keeps its own cash/meta context.
+const groups = new Map();
+for (const r of rows) {
+  const dbPath = normDbPath(r.portfolio_db_path || r.db_path || cfg.portfolio_db_path);
+  const key = dbPath || "__NO_DB__";
+  if (!groups.has(key)) groups.set(key, []);
+  groups.get(key).push(r);
+}
 
-const metaRowNumSrc = getRowNum(metaRow);
-const cashRowNumSrc = getRowNum(cashRow);
+const out = [];
 
-const headerOffset = (metaRowNumSrc === 1) ? 1 : 0;
-const metaRowNumber = (metaRowNumSrc ?? 1) + headerOffset;
-const cashRowNumber = (cashRowNumSrc ?? 2) + headerOffset;
+for (const [dbPath, grpRows] of groups.entries()) {
+  const metaRow = grpRows.find(r => normSymbol(r.Symbol) === "__META__") || null;
+  const cashRow = grpRows.find(r => normSymbol(r.Symbol) === "CASH_EUR") || null;
 
-const initialCapitalEUR = metaRow ? parseFrNumber(metaRow.MarketValue) : 50000;
-const cashMarketValueRaw = cashRow?.MarketValue ?? cashRow?.LastPrice ?? "";
-const cashMarketValueEUR = parseFrNumber(cashMarketValueRaw);
+  const metaRowNumSrc = getRowNum(metaRow);
+  const cashRowNumSrc = getRowNum(cashRow);
 
-const pf_ctx = {
-  headerOffset,
-  meta: {
-    row_number: metaRowNumber,
-    row_number_src: metaRowNumSrc,
-    UpdatedAt: metaRow?.UpdatedAt ?? null,
-    initialCapitalEUR,
-  },
-  cash: {
-    row_number: cashRowNumber,
-    row_number_src: cashRowNumSrc,
-    UpdatedAt: cashRow?.UpdatedAt ?? null,
-    MarketValueRaw: cashMarketValueRaw,
-    MarketValueEUR: cashMarketValueEUR,
-  },
-};
+  const headerOffset = (metaRowNumSrc === 1) ? 1 : 0;
+  const metaRowNumber = (metaRowNumSrc ?? 1) + headerOffset;
+  const cashRowNumber = (cashRowNumSrc ?? 2) + headerOffset;
 
-const positions = rows.filter(r => {
-  const sym = normSymbol(r.Symbol);
-  if (!sym) return false;
-  if (sym === "__META__") return false;
-  if (sym === "CASH_EUR") return false;
+  const initialCapitalEUR = metaRow ? parseFrNumber(metaRow.MarketValue) : 50000;
+  const cashMarketValueRaw = cashRow?.MarketValue ?? cashRow?.LastPrice ?? "";
+  const cashMarketValueEUR = parseFrNumber(cashMarketValueRaw);
 
-  const q = r.Quantity ?? r.qty;
-  return q !== null && q !== undefined && String(q).trim() !== "";
-});
-
-const out = positions.map(r => {
-  const rowNumSrc = getRowNum(r);
-  const rowNumSheet = rowNumSrc !== null ? (rowNumSrc + headerOffset) : null;
-
-  const symbol = normSymbol(r.Symbol);
-  const qty = parseFrNumber(r.Quantity ?? r.qty);
-  const avgPrice = parseFrNumber(r.AvgPrice ?? r.avgPrice);
-
-  return {
-    ...cfg,
-    ...r,
-    pf_ctx,
-    row_number_src: rowNumSrc,
-    row_number: rowNumSheet ?? rowNumSrc,
-    symbol,
-    qty,
-    avgPrice,
-    Name: r.Name,
-    AssetClass: r.AssetClass,
-    Sector: r.Sector,
-    Industry: r.Industry,
-    ISIN: r.ISIN,
+  const pf_ctx = {
+    portfolio_db_path: dbPath === "__NO_DB__" ? "" : dbPath,
+    headerOffset,
+    meta: {
+      row_number: metaRowNumber,
+      row_number_src: metaRowNumSrc,
+      UpdatedAt: metaRow?.UpdatedAt ?? null,
+      initialCapitalEUR,
+    },
+    cash: {
+      row_number: cashRowNumber,
+      row_number_src: cashRowNumSrc,
+      UpdatedAt: cashRow?.UpdatedAt ?? null,
+      MarketValueRaw: cashMarketValueRaw,
+      MarketValueEUR: cashMarketValueEUR,
+    },
   };
-});
+
+  const positions = grpRows.filter(r => {
+    const sym = normSymbol(r.Symbol);
+    if (!sym) return false;
+    if (sym === "__META__") return false;
+    if (sym === "CASH_EUR") return false;
+
+    const q = r.Quantity ?? r.qty;
+    return q !== null && q !== undefined && String(q).trim() !== "";
+  });
+
+  for (const r of positions) {
+    const rowNumSrc = getRowNum(r);
+    const rowNumSheet = rowNumSrc !== null ? (rowNumSrc + headerOffset) : null;
+
+    const symbol = normSymbol(r.Symbol);
+    const qty = parseFrNumber(r.Quantity ?? r.qty);
+    const avgPrice = parseFrNumber(r.AvgPrice ?? r.avgPrice);
+
+    out.push({
+      ...cfg,
+      ...r,
+      portfolio_db_path: dbPath === "__NO_DB__" ? (r.portfolio_db_path || cfg.portfolio_db_path || "") : dbPath,
+      pf_ctx,
+      row_number_src: rowNumSrc,
+      row_number: rowNumSheet ?? rowNumSrc,
+      symbol,
+      qty,
+      avgPrice,
+      Name: r.Name,
+      AssetClass: r.AssetClass,
+      Sector: r.Sector,
+      Industry: r.Industry,
+      ISIN: r.ISIN,
+    });
+  }
+}
 
 return out.map(j => ({ json: j }));

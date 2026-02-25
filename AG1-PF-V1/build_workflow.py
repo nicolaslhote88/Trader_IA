@@ -82,13 +82,31 @@ def build() -> dict:
                         {
                             "id": "pf00-07",
                             "name": "portfolio_db_path",
-                            "value": "/files/duckdb/ag1_v2.duckdb",
+                            "value": "/files/duckdb/ag1_v2_chatgpt52.duckdb",
+                            "type": "string",
+                        },
+                        {
+                            "id": "pf00-07b",
+                            "name": "portfolio_db_paths_json",
+                            "value": (
+                                "["
+                                "\"/files/duckdb/ag1_v2_chatgpt52.duckdb\","
+                                "\"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\","
+                                "\"/files/duckdb/ag1_v2_gemini30_pro.duckdb\""
+                                "]"
+                            ),
+                            "type": "string",
+                        },
+                        {
+                            "id": "pf00-07c",
+                            "name": "universe_db_path",
+                            "value": "/files/duckdb/ag2_v2.duckdb",
                             "type": "string",
                         },
                         {
                             "id": "pf00-08",
                             "name": "workflow_name",
-                            "value": "PF Portfolio MTM Updater",
+                            "value": "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)",
                             "type": "string",
                         },
                         {
@@ -109,98 +127,20 @@ def build() -> dict:
         },
         {
             "parameters": {
-                "documentId": {
-                    "__rl": True,
-                    "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-                    "mode": "list",
-                    "cachedResultName": "TradingSim_GoogleSheet_Template",
-                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk",
-                },
-                "sheetName": {
-                    "__rl": True,
-                    "value": 757810202,
-                    "mode": "list",
-                    "cachedResultName": "Portefeuille",
-                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=757810202",
-                },
-                "options": {},
+                "language": "pythonNative",
+                "pythonCode": load_code("00_read_portfolios_duckdb.py"),
             },
-            "type": "n8n-nodes-base.googleSheets",
-            "typeVersion": 4.7,
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
             "position": [240, 0],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f104",
             "name": "Read Portfolio",
-            "credentials": {
-                "googleSheetsOAuth2Api": {
-                    "id": "aX5iAQEN9HK4UGjr",
-                    "name": "Google Sheets account",
-                }
-            },
-        },
-        {
-            "parameters": {
-                "documentId": {
-                    "__rl": True,
-                    "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-                    "mode": "list",
-                    "cachedResultName": "TradingSim_GoogleSheet_Template",
-                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk",
-                },
-                "sheetName": {
-                    "__rl": True,
-                    "value": 1078848687,
-                    "mode": "list",
-                    "cachedResultName": "Universe",
-                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687",
-                },
-                "filtersUI": {
-                    "values": [
-                        {
-                            "lookupColumn": "Symbol",
-                            "lookupValue": "={{ $json.Symbol || '' }}",
-                        }
-                    ]
-                },
-                "options": {},
-            },
-            "type": "n8n-nodes-base.googleSheets",
-            "typeVersion": 4.7,
-            "position": [480, 128],
-            "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f105",
-            "name": "Get Universe Row",
-            "credentials": {
-                "googleSheetsOAuth2Api": {
-                    "id": "aX5iAQEN9HK4UGjr",
-                    "name": "Google Sheets account",
-                }
-            },
-        },
-        {
-            "parameters": {"jsCode": load_code("09_filter_universe_columns.js")},
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [704, 128],
-            "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f106",
-            "name": "Filter Universe Columns",
-        },
-        {
-            "parameters": {
-                "mode": "combine",
-                "fieldsToMatchString": "Symbol",
-                "joinMode": "enrichInput1",
-                "options": {},
-            },
-            "type": "n8n-nodes-base.merge",
-            "typeVersion": 3.2,
-            "position": [928, 0],
-            "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f107",
-            "name": "Merge Portfolio + Universe",
         },
         {
             "parameters": {"jsCode": load_code("03_normalize_positions.js")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [1152, 0],
+            "position": [480, 0],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f108",
             "name": "PF.02 - Normalize Positions",
         },
@@ -208,7 +148,7 @@ def build() -> dict:
             "parameters": {"options": {}},
             "type": "n8n-nodes-base.splitInBatches",
             "typeVersion": 3,
-            "position": [1376, 0],
+            "position": [704, 0],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f109",
             "name": "Loop Over Items",
         },
@@ -320,7 +260,7 @@ def build() -> dict:
             "typeVersion": 2,
             "position": [1616, -160],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f117",
-            "name": "PF.08 - Build Sheet Updates",
+            "name": "PF.08 - Build DuckDB Payloads",
         },
         {
             "parameters": {
@@ -336,55 +276,7 @@ def build() -> dict:
         },
         {
             "parameters": {
-                "operation": "update",
-                "documentId": {
-                    "__rl": True,
-                    "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-                    "mode": "list",
-                    "cachedResultName": "TradingSim_GoogleSheet_Template",
-                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk",
-                },
-                "sheetName": {
-                    "__rl": True,
-                    "value": 757810202,
-                    "mode": "list",
-                    "cachedResultName": "Portefeuille",
-                    "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=757810202",
-                },
-                "columns": {
-                    "mappingMode": "defineBelow",
-                    "value": {
-                        "row_number": "={{ $json.row_number }}",
-                        "LastPrice": "={{ $json.LastPrice }}",
-                        "MarketValue": "={{ $json.MarketValue }}",
-                        "UnrealizedPnL": "={{ $json.UnrealizedPnL }}",
-                        "UpdatedAt": "={{ $json.UpdatedAt }}",
-                        "Name": "={{ $json.Name }}",
-                        "AssetClass": "={{ $json.AssetClass }}",
-                        "Sector": "={{ $json.Sector }}",
-                        "Industry": "={{ $json.Industry }}",
-                    },
-                    "matchingColumns": ["row_number"],
-                    "attemptToConvertTypes": False,
-                    "convertFieldsToString": False,
-                },
-                "options": {},
-            },
-            "type": "n8n-nodes-base.googleSheets",
-            "typeVersion": 4.7,
-            "position": [2064, -160],
-            "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f119",
-            "name": "Update Portfolio Row",
-            "credentials": {
-                "googleSheetsOAuth2Api": {
-                    "id": "aX5iAQEN9HK4UGjr",
-                    "name": "Google Sheets account",
-                }
-            },
-        },
-        {
-            "parameters": {
-                "content": "PF workflow: DuckDB is persisted at PF.08B, Google Sheets stays updated for manual control.",
+                "content": "PF workflow (refactored): read each AG1 portfolio from its dedicated DuckDB, compute MTM per position, then write MTM back to the same DuckDB (3 portfolios in one run).",
                 "height": 220,
                 "width": 900,
                 "color": 5,
@@ -401,21 +293,11 @@ def build() -> dict:
         "Schedule Trigger": {"main": [[{"node": "PF.00 - Config", "type": "main", "index": 0}]]},
         "Manual Trigger": {"main": [[{"node": "PF.00 - Config", "type": "main", "index": 0}]]},
         "PF.00 - Config": {"main": [[{"node": "Read Portfolio", "type": "main", "index": 0}]]},
-        "Read Portfolio": {
-            "main": [
-                [
-                    {"node": "Get Universe Row", "type": "main", "index": 0},
-                    {"node": "Merge Portfolio + Universe", "type": "main", "index": 0},
-                ]
-            ]
-        },
-        "Get Universe Row": {"main": [[{"node": "Filter Universe Columns", "type": "main", "index": 0}]]},
-        "Filter Universe Columns": {"main": [[{"node": "Merge Portfolio + Universe", "type": "main", "index": 1}]]},
-        "Merge Portfolio + Universe": {"main": [[{"node": "PF.02 - Normalize Positions", "type": "main", "index": 0}]]},
+        "Read Portfolio": {"main": [[{"node": "PF.02 - Normalize Positions", "type": "main", "index": 0}]]},
         "PF.02 - Normalize Positions": {"main": [[{"node": "Loop Over Items", "type": "main", "index": 0}]]},
         "Loop Over Items": {
             "main": [
-                [{"node": "PF.08 - Build Sheet Updates", "type": "main", "index": 0}],
+                [{"node": "PF.08 - Build DuckDB Payloads", "type": "main", "index": 0}],
                 [
                     {"node": "PF.05A - Fetch Price 1D", "type": "main", "index": 0},
                     {"node": "PF.05B - Fetch Price 1H", "type": "main", "index": 0},
@@ -430,12 +312,11 @@ def build() -> dict:
         "PF.05B - Wrap 1H": {"main": [[{"node": "PF.06B - Merge (+ 1H)", "type": "main", "index": 1}]]},
         "PF.06B - Merge (+ 1H)": {"main": [[{"node": "PF.07 - Compute MTM", "type": "main", "index": 0}]]},
         "PF.07 - Compute MTM": {"main": [[{"node": "Loop Over Items", "type": "main", "index": 0}]]},
-        "PF.08 - Build Sheet Updates": {"main": [[{"node": "PF.08B - Write Positions MTM DuckDB", "type": "main", "index": 0}]]},
-        "PF.08B - Write Positions MTM DuckDB": {"main": [[{"node": "Update Portfolio Row", "type": "main", "index": 0}]]},
+        "PF.08 - Build DuckDB Payloads": {"main": [[{"node": "PF.08B - Write Positions MTM DuckDB", "type": "main", "index": 0}]]},
     }
 
     return {
-        "name": "AG1-PF-V1 - Portfolio MTM (DuckDB + Sheets)",
+        "name": "AG1-PF-V1 - Portfolio MTM (DuckDB-only, Multi AG1-V2)",
         "nodes": nodes,
         "connections": connections,
         "pinData": {},
