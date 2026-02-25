@@ -7,6 +7,11 @@ function safeNum(v) {
   return Number.isFinite(n) ? n : 0;
 }
 
+function safeNumOrNull(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
 function round2(v) {
   const n = safeNum(v);
   return Math.round((n + Number.EPSILON) * 100) / 100;
@@ -24,6 +29,12 @@ function safeJsonParse(v, fallback = null) {
     if (typeof v === "object") return v;
     return JSON.parse(String(v));
   } catch {
+    try {
+      const s = String(v ?? "");
+      if (s.includes(";")) {
+        return JSON.parse(s.replace(/;/g, ","));
+      }
+    } catch {}
     return fallback;
   }
 }
@@ -31,6 +42,11 @@ function safeJsonParse(v, fallback = null) {
 function normPath(v) {
   const s = String(v ?? "").trim();
   return s || null;
+}
+
+function isLegacyAg1DbPath(v) {
+  const s = String(v ?? "").trim().toLowerCase().replace(/\\/g, "/");
+  return s.endsWith("/ag1_v2.duckdb");
 }
 
 function normSymbol(v) {
@@ -92,14 +108,14 @@ function resolvePortfolioDbPaths(cfg, inItems, readRows) {
   const parsedJson = safeJsonParse(cfg?.portfolio_db_paths_json, null);
   const arr2 = Array.isArray(parsedJson) ? parsedJson : [];
   const csv = String(cfg?.portfolio_db_paths_csv ?? "").trim();
-  const arr3 = csv ? csv.split(",").map((x) => x.trim()) : [];
+  const arr3 = csv ? csv.split(/[;,]/).map((x) => x.trim()) : [];
   const singles = [
     cfg?.portfolio_db_path,
     ...inItems.map((j) => j?.portfolio_db_path || j?.db_path),
     ...readRows.map((r) => r?.portfolio_db_path || r?.db_path),
   ];
-  const fallback = ["/files/duckdb/ag1_v2_chatgpt52.duckdb"];
-  return uniqPaths([...arr1, ...arr2, ...arr3, ...singles, ...fallback]);
+  const fallback = ["/local-files/duckdb/ag1_v2_chatgpt52.duckdb"];
+  return uniqPaths([...arr1, ...arr2, ...arr3, ...singles, ...fallback]).filter((p) => !isLegacyAg1DbPath(p));
 }
 
 function buildPfCtxFromRows(rows, dbPath) {
@@ -170,7 +186,10 @@ const positionUpdates = inItems
   .filter((j) => j?.gs_update?.row_number != null)
   .map((j) => {
     const u = j.gs_update;
-    const primaryDbPath = normPath(j.portfolio_db_path || j.db_path || cfg.portfolio_db_path) || "/files/duckdb/ag1_v2_chatgpt52.duckdb";
+    let primaryDbPath = normPath(j.portfolio_db_path || j.db_path || cfg.portfolio_db_path);
+    if (!primaryDbPath || isLegacyAg1DbPath(primaryDbPath)) {
+      primaryDbPath = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb";
+    }
     seenPositionDbs.add(primaryDbPath);
     const pfCtx = j.pf_ctx || ctxByDb.get(primaryDbPath) || {};
     const pfCash = pfCtx.cash || {};
@@ -205,7 +224,7 @@ const positionUpdates = inItems
       // Portfolio context persisted by PF.08B in DuckDB technical rows (per portfolio).
       pf_cash_market_value: safeNum(pfCash.MarketValueEUR),
       pf_cash_updated_at: pfCash.UpdatedAt || nowIso,
-      pf_initial_capital: safeNum(pfMeta.initialCapitalEUR),
+      pf_initial_capital: safeNumOrNull(pfMeta.initialCapitalEUR),
       pf_meta_updated_at: pfMeta.UpdatedAt || nowIso,
     };
   });
@@ -240,14 +259,17 @@ for (const dbPath of targetDbPaths) {
     mtm_price_asof: null,
     pf_cash_market_value: safeNum(pfCash.MarketValueEUR),
     pf_cash_updated_at: pfCash.UpdatedAt || nowIso,
-    pf_initial_capital: safeNum(pfMeta.initialCapitalEUR),
+    pf_initial_capital: safeNumOrNull(pfMeta.initialCapitalEUR),
     pf_meta_updated_at: pfMeta.UpdatedAt || nowIso,
   });
 }
 
 // Safety net if no targets were resolved but PF.08 still executes.
 if (positionUpdates.length === 0) {
-  const primaryDbPath = normPath(cfg.portfolio_db_path) || "/files/duckdb/ag1_v2_chatgpt52.duckdb";
+  let primaryDbPath = normPath(cfg.portfolio_db_path);
+  if (!primaryDbPath || isLegacyAg1DbPath(primaryDbPath)) {
+    primaryDbPath = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb";
+  }
   positionUpdates.push({
     row_number: null,
     LastPrice: 0,
@@ -272,7 +294,7 @@ if (positionUpdates.length === 0) {
     mtm_price_asof: null,
     pf_cash_market_value: 0,
     pf_cash_updated_at: nowIso,
-    pf_initial_capital: 0,
+    pf_initial_capital: null,
     pf_meta_updated_at: nowIso,
   });
 }

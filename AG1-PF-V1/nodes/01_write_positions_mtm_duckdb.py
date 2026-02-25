@@ -1,12 +1,14 @@
 import gc
 import json
+import os
+import re
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 import duckdb
 
-DEFAULT_DB_PATH = "/files/duckdb/ag1_v2_chatgpt52.duckdb"
+DEFAULT_DB_PATH = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb"
 DEFAULT_WORKFLOW_NAME = "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)"
 
 
@@ -92,6 +94,11 @@ def to_text(v):
     return "" if s.lower() in ("nan", "nat", "none", "null") else s.strip()
 
 
+def is_legacy_ag1_db_path(v):
+    s = to_text(v).lower().replace("\\", "/")
+    return s.endswith("/ag1_v2.duckdb")
+
+
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
@@ -124,8 +131,9 @@ def _parse_paths_candidate(v):
         except Exception:
             pass
 
-    if "," in s:
-        return [p for p in (to_text(x) for x in s.split(",")) if p]
+    if "," in s or ";" in s:
+        parts = [to_text(x).strip().strip('"').strip("'") for x in re.split(r"[;,]", s.strip().strip("[]"))]
+        return [p for p in parts if p]
 
     return [s]
 
@@ -145,12 +153,48 @@ def _dedupe_paths(paths):
     return out
 
 
+def _path_alias_candidates(path_text):
+    p = to_text(path_text).replace("\\", "/")
+    if not p:
+        return []
+    out = [p]
+    if p.startswith("/local-files/"):
+        out.append("/files/" + p[len("/local-files/"):])
+    elif p.startswith("/files/"):
+        out.append("/local-files/" + p[len("/files/"):])
+    return _dedupe_paths(out)
+
+
+def _resolve_rw_db_path(path_text):
+    cands = _path_alias_candidates(path_text)
+    if not cands:
+        return DEFAULT_DB_PATH
+    for p in cands:
+        try:
+            if os.path.exists(p):
+                return p
+        except Exception:
+            pass
+    for p in cands:
+        try:
+            d = os.path.dirname(p)
+            if d and os.path.isdir(d):
+                return p
+        except Exception:
+            pass
+    return cands[0]
+
+
 def group_items_by_db(items):
     groups = {}
     order = []
     for it in items:
         j = (it or {}).get("json", {}) or {}
         db_path = to_text(pick(j.get("portfolio_db_path"), j.get("db_path"), j.get("duckdb_path"))) or DEFAULT_DB_PATH
+        if is_legacy_ag1_db_path(db_path):
+            # Ignore stale mono-DB target and force dedicated AG1-v2 default.
+            db_path = DEFAULT_DB_PATH
+        db_path = _resolve_rw_db_path(db_path)
         if db_path not in groups:
             groups[db_path] = []
             order.append(db_path)
@@ -305,7 +349,7 @@ def build_rows(items, run_id, now_iso):
             }
         )
 
-    if initial_capital is not None:
+    if initial_capital is not None and initial_capital > 0:
         rows.append(
             {
                 "id": f"{run_id}|__META__|0",

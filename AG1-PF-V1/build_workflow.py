@@ -82,7 +82,7 @@ def build() -> dict:
                         {
                             "id": "pf00-07",
                             "name": "portfolio_db_path",
-                            "value": "/files/duckdb/ag1_v2_chatgpt52.duckdb",
+                            "value": "/local-files/duckdb/ag1_v2_chatgpt52.duckdb",
                             "type": "string",
                         },
                         {
@@ -90,9 +90,9 @@ def build() -> dict:
                             "name": "portfolio_db_paths_json",
                             "value": (
                                 "["
-                                "\"/files/duckdb/ag1_v2_chatgpt52.duckdb\","
-                                "\"/files/duckdb/ag1_v2_grok41_reasoning.duckdb\","
-                                "\"/files/duckdb/ag1_v2_gemini30_pro.duckdb\""
+                                "\"/local-files/duckdb/ag1_v2_chatgpt52.duckdb\","
+                                "\"/local-files/duckdb/ag1_v2_grok41_reasoning.duckdb\","
+                                "\"/local-files/duckdb/ag1_v2_gemini30_pro.duckdb\""
                                 "]"
                             ),
                             "type": "string",
@@ -100,7 +100,7 @@ def build() -> dict:
                         {
                             "id": "pf00-07c",
                             "name": "universe_db_path",
-                            "value": "/files/duckdb/ag2_v2.duckdb",
+                            "value": "/local-files/duckdb/ag2_v2.duckdb",
                             "type": "string",
                         },
                         {

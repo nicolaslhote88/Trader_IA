@@ -9,11 +9,11 @@ from datetime import datetime, timezone
 import duckdb
 
 DEFAULT_TARGETS = [
-    "/files/duckdb/ag1_v2_chatgpt52.duckdb",
-    "/files/duckdb/ag1_v2_grok41_reasoning.duckdb",
-    "/files/duckdb/ag1_v2_gemini30_pro.duckdb",
+    "/local-files/duckdb/ag1_v2_chatgpt52.duckdb",
+    "/local-files/duckdb/ag1_v2_grok41_reasoning.duckdb",
+    "/local-files/duckdb/ag1_v2_gemini30_pro.duckdb",
 ]
-DEFAULT_UNIVERSE_DB_PATH = "/files/duckdb/ag2_v2.duckdb"
+DEFAULT_UNIVERSE_DB_PATH = "/local-files/duckdb/ag2_v2.duckdb"
 DEFAULT_UNIVERSE_TABLE = "universe"
 
 
@@ -73,8 +73,14 @@ def _parse_paths_candidate(v):
                 return [to_text(x) for x in arr if to_text(x)]
         except Exception:
             pass
-    if "," in s:
-        return [to_text(x) for x in s.split(",") if to_text(x)]
+    if "," in s or ";" in s:
+        parts = re.split(r"[;,]", s.strip().strip("[]"))
+        out = []
+        for x in parts:
+            t = to_text(x).strip().strip('"').strip("'")
+            if t:
+                out.append(t)
+        return out
     return [s]
 
 
@@ -91,6 +97,36 @@ def dedupe_paths(paths):
         seen.add(key)
         out.append(t)
     return out
+
+
+def _is_legacy_ag1_db_path(path_text):
+    p = to_text(path_text).lower().replace("\\", "/")
+    return p.endswith("/ag1_v2.duckdb")
+
+
+def _path_alias_candidates(path_text):
+    p = to_text(path_text).replace("\\", "/")
+    if not p:
+        return []
+    out = [p]
+    if p.startswith("/local-files/"):
+        out.append("/files/" + p[len("/local-files/"):])
+    elif p.startswith("/files/"):
+        out.append("/local-files/" + p[len("/files/"):])
+    return dedupe_paths(out)
+
+
+def _resolve_existing_db_path(path_text):
+    cands = _path_alias_candidates(path_text)
+    if not cands:
+        return ""
+    for p in cands:
+        try:
+            if os.path.exists(p):
+                return p
+        except Exception:
+            pass
+    return cands[0]
 
 
 def _norm_symbol(v):
@@ -136,9 +172,11 @@ def resolve_target_paths(cfg):
     paths.extend(_parse_paths_candidate(cfg.get("portfolio_db_paths_csv")))
     if not paths:
         paths.extend(_parse_paths_candidate(cfg.get("portfolio_db_path")))
+    paths = dedupe_paths(paths)
+    paths = [p for p in paths if not _is_legacy_ag1_db_path(p)]
     if not paths:
         paths = list(DEFAULT_TARGETS)
-    return dedupe_paths(paths)
+    return paths
 
 
 def _resolve_universe_db_path(cfg):
@@ -151,8 +189,8 @@ def _resolve_universe_db_path(cfg):
     for c in candidates:
         s = to_text(c)
         if s:
-            return s
-    return DEFAULT_UNIVERSE_DB_PATH
+            return _resolve_existing_db_path(s)
+    return _resolve_existing_db_path(DEFAULT_UNIVERSE_DB_PATH)
 
 
 def _load_universe_map(cfg):
@@ -488,18 +526,50 @@ cfg = cfg if isinstance(cfg, dict) else {}
 targets = resolve_target_paths(cfg)
 universe_map = _load_universe_map(cfg)
 out_rows = []
+diag = []
 
-for db_path in targets:
+for db_path_cfg in targets:
+    db_path = _resolve_existing_db_path(db_path_cfg)
+    d = {
+        "configured_db_path": db_path_cfg,
+        "resolved_db_path": db_path,
+        "resolved_path_exists": bool(db_path and os.path.exists(db_path)),
+    }
     with db_con(db_path) as con:
         if con is None:
+            d["status"] = "CONNECT_FAILED"
+            diag.append(d)
             continue
 
-        rows = _legacy_rows(con, db_path)
+        # AG1-V2 ledger (core.*) is the source of truth for current portfolio state.
+        # Legacy MTM table can lag behind after trades, so only use it as fallback.
+        rows = _core_rows(con, db_path)
+        source = "core_snapshots" if rows else None
         if not rows:
-            rows = _core_rows(con, db_path)
+            rows = _legacy_rows(con, db_path)
+            if rows:
+                source = "legacy_mtm_latest"
         rows = _enrich_rows_from_universe(rows, universe_map)
+        d["status"] = "OK" if rows else "NO_ROWS"
+        d["rows"] = len(rows)
+        d["portfolio_source"] = source or ""
+        diag.append(d)
 
         for r in rows:
             out_rows.append({"json": r})
+
+if not out_rows:
+    compact = []
+    for d in diag:
+        compact.append(
+            f"{d.get('configured_db_path')} -> {d.get('resolved_db_path')} "
+            f"(exists={d.get('resolved_path_exists')}, status={d.get('status')}, rows={d.get('rows', 0)})"
+        )
+    hint = " | ".join(compact)[:1800]
+    raise RuntimeError(
+        "Read Portfolio: aucune ligne lue depuis les bases AG1 dediees. "
+        "Verifier les mounts Docker (/local-files vs /files) et la presence des tables core.*. "
+        + hint
+    )
 
 return out_rows
