@@ -400,13 +400,30 @@ def write_rows_to_db(db_path, rows, rows_in, run_id, workflow_name):
                 try:
                     con.execute(
                         """
-                        INSERT OR REPLACE INTO portfolio_positions_mtm_latest
+                        INSERT INTO portfolio_positions_mtm_latest
                         (
                             symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,
                             quantity, avg_price, last_price, market_value, unrealized_pnl,
                             updated_at, source_updated_at, run_id, ingested_at
                         )
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        ON CONFLICT (symbol) DO UPDATE SET
+                            row_number        = excluded.row_number,
+                            symbol_raw        = excluded.symbol_raw,
+                            quantity          = excluded.quantity,
+                            avg_price         = excluded.avg_price,
+                            last_price        = excluded.last_price,
+                            market_value      = excluded.market_value,
+                            unrealized_pnl    = excluded.unrealized_pnl,
+                            updated_at        = excluded.updated_at,
+                            source_updated_at = excluded.source_updated_at,
+                            run_id            = excluded.run_id,
+                            ingested_at       = CURRENT_TIMESTAMP,
+                            name       = CASE WHEN excluded.name       IS NOT NULL AND excluded.name       <> '' THEN excluded.name       ELSE portfolio_positions_mtm_latest.name       END,
+                            asset_class= CASE WHEN excluded.asset_class IS NOT NULL AND excluded.asset_class <> '' THEN excluded.asset_class ELSE portfolio_positions_mtm_latest.asset_class END,
+                            sector     = CASE WHEN excluded.sector     IS NOT NULL AND excluded.sector     <> '' THEN excluded.sector     ELSE portfolio_positions_mtm_latest.sector     END,
+                            industry   = CASE WHEN excluded.industry   IS NOT NULL AND excluded.industry   <> '' THEN excluded.industry   ELSE portfolio_positions_mtm_latest.industry   END,
+                            isin       = CASE WHEN excluded.isin       IS NOT NULL AND excluded.isin       <> '' THEN excluded.isin       ELSE portfolio_positions_mtm_latest.isin       END
                         """,
                         [
                             row["symbol"], row["row_number"], row["symbol_raw"], row["name"], row["asset_class"],
