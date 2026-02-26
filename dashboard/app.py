@@ -1458,6 +1458,535 @@ def _indicator_bar(key: str, value: float, tf_label: str = "") -> str:
 
 
 # ============================================================
+# HELPERS V2 - AG2 overview (visual/actionable)
+# ============================================================
+
+
+def _ag2_short_run_id(run_id: object) -> str:
+    s = str(run_id or "").strip()
+    if not s:
+        return "—"
+    return s if len(s) <= 22 else f"{s[:10]}...{s[-8:]}"
+
+
+def _ag2_safe_div(num: float, den: float) -> float | None:
+    try:
+        n = float(num)
+        d = float(den)
+    except Exception:
+        return None
+    if d == 0:
+        return None
+    return n / d
+
+
+def _ag2_ratio_text(num: float, den: float, digits: int = 1, suffix: str = "") -> str:
+    r = _ag2_safe_div(num, den)
+    if r is None:
+        return "—"
+    return f"{r * 100.0:.{digits}f}%{suffix}"
+
+
+def _ag2_delta_text(current: object, previous: object, *, digits: int = 0, prefix: str = "vs prev ") -> str | None:
+    cur = pd.to_numeric(pd.Series([current]), errors="coerce").iloc[0]
+    prev = pd.to_numeric(pd.Series([previous]), errors="coerce").iloc[0]
+    if pd.isna(cur) or pd.isna(prev):
+        return None
+    diff = float(cur) - float(prev)
+    sign = "+" if diff >= 0 else ""
+    return f"{prefix}{sign}{diff:.{digits}f}"
+
+
+def _ag2_age_hours(ts: object) -> float | None:
+    dt = pd.to_datetime(ts, errors="coerce", utc=True)
+    if pd.isna(dt):
+        return None
+    now_utc = pd.Timestamp.now(tz="UTC")
+    return max(0.0, float((now_utc - dt).total_seconds() / 3600.0))
+
+
+def _ag2_fmt_age(age_h: object) -> str:
+    n = pd.to_numeric(pd.Series([age_h]), errors="coerce").iloc[0]
+    if pd.isna(n):
+        return "—"
+    n = float(n)
+    if n < 24:
+        return f"{n:.1f}h"
+    return f"{(n / 24.0):.1f}j"
+
+
+def _ag2_status_pill_html(level: str, text: str | None = None) -> str:
+    lvl = str(level or "WARN").upper()
+    if lvl == "OK":
+        bg = "#16a34a"
+    elif lvl == "ERROR":
+        bg = "#dc2626"
+    else:
+        bg = "#d97706"
+        lvl = "WARN"
+    label = html.escape(text or lvl)
+    return (
+        f"<span style='display:inline-block;padding:4px 10px;border-radius:999px;"
+        f"background:{bg};color:#fff;font-weight:700;font-size:0.8rem;'>{label}</span>"
+    )
+
+
+def _ag2_norm_action_value(v: object) -> str:
+    s = str(v or "").strip().upper()
+    if s in ("BUY", "SELL", "NEUTRAL"):
+        return s
+    return "NEUTRAL"
+
+
+def _ag2_norm_ai_decision_value(v: object) -> str:
+    s = str(v or "").strip().upper()
+    if not s:
+        return "—"
+    return s
+
+
+def _ag2_pick_col(df: pd.DataFrame, candidates: list[str], default_name: str, default_value: object = pd.NA) -> pd.Series:
+    if df is None or df.empty:
+        return pd.Series([], dtype=object, name=default_name)
+    col = _first_existing_column(df, candidates)
+    if col and col in df.columns:
+        return df[col]
+    return pd.Series([default_value] * len(df), index=df.index, name=default_name)
+
+
+@st.cache_data(ttl=60)
+def _ag2_prepare_overview_working_df(df_signals: pd.DataFrame) -> pd.DataFrame:
+    if df_signals is None or df_signals.empty:
+        return pd.DataFrame()
+
+    wk = normalize_cols(df_signals.copy())
+    if "symbol" not in wk.columns:
+        wk["symbol"] = ""
+    wk["symbol"] = wk["symbol"].fillna("").astype(str).str.strip().str.upper()
+    wk = wk[wk["symbol"] != ""].copy()
+    if wk.empty:
+        return pd.DataFrame()
+
+    if "name" not in wk.columns:
+        wk["name"] = ""
+    if "sector" not in wk.columns:
+        wk["sector"] = ""
+    if "filter_reason" not in wk.columns:
+        wk["filter_reason"] = _ag2_pick_col(wk, ["filter", "reason"], "filter_reason", "")
+    if "ai_decision" not in wk.columns:
+        wk["ai_decision"] = _ag2_pick_col(wk, ["ia_decision", "decision_ia"], "ai_decision", "")
+    if "ai_quality" not in wk.columns:
+        wk["ai_quality"] = _ag2_pick_col(wk, ["ia_quality", "quality_ia"], "ai_quality", pd.NA)
+    if "call_ai" not in wk.columns:
+        wk["call_ai"] = _ag2_pick_col(wk, ["should_call_ai"], "call_ai", False)
+    if "workflow_date" not in wk.columns:
+        wk["workflow_date"] = _ag2_pick_col(wk, ["updated_at", "created_at", "date"], "workflow_date", pd.NaT)
+    if "last_close" not in wk.columns:
+        wk["last_close"] = _ag2_pick_col(wk, ["close", "d1_last_close", "h1_last_close"], "last_close", pd.NA)
+    if "d1_action" not in wk.columns:
+        wk["d1_action"] = _ag2_pick_col(wk, ["action_d1"], "d1_action", "")
+    if "h1_action" not in wk.columns:
+        wk["h1_action"] = _ag2_pick_col(wk, ["action_h1"], "h1_action", "")
+    if "d1_score" not in wk.columns:
+        wk["d1_score"] = _ag2_pick_col(wk, ["score_d1"], "d1_score", pd.NA)
+    if "h1_score" not in wk.columns:
+        wk["h1_score"] = _ag2_pick_col(wk, ["score_h1"], "h1_score", pd.NA)
+    if "d1_rsi14" not in wk.columns:
+        wk["d1_rsi14"] = _ag2_pick_col(wk, ["d1_rsi", "rsi_d1"], "d1_rsi14", pd.NA)
+    if "h1_rsi14" not in wk.columns:
+        wk["h1_rsi14"] = _ag2_pick_col(wk, ["h1_rsi", "rsi_h1"], "h1_rsi14", pd.NA)
+
+    wk["name"] = wk["name"].fillna("").astype(str).str.strip()
+    wk["sector"] = wk["sector"].fillna("").astype(str).str.strip().replace("", "Sans secteur")
+    wk["filter_reason"] = wk["filter_reason"].fillna("").astype(str).str.strip()
+    wk["ai_decision_norm"] = wk["ai_decision"].map(_ag2_norm_ai_decision_value)
+    wk["h1_action_norm"] = wk["h1_action"].map(_ag2_norm_action_value)
+    wk["d1_action_norm"] = wk["d1_action"].map(_ag2_norm_action_value)
+
+    wk["last_close_num"] = safe_float_series(wk["last_close"])
+    wk["h1_score_num"] = safe_float_series(wk["h1_score"])
+    wk["d1_score_num"] = safe_float_series(wk["d1_score"])
+    wk["h1_rsi_num"] = safe_float_series(wk["h1_rsi14"])
+    wk["d1_rsi_num"] = safe_float_series(wk["d1_rsi14"])
+    wk["ai_quality_num"] = safe_float_series(wk["ai_quality"])
+    wk["call_ai_flag"] = truthy_series(wk["call_ai"]) if "call_ai" in wk.columns else pd.Series(False, index=wk.index)
+
+    wk["workflow_ts"] = pd.to_datetime(wk["workflow_date"], errors="coerce", utc=True)
+    wk["h1_ts"] = pd.to_datetime(_ag2_pick_col(wk, ["h1_date", "h1_ts", "h1_updated_at"], "h1_ts", pd.NaT), errors="coerce", utc=True)
+    wk["d1_ts"] = pd.to_datetime(_ag2_pick_col(wk, ["d1_date", "d1_ts", "d1_updated_at"], "d1_ts", pd.NaT), errors="coerce", utc=True)
+
+    wk["is_actionable_d1"] = wk["d1_action_norm"].isin(["BUY", "SELL"])
+    wk["is_divergence_h1d1"] = (
+        (wk["h1_action_norm"] != wk["d1_action_norm"])
+        & ~((wk["h1_action_norm"] == "NEUTRAL") & (wk["d1_action_norm"] == "NEUTRAL"))
+    )
+    wk["is_confluence_buy"] = (wk["h1_action_norm"] == "BUY") & (wk["d1_action_norm"] == "BUY")
+    wk["is_confluence_sell"] = (wk["h1_action_norm"] == "SELL") & (wk["d1_action_norm"] == "SELL")
+
+    return wk.reset_index(drop=True)
+
+
+def _ag2_kpi_counts(df: pd.DataFrame) -> dict[str, int]:
+    if df is None or df.empty:
+        return {
+            "total_symbols": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "neutral_count": 0,
+            "actionable_count": 0,
+            "ai_calls": 0,
+            "ai_approvals": 0,
+        }
+    d1 = df.get("d1_action_norm", pd.Series("NEUTRAL", index=df.index)).astype(str)
+    ai = df.get("ai_decision_norm", pd.Series("—", index=df.index)).astype(str)
+    calls = df.get("call_ai_flag", pd.Series(False, index=df.index))
+    total = int(len(df))
+    buy = int((d1 == "BUY").sum())
+    sell = int((d1 == "SELL").sum())
+    neutral = max(0, total - buy - sell)
+    actionable = buy + sell
+    ai_calls = int(pd.Series(calls).fillna(False).astype(bool).sum())
+    ai_approvals = int(ai.eq("APPROVE").sum())
+    return {
+        "total_symbols": total,
+        "buy_count": buy,
+        "sell_count": sell,
+        "neutral_count": neutral,
+        "actionable_count": actionable,
+        "ai_calls": ai_calls,
+        "ai_approvals": ai_approvals,
+    }
+
+
+def _ag2_latest_run_meta(df_runs: pd.DataFrame, df_working: pd.DataFrame) -> dict[str, object]:
+    out: dict[str, object] = {
+        "run_id": "",
+        "run_ts": pd.NaT,
+        "run_status": "",
+        "prev_total": None,
+        "prev_ai_calls": None,
+        "prev_ai_approvals": None,
+    }
+    if df_runs is not None and not df_runs.empty:
+        rk = normalize_cols(df_runs.copy())
+        ts_col = _first_existing_column(rk, ["finished_at", "started_at", "updated_at", "created_at"])
+        if ts_col:
+            rk["_run_ts"] = pd.to_datetime(rk[ts_col], errors="coerce", utc=True)
+        else:
+            rk["_run_ts"] = pd.NaT
+        rk = rk.sort_values("_run_ts", ascending=False, na_position="last").reset_index(drop=True)
+        if not rk.empty:
+            row0 = rk.iloc[0]
+            out["run_id"] = str(row0.get("run_id", "") or "")
+            out["run_ts"] = row0.get("_run_ts", pd.NaT)
+            out["run_status"] = str(row0.get("status", "") or "").upper()
+            if "symbols_ok" in rk.columns or "symbols_error" in rk.columns:
+                ok0 = pd.to_numeric(pd.Series([row0.get("symbols_ok", pd.NA)]), errors="coerce").iloc[0]
+                er0 = pd.to_numeric(pd.Series([row0.get("symbols_error", pd.NA)]), errors="coerce").iloc[0]
+                if len(rk) > 1:
+                    row1 = rk.iloc[1]
+                    ok1 = pd.to_numeric(pd.Series([row1.get("symbols_ok", pd.NA)]), errors="coerce").iloc[0]
+                    er1 = pd.to_numeric(pd.Series([row1.get("symbols_error", pd.NA)]), errors="coerce").iloc[0]
+                    if not (pd.isna(ok1) and pd.isna(er1)):
+                        out["prev_total"] = float((0 if pd.isna(ok1) else ok1) + (0 if pd.isna(er1) else er1))
+                if not (pd.isna(ok0) and pd.isna(er0)):
+                    out["run_total"] = float((0 if pd.isna(ok0) else ok0) + (0 if pd.isna(er0) else er0))
+            if "ai_calls" in rk.columns:
+                cur = pd.to_numeric(pd.Series([rk.iloc[0].get("ai_calls", pd.NA)]), errors="coerce").iloc[0]
+                if not pd.isna(cur):
+                    out["run_ai_calls"] = float(cur)
+                if len(rk) > 1:
+                    prev = pd.to_numeric(pd.Series([rk.iloc[1].get("ai_calls", pd.NA)]), errors="coerce").iloc[0]
+                    if not pd.isna(prev):
+                        out["prev_ai_calls"] = float(prev)
+            appr_col = _first_existing_column(rk, ["ai_approved", "ai_approvals", "approved_ai", "approved_count"])
+            if appr_col:
+                cur = pd.to_numeric(pd.Series([rk.iloc[0].get(appr_col, pd.NA)]), errors="coerce").iloc[0]
+                if not pd.isna(cur):
+                    out["run_ai_approvals"] = float(cur)
+                if len(rk) > 1:
+                    prev = pd.to_numeric(pd.Series([rk.iloc[1].get(appr_col, pd.NA)]), errors="coerce").iloc[0]
+                    if not pd.isna(prev):
+                        out["prev_ai_approvals"] = float(prev)
+
+    if pd.isna(out.get("run_ts", pd.NaT)) and df_working is not None and not df_working.empty:
+        out["run_ts"] = _latest_timestamp(df_working, ["workflow_ts", "workflow_date", "updated_at", "created_at"])
+
+    return out
+
+
+def _ag2_signal_mix_figure(df: pd.DataFrame) -> go.Figure | None:
+    if df is None or df.empty:
+        return None
+    actions = ["BUY", "SELL", "NEUTRAL"]
+    colors = {"BUY": "#22c55e", "SELL": "#ef4444", "NEUTRAL": "#6b7280"}
+    rows = []
+    for tf_label, col in [("H1", "h1_action_norm"), ("D1", "d1_action_norm")]:
+        ser = df.get(col, pd.Series("NEUTRAL", index=df.index)).astype(str)
+        counts = ser.value_counts()
+        row = {"timeframe": tf_label}
+        for a in actions:
+            row[a] = int(counts.get(a, 0))
+        rows.append(row)
+    chart_df = pd.DataFrame(rows)
+    fig = go.Figure()
+    for a in actions:
+        fig.add_bar(
+            x=chart_df["timeframe"],
+            y=chart_df[a],
+            name=a,
+            marker_color=colors[a],
+            text=chart_df[a],
+            textposition="inside",
+        )
+    fig.update_layout(
+        barmode="stack",
+        height=250,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", y=1.08, x=0),
+        yaxis=dict(title="Count", gridcolor="rgba(128,128,128,0.15)"),
+        xaxis=dict(title=None),
+    )
+    return fig
+
+
+def _ag2_sector_action_heatmap_figure(df: pd.DataFrame) -> go.Figure | None:
+    if df is None or df.empty or "sector" not in df.columns:
+        return None
+    wk = df.copy()
+    wk["sector"] = wk["sector"].fillna("").astype(str).str.strip().replace("", "Sans secteur")
+    wk["d1_action_norm"] = wk.get("d1_action_norm", pd.Series("NEUTRAL", index=wk.index)).astype(str)
+    heat = wk.groupby(["sector", "d1_action_norm"]).size().unstack(fill_value=0)
+    if heat.empty:
+        return None
+    cols = ["BUY", "SELL", "NEUTRAL"]
+    heat = heat.reindex(columns=cols, fill_value=0)
+    heat["__total"] = heat.sum(axis=1)
+    heat = heat.sort_values("__total", ascending=False).head(12)
+    row_totals = heat["__total"].replace(0, pd.NA)
+    z = heat[cols].to_numpy()
+    text = []
+    for sector in heat.index:
+        row = []
+        tot = row_totals.get(sector, pd.NA)
+        for a in cols:
+            cnt = int(heat.loc[sector, a])
+            pct = (cnt / float(tot) * 100.0) if pd.notna(tot) and float(tot) > 0 else 0.0
+            row.append(f"{cnt}<br>{pct:.0f}%")
+        text.append(row)
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=cols,
+            y=heat.index.tolist(),
+            text=text,
+            texttemplate="%{text}",
+            colorscale="Blues",
+            reversescale=False,
+            hovertemplate="Sector=%{y}<br>Action=%{x}<br>Count=%{z}<extra></extra>",
+            colorbar=dict(title="Count"),
+        )
+    )
+    fig.update_layout(
+        height=280,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(title=None),
+        yaxis=dict(title=None, automargin=True),
+    )
+    return fig
+
+
+def _ag2_h1_d1_matrix_figure(df: pd.DataFrame) -> go.Figure | None:
+    if df is None or df.empty:
+        return None
+    cols = ["BUY", "SELL", "NEUTRAL"]
+    h1 = df.get("h1_action_norm", pd.Series("NEUTRAL", index=df.index)).astype(str)
+    d1 = df.get("d1_action_norm", pd.Series("NEUTRAL", index=df.index)).astype(str)
+    mat = pd.crosstab(h1, d1).reindex(index=cols, columns=cols, fill_value=0)
+    z = mat.to_numpy()
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z,
+            x=cols,
+            y=cols,
+            colorscale="RdYlGn",
+            reversescale=True,
+            text=[[str(int(v)) for v in row] for row in z],
+            texttemplate="%{text}",
+            hovertemplate="H1=%{y}<br>D1=%{x}<br>Count=%{z}<extra></extra>",
+            colorbar=dict(title="Count"),
+        )
+    )
+    fig.update_layout(
+        height=280,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(title="D1 action"),
+        yaxis=dict(title="H1 action"),
+    )
+    return fig
+
+
+def _ag2_funnel_figure(total: int, actionable: int, ai_calls: int, ai_approvals: int) -> go.Figure:
+    labels = ["Analyses", "Actionables", "Appels IA", "IA approuves"]
+    values = [max(0, int(total)), max(0, int(actionable)), max(0, int(ai_calls)), max(0, int(ai_approvals))]
+    fig = go.Figure(
+        go.Funnel(
+            y=labels,
+            x=values,
+            textinfo="value+percent previous",
+            marker=dict(color=["#64748b", "#60a5fa", "#a78bfa", "#22c55e"]),
+        )
+    )
+    fig.update_layout(
+        height=260,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+    )
+    return fig
+
+
+def _ag2_score_rsi_scatter_figure(df: pd.DataFrame) -> go.Figure | None:
+    if df is None or df.empty:
+        return None
+    wk = df.copy()
+    if "d1_score_num" not in wk.columns or "d1_rsi_num" not in wk.columns:
+        return None
+    wk = wk[pd.notna(wk["d1_score_num"]) & pd.notna(wk["d1_rsi_num"])].copy()
+    if wk.empty:
+        return None
+    wk["d1_action_norm"] = wk.get("d1_action_norm", pd.Series("NEUTRAL", index=wk.index)).astype(str)
+    color_map = {"BUY": "#22c55e", "SELL": "#ef4444", "NEUTRAL": "#9ca3af"}
+    fig = px.scatter(
+        wk,
+        x="d1_rsi_num",
+        y="d1_score_num",
+        color="d1_action_norm",
+        hover_data={"symbol": True, "name": True, "sector": True, "d1_rsi_num": ":.1f", "d1_score_num": ":.1f"},
+        color_discrete_map=color_map,
+        labels={"d1_rsi_num": "D1 RSI", "d1_score_num": "D1 Score", "d1_action_norm": "D1 Action"},
+    )
+    fig.update_traces(marker=dict(size=9, opacity=0.85))
+    fig.add_vline(x=30, line_dash="dot", line_color="#64748b")
+    fig.add_vline(x=70, line_dash="dot", line_color="#64748b")
+    fig.update_layout(
+        height=280,
+        margin=dict(l=10, r=10, t=10, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        legend=dict(orientation="h", y=1.08, x=0),
+        xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+        yaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+    )
+    return fig
+
+
+def _ag2_make_display_table(df: pd.DataFrame, *, advanced: bool = False) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    wk = df.copy()
+    out = pd.DataFrame(index=wk.index)
+    out["Symbol"] = wk.get("symbol", pd.Series("", index=wk.index)).astype(str)
+    out["Name"] = wk.get("name", pd.Series("", index=wk.index)).fillna("").astype(str)
+    out["Sector"] = wk.get("sector", pd.Series("", index=wk.index)).fillna("").astype(str)
+    close_num = wk.get("last_close_num", safe_float_series(wk.get("last_close", pd.Series(pd.NA, index=wk.index))))
+    out["Close"] = close_num.apply(lambda v: f"{v:.2f}" if pd.notna(v) and float(v) > 0 else "—")
+    out["D1 Action"] = wk.get("d1_action_norm", pd.Series("NEUTRAL", index=wk.index)).astype(str)
+    d1_score = wk.get("d1_score_num", pd.Series(pd.NA, index=wk.index))
+    out["D1 Score"] = d1_score.apply(lambda v: f"{float(v):.0f}" if pd.notna(v) else "—")
+    d1_rsi = wk.get("d1_rsi_num", pd.Series(pd.NA, index=wk.index))
+    out["D1 RSI"] = d1_rsi.apply(lambda v: f"{float(v):.1f}" if pd.notna(v) else "—")
+    out["Filtre"] = wk.get("filter_reason", pd.Series("", index=wk.index)).fillna("").astype(str).replace("", "—")
+    out["IA"] = wk.get("ai_decision_norm", pd.Series("—", index=wk.index)).astype(str)
+    ai_q = wk.get("ai_quality_num", pd.Series(pd.NA, index=wk.index))
+    out["Qualite IA"] = ai_q.apply(lambda v: f"{float(v):.1f}/10" if pd.notna(v) and float(v) > 0 else "—")
+    wf_ts = pd.to_datetime(wk.get("workflow_ts", pd.Series(pd.NaT, index=wk.index)), errors="coerce", utc=True)
+    out["Date"] = wf_ts.apply(lambda x: x.tz_convert("Europe/Paris").strftime("%Y-%m-%d") if pd.notna(x) else "—")
+
+    if advanced:
+        out["H1 Action"] = wk.get("h1_action_norm", pd.Series("NEUTRAL", index=wk.index)).astype(str)
+        h1_score = wk.get("h1_score_num", pd.Series(pd.NA, index=wk.index))
+        h1_rsi = wk.get("h1_rsi_num", pd.Series(pd.NA, index=wk.index))
+        out["H1 Score"] = h1_score.apply(lambda v: f"{float(v):.0f}" if pd.notna(v) else "—")
+        out["H1 RSI"] = h1_rsi.apply(lambda v: f"{float(v):.1f}" if pd.notna(v) else "—")
+
+    return out.reset_index(drop=True)
+
+
+def _ag2_style_display_table(df_display: pd.DataFrame, df_source: pd.DataFrame, *, quality_warn_threshold: float = 4.0):
+    if df_display is None or df_display.empty:
+        return df_display
+    src = df_source.reset_index(drop=True).copy()
+    disp = df_display.reset_index(drop=True).copy()
+
+    def _cell_style(val: object) -> str:
+        s = str(val or "").upper()
+        if s == "BUY":
+            return "background-color:#14532d;color:#dcfce7;font-weight:700;"
+        if s == "SELL":
+            return "background-color:#7f1d1d;color:#fee2e2;font-weight:700;"
+        if s == "NEUTRAL":
+            return "background-color:#374151;color:#e5e7eb;font-weight:700;"
+        if s == "APPROVE":
+            return "background-color:#14532d;color:#dcfce7;font-weight:700;"
+        if s == "REJECT":
+            return "background-color:#7c2d12;color:#ffedd5;font-weight:700;"
+        if s == "WATCH":
+            return "background-color:#78350f;color:#fef3c7;font-weight:700;"
+        if s == "SKIP":
+            return "background-color:#1f2937;color:#d1d5db;font-weight:700;"
+        return ""
+
+    def _row_styles(row: pd.Series) -> list[str]:
+        i = row.name
+        styles = [""] * len(row)
+        if i >= len(src):
+            return styles
+        confluence_buy = bool(src.iloc[i].get("is_confluence_buy", False))
+        confluence_sell = bool(src.iloc[i].get("is_confluence_sell", False))
+        divergence = bool(src.iloc[i].get("is_divergence_h1d1", False))
+        d1_score = pd.to_numeric(pd.Series([src.iloc[i].get("d1_score_num", pd.NA)]), errors="coerce").iloc[0]
+        ai_dec = str(src.iloc[i].get("ai_decision_norm", "") or "").upper()
+        ai_q = pd.to_numeric(pd.Series([src.iloc[i].get("ai_quality_num", pd.NA)]), errors="coerce").iloc[0]
+
+        row_bg = ""
+        if confluence_buy:
+            row_bg = "background-color: rgba(34,197,94,0.08);"
+        elif confluence_sell:
+            row_bg = "background-color: rgba(239,68,68,0.08);"
+        elif divergence:
+            row_bg = "background-color: rgba(245,158,11,0.08);"
+        if row_bg:
+            styles = [row_bg] * len(row)
+
+        if ai_dec == "REJECT" and pd.notna(d1_score) and abs(float(d1_score)) >= 70:
+            styles = ["background-color: rgba(251,191,36,0.10);"] * len(row)
+
+        if pd.notna(ai_q) and float(ai_q) > 0 and float(ai_q) < float(quality_warn_threshold):
+            try:
+                q_col = row.index.get_loc("Qualite IA")
+                styles[q_col] = (styles[q_col] or "") + "background-color: rgba(239,68,68,0.18);"
+            except Exception:
+                pass
+        return styles
+
+    styler = disp.style
+    for c in ["D1 Action", "H1 Action", "IA"]:
+        if c in disp.columns:
+            if hasattr(styler, "map"):
+                styler = styler.map(_cell_style, subset=[c])
+            else:
+                styler = styler.applymap(_cell_style, subset=[c])
+    styler = styler.apply(_row_styles, axis=1)
+    return styler
+
+# ============================================================
 # FETCH PRICE DATA FROM YFINANCE-API
 # ============================================================
 
@@ -7899,71 +8428,322 @@ elif page == "Analyse Technique V2":
     # TAB 1: VUE D'ENSEMBLE
     # ================================================================
     with tab_overview:
-        # KPI row
-        total_symbols = len(df_signals)
-        buy_count = int((df_signals.get("d1_action", pd.Series(dtype=str)).astype(str).str.upper() == "BUY").sum())
-        sell_count = int((df_signals.get("d1_action", pd.Series(dtype=str)).astype(str).str.upper() == "SELL").sum())
-        neutral_count = total_symbols - buy_count - sell_count
-        ai_calls = int(truthy_series(df_signals.get("call_ai", pd.Series(dtype=object))).sum()) if "call_ai" in df_signals.columns else 0
-        ai_approvals = int(df_signals.get("ai_decision", pd.Series(dtype=str)).astype(str).str.upper().eq("APPROVE").sum()) if "ai_decision" in df_signals.columns else 0
+        df_ov = _ag2_prepare_overview_working_df(df_signals)
+        if df_ov is None or df_ov.empty:
+            st.warning("Aucune donnee AG2 exploitable pour la vue d'ensemble.")
+        else:
+            run_meta = _ag2_latest_run_meta(df_runs, df_ov)
+            counts_all = _ag2_kpi_counts(df_ov)
 
-        kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
-        kc1.metric("Symboles analysés", total_symbols)
-        kc2.metric("BUY", buy_count)
-        kc3.metric("SELL", sell_count)
-        kc4.metric("NEUTRAL", neutral_count)
-        kc5.metric("Appels IA", ai_calls)
-        kc6.metric("IA Approuvés", ai_approvals)
+            latest_d1_ts = _latest_timestamp(df_ov, ["d1_ts", "workflow_ts", "workflow_date"])
+            latest_h1_ts = _latest_timestamp(df_ov, ["h1_ts", "workflow_ts", "workflow_date"])
+            latest_workflow_ts = _latest_timestamp(df_ov, ["workflow_ts", "workflow_date"])
+            age_d1_h = _ag2_age_hours(latest_d1_ts)
+            age_h1_h = _ag2_age_hours(latest_h1_ts)
+            age_workflow_h = _ag2_age_hours(latest_workflow_ts)
 
-        st.divider()
+            missing_core_mask = pd.Series(False, index=df_ov.index)
+            for col in ["symbol", "d1_action_norm", "d1_score_num"]:
+                if col not in df_ov.columns:
+                    missing_core_mask = pd.Series(True, index=df_ov.index)
+                    break
+                if col.endswith("_num"):
+                    missing_core_mask = missing_core_mask | pd.isna(df_ov[col])
+                else:
+                    missing_core_mask = missing_core_mask | df_ov[col].astype(str).str.strip().eq("")
+            missing_core_pct = float(missing_core_mask.mean() * 100.0) if len(df_ov) else 100.0
 
-        # Build styled overview dataframe
-        overview_cols = {
-            "symbol": "Symbol",
-        }
+            status_level = "OK"
+            status_reasons = []
+            if len(df_ov) == 0:
+                status_level = "ERROR"
+                status_reasons.append("table vide")
+            if age_d1_h is None and age_h1_h is None:
+                status_level = "ERROR"
+                status_reasons.append("dates H1/D1 indisponibles")
+            elif (age_d1_h is not None and age_d1_h > 36.0) or (age_h1_h is not None and age_h1_h > 24.0):
+                if status_level != "ERROR":
+                    status_level = "WARN"
+                status_reasons.append(f"fraicheur D1/H1 ({_ag2_fmt_age(age_d1_h)} / {_ag2_fmt_age(age_h1_h)})")
+            if missing_core_pct > 25.0:
+                if status_level != "ERROR":
+                    status_level = "WARN"
+                status_reasons.append(f"champs manquants eleves ({missing_core_pct:.0f}%)")
+            if run_meta.get("run_status") and str(run_meta.get("run_status")).upper() not in ("SUCCESS", "OK"):
+                if status_level != "ERROR":
+                    status_level = "WARN"
+                status_reasons.append(f"run_status={run_meta.get('run_status')}")
 
-        df_ov = df_signals.copy()
+            with st.container(border=True):
+                c_run1, c_run2, c_run3, c_run4 = st.columns([2.3, 1.0, 1.1, 1.8])
+                run_ts = pd.to_datetime(run_meta.get("run_ts", pd.NaT), errors="coerce", utc=True)
+                if pd.isna(run_ts):
+                    run_ts = pd.to_datetime(latest_workflow_ts, errors="coerce", utc=True)
+                run_ts_txt = run_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M") if pd.notna(run_ts) else "—"
+                c_run1.markdown(
+                    (
+                        "<div style='font-size:0.95rem;font-weight:700;'>Run & sante AG2</div>"
+                        f"<div style='margin-top:4px;'>Dernier run: <code>{html.escape(_ag2_short_run_id(run_meta.get('run_id')))}</code> | "
+                        f"{html.escape(run_ts_txt)}</div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+                c_run2.markdown(
+                    f"<div style='margin-top:0.45rem'>{_ag2_status_pill_html(status_level)}</div>",
+                    unsafe_allow_html=True,
+                )
+                c_run3.metric(
+                    "Freshness D1",
+                    _ag2_fmt_age(age_d1_h),
+                    _freshness_label_from_age(age_d1_h if age_d1_h is not None else pd.NA, 36.0, 96.0) if age_d1_h is not None else "Manquant",
+                    delta_color="off",
+                )
+                c_run4.markdown(
+                    (
+                        f"**Barres H1**: {_ag2_fmt_age(age_h1_h)}  \n"
+                        f"**Scan AG2**: {_ag2_fmt_age(age_workflow_h)}  \n"
+                        f"**Nulls coeur**: {missing_core_pct:.0f}%"
+                    )
+                    + (f"  \n**Notes**: {', '.join(status_reasons[:2])}" if status_reasons else "")
+                )
 
-        # Ensure columns exist with defaults
-        for col_name in [
-            "name", "sector", "last_close",
-            "h1_action", "h1_score", "h1_rsi14",
-            "d1_action", "d1_score", "d1_rsi14",
-            "filter_reason", "ai_decision", "ai_quality",
-            "workflow_date",
-        ]:
-            if col_name not in df_ov.columns:
-                df_ov[col_name] = ""
+            buy_count = counts_all["buy_count"]
+            sell_count = counts_all["sell_count"]
+            neutral_count = counts_all["neutral_count"]
+            total_symbols = counts_all["total_symbols"]
+            actionable_count = counts_all["actionable_count"]
+            ai_calls = counts_all["ai_calls"]
+            ai_approvals = counts_all["ai_approvals"]
 
-        # Format for display
-        df_display = pd.DataFrame()
-        df_display["Symbol"] = df_ov["symbol"]
-        df_display["Name"] = df_ov["name"].fillna("")
-        df_display["Sector"] = df_ov["sector"].fillna("")
-        close_num = safe_float_series(df_ov["last_close"])
-        h1_score_num = safe_float_series(df_ov["h1_score"])
-        h1_rsi_num = safe_float_series(df_ov["h1_rsi14"])
-        d1_score_num = safe_float_series(df_ov["d1_score"])
-        d1_rsi_num = safe_float_series(df_ov["d1_rsi14"])
-        ai_quality_num = safe_float_series(df_ov["ai_quality"])
+            approval_rate_txt = _ag2_ratio_text(ai_approvals, ai_calls)
+            buy_ratio_txt = _ag2_ratio_text(buy_count, actionable_count, suffix=" actionable")
+            sell_ratio_txt = _ag2_ratio_text(sell_count, actionable_count, suffix=" actionable")
+            neutral_ratio_txt = _ag2_ratio_text(neutral_count, total_symbols, suffix=" total")
+            ai_call_cov_txt = _ag2_ratio_text(ai_calls, total_symbols, suffix=" total")
 
-        df_display["Close"] = close_num.apply(lambda v: f"{v:.2f}" if v > 0 else "—")
-        df_display["H1 Action"] = df_ov["h1_action"].fillna("").astype(str).str.upper().replace("", "—")
-        df_display["H1 Score"] = h1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "—")
-        df_display["H1 RSI"] = h1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "—")
-        df_display["D1 Action"] = df_ov["d1_action"].fillna("").astype(str).str.upper().replace("", "—")
-        df_display["D1 Score"] = d1_score_num.apply(lambda v: f"{v:.0f}" if v != 0 else "—")
-        df_display["D1 RSI"] = d1_rsi_num.apply(lambda v: f"{v:.1f}" if v > 0 else "—")
-        df_display["Filtre"] = df_ov["filter_reason"].fillna("—")
-        df_display["IA"] = df_ov["ai_decision"].fillna("").astype(str).str.upper().replace("", "—")
-        df_display["Qualité IA"] = ai_quality_num.apply(lambda v: f"{v:.0f}/10" if v > 0 else "—")
-        df_display["Date"] = df_ov["workflow_date"].apply(
-            lambda x: str(x)[:10] if pd.notna(x) and str(x).strip() not in ("", "nan", "NaT") else "—"
-        )
+            kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
+            kc1.metric("Symboles analyses", total_symbols, _ag2_delta_text(total_symbols, run_meta.get("prev_total"), digits=0), delta_color="off")
+            kc2.metric("BUY", buy_count, buy_ratio_txt, delta_color="off")
+            kc3.metric("SELL", sell_count, sell_ratio_txt, delta_color="off")
+            kc4.metric("NEUTRAL", neutral_count, neutral_ratio_txt, delta_color="off")
+            kc5.metric("Appels IA", ai_calls, _ag2_delta_text(ai_calls, run_meta.get("prev_ai_calls"), digits=0) or ai_call_cov_txt, delta_color="off")
+            kc6.metric("IA approuves", ai_approvals, _ag2_delta_text(ai_approvals, run_meta.get("prev_ai_approvals"), digits=0) or f"Tx {approval_rate_txt}", delta_color="off")
 
-        # Apply RSI coloring via Styler on a numeric version for conditional formatting
-        # Since we use HTML badges, we display via HTML table
-        render_interactive_table(df_display, key_suffix="v2_overview")
+            with st.container(border=True):
+                st.markdown("#### Filtres rapides & scope")
+
+                d1_actions_available = sorted([x for x in df_ov.get("d1_action_norm", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x])
+                h1_actions_available = sorted([x for x in df_ov.get("h1_action_norm", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x])
+                sector_options = sorted([x for x in df_ov.get("sector", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x])
+                ai_status_options = sorted([x for x in df_ov.get("ai_decision_norm", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x and x != "—"])
+
+                f1, f2, f3, f4, f5 = st.columns([1.4, 1.4, 1.6, 1.4, 1.2])
+                selected_d1_actions = f1.multiselect("Action D1", d1_actions_available, key="ag2_v2_f_d1")
+                selected_h1_actions = f2.multiselect("Action H1", h1_actions_available, key="ag2_v2_f_h1")
+                selected_sectors = f3.multiselect("Secteurs", sector_options, key="ag2_v2_f_sector")
+                selected_ai_status = f4.multiselect("IA status", ai_status_options, key="ag2_v2_f_ia")
+                graphs_scope = f5.radio("Scope graphes", ["All", "Filtered"], key="ag2_v2_scope_graphs")
+
+                f6, f7, f8, f9, f10 = st.columns([1.2, 1.3, 1.6, 1.3, 1.0])
+                only_actionable = f6.toggle("Only actionable", value=False, key="ag2_v2_f_only_actionable")
+                only_divergences = f7.toggle("Only divergences", value=False, key="ag2_v2_f_only_div")
+                include_neutral_div = f8.toggle("Inclure div. NEUTRAL", value=False, key="ag2_v2_f_div_neutral")
+                show_advanced_cols = f9.toggle("Colonnes avancees", value=False, key="ag2_v2_f_cols_adv")
+                top_n = int(f10.selectbox("Top N", [10, 15, 20], index=1, key="ag2_v2_f_top_n"))
+
+                ai_quality_valid = pd.to_numeric(df_ov.get("ai_quality_num", pd.Series(pd.NA, index=df_ov.index)), errors="coerce").dropna()
+                max_quality = float(max(10.0, ai_quality_valid.max())) if not ai_quality_valid.empty else 10.0
+                quality_min = st.slider("Qualite IA min", 0.0, float(max_quality), 0.0, 0.5, key="ag2_v2_f_quality_min")
+
+                d1_score_valid = pd.to_numeric(df_ov.get("d1_score_num", pd.Series(pd.NA, index=df_ov.index)), errors="coerce").dropna()
+                if not d1_score_valid.empty:
+                    score_lo = float(d1_score_valid.min())
+                    score_hi = float(d1_score_valid.max())
+                    if score_lo == score_hi:
+                        score_lo -= 1.0
+                        score_hi += 1.0
+                    score_range = st.slider("Range D1 score", score_lo, score_hi, (score_lo, score_hi), 1.0, key="ag2_v2_f_score_range")
+                else:
+                    score_range = None
+                    st.caption("Range D1 score indisponible (colonne absente ou vide).")
+
+            df_filtered = df_ov.copy()
+            if selected_d1_actions:
+                df_filtered = df_filtered[df_filtered["d1_action_norm"].isin(selected_d1_actions)]
+            if selected_h1_actions:
+                df_filtered = df_filtered[df_filtered["h1_action_norm"].isin(selected_h1_actions)]
+            if selected_sectors:
+                df_filtered = df_filtered[df_filtered["sector"].isin(selected_sectors)]
+            if selected_ai_status:
+                df_filtered = df_filtered[df_filtered["ai_decision_norm"].isin(selected_ai_status)]
+            if only_actionable:
+                df_filtered = df_filtered[df_filtered["is_actionable_d1"] == True]  # noqa: E712
+            if only_divergences:
+                div_mask = df_filtered["is_divergence_h1d1"] == True  # noqa: E712
+                if not include_neutral_div:
+                    div_mask = div_mask & ~(
+                        (df_filtered["h1_action_norm"] == "NEUTRAL") | (df_filtered["d1_action_norm"] == "NEUTRAL")
+                    )
+                df_filtered = df_filtered[div_mask]
+            if quality_min > 0:
+                q = pd.to_numeric(df_filtered.get("ai_quality_num", pd.Series(pd.NA, index=df_filtered.index)), errors="coerce")
+                df_filtered = df_filtered[q >= float(quality_min)]
+            if score_range is not None:
+                sc = pd.to_numeric(df_filtered.get("d1_score_num", pd.Series(pd.NA, index=df_filtered.index)), errors="coerce")
+                df_filtered = df_filtered[sc.isna() | sc.between(float(score_range[0]), float(score_range[1]), inclusive="both")]
+
+            df_scope = df_filtered if graphs_scope == "Filtered" else df_ov
+            counts_scope = _ag2_kpi_counts(df_scope)
+            counts_filtered = _ag2_kpi_counts(df_filtered)
+            st.caption(
+                f"Graphes={graphs_scope} | Filtre: {len(df_filtered)}/{len(df_ov)} lignes | "
+                f"Actionables(scope)={counts_scope['actionable_count']} | Tx approb IA(scope)={_ag2_ratio_text(counts_scope['ai_approvals'], counts_scope['ai_calls'])}"
+            )
+
+            g1, g2, g3 = st.columns(3, gap="large")
+            with g1:
+                with st.container(border=True):
+                    st.markdown("#### Signal mix H1 vs D1")
+                    fig_mix = _ag2_signal_mix_figure(df_scope)
+                    if fig_mix is None:
+                        st.info("Donnees insuffisantes.")
+                    else:
+                        st.plotly_chart(fig_mix, use_container_width=True, config={"displayModeBar": False})
+            with g2:
+                with st.container(border=True):
+                    st.markdown("#### Heatmap secteur x action (D1)")
+                    fig_heat = _ag2_sector_action_heatmap_figure(df_scope)
+                    if fig_heat is None:
+                        st.info("Secteur/action indisponible.")
+                    else:
+                        st.plotly_chart(fig_heat, use_container_width=True, config={"displayModeBar": False})
+            with g3:
+                with st.container(border=True):
+                    st.markdown("#### Matrice accord H1 vs D1")
+                    fig_mat = _ag2_h1_d1_matrix_figure(df_scope)
+                    if fig_mat is None:
+                        st.info("Donnees insuffisantes.")
+                    else:
+                        st.plotly_chart(fig_mat, use_container_width=True, config={"displayModeBar": False})
+                        mat_counts = pd.crosstab(
+                            df_scope.get("h1_action_norm", pd.Series("NEUTRAL", index=df_scope.index)),
+                            df_scope.get("d1_action_norm", pd.Series("NEUTRAL", index=df_scope.index)),
+                        ).reindex(index=["BUY", "SELL", "NEUTRAL"], columns=["BUY", "SELL", "NEUTRAL"], fill_value=0)
+                        st.caption(
+                            f"BUY/BUY={int(mat_counts.loc['BUY','BUY'])} | SELL/SELL={int(mat_counts.loc['SELL','SELL'])} | "
+                            f"BUY/SELL + SELL/BUY={int(mat_counts.loc['BUY','SELL']) + int(mat_counts.loc['SELL','BUY'])}"
+                        )
+
+            qleft, qright = st.columns(2, gap="large")
+            with qleft:
+                with st.container(border=True):
+                    st.markdown("#### Funnel IA & qualite")
+                    st.plotly_chart(
+                        _ag2_funnel_figure(
+                            counts_scope["total_symbols"],
+                            counts_scope["actionable_count"],
+                            counts_scope["ai_calls"],
+                            counts_scope["ai_approvals"],
+                        ),
+                        use_container_width=True,
+                        config={"displayModeBar": False},
+                    )
+                    ai_quality_scope = pd.to_numeric(df_scope.get("ai_quality_num", pd.Series(pd.NA, index=df_scope.index)), errors="coerce")
+                    ai_quality_scope = ai_quality_scope[ai_quality_scope.notna() & (ai_quality_scope > 0)]
+                    ai_dec_scope = df_scope.get("ai_decision_norm", pd.Series("—", index=df_scope.index)).astype(str)
+                    q1, q2, q3, q4 = st.columns(4)
+                    q1.metric("% qualite IA", _ag2_ratio_text(int(ai_quality_scope.shape[0]), len(df_scope)), delta_color="off")
+                    q2.metric("Qualite IA moy", f"{float(ai_quality_scope.mean()):.1f}/10" if not ai_quality_scope.empty else "—", delta_color="off")
+                    q3.metric("% REJECT", _ag2_ratio_text(int(ai_dec_scope.eq("REJECT").sum()), len(df_scope)), delta_color="off")
+                    q4.metric("% SKIP", _ag2_ratio_text(int(ai_dec_scope.eq("SKIP").sum()), len(df_scope)), delta_color="off")
+                    st.caption(
+                        f"Freshness H1={_ag2_fmt_age(age_h1_h)} | D1={_ag2_fmt_age(age_d1_h)} | "
+                        f"Status={status_level}"
+                    )
+            with qright:
+                with st.container(border=True):
+                    st.markdown("#### Scatter D1 score vs RSI")
+                    fig_scatter = _ag2_score_rsi_scatter_figure(df_scope)
+                    if fig_scatter is None:
+                        st.info("Scatter indisponible (D1 score / RSI manquants).")
+                    else:
+                        st.plotly_chart(fig_scatter, use_container_width=True, config={"displayModeBar": False})
+                        st.caption("Repere: BUY score haut + RSI > 70 = attention surachat ; SELL score bas + RSI < 30 = possible capitulation.")
+
+            with st.container(border=True):
+                st.markdown("#### Actionable maintenant")
+                st.caption(
+                    f"Source = {'filtree' if len(df_filtered) != len(df_ov) else 'globale'} | Top N={top_n} | "
+                    f"Actionables filtres={counts_filtered['actionable_count']}"
+                )
+                top_buy_tab, top_sell_tab, top_div_tab = st.tabs(["Top BUY (D1)", "Top SELL (D1)", "Divergences H1 vs D1"])
+
+                def _render_top(df_src: pd.DataFrame, empty_msg: str):
+                    if df_src is None or df_src.empty:
+                        st.info(empty_msg)
+                        return
+                    display_df = _ag2_make_display_table(df_src, advanced=show_advanced_cols)
+                    styled_df = _ag2_style_display_table(
+                        display_df,
+                        df_src,
+                        quality_warn_threshold=max(1.0, float(quality_min if quality_min > 0 else 4.0)),
+                    )
+                    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=420)
+
+                with top_buy_tab:
+                    buy_df = (
+                        df_filtered[df_filtered["d1_action_norm"] == "BUY"]
+                        .sort_values(["d1_score_num", "ai_quality_num"], ascending=[False, False], na_position="last")
+                        .head(top_n)
+                    )
+                    _render_top(buy_df, "Aucun signal BUY dans le scope courant.")
+
+                with top_sell_tab:
+                    sell_df = df_filtered[df_filtered["d1_action_norm"] == "SELL"].copy()
+                    sell_scores = pd.to_numeric(sell_df.get("d1_score_num", pd.Series(pd.NA, index=sell_df.index)), errors="coerce")
+                    sort_sell_ascending = bool((sell_scores.dropna() < 0).any()) if not sell_df.empty else True
+                    sell_df = sell_df.sort_values(
+                        ["d1_score_num", "ai_quality_num"],
+                        ascending=[sort_sell_ascending, False],
+                        na_position="last",
+                    ).head(top_n)
+                    _render_top(sell_df, "Aucun signal SELL dans le scope courant.")
+
+                with top_div_tab:
+                    div_include_neutral = st.toggle(
+                        "Inclure divergences avec NEUTRAL",
+                        value=include_neutral_div,
+                        key="ag2_v2_div_tab_neutral",
+                    )
+                    div_df = df_filtered[df_filtered["h1_action_norm"] != df_filtered["d1_action_norm"]].copy()
+                    if not div_include_neutral:
+                        div_df = div_df[
+                            ~((div_df["h1_action_norm"] == "NEUTRAL") | (div_df["d1_action_norm"] == "NEUTRAL"))
+                        ]
+                    div_df["abs_div_strength"] = (
+                        pd.to_numeric(div_df.get("d1_score_num", pd.Series(0.0, index=div_df.index)), errors="coerce").abs().fillna(0.0)
+                        + pd.to_numeric(div_df.get("h1_score_num", pd.Series(0.0, index=div_df.index)), errors="coerce").abs().fillna(0.0)
+                    )
+                    div_df = div_df.sort_values(["abs_div_strength", "ai_quality_num"], ascending=[False, False], na_position="last").head(top_n)
+                    _render_top(div_df, "Aucune divergence H1/D1 dans le scope courant.")
+
+            with st.container(border=True):
+                st.markdown("#### Table complete (secondaire)")
+                st.caption(
+                    f"{len(df_filtered)} ligne(s) affichee(s) / {len(df_ov)} | "
+                    f"Divergences={int(df_filtered.get('is_divergence_h1d1', pd.Series(False, index=df_filtered.index)).sum()) if not df_filtered.empty else 0} | "
+                    "Highlights: confluence, divergences, low quality, reject sur signal fort"
+                )
+                if df_filtered.empty:
+                    st.info("Aucune ligne apres filtres.")
+                else:
+                    df_display = _ag2_make_display_table(df_filtered, advanced=show_advanced_cols)
+                    styled_display = _ag2_style_display_table(
+                        df_display,
+                        df_filtered,
+                        quality_warn_threshold=max(1.0, float(quality_min if quality_min > 0 else 4.0)),
+                    )
+                    st.dataframe(styled_display, use_container_width=True, hide_index=True, height=560)
 
     # ================================================================
     # TAB 2: VUE DETAILLEE
