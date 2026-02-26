@@ -40,12 +40,6 @@ def _sync_ledger_to_mtm(con, run_id):
             )
         """)
 
-        # Migrate: add ingested_at if the table predates the current schema.
-        try:
-            con.execute("ALTER TABLE portfolio_positions_mtm_latest ADD COLUMN ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-        except Exception:
-            pass  # column already exists
-
         # Supprimer les positions cloturees (plus dans le snapshot courant)
         con.execute("""
             DELETE FROM portfolio_positions_mtm_latest
@@ -60,7 +54,7 @@ def _sync_ledger_to_mtm(con, run_id):
             INSERT INTO portfolio_positions_mtm_latest (
                 symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,
                 quantity, avg_price, last_price, market_value, unrealized_pnl,
-                updated_at, source_updated_at, run_id, ingested_at
+                updated_at, source_updated_at, run_id
             )
             SELECT
                 pos.symbol,
@@ -78,8 +72,7 @@ def _sync_ledger_to_mtm(con, run_id):
                 pos.unrealized_pnl_eur,
                 TRY_CAST(pos.ts AS TIMESTAMP),
                 pos.ts,
-                pos.run_id,
-                CURRENT_TIMESTAMP
+                pos.run_id
             FROM core.positions_snapshot pos
             LEFT JOIN core.instruments inst ON inst.symbol = pos.symbol
             WHERE pos.run_id = ?
@@ -94,7 +87,6 @@ def _sync_ledger_to_mtm(con, run_id):
                 updated_at        = excluded.updated_at,
                 source_updated_at = excluded.source_updated_at,
                 run_id            = excluded.run_id,
-                ingested_at       = CURRENT_TIMESTAMP,
                 name        = CASE WHEN excluded.name        IS NOT NULL AND excluded.name        <> '' THEN excluded.name        ELSE portfolio_positions_mtm_latest.name        END,
                 asset_class = CASE WHEN excluded.asset_class IS NOT NULL AND excluded.asset_class <> '' THEN excluded.asset_class ELSE portfolio_positions_mtm_latest.asset_class END,
                 sector      = CASE WHEN excluded.sector      IS NOT NULL AND excluded.sector      <> '' THEN excluded.sector      ELSE portfolio_positions_mtm_latest.sector      END,
@@ -107,7 +99,7 @@ def _sync_ledger_to_mtm(con, run_id):
             INSERT INTO portfolio_positions_mtm_latest (
                 symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,
                 quantity, avg_price, last_price, market_value, unrealized_pnl,
-                updated_at, source_updated_at, run_id, ingested_at
+                updated_at, source_updated_at, run_id
             )
             SELECT
                 'CASH_EUR', 0, 'CASH_EUR', 'Cash', 'Cash', 'Cash', 'Cash', '',
@@ -116,16 +108,14 @@ def _sync_ledger_to_mtm(con, run_id):
                 0.0,
                 TRY_CAST(ps.ts AS TIMESTAMP),
                 ps.ts,
-                ps.run_id,
-                CURRENT_TIMESTAMP
+                ps.run_id
             FROM core.portfolio_snapshot ps
             WHERE ps.run_id = ?
             ON CONFLICT (symbol) DO UPDATE SET
                 market_value      = excluded.market_value,
                 updated_at        = excluded.updated_at,
                 source_updated_at = excluded.source_updated_at,
-                run_id            = excluded.run_id,
-                ingested_at       = CURRENT_TIMESTAMP
+                run_id            = excluded.run_id
         """, [run_id])
 
         return True

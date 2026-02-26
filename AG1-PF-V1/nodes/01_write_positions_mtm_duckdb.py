@@ -386,15 +386,6 @@ def write_rows_to_db(db_path, rows, rows_in, run_id, workflow_name):
             for stmt in SCHEMA_SQL:
                 con.execute(stmt)
 
-            # Migrate: add ingested_at column to tables that predate the current schema.
-            # CREATE TABLE IF NOT EXISTS does not alter existing tables, so we must
-            # explicitly add columns that may be missing from older DuckDB files.
-            for tbl in ("portfolio_positions_mtm_latest", "portfolio_positions_mtm_history"):
-                try:
-                    con.execute(f"ALTER TABLE {tbl} ADD COLUMN ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
-                except Exception:
-                    pass  # column already exists
-
             con.execute(
                 """
                 INSERT OR REPLACE INTO portfolio_positions_mtm_run_log
@@ -413,9 +404,9 @@ def write_rows_to_db(db_path, rows, rows_in, run_id, workflow_name):
                         (
                             symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,
                             quantity, avg_price, last_price, market_value, unrealized_pnl,
-                            updated_at, source_updated_at, run_id, ingested_at
+                            updated_at, source_updated_at, run_id
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         ON CONFLICT (symbol) DO UPDATE SET
                             row_number        = excluded.row_number,
                             symbol_raw        = excluded.symbol_raw,
@@ -427,7 +418,6 @@ def write_rows_to_db(db_path, rows, rows_in, run_id, workflow_name):
                             updated_at        = excluded.updated_at,
                             source_updated_at = excluded.source_updated_at,
                             run_id            = excluded.run_id,
-                            ingested_at       = CURRENT_TIMESTAMP,
                             name       = CASE WHEN excluded.name       IS NOT NULL AND excluded.name       <> '' THEN excluded.name       ELSE portfolio_positions_mtm_latest.name       END,
                             asset_class= CASE WHEN excluded.asset_class IS NOT NULL AND excluded.asset_class <> '' THEN excluded.asset_class ELSE portfolio_positions_mtm_latest.asset_class END,
                             sector     = CASE WHEN excluded.sector     IS NOT NULL AND excluded.sector     <> '' THEN excluded.sector     ELSE portfolio_positions_mtm_latest.sector     END,
@@ -448,9 +438,9 @@ def write_rows_to_db(db_path, rows, rows_in, run_id, workflow_name):
                         (
                             id, run_id, symbol, row_number, symbol_raw, name, asset_class, sector, industry, isin,
                             quantity, avg_price, last_price, market_value, unrealized_pnl,
-                            updated_at, source_updated_at, ingested_at
+                            updated_at, source_updated_at
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         [
                             row["id"], row["run_id"], row["symbol"], row["row_number"], row["symbol_raw"],
