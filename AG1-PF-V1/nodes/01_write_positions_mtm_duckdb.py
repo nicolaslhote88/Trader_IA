@@ -386,6 +386,15 @@ def write_rows_to_db(db_path, rows, rows_in, run_id, workflow_name):
             for stmt in SCHEMA_SQL:
                 con.execute(stmt)
 
+            # Migrate: add ingested_at column to tables that predate the current schema.
+            # CREATE TABLE IF NOT EXISTS does not alter existing tables, so we must
+            # explicitly add columns that may be missing from older DuckDB files.
+            for tbl in ("portfolio_positions_mtm_latest", "portfolio_positions_mtm_history"):
+                try:
+                    con.execute(f"ALTER TABLE {tbl} ADD COLUMN ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                except Exception:
+                    pass  # column already exists
+
             con.execute(
                 """
                 INSERT OR REPLACE INTO portfolio_positions_mtm_run_log

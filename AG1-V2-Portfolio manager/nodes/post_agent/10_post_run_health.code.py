@@ -40,6 +40,12 @@ def _sync_ledger_to_mtm(con, run_id):
             )
         """)
 
+        # Migrate: add ingested_at if the table predates the current schema.
+        try:
+            con.execute("ALTER TABLE portfolio_positions_mtm_latest ADD COLUMN ingested_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+        except Exception:
+            pass  # column already exists
+
         # Supprimer les positions cloturees (plus dans le snapshot courant)
         con.execute("""
             DELETE FROM portfolio_positions_mtm_latest
