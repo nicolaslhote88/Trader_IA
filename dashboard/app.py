@@ -1,3 +1,4 @@
+import ast
 import json
 import hashlib
 import html
@@ -3480,6 +3481,1142 @@ def _normalize_symbol_news_df(df_symbol_news: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+def _news_parse_listish(v: object) -> list[str]:
+    if v is None:
+        return []
+    if isinstance(v, (list, tuple, set)):
+        vals = [str(x).strip() for x in v]
+        return [x for x in vals if x and x.lower() not in ("nan", "none", "nat")]
+    s = str(v).strip()
+    if not s or s.lower() in ("nan", "none", "nat", "[]", "{}"):
+        return []
+
+    parsed = None
+    if (s.startswith("[") and s.endswith("]")) or (s.startswith("{") and s.endswith("}")):
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(s)
+                break
+            except Exception:
+                parsed = None
+        if isinstance(parsed, dict):
+            parsed = list(parsed.values())
+        if isinstance(parsed, (list, tuple, set)):
+            vals = [str(x).strip() for x in parsed]
+            return [x for x in vals if x and x.lower() not in ("nan", "none", "nat")]
+
+    # Fallback split on common separators
+    parts = re.split(r"[|;,/]", s)
+    if len(parts) <= 1 and " - " in s:
+        parts = s.split(" - ")
+    vals = [p.strip() for p in parts]
+    return [x for x in vals if x and x.lower() not in ("nan", "none", "nat")]
+
+
+def _news_to_numeric_0_100(v: object) -> float | None:
+    n = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+    if pd.isna(n):
+        return None
+    x = float(n)
+    # Common scales: [-1..1], [0..1], [0..10], [0..100]
+    if -1.0 <= x <= 1.0:
+        x *= 100.0
+    elif 1.0 < abs(x) <= 10.0:
+        x *= 10.0
+    x = max(-100.0, min(100.0, x))
+    return x
+
+
+def _news_urgency_to_score(v: object) -> float | None:
+    n = _news_to_numeric_0_100(v)
+    if n is not None:
+        return max(0.0, min(100.0, abs(n)))
+    s = str(v or "").strip().lower()
+    if not s:
+        return None
+    if any(k in s for k in ["critical", "urgent", "very_high", "very high", "haute", "high"]):
+        return 90.0
+    if any(k in s for k in ["medium", "moderate", "moyenne", "normal"]):
+        return 55.0
+    if any(k in s for k in ["low", "faible"]):
+        return 25.0
+    return None
+
+
+def _news_confidence_to_score(v: object) -> float | None:
+    n = _news_to_numeric_0_100(v)
+    if n is not None:
+        return max(0.0, min(100.0, abs(n)))
+    s = str(v or "").strip().lower()
+    if not s:
+        return None
+    if any(k in s for k in ["high", "forte", "strong"]):
+        return 80.0
+    if any(k in s for k in ["medium", "moderate", "moyenne"]):
+        return 55.0
+    if any(k in s for k in ["low", "faible", "weak"]):
+        return 30.0
+    return None
+
+
+def _news_bool_or_none(v: object) -> bool | None:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "y", "ok", "relevant", "oui"):
+        return True
+    if s in ("0", "false", "no", "n", "non", "irrelevant"):
+        return False
+    return None
+
+
+def _news_extract_symbols(raw_symbol: object, raw_symbols: object) -> list[str]:
+    vals: list[str] = []
+    if raw_symbol is not None:
+        vals.extend(_news_parse_listish(raw_symbol))
+        if not vals:
+            s = str(raw_symbol).strip()
+            if s:
+                vals.append(s)
+    vals.extend(_news_parse_listish(raw_symbols))
+    clean = []
+    for v in vals:
+        vv = str(v).strip().upper()
+        if not vv or vv in ("NAN", "NONE", "N/A"):
+            continue
+        if vv not in clean:
+            clean.append(vv)
+    return clean
+
+
+def _news_infer_direction(
+    *,
+    scope: str,
+    market_regime: object = None,
+    sentiment: object = None,
+    action: object = None,
+    reason: object = None,
+    impact_score: object = None,
+) -> str:
+    txt = " ".join(
+        [
+            str(market_regime or ""),
+            str(sentiment or ""),
+            str(action or ""),
+            str(reason or ""),
+        ]
+    ).lower()
+    if any(k in txt for k in ["risk-off", "risk off", "bear", "baiss", "negative", "négat", "negatif", "loser", "underweight", "reduce", "sortir"]):
+        return "BEARISH"
+    if any(k in txt for k in ["risk-on", "risk on", "bull", "hauss", "positive", "winner", "overweight", "renforcer", "acheter", "buy"]):
+        return "BULLISH"
+    imp = _news_to_numeric_0_100(impact_score)
+    if imp is not None and imp < 0:
+        return "BEARISH"
+    if imp is not None and imp > 0 and str(scope).upper() == "MACRO":
+        return "BULLISH"
+    return "NEUTRAL"
+
+
+def normalize_news_schema(df_news: pd.DataFrame, scope: str) -> pd.DataFrame:
+    """
+    Map AG4 macro / AG4-SPE raw tables to a common internal schema.
+    Robust to schema drift: missing fields are filled with NA/empty values.
+    """
+    cols = [
+        "run_id",
+        "scope",
+        "published_at",
+        "ingested_at",
+        "source",
+        "url",
+        "headline",
+        "summary",
+        "themes",
+        "market_regime",
+        "sector_tags",
+        "symbols",
+        "symbol_primary",
+        "is_relevant",
+        "urgency",
+        "impact_score",
+        "confidence_score",
+        "direction",
+        "type",
+        "name",
+        "raw_title",
+        "raw_summary",
+    ]
+    if df_news is None or df_news.empty:
+        return pd.DataFrame(columns=cols + ["priority_score", "priority_score_signed", "urgency_norm", "confidence_norm", "impact_abs"])
+
+    wk = normalize_cols(df_news.copy())
+    out = pd.DataFrame(index=wk.index)
+    scope_norm = str(scope or "").strip().upper() or "MACRO"
+
+    run_col = _first_existing_column(wk, ["run_id", "workflow_run_id"])
+    pub_col = _first_existing_column(
+        wk,
+        ["published_at", "publishedat", "analyzed_at", "analyzedat", "last_seen_at", "lastseenat", "updated_at", "updatedat", "created_at", "fetched_at", "fetchedat"],
+    )
+    ing_col = _first_existing_column(wk, ["ingested_at", "ingestedat", "fetched_at", "fetchedat", "analyzed_at", "analyzedat", "updated_at", "updatedat", "created_at"])
+    source_col = _first_existing_column(wk, ["source", "publisher", "domain", "feed"])
+    url_col = _first_existing_column(wk, ["url", "link", "source_url", "sourceurl"])
+    headline_col = _first_existing_column(wk, ["headline", "title"])
+    summary_col = _first_existing_column(wk, ["summary", "snippet", "notes", "body_summary"])
+    theme_col = _first_existing_column(wk, ["themes", "theme", "macro_themes"])
+    regime_col = _first_existing_column(wk, ["market_regime", "regime"])
+    sector_tags_col = _first_existing_column(wk, ["sector_tags", "affected_sectors", "sectors"])
+    winners_col = _first_existing_column(wk, ["sectors_bullish", "winners"])
+    losers_col = _first_existing_column(wk, ["sectors_bearish", "losers"])
+    symbol_col = _first_existing_column(wk, ["symbol", "ticker"])
+    symbols_col = _first_existing_column(wk, ["symbols", "tickers"])
+    relevant_col = _first_existing_column(wk, ["is_relevant", "relevant", "isrelevant"])
+    urgency_col = _first_existing_column(wk, ["urgency", "urgency_score", "urgencyscore", "priority"])
+    impact_col = _first_existing_column(wk, ["impact_score", "impactscore", "impact"])
+    conf_col = _first_existing_column(wk, ["confidence_score", "confidence", "confidencescore"])
+    type_col = _first_existing_column(wk, ["type", "news_type", "event_type", "category"])
+    name_col = _first_existing_column(wk, ["company_name", "companyname", "name"])
+    sentiment_col = _first_existing_column(wk, ["sentiment", "bias"])
+    action_col = _first_existing_column(wk, ["action", "recommended_action"])
+    reason_col = _first_existing_column(wk, ["reason", "rationale"])
+
+    out["run_id"] = wk[run_col].fillna("").astype(str) if run_col else ""
+    out["scope"] = scope_norm
+    out["published_at"] = pd.to_datetime(wk[pub_col], errors="coerce", utc=True) if pub_col else pd.NaT
+    out["ingested_at"] = pd.to_datetime(wk[ing_col], errors="coerce", utc=True) if ing_col else pd.NaT
+    out["source"] = wk[source_col].fillna("").astype(str) if source_col else ""
+    out["url"] = wk[url_col].fillna("").astype(str) if url_col else ""
+    out["raw_title"] = wk[headline_col].fillna("").astype(str) if headline_col else ""
+    out["raw_summary"] = wk[summary_col].fillna("").astype(str) if summary_col else ""
+    out["headline"] = out["raw_title"].where(out["raw_title"].astype(str).str.strip() != "", "—")
+    out["summary"] = out["raw_summary"].where(out["raw_summary"].astype(str).str.strip() != "", "—")
+    out["market_regime"] = wk[regime_col].fillna("").astype(str) if regime_col else ""
+    out["type"] = wk[type_col].fillna("").astype(str) if type_col else ""
+    out["name"] = wk[name_col].fillna("").astype(str) if name_col else ""
+
+    theme_series = wk[theme_col] if theme_col else pd.Series("", index=wk.index)
+    sec_tag_series = wk[sector_tags_col] if sector_tags_col else pd.Series("", index=wk.index)
+    win_series = wk[winners_col] if winners_col else pd.Series("", index=wk.index)
+    lose_series = wk[losers_col] if losers_col else pd.Series("", index=wk.index)
+    symbol_series = wk[symbol_col] if symbol_col else pd.Series("", index=wk.index)
+    symbols_series = wk[symbols_col] if symbols_col else pd.Series("", index=wk.index)
+
+    themes_list = []
+    sector_list = []
+    bullish_sector_list = []
+    bearish_sector_list = []
+    symbols_list = []
+    symbol_primary_list = []
+    for i in wk.index:
+        theme_vals = _news_parse_listish(theme_series.get(i, ""))
+        if not theme_vals and str(theme_series.get(i, "")).strip():
+            theme_vals = [str(theme_series.get(i)).strip()]
+        win_vals = _news_parse_listish(win_series.get(i, ""))
+        lose_vals = _news_parse_listish(lose_series.get(i, ""))
+        base_sector_vals = _news_parse_listish(sec_tag_series.get(i, ""))
+        all_sector_vals = []
+        for s in base_sector_vals + win_vals + lose_vals:
+            ss = str(s).strip()
+            if ss and ss not in all_sector_vals:
+                all_sector_vals.append(ss)
+        syms = _news_extract_symbols(symbol_series.get(i, None), symbols_series.get(i, None))
+        themes_list.append(theme_vals)
+        bullish_sector_list.append(win_vals)
+        bearish_sector_list.append(lose_vals)
+        sector_list.append(all_sector_vals)
+        symbols_list.append(syms)
+        symbol_primary_list.append(syms[0] if syms else "")
+    out["themes"] = themes_list
+    out["sector_tags"] = sector_list
+    out["sector_tags_bullish"] = bullish_sector_list
+    out["sector_tags_bearish"] = bearish_sector_list
+    out["symbols"] = symbols_list
+    out["symbol_primary"] = symbol_primary_list
+
+    if relevant_col:
+        out["is_relevant"] = wk[relevant_col].map(_news_bool_or_none)
+    else:
+        out["is_relevant"] = pd.Series([None] * len(out), index=out.index, dtype=object)
+    if scope_norm == "SPE":
+        out["is_relevant"] = out["is_relevant"].where(out["is_relevant"].notna(), True)
+
+    impact_series = wk[impact_col] if impact_col else pd.Series(pd.NA, index=wk.index)
+    urgency_series = wk[urgency_col] if urgency_col else pd.Series(pd.NA, index=wk.index)
+    conf_series = wk[conf_col] if conf_col else pd.Series(pd.NA, index=wk.index)
+    sentiment_series = wk[sentiment_col] if sentiment_col else pd.Series("", index=wk.index)
+    action_series = wk[action_col] if action_col else pd.Series("", index=wk.index)
+    reason_series = wk[reason_col] if reason_col else pd.Series("", index=wk.index)
+
+    out["impact_score"] = [(_news_to_numeric_0_100(impact_series.get(i, None))) for i in wk.index]
+    out["urgency"] = [(_news_urgency_to_score(urgency_series.get(i, None))) for i in wk.index]
+    out["confidence_score"] = [(_news_confidence_to_score(conf_series.get(i, None))) for i in wk.index]
+    out["impact_score"] = pd.to_numeric(out["impact_score"], errors="coerce")
+    out["urgency"] = pd.to_numeric(out["urgency"], errors="coerce")
+    out["confidence_score"] = pd.to_numeric(out["confidence_score"], errors="coerce")
+
+    out["direction"] = [
+        _news_infer_direction(
+            scope=scope_norm,
+            market_regime=out.at[i, "market_regime"],
+            sentiment=sentiment_series.get(i, None),
+            action=action_series.get(i, None),
+            reason=reason_series.get(i, None),
+            impact_score=out.at[i, "impact_score"],
+        )
+        for i in out.index
+    ]
+
+    out["urgency_norm"] = (out["urgency"].fillna(50.0).clip(lower=0.0, upper=100.0) / 100.0)
+    out["confidence_norm"] = (out["confidence_score"].fillna(60.0).clip(lower=0.0, upper=100.0) / 100.0)
+    out["impact_abs"] = out["impact_score"].abs().fillna(0.0)
+    out["priority_score"] = out["impact_abs"] * (0.5 + out["urgency_norm"]) * out["confidence_norm"]
+    sign_map = out["direction"].map({"BULLISH": 1.0, "BEARISH": -1.0, "NEUTRAL": 0.0}).fillna(0.0)
+    out["priority_score_signed"] = out["priority_score"] * sign_map
+
+    if scope_norm == "SPE":
+        out = out[out["symbol_primary"].astype(str).str.strip() != ""].copy()
+
+    # Normalize text placeholders and ordering
+    for c in ["source", "url", "headline", "summary", "market_regime", "type", "name"]:
+        if c in out.columns:
+            out[c] = out[c].fillna("").astype(str)
+    out = out.sort_values("published_at", ascending=False, na_position="last")
+    return out.reset_index(drop=True)
+
+
+def _news_short_run_id(run_id: object) -> str:
+    s = str(run_id or "").strip()
+    if not s:
+        return "—"
+    return s if len(s) <= 24 else f"{s[:10]}...{s[-8:]}"
+
+
+def _news_latest_run_snapshot(df_runs: pd.DataFrame, workflow: str) -> dict[str, object]:
+    now_utc = pd.Timestamp.now(tz="UTC")
+    out = {
+        "workflow": workflow,
+        "run_id": "",
+        "status_raw": "NO_DATA",
+        "status": "Aucune donnee",
+        "started_at": pd.NaT,
+        "finished_at": pd.NaT,
+        "ref_ts": pd.NaT,
+        "age_h": pd.NA,
+        "raw": {},
+    }
+    if df_runs is None or df_runs.empty:
+        return out
+    wk = normalize_cols(df_runs.copy())
+    ts_start_col = _first_existing_column(wk, ["started_at", "startedat", "created_at", "createdat"])
+    ts_end_col = _first_existing_column(wk, ["finished_at", "finishedat", "updated_at", "updatedat"])
+    if not ts_start_col:
+        return out
+    wk["started_at"] = pd.to_datetime(wk[ts_start_col], errors="coerce", utc=True)
+    wk["finished_at"] = pd.to_datetime(wk[ts_end_col], errors="coerce", utc=True) if ts_end_col else pd.NaT
+    wk["status_u"] = wk.get("status", pd.Series("", index=wk.index)).fillna("").astype(str).str.upper().str.strip()
+    wk = wk.dropna(subset=["started_at"]).sort_values("started_at", ascending=False)
+    if wk.empty:
+        return out
+    row = wk.iloc[0]
+    ref_ts = row["finished_at"] if pd.notna(row["finished_at"]) else row["started_at"]
+    out["run_id"] = str(row.get("run_id", "") or "")
+    out["status_raw"] = str(row.get("status_u", "") or "UNKNOWN")
+    out["status"] = out["status_raw"] if out["status_raw"] else "UNKNOWN"
+    out["started_at"] = row["started_at"]
+    out["finished_at"] = row["finished_at"]
+    out["ref_ts"] = ref_ts
+    out["age_h"] = round(float((now_utc - ref_ts).total_seconds() / 3600.0), 1) if pd.notna(ref_ts) else pd.NA
+    try:
+        out["raw"] = row.to_dict()
+    except Exception:
+        out["raw"] = {}
+    return out
+
+
+def _news_window_cutoff(window_key: str) -> pd.Timestamp | None:
+    now_utc = pd.Timestamp.now(tz="UTC")
+    mapping = {"24h": pd.Timedelta(hours=24), "7j": pd.Timedelta(days=7), "30j": pd.Timedelta(days=30)}
+    delta = mapping.get(str(window_key), None)
+    return (now_utc - delta) if delta is not None else None
+
+
+def _news_filter_window(df: pd.DataFrame, window_key: str, ts_col: str = "published_at") -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=df.columns if isinstance(df, pd.DataFrame) else [])
+    cutoff = _news_window_cutoff(window_key)
+    if cutoff is None or ts_col not in df.columns:
+        return df.copy()
+    ts = pd.to_datetime(df[ts_col], errors="coerce", utc=True)
+    return df[ts >= cutoff].copy()
+
+
+def _news_pill_html(label: str, tone: str = "neutral") -> str:
+    tone_norm = str(tone or "neutral").lower()
+    color_map = {
+        "buy": "#16a34a",
+        "bullish": "#16a34a",
+        "ok": "#16a34a",
+        "sell": "#dc2626",
+        "bearish": "#dc2626",
+        "error": "#dc2626",
+        "warn": "#d97706",
+        "warning": "#d97706",
+        "info": "#2563eb",
+        "neutral": "#6b7280",
+        "risk-on": "#16a34a",
+        "risk-off": "#dc2626",
+    }
+    bg = color_map.get(tone_norm, "#6b7280")
+    return (
+        f"<span style='display:inline-block;padding:3px 8px;border-radius:999px;"
+        f"background:{bg};color:#fff;font-weight:700;font-size:0.75rem;'>{html.escape(str(label))}</span>"
+    )
+
+
+def _news_dedupe_clusters(df_news: pd.DataFrame) -> pd.DataFrame:
+    if df_news is None or df_news.empty:
+        return pd.DataFrame(columns=list(df_news.columns) + ["cluster_size", "cluster_urls", "dedupe_key"])
+    wk = df_news.copy()
+    wk["headline_norm"] = (
+        wk.get("headline", pd.Series("", index=wk.index))
+        .fillna("")
+        .astype(str)
+        .str.lower()
+        .str.replace(r"\s+", " ", regex=True)
+        .str.strip()
+    )
+    wk["source_norm"] = wk.get("source", pd.Series("", index=wk.index)).fillna("").astype(str).str.lower().str.strip()
+    wk["url_norm"] = wk.get("url", pd.Series("", index=wk.index)).fillna("").astype(str).str.strip()
+    wk["pub_day"] = pd.to_datetime(wk.get("published_at", pd.Series(pd.NaT, index=wk.index)), errors="coerce", utc=True).dt.strftime("%Y-%m-%d")
+    wk["dedupe_key"] = wk["url_norm"]
+    no_url = wk["dedupe_key"].astype(str).str.strip() == ""
+    wk.loc[no_url, "dedupe_key"] = (
+        wk.loc[no_url, "headline_norm"]
+        + "|"
+        + wk.loc[no_url, "source_norm"]
+        + "|"
+        + wk.loc[no_url, "pub_day"].fillna("")
+    )
+    wk = wk.sort_values("published_at", ascending=False, na_position="last")
+    grp = wk.groupby("dedupe_key", dropna=False)
+    first = grp.head(1).copy()
+    counts = grp.size().rename("cluster_size")
+    urls = grp["url_norm"].apply(lambda s: [u for u in s.dropna().astype(str).tolist() if u]).rename("cluster_urls")
+    first = first.merge(counts, left_on="dedupe_key", right_index=True, how="left")
+    first = first.merge(urls, left_on="dedupe_key", right_index=True, how="left")
+    first["cluster_size"] = pd.to_numeric(first["cluster_size"], errors="coerce").fillna(1).astype(int)
+    return first.sort_values("published_at", ascending=False, na_position="last").reset_index(drop=True)
+
+
+def _news_priority_agg(series: pd.Series) -> float:
+    x = pd.to_numeric(series, errors="coerce").fillna(0.0)
+    return float(x.sum())
+
+
+def _news_fmt_ts_paris(v: object) -> str:
+    ts = pd.to_datetime(v, errors="coerce", utc=True)
+    if pd.isna(ts):
+        return "—"
+    return ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
+
+
+def _news_fmt_age_h(v: object) -> str:
+    n = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+    if pd.isna(n):
+        return "—"
+    n = float(n)
+    return f"{n:.1f}h" if n < 24 else f"{n/24.0:.1f}j"
+
+
+def _news_fmt_pct(v: object, ndigits: int = 1) -> str:
+    n = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+    if pd.isna(n):
+        return "—"
+    x = float(n)
+    if abs(x) <= 1.0:
+        x *= 100.0
+    return f"{x:.{ndigits}f}%"
+
+
+def _news_fmt_score(v: object, ndigits: int = 1) -> str:
+    n = pd.to_numeric(pd.Series([v]), errors="coerce").iloc[0]
+    if pd.isna(n):
+        return "—"
+    return f"{float(n):.{ndigits}f}"
+
+
+def _news_pill_html(label: str, tone: str = "neutral") -> str:
+    tone_norm = str(tone or "neutral").lower()
+    color_map = {
+        "ok": "#16a34a",
+        "bullish": "#16a34a",
+        "risk-on": "#16a34a",
+        "warn": "#d97706",
+        "warning": "#d97706",
+        "error": "#dc2626",
+        "bearish": "#dc2626",
+        "risk-off": "#dc2626",
+        "info": "#2563eb",
+        "neutral": "#6b7280",
+    }
+    bg = color_map.get(tone_norm, "#6b7280")
+    return (
+        f"<span style='display:inline-block;padding:3px 8px;border-radius:999px;"
+        f"background:{bg};color:#fff;font-weight:700;font-size:0.75rem;'>{html.escape(str(label))}</span>"
+    )
+
+
+def _news_scope_catalog_from_ag1() -> tuple[dict[str, list[str]], pd.DataFrame, str]:
+    catalog: dict[str, list[str]] = {
+        "Portefeuille actif": [],
+        "Tous portefeuilles": [],
+        "Universe complet": [],
+    }
+    df_positions_active = pd.DataFrame()
+    active_key = str(st.session_state.get("dashboard_active_portfolio") or "").strip()
+    try:
+        ag1_multi = load_ag1_multi_portfolios()
+    except Exception:
+        ag1_multi = {}
+
+    available_keys = [
+        k for k, p in ag1_multi.items()
+        if isinstance(p, dict) and str(p.get("status", "")).lower() == "ok"
+    ]
+    if active_key not in available_keys:
+        active_key = available_keys[0] if available_keys else ""
+
+    all_syms: list[str] = []
+    for key in available_keys:
+        payload = ag1_multi.get(key, {})
+        dfp = payload.get("df_portfolio", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+        if not isinstance(dfp, pd.DataFrame) or dfp.empty:
+            continue
+        wk = normalize_cols(dfp.copy())
+        if "symbol" not in wk.columns:
+            continue
+        wk["symbol"] = wk["symbol"].astype(str).str.strip().str.upper()
+        wk = wk[~wk["symbol"].isin(["", "CASH_EUR", "__META__"])]
+        syms = [s for s in wk["symbol"].dropna().tolist() if s and s not in all_syms]
+        all_syms.extend(syms)
+        if key == active_key:
+            df_positions_active = wk.copy()
+            catalog["Portefeuille actif"] = syms
+    catalog["Tous portefeuilles"] = all_syms
+    return catalog, df_positions_active, active_key
+
+
+def _render_macro_alert_card(row: pd.Series) -> None:
+    headline = str(row.get("headline", "—") or "—").strip()
+    source = str(row.get("source", "") or "Source inconnue").strip()
+    ts_txt = _news_fmt_ts_paris(row.get("published_at"))
+    summary = str(row.get("summary", "—") or "—").strip()
+    url = str(row.get("url", "") or "").strip()
+    direction = str(row.get("direction", "NEUTRAL") or "NEUTRAL").upper()
+    direction_tone = "bullish" if direction == "BULLISH" else ("bearish" if direction == "BEARISH" else "neutral")
+    urgency = pd.to_numeric(pd.Series([row.get("urgency", pd.NA)]), errors="coerce").iloc[0]
+    impact = pd.to_numeric(pd.Series([row.get("impact_score", pd.NA)]), errors="coerce").iloc[0]
+    conf = pd.to_numeric(pd.Series([row.get("confidence_score", pd.NA)]), errors="coerce").iloc[0]
+    regime = str(row.get("market_regime", "") or "").strip()
+    themes = row.get("themes", []) if isinstance(row.get("themes"), list) else []
+    sectors = row.get("sector_tags", []) if isinstance(row.get("sector_tags"), list) else []
+    bull_secs = row.get("sector_tags_bullish", []) if isinstance(row.get("sector_tags_bullish"), list) else []
+    bear_secs = row.get("sector_tags_bearish", []) if isinstance(row.get("sector_tags_bearish"), list) else []
+
+    with st.container(border=True):
+        st.markdown(f"**{html.escape(headline)}**  \n{html.escape(source)} | {ts_txt}")
+        if summary and summary != "—":
+            st.caption(summary[:280] + ("..." if len(summary) > 280 else ""))
+        pills = [
+            _news_pill_html(f"Urg {_news_fmt_score(urgency, 0)}", "warn" if pd.notna(urgency) and float(urgency) >= 80 else "neutral"),
+            _news_pill_html(f"Impact {_news_fmt_score(impact, 0)}", "info"),
+            _news_pill_html(f"Conf {_news_fmt_score(conf, 0)}", "ok"),
+            _news_pill_html(direction, direction_tone),
+        ]
+        if regime:
+            regime_tone = "risk-on" if "on" in regime.lower() else ("risk-off" if "off" in regime.lower() else "neutral")
+            pills.append(_news_pill_html(regime, regime_tone))
+        st.markdown(" ".join(pills), unsafe_allow_html=True)
+        tags = []
+        if themes:
+            tags.append("Themes: " + ", ".join([str(t) for t in themes[:4]]))
+        if sectors:
+            tags.append("Secteurs: " + ", ".join([str(s) for s in sectors[:4]]))
+        if tags:
+            st.caption(" | ".join(tags))
+        with st.expander("Explain impact", expanded=False):
+            posture = "Prudent" if direction == "BEARISH" or (pd.notna(urgency) and float(urgency) >= 80) else ("Offensif" if direction == "BULLISH" else "Neutre")
+            st.write(
+                f"Impact attendu: posture `{posture}`. "
+                f"Secteurs favorises: {', '.join(bull_secs[:3]) if bull_secs else '—'}. "
+                f"Secteurs sous pression: {', '.join(bear_secs[:3]) if bear_secs else '—'}. "
+                f"Themes a surveiller: {', '.join([str(t) for t in themes[:3]]) if themes else '—'}."
+            )
+        if url:
+            st.markdown(f"[Ouvrir la source]({url})")
+
+
+def render_macro_alerts(df_macro: pd.DataFrame, *, key_prefix: str = "ag4_macro_alerts") -> None:
+    with st.container(border=True):
+        st.markdown("#### Macro Alerts feed")
+        st.caption("Tri actionnable = impact_score * (0.5 + urgency_norm) * (confidence/100)")
+        if df_macro is None or df_macro.empty:
+            st.info("Aucune news macro sur la periode.")
+            return
+        top_n = int(st.selectbox("Nombre d'alertes", [10, 15, 20], index=0, key=f"{key_prefix}_topn"))
+        wk = df_macro.sort_values(["urgency", "priority_score", "published_at"], ascending=[False, False, False], na_position="last")
+        for _, row in wk.head(top_n).iterrows():
+            _render_macro_alert_card(row)
+
+
+def render_macro_overview(df_macro: pd.DataFrame, df_macro_runs: pd.DataFrame, df_positions_optional: pd.DataFrame | None = None) -> None:
+    if df_macro is None or df_macro.empty:
+        st.info("Aucune donnee macro AG4 disponible.")
+        return
+
+    macro_window = st.radio("Fenetre macro", ["7j", "30j"], horizontal=True, key="ag4_macro_overview_window")
+    df_macro_win = _news_filter_window(df_macro, macro_window)
+    if df_macro_win.empty:
+        st.info(f"Aucune news macro sur {macro_window}.")
+        return
+
+    run_meta = _news_latest_run_snapshot(df_macro_runs, "AG4 Macro")
+    pub_all = pd.to_datetime(df_macro.get("published_at", pd.Series(pd.NaT, index=df_macro.index)), errors="coerce", utc=True)
+    latest_pub = pub_all.dropna().max() if not pub_all.dropna().empty else pd.NaT
+    age_h = (pd.Timestamp.now(tz="UTC") - latest_pub).total_seconds() / 3600.0 if pd.notna(latest_pub) else pd.NA
+    cov_24h = len(_news_filter_window(df_macro, "24h"))
+    cov_7d = len(_news_filter_window(df_macro, "7j"))
+    status = "OK"
+    reasons: list[str] = []
+    if pd.isna(age_h):
+        status = "WARN"
+        reasons.append("published_at manquant")
+    elif float(age_h) > 24.0:
+        status = "WARN"
+        reasons.append(f"freshness={_news_fmt_age_h(age_h)}")
+    if cov_24h < 3 and cov_7d > 0:
+        status = "WARN"
+        reasons.append("coverage 24h faible")
+
+    latest_row = df_macro.sort_values("published_at", ascending=False, na_position="last").iloc[0]
+    regime = str(latest_row.get("market_regime", "") or "").strip() or "Neutral"
+    regime_tone = "risk-on" if "on" in regime.lower() else ("risk-off" if "off" in regime.lower() else "neutral")
+    conf = pd.to_numeric(pd.Series([latest_row.get("confidence_score", pd.NA)]), errors="coerce").iloc[0]
+    alerts_24h = _news_filter_window(df_macro, "24h")
+    high_urg_24h = int((pd.to_numeric(alerts_24h.get("urgency", pd.Series(pd.NA, index=alerts_24h.index)), errors="coerce").fillna(0.0) >= 80.0).sum()) if not alerts_24h.empty else 0
+
+    theme_tokens = []
+    for t in _news_filter_window(df_macro, "7j").get("themes", pd.Series(dtype=object)):
+        if isinstance(t, list):
+            theme_tokens.extend([str(x) for x in t if str(x).strip()])
+    active_themes_7d = len(set(theme_tokens))
+    macro_sent_net = _news_priority_agg(df_macro_win.get("priority_score_signed", pd.Series(dtype=float)))
+
+    sec_rows = []
+    for _, r in df_macro_win.iterrows():
+        p = float(pd.to_numeric(pd.Series([r.get("priority_score", 0.0)]), errors="coerce").fillna(0.0).iloc[0])
+        for s in (r.get("sector_tags_bullish", []) if isinstance(r.get("sector_tags_bullish"), list) else []):
+            sec_rows.append({"sector": str(s), "direction": "Bullish", "score": p})
+        for s in (r.get("sector_tags_bearish", []) if isinstance(r.get("sector_tags_bearish"), list) else []):
+            sec_rows.append({"sector": str(s), "direction": "Bearish", "score": p})
+    sec_df = pd.DataFrame(sec_rows)
+    top_winner_txt = "—"
+    top_loser_txt = "—"
+    if not sec_df.empty:
+        sec_agg = sec_df.groupby(["sector", "direction"], as_index=False)["score"].sum()
+        bull = sec_agg[sec_agg["direction"] == "Bullish"].sort_values("score", ascending=False)
+        bear = sec_agg[sec_agg["direction"] == "Bearish"].sort_values("score", ascending=False)
+        if not bull.empty:
+            top_winner_txt = f"{bull.iloc[0]['sector']} ({bull.iloc[0]['score']:.0f})"
+        if not bear.empty:
+            top_loser_txt = f"{bear.iloc[0]['sector']} ({bear.iloc[0]['score']:.0f})"
+
+    with st.container(border=True):
+        b1, b2, b3, b4 = st.columns([2.2, 1.0, 1.1, 1.7])
+        b1.markdown(f"**Dernier run AG4**: `{_news_short_run_id(run_meta.get('run_id'))}` | {_news_fmt_ts_paris(run_meta.get('ref_ts'))}")
+        b2.markdown(_news_pill_html(status, "ok" if status == "OK" else "warn"), unsafe_allow_html=True)
+        b3.metric("Freshness", _news_fmt_age_h(age_h), delta_color="off")
+        b4.markdown(f"**Coverage**: 24h={cov_24h} | 7j={cov_7d}  \n**Notes**: {', '.join(reasons[:2]) if reasons else 'RAS'}")
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.markdown("**Market regime**")
+    k1.markdown(_news_pill_html(regime, regime_tone), unsafe_allow_html=True)
+    k1.caption(f"Conf {_news_fmt_score(conf, 0)}")
+    k2.metric("Macro sentiment net", _news_fmt_score(macro_sent_net, 0), delta_color="off")
+    k3.metric("# alertes high urgency (24h)", high_urg_24h)
+    k4.metric("# themes actifs (7j)", active_themes_7d)
+    k5.metric("Winner sector", top_winner_txt, delta_color="off")
+    k6.metric("Loser sector", top_loser_txt, delta_color="off")
+
+    c1, c2, c3 = st.columns(3, gap="large")
+    with c1:
+        with st.container(border=True):
+            st.markdown("#### Timeline regime")
+            tl_window = st.radio("Fenetre", ["7j", "30j"], horizontal=True, key="ag4_macro_timeline_window")
+            df_tl = _news_filter_window(df_macro, tl_window).copy()
+            if df_tl.empty:
+                st.info("Aucune donnee.")
+            else:
+                df_tl["day"] = pd.to_datetime(df_tl["published_at"], errors="coerce", utc=True).dt.floor("D")
+                df_tl["regime_score"] = df_tl.get("market_regime", pd.Series("", index=df_tl.index)).astype(str).str.lower().map(
+                    lambda s: 1 if "risk-on" in s or "risk on" in s else (-1 if "risk-off" in s or "risk off" in s else 0)
+                )
+                daily = df_tl.groupby("day", as_index=False).agg(
+                    regime_score=("regime_score", "mean"),
+                    articles=("day", "size"),
+                )
+                if daily.empty:
+                    st.info("Aucune donnee.")
+                else:
+                    fig_tl = go.Figure()
+                    fig_tl.add_trace(go.Bar(x=daily["day"], y=daily["articles"], name="#articles", marker_color="rgba(96,165,250,0.35)", yaxis="y2"))
+                    fig_tl.add_trace(go.Scatter(x=daily["day"], y=daily["regime_score"], name="Regime", mode="lines+markers", line=dict(color="#eab308", width=2)))
+                    fig_tl.update_layout(
+                        height=260,
+                        margin=dict(l=10, r=10, t=10, b=10),
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+                        yaxis=dict(title="RiskOff -1 / 0 / +1 RiskOn", range=[-1.2, 1.2], gridcolor="rgba(128,128,128,0.15)"),
+                        yaxis2=dict(title="#", overlaying="y", side="right", showgrid=False),
+                        legend=dict(orientation="h", y=1.08, x=0),
+                    )
+                    st.plotly_chart(fig_tl, use_container_width=True, config={"displayModeBar": False})
+    with c2:
+        with st.container(border=True):
+            st.markdown("#### Top Themes")
+            rows = []
+            for _, r in df_macro_win.iterrows():
+                themes = r.get("themes", []) if isinstance(r.get("themes"), list) else []
+                for t in themes:
+                    rows.append({"theme": str(t), "score": float(pd.to_numeric(pd.Series([r.get('priority_score', 0.0)]), errors='coerce').fillna(0.0).iloc[0]), "direction": str(r.get("direction", "NEUTRAL"))})
+            th_df = pd.DataFrame(rows)
+            if th_df.empty:
+                st.info("Themes indisponibles.")
+            else:
+                agg = th_df.groupby("theme", as_index=False).agg(
+                    theme_score=("score", "sum"),
+                    bull=("direction", lambda s: int((pd.Series(s).astype(str).str.upper() == "BULLISH").sum())),
+                    bear=("direction", lambda s: int((pd.Series(s).astype(str).str.upper() == "BEARISH").sum())),
+                )
+                agg["dir"] = agg.apply(lambda r: "Bullish" if r["bull"] > r["bear"] else ("Bearish" if r["bear"] > r["bull"] else "Neutral"), axis=1)
+                agg = agg.sort_values("theme_score", ascending=False).head(8).sort_values("theme_score", ascending=True)
+                fig_th = px.bar(agg, x="theme_score", y="theme", orientation="h", color="dir", color_discrete_map={"Bullish": "#22c55e", "Bearish": "#ef4444", "Neutral": "#9ca3af"}, text="theme_score")
+                fig_th.update_traces(texttemplate="%{text:.0f}", textposition="outside")
+                fig_th.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(gridcolor="rgba(128,128,128,0.15)"), yaxis=dict(title=None), legend=dict(orientation="h", y=1.08, x=0))
+                st.plotly_chart(fig_th, use_container_width=True, config={"displayModeBar": False})
+    with c3:
+        with st.container(border=True):
+            st.markdown("#### Heatmap Secteur x Impact")
+            if sec_df.empty:
+                st.info("Secteurs winners/losers indisponibles.")
+            else:
+                sec_heat = sec_df.groupby(["sector", "direction"], as_index=False)["score"].sum()
+                pv = sec_heat.pivot_table(index="sector", columns="direction", values="score", aggfunc="sum", fill_value=0.0)
+                for col in ["Bullish", "Bearish"]:
+                    if col not in pv.columns:
+                        pv[col] = 0.0
+                pv["total"] = pv["Bullish"] + pv["Bearish"]
+                pv = pv.sort_values("total", ascending=False).head(10)
+                z = pv[["Bullish", "Bearish"]].to_numpy()
+                fig_sec = go.Figure(data=go.Heatmap(z=z, x=["Bullish", "Bearish"], y=pv.index.tolist(), text=[[f"{v:.0f}" for v in row] for row in z], texttemplate="%{text}", colorscale="Viridis"))
+                fig_sec.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(title=None), yaxis=dict(title=None, automargin=True))
+                st.plotly_chart(fig_sec, use_container_width=True, config={"displayModeBar": False})
+
+    render_macro_alerts(df_macro_win, key_prefix="ag4_macro_alerts_feed")
+
+    with st.container(border=True):
+        st.markdown("#### So what for portfolio?")
+        posture = "Neutre"
+        if ("risk-off" in regime.lower() or "risk off" in regime.lower()) or high_urg_24h >= 3:
+            posture = "Prudent"
+        elif ("risk-on" in regime.lower() or "risk on" in regime.lower()) and high_urg_24h <= 1:
+            posture = "Offensif"
+        posture_tone = "warn" if posture == "Prudent" else ("ok" if posture == "Offensif" else "neutral")
+        s1, s2, s3 = st.columns(3)
+        s1.markdown(_news_pill_html(f"Posture: {posture}", posture_tone), unsafe_allow_html=True)
+        over_txt = "—"
+        under_txt = "—"
+        if not sec_df.empty:
+            sec_agg = sec_df.groupby(["sector", "direction"], as_index=False)["score"].sum()
+            bull = sec_agg[sec_agg["direction"] == "Bullish"].sort_values("score", ascending=False)
+            bear = sec_agg[sec_agg["direction"] == "Bearish"].sort_values("score", ascending=False)
+            over_txt = ", ".join(bull["sector"].head(3).tolist()) if not bull.empty else "—"
+            under_txt = ", ".join(bear["sector"].head(3).tolist()) if not bear.empty else "—"
+        theme_risks = []
+        for _, r in df_macro_win.iterrows():
+            if str(r.get("direction", "NEUTRAL")).upper() not in ("BEARISH", "NEUTRAL"):
+                continue
+            for t in (r.get("themes", []) if isinstance(r.get("themes"), list) else []):
+                theme_risks.append({"theme": str(t), "score": float(pd.to_numeric(pd.Series([r.get("priority_score", 0.0)]), errors="coerce").fillna(0.0).iloc[0])})
+        risk_txt = "—"
+        if theme_risks:
+            th = pd.DataFrame(theme_risks).groupby("theme", as_index=False)["score"].sum().sort_values("score", ascending=False)
+            risk_txt = ", ".join(th["theme"].head(4).tolist()) if not th.empty else "—"
+        s2.markdown(f"**Surponderer**: {over_txt}  \n**Sous-ponderer**: {under_txt}")
+        s3.markdown(f"**Risques a surveiller**: {risk_txt}")
+
+        if isinstance(df_positions_optional, pd.DataFrame) and not df_positions_optional.empty:
+            pos = normalize_cols(df_positions_optional.copy())
+            if "sector" in pos.columns and "marketvalue" in pos.columns:
+                pos["sector"] = pos["sector"].fillna("").astype(str).str.strip()
+                pos["marketvalue"] = pd.to_numeric(pos["marketvalue"], errors="coerce").fillna(0.0)
+                pos = pos[(pos["sector"] != "") & (pos["marketvalue"] > 0)]
+                if not pos.empty:
+                    total_mv = float(pos["marketvalue"].sum()) or 1.0
+                    sec_w = (pos.groupby("sector")["marketvalue"].sum() / total_mv * 100.0).sort_values(ascending=False)
+                    st.caption("Impact portefeuille (secteurs exposés): " + ", ".join([f"{sec} {w:.1f}%" for sec, w in sec_w.head(5).items()]))
+
+
+def render_symbol_news(
+    df_spe: pd.DataFrame,
+    *,
+    scope_catalog: dict[str, list[str]] | None = None,
+    df_universe_optional: pd.DataFrame | None = None,
+    df_positions_active: pd.DataFrame | None = None,
+) -> None:
+    if df_spe is None or df_spe.empty:
+        st.info("Aucune news par valeur AG4-SPE disponible.")
+        return
+
+    scope_catalog = dict(scope_catalog or {})
+    if "Universe complet" not in scope_catalog:
+        scope_catalog["Universe complet"] = []
+
+    spe_all = df_spe.copy()
+    spe_all["symbol_primary"] = spe_all.get("symbol_primary", pd.Series("", index=spe_all.index)).fillna("").astype(str).str.upper()
+
+    base_symbols = set([s for s in spe_all["symbol_primary"].dropna().tolist() if s])
+    if isinstance(df_universe_optional, pd.DataFrame) and not df_universe_optional.empty:
+        un = normalize_cols(df_universe_optional.copy())
+        if "symbol" in un.columns:
+            base_symbols.update(un["symbol"].dropna().astype(str).str.strip().str.upper().tolist())
+    scope_catalog["Universe complet"] = sorted([s for s in base_symbols if s])
+
+    c1, c2, c3, c4 = st.columns([1.1, 1.6, 2.4, 2.1])
+    window_key = c1.radio("Fenetre", ["24h", "7j", "30j"], key="ag4_spe_window")
+    scope_name = c2.selectbox("Scope", list(scope_catalog.keys()), key="ag4_spe_scope")
+    symbol_options = sorted([s for s in spe_all["symbol_primary"].dropna().unique().tolist() if s])
+    selected_symbols = c3.multiselect("Filtre symbol", symbol_options, key="ag4_spe_symbol_filter")
+    c4.write("")
+    holdings_only = c4.toggle("Holdings only", value=False, key="ag4_spe_holdings_only")
+    high_urg_only = c4.toggle("High urgency only", value=False, key="ag4_spe_high_urg_only")
+    relevant_only = c4.toggle("Relevant only", value=False, key="ag4_spe_relevant_only")
+
+    scope_symbols = set([str(s).upper() for s in scope_catalog.get(scope_name, []) if str(s).strip()])
+
+    spe_window = _news_filter_window(spe_all, window_key)
+    if (scope_name != "Universe complet" or holdings_only) and scope_symbols:
+        spe_window = spe_window[spe_window["symbol_primary"].isin(scope_symbols)]
+    if selected_symbols:
+        spe_window = spe_window[spe_window["symbol_primary"].isin([str(s).upper() for s in selected_symbols])]
+    if high_urg_only:
+        spe_window = spe_window[pd.to_numeric(spe_window.get("urgency", pd.Series(pd.NA, index=spe_window.index)), errors="coerce").fillna(0.0) >= 80.0]
+    if relevant_only:
+        rel = spe_window.get("is_relevant", pd.Series(True, index=spe_window.index))
+        spe_window = spe_window[rel.fillna(False) == True]  # noqa: E712
+
+    events_count = len(spe_window)
+    high_urg_count = int((pd.to_numeric(spe_window.get("urgency", pd.Series(pd.NA, index=spe_window.index)), errors="coerce").fillna(0.0) >= 80.0).sum()) if not spe_window.empty else 0
+    relevant_count = int((spe_window.get("is_relevant", pd.Series(False, index=spe_window.index)).fillna(False) == True).sum()) if not spe_window.empty else 0  # noqa: E712
+    risk_7d_df = _news_filter_window(spe_window, "7j")
+    risk_30d_df = _news_filter_window(spe_window, "30j")
+    headline_risk_7d = float(pd.to_numeric(risk_7d_df.get("priority_score", pd.Series(0.0, index=risk_7d_df.index)), errors="coerce").fillna(0.0).sum()) if not risk_7d_df.empty else 0.0
+    headline_risk_30d = float(pd.to_numeric(risk_30d_df.get("priority_score", pd.Series(0.0, index=risk_30d_df.index)), errors="coerce").fillna(0.0).sum()) if not risk_30d_df.empty else 0.0
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("# evenements (scope)", events_count)
+    k2.metric("# high urgency", high_urg_count)
+    k3.metric("# relevant", relevant_count)
+    k4.metric("Headline risk score", f"{headline_risk_7d:.0f}", delta=f"30j {headline_risk_30d:.0f}", delta_color="off")
+    st.caption("Headline risk = somme(priority_score) ; priority_score = impact_score * (0.5 + urgency_norm) * (confidence/100)")
+
+    base_for_scoreboard = spe_all.copy()
+    if (scope_name != "Universe complet" or holdings_only) and scope_symbols:
+        base_for_scoreboard = base_for_scoreboard[base_for_scoreboard["symbol_primary"].isin(scope_symbols)]
+    if selected_symbols:
+        base_for_scoreboard = base_for_scoreboard[base_for_scoreboard["symbol_primary"].isin([str(s).upper() for s in selected_symbols])]
+    if high_urg_only:
+        base_for_scoreboard = base_for_scoreboard[pd.to_numeric(base_for_scoreboard.get("urgency", pd.Series(pd.NA, index=base_for_scoreboard.index)), errors="coerce").fillna(0.0) >= 80.0]
+    if relevant_only:
+        base_for_scoreboard = base_for_scoreboard[base_for_scoreboard.get("is_relevant", pd.Series(True, index=base_for_scoreboard.index)).fillna(False) == True]  # noqa: E712
+
+    if base_for_scoreboard.empty:
+        st.info("Aucune news symbole dans le scope courant.")
+        return
+
+    def _sym_score_agg(df_src: pd.DataFrame, suffix: str) -> pd.DataFrame:
+        if df_src is None or df_src.empty:
+            return pd.DataFrame(columns=["symbol_primary"])
+        wk = df_src.copy()
+        wk["published_at"] = pd.to_datetime(wk.get("published_at", pd.Series(pd.NaT, index=wk.index)), errors="coerce", utc=True)
+        grp = wk.groupby("symbol_primary", as_index=False).agg(
+            **{
+                f"headline_risk_{suffix}": ("priority_score", "sum"),
+                f"urgency_max_{suffix}": ("urgency", "max"),
+                f"impact_max_{suffix}": ("impact_score", lambda s: pd.to_numeric(s, errors="coerce").abs().max()),
+                f"confidence_mean_{suffix}": ("confidence_score", "mean"),
+                f"last_event_at_{suffix}": ("published_at", "max"),
+                f"events_{suffix}": ("symbol_primary", "size"),
+            }
+        )
+        return grp
+
+    sb7 = _sym_score_agg(_news_filter_window(base_for_scoreboard, "7j"), "7d")
+    sb30 = _sym_score_agg(_news_filter_window(base_for_scoreboard, "30j"), "30d")
+    sb = sb30.merge(sb7, on="symbol_primary", how="outer")
+    latest_evt = (
+        base_for_scoreboard.sort_values("published_at", ascending=False, na_position="last")
+        .drop_duplicates(subset=["symbol_primary"], keep="first")
+        [[c for c in ["symbol_primary", "headline", "published_at", "urgency", "impact_score", "confidence_score", "name"] if c in base_for_scoreboard.columns]]
+        .rename(columns={"headline": "last_headline", "published_at": "last_event_at", "name": "name_latest"})
+    )
+    sb = sb.merge(latest_evt, on="symbol_primary", how="left")
+
+    if isinstance(df_universe_optional, pd.DataFrame) and not df_universe_optional.empty:
+        un = normalize_cols(df_universe_optional.copy())
+        if "symbol" in un.columns:
+            un["symbol"] = un["symbol"].astype(str).str.strip().str.upper()
+            if "name" not in un.columns:
+                un["name"] = ""
+            if "sector" not in un.columns:
+                un["sector"] = ""
+            sb = sb.merge(un[["symbol", "name", "sector"]].drop_duplicates("symbol"), left_on="symbol_primary", right_on="symbol", how="left")
+            sb.drop(columns=["symbol"], inplace=True, errors="ignore")
+    if "name" not in sb.columns:
+        sb["name"] = sb.get("name_latest", pd.Series("", index=sb.index))
+    if "sector" not in sb.columns:
+        sb["sector"] = ""
+
+    for c in ["headline_risk_7d", "headline_risk_30d", "urgency_max_7d", "impact_max_7d", "confidence_mean_7d"]:
+        if c not in sb.columns:
+            sb[c] = pd.NA
+    sb["breaking_flag"] = pd.to_numeric(sb.get("urgency_max_7d", pd.Series(pd.NA, index=sb.index)), errors="coerce").fillna(0.0) >= 90.0
+    sb = sb.sort_values(["headline_risk_7d", "headline_risk_30d"], ascending=[False, False], na_position="last")
+
+    st.markdown("#### Scoreboard par valeur")
+    sb_show = pd.DataFrame(
+        {
+            "Symbol": sb["symbol_primary"],
+            "Name": sb.get("name", pd.Series("", index=sb.index)).fillna("").astype(str),
+            "Sector": sb.get("sector", pd.Series("", index=sb.index)).fillna("").astype(str),
+            "HeadlineRisk 7d": pd.to_numeric(sb.get("headline_risk_7d", pd.Series(pd.NA, index=sb.index)), errors="coerce").round(1),
+            "HeadlineRisk 30d": pd.to_numeric(sb.get("headline_risk_30d", pd.Series(pd.NA, index=sb.index)), errors="coerce").round(1),
+            "Last event": pd.to_datetime(sb.get("last_event_at", pd.Series(pd.NaT, index=sb.index)), errors="coerce", utc=True).apply(lambda x: x.tz_convert("Europe/Paris").strftime("%m-%d %H:%M") if pd.notna(x) else "—"),
+            "Urgency max 7d": pd.to_numeric(sb.get("urgency_max_7d", pd.Series(pd.NA, index=sb.index)), errors="coerce").round(0),
+            "Impact max 7d": pd.to_numeric(sb.get("impact_max_7d", pd.Series(pd.NA, index=sb.index)), errors="coerce").round(0),
+            "Confidence moyen 7d": pd.to_numeric(sb.get("confidence_mean_7d", pd.Series(pd.NA, index=sb.index)), errors="coerce").round(0),
+            "Flag Breaking": sb.get("breaking_flag", pd.Series(False, index=sb.index)).map(lambda x: "YES" if bool(x) else "—"),
+        }
+    )
+    st.dataframe(sb_show.head(120), use_container_width=True, hide_index=True, height=360)
+
+    symbol_choices = [s for s in sb["symbol_primary"].dropna().astype(str).tolist() if s]
+    if not symbol_choices:
+        st.info("Aucun symbole pour le detail.")
+        return
+    selected_symbol = st.selectbox("Detail valeur", symbol_choices, index=0, key="ag4_spe_selected_symbol")
+
+    detail_df = base_for_scoreboard[base_for_scoreboard["symbol_primary"] == str(selected_symbol).upper()].copy()
+    if detail_df.empty:
+        st.info("Aucune news pour ce symbole.")
+        return
+    detail_df = detail_df.sort_values("published_at", ascending=False, na_position="last")
+    detail_clusters = _news_dedupe_clusters(detail_df)
+
+    left, right = st.columns([1.1, 1.9], gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown(f"#### Timeline — {selected_symbol}")
+            tl = detail_df.copy()
+            tl["published_at"] = pd.to_datetime(tl["published_at"], errors="coerce", utc=True)
+            tl["priority_score"] = pd.to_numeric(tl.get("priority_score", pd.Series(0.0, index=tl.index)), errors="coerce").fillna(0.0)
+            tl["urgency"] = pd.to_numeric(tl.get("urgency", pd.Series(pd.NA, index=tl.index)), errors="coerce")
+            if tl["published_at"].dropna().empty:
+                st.info("Pas de timeline disponible.")
+            else:
+                tl["direction_plot"] = tl.get("direction", pd.Series("NEUTRAL", index=tl.index)).astype(str)
+                fig = px.scatter(
+                    tl,
+                    x="published_at",
+                    y="priority_score",
+                    color="direction_plot",
+                    size="urgency" if tl["urgency"].notna().any() else None,
+                    hover_data={"headline": True, "priority_score": ":.1f", "urgency": ":.0f", "confidence_score": ":.0f"},
+                    color_discrete_map={"BULLISH": "#22c55e", "BEARISH": "#ef4444", "NEUTRAL": "#9ca3af"},
+                    labels={"direction_plot": "Direction"},
+                )
+                fig.update_layout(height=340, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(gridcolor="rgba(128,128,128,0.15)"), yaxis=dict(gridcolor="rgba(128,128,128,0.15)"), legend=dict(orientation="h", y=1.08, x=0))
+                st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    with right:
+        with st.container(border=True):
+            st.markdown("#### Liste news (dédoublonnée)")
+            st.caption("Déduplication par URL sinon (headline normalisé + source + jour), regroupée en clusters.")
+            max_items = int(st.selectbox("Nb items", [10, 20, 30], index=1, key="ag4_spe_detail_nb_items"))
+            if detail_clusters.empty:
+                st.info("Aucune news.")
+            else:
+                for _, r in detail_clusters.head(max_items).iterrows():
+                    cluster_n = int(pd.to_numeric(pd.Series([r.get("cluster_size", 1)]), errors="coerce").fillna(1).iloc[0])
+                    title = str(r.get("headline", "—") or "—")
+                    st.markdown(f"**{html.escape(title)}**" + (f" _( +{cluster_n-1} similaires )_" if cluster_n > 1 else ""))
+                    st.caption(f"{_news_fmt_ts_paris(r.get('published_at'))} | {str(r.get('source', '') or 'Source inconnue')}")
+                    summary = str(r.get("summary", "—") or "—")
+                    if summary and summary != "—":
+                        st.write(summary[:260] + ("..." if len(summary) > 260 else ""))
+                    urg = pd.to_numeric(pd.Series([r.get("urgency", pd.NA)]), errors="coerce").iloc[0]
+                    imp = pd.to_numeric(pd.Series([r.get("impact_score", pd.NA)]), errors="coerce").iloc[0]
+                    conf = pd.to_numeric(pd.Series([r.get("confidence_score", pd.NA)]), errors="coerce").iloc[0]
+                    rel = r.get("is_relevant", None)
+                    typ = str(r.get("type", "—") or "—")
+                    st.markdown(
+                        " ".join(
+                            [
+                                _news_pill_html(f"Urg {_news_fmt_score(urg, 0)}", "warn" if pd.notna(urg) and float(urg) >= 80 else "neutral"),
+                                _news_pill_html(f"Impact {_news_fmt_score(imp, 0)}", "info"),
+                                _news_pill_html(f"Conf {_news_fmt_score(conf, 0)}", "ok"),
+                                _news_pill_html("Relevant" if rel is True else ("Not relevant" if rel is False else "Relevance —"), "ok" if rel is True else "neutral"),
+                                _news_pill_html(typ, "neutral"),
+                            ]
+                        ),
+                        unsafe_allow_html=True,
+                    )
+                    url = str(r.get("url", "") or "").strip()
+                    if url:
+                        st.markdown(f"[Lien source]({url})")
+                    st.divider()
+
+
+def render_news_runs_history(df_macro: pd.DataFrame, df_spe: pd.DataFrame, df_macro_runs: pd.DataFrame, df_spe_runs: pd.DataFrame) -> None:
+    st.markdown("#### Historique runs (AG4 & AG4-SPE)")
+    m_snap = _news_latest_run_snapshot(df_macro_runs, "AG4 Macro")
+    s_snap = _news_latest_run_snapshot(df_spe_runs, "AG4-SPE")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("AG4 Macro status", str(m_snap.get("status_raw", "NO_DATA")), delta=_news_fmt_age_h(m_snap.get("age_h")), delta_color="off")
+    c2.metric("AG4-SPE status", str(s_snap.get("status_raw", "NO_DATA")), delta=_news_fmt_age_h(s_snap.get("age_h")), delta_color="off")
+    c3.metric("#articles macro (7j)", len(_news_filter_window(df_macro, "7j")) if isinstance(df_macro, pd.DataFrame) else 0)
+    c4.metric("#events spe (7j)", len(_news_filter_window(df_spe, "7j")) if isinstance(df_spe, pd.DataFrame) else 0)
+
+    chart_window = st.radio("Fenetre chart", ["7j", "30j"], horizontal=True, key="ag4_runs_chart_window")
+    rows = []
+    if isinstance(df_macro, pd.DataFrame) and not df_macro.empty:
+        dm = _news_filter_window(df_macro, chart_window).copy()
+        if not dm.empty:
+            dm["day"] = pd.to_datetime(dm.get("published_at", pd.Series(pd.NaT, index=dm.index)), errors="coerce", utc=True).dt.floor("D")
+            rows.append(dm.groupby("day").size().reset_index(name="count").assign(flow="Macro"))
+    if isinstance(df_spe, pd.DataFrame) and not df_spe.empty:
+        ds = _news_filter_window(df_spe, chart_window).copy()
+        if not ds.empty:
+            ds["day"] = pd.to_datetime(ds.get("published_at", pd.Series(pd.NaT, index=ds.index)), errors="coerce", utc=True).dt.floor("D")
+            rows.append(ds.groupby("day").size().reset_index(name="count").assign(flow="SPE"))
+    if rows:
+        hist_df = pd.concat(rows, ignore_index=True)
+        fig = px.line(hist_df, x="day", y="count", color="flow", markers=True, color_discrete_map={"Macro": "#60a5fa", "SPE": "#f59e0b"})
+        fig.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(gridcolor="rgba(128,128,128,0.15)"), yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="#articles/jour"), legend=dict(orientation="h", y=1.08, x=0))
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False})
+    else:
+        st.info("Pas de donnees d'articles sur la fenetre.")
+
+    t1, t2 = st.tabs(["Runs AG4 Macro", "Runs AG4-SPE"])
+    with t1:
+        if df_macro_runs is None or df_macro_runs.empty:
+            st.info("Aucun run AG4 Macro.")
+        else:
+            wk = normalize_cols(df_macro_runs.copy())
+            cols = [c for c in ["run_id", "status", "started_at", "finished_at", "articles_count", "articles_ingested", "high_alerts", "top_theme", "regime"] if c in wk.columns]
+            if not cols:
+                cols = wk.columns.tolist()[:12]
+            st.dataframe(wk[cols], use_container_width=True, hide_index=True, height=320)
+    with t2:
+        if df_spe_runs is None or df_spe_runs.empty:
+            st.info("Aucun run AG4-SPE.")
+        else:
+            wk = normalize_cols(df_spe_runs.copy())
+            cols = [c for c in ["run_id", "status", "started_at", "finished_at", "events_count", "relevant_count", "high_urgency_count", "top_theme", "regime"] if c in wk.columns]
+            if not cols:
+                cols = wk.columns.tolist()[:12]
+            st.dataframe(wk[cols], use_container_width=True, hide_index=True, height=320)
+
+
+def _news_health_metrics(df_news: pd.DataFrame, label: str, fresh_warn_h: float) -> dict[str, object]:
+    out: dict[str, object] = {
+        "Flux": label,
+        "Rows": 0,
+        "Freshness": "—",
+        "Age_h": pd.NA,
+        "% sans URL": pd.NA,
+        "% sans published_at": pd.NA,
+        "% sans score": pd.NA,
+        "Duplicates %": pd.NA,
+        "Lag ingest mean (h)": pd.NA,
+        "Status": "WARN",
+        "Raisons": "",
+    }
+    if df_news is None or df_news.empty:
+        out["Status"] = "ERROR"
+        out["Raisons"] = "table vide"
+        return out
+
+    wk = df_news.copy()
+    n = len(wk)
+    out["Rows"] = n
+    pub = pd.to_datetime(wk.get("published_at", pd.Series(pd.NaT, index=wk.index)), errors="coerce", utc=True)
+    ing = pd.to_datetime(wk.get("ingested_at", pd.Series(pd.NaT, index=wk.index)), errors="coerce", utc=True)
+    latest_pub = pub.dropna().max() if not pub.dropna().empty else pd.NaT
+    if pd.notna(latest_pub):
+        age_h = max(0.0, (pd.Timestamp.now(tz="UTC") - latest_pub).total_seconds() / 3600.0)
+        out["Age_h"] = round(age_h, 1)
+        out["Freshness"] = _news_fmt_age_h(age_h)
+
+    out["% sans URL"] = round(float(wk.get("url", pd.Series("", index=wk.index)).fillna("").astype(str).str.strip().eq("").mean() * 100.0), 1) if n else pd.NA
+    out["% sans published_at"] = round(float(pub.isna().mean() * 100.0), 1) if n else pd.NA
+    score_masks = []
+    for c in ["impact_score", "urgency", "confidence_score"]:
+        if c in wk.columns:
+            score_masks.append(pd.to_numeric(wk[c], errors="coerce").isna())
+    out["% sans score"] = round(float(pd.concat(score_masks, axis=1).all(axis=1).mean() * 100.0), 1) if score_masks else 100.0
+    clustered = _news_dedupe_clusters(wk)
+    out["Duplicates %"] = round(float((1.0 - (len(clustered) / max(1, n))) * 100.0), 1)
+    if ing.notna().any() and pub.notna().any():
+        lag = (ing - pub).dt.total_seconds() / 3600.0
+        lag = lag[(lag.notna()) & (lag >= 0)]
+        if not lag.empty:
+            out["Lag ingest mean (h)"] = round(float(lag.mean()), 1)
+
+    status = "OK"
+    reasons: list[str] = []
+    if pd.isna(out["Age_h"]) or (pd.notna(out["Age_h"]) and float(out["Age_h"]) > fresh_warn_h):
+        status = "WARN"
+        reasons.append("freshness")
+    if pd.notna(out["% sans published_at"]) and float(out["% sans published_at"]) > 20.0:
+        status = "WARN"
+        reasons.append("published_at")
+    if pd.notna(out["% sans score"]) and float(out["% sans score"]) > 50.0:
+        status = "WARN"
+        reasons.append("scores")
+    out["Status"] = status
+    out["Raisons"] = ", ".join(reasons) if reasons else "RAS"
+    return out
+
+
+def render_news_health(df_macro: pd.DataFrame, df_spe: pd.DataFrame) -> None:
+    st.markdown("#### Qualite pipeline (observabilite)")
+    macro_metrics = _news_health_metrics(df_macro, "AG4 Macro", fresh_warn_h=24.0)
+    spe_metrics = _news_health_metrics(df_spe, "AG4-SPE", fresh_warn_h=24.0)
+    health_df = pd.DataFrame([macro_metrics, spe_metrics])
+    status_rank = {"OK": 0, "WARN": 1, "ERROR": 2}
+    worst_status = max(health_df["Status"].tolist(), key=lambda s: status_rank.get(str(s), 1)) if not health_df.empty else "WARN"
+    reasons = "; ".join([f"{r['Flux']}: {r['Raisons']}" for _, r in health_df.iterrows() if str(r.get("Raisons", "")) not in ("", "RAS")]) or "RAS"
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(_news_pill_html(f"Global {worst_status}", "ok" if worst_status == "OK" else ("error" if worst_status == "ERROR" else "warn")), unsafe_allow_html=True)
+    c2.metric("Freshness macro", _news_fmt_age_h(macro_metrics.get("Age_h")))
+    c3.metric("Freshness spe", _news_fmt_age_h(spe_metrics.get("Age_h")))
+    c4.caption(f"Raisons: {reasons}")
+
+    st.dataframe(health_df, use_container_width=True, hide_index=True, height=220)
 def _load_fundamentals_for_dashboard(duckdb_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     df = duckdb_data.get("df_funda_latest", pd.DataFrame())
     if df is None or df.empty:
@@ -4610,6 +5747,7 @@ page = st.sidebar.radio(
         "Vue consolidee Multi-Agents",
         "Analyse Technique V2",
         "Analyse Fondamentale V2",
+        "Macro & News (AG4)",
     ],
 )
 
@@ -8387,6 +9525,64 @@ elif page == "Vue consolidee Multi-Agents":
                         f"Data quality globale: {safe_num(row.get('data_quality_score', pd.NA), 1)}/100 | "
                         f"Gate summary: {safe_text(row.get('gate_summary', 'N/A'))}"
                     )
+
+
+# ============================================================
+# PAGE X: MACRO & NEWS (AG4)
+# ============================================================
+
+elif page == "Macro & News (AG4)":
+    st.title("Macro & News (AG4)")
+    st.caption("Vue macro AG4 + news par valeur AG4-SPE (normalisation robuste, scoring actionnable, observabilite pipeline).")
+
+    if st.button("Rafraichir", key="refresh_ag4_news"):
+        load_data.clear()
+        load_duckdb_data.clear()
+        load_ag1_multi_portfolios.clear()
+        st.rerun()
+
+    if not duckdb_data:
+        st.info("Base DuckDB non disponible. Verifiez les fichiers AG4 / AG4-SPE.")
+        st.stop()
+
+    df_macro_raw = duckdb_data.get("df_news_macro_history", pd.DataFrame())
+    df_spe_raw = duckdb_data.get("df_news_symbol_history", pd.DataFrame())
+    df_macro_runs = duckdb_data.get("df_news_macro_runs", pd.DataFrame())
+    df_spe_runs = duckdb_data.get("df_news_symbol_runs", pd.DataFrame())
+
+    df_macro_news = normalize_news_schema(df_macro_raw, "MACRO")
+    df_spe_news = normalize_news_schema(df_spe_raw, "SPE")
+
+    if (df_macro_news is None or df_macro_news.empty) and (df_spe_news is None or df_spe_news.empty):
+        st.warning("Aucune donnee AG4 / AG4-SPE exploitable apres normalisation. Verifiez les tables `news_history` et le mapping.")
+        st.stop()
+
+    scope_catalog, df_positions_active, active_ag1_key = _news_scope_catalog_from_ag1()
+    active_label = AG1_MULTI_PORTFOLIO_CONFIG.get(active_ag1_key, {}).get("label", active_ag1_key or "—")
+
+    top_tabs = st.tabs(["Vue Macro (Overview)", "News par valeur", "Historique runs", "Qualite pipeline"])
+
+    with top_tabs[0]:
+        st.caption(f"Portefeuille actif (bridge AG1): {active_label}")
+        render_macro_overview(df_macro_news, df_macro_runs, df_positions_optional=df_positions_active)
+
+    with top_tabs[1]:
+        st.caption(
+            f"Scopes disponibles: portefeuille actif ({active_label}), tous portefeuilles AG1, universe complet. "
+            "La table est triée par headline risk 7j."
+        )
+        render_symbol_news(
+            df_spe_news,
+            scope_catalog=scope_catalog,
+            df_universe_optional=df_univ,
+            df_positions_active=df_positions_active,
+        )
+
+    with top_tabs[2]:
+        render_news_runs_history(df_macro_news, df_spe_news, df_macro_runs, df_spe_runs)
+
+    with top_tabs[3]:
+        render_news_health(df_macro_news, df_spe_news)
 
 
 # ============================================================
