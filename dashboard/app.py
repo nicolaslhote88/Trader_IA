@@ -3593,6 +3593,12 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
             "alerts_24h": 0,
             "last_run_id": "",
             "last_model": "",
+            "last_strategy_version": "",
+            "last_config_version": "",
+            "last_prompt_version": "",
+            "last_data_ok_for_trading": None,
+            "last_price_coverage_pct": None,
+            "last_decision_summary": "",
             "last_update": pd.NaT,
         },
         "df_portfolio": pd.DataFrame(),
@@ -3655,6 +3661,9 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
               ts_start,
               ts_end,
               model,
+              strategy_version,
+              config_version,
+              prompt_version,
               decision_summary,
               data_ok_for_trading,
               price_coverage_pct,
@@ -3857,6 +3866,18 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                     init_cap = init_cap_val
 
         latest = df_latest.iloc[0].to_dict() if df_latest is not None and not df_latest.empty else {}
+        latest_run_meta: dict[str, object] = {}
+        if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
+            last_run_id_guess = str(latest.get("run_id") or "").strip()
+            runs_src = df_runs.copy()
+            runs_src["run_id"] = runs_src["run_id"].astype(str)
+            if last_run_id_guess:
+                match = runs_src[runs_src["run_id"] == last_run_id_guess]
+                if not match.empty:
+                    latest_run_meta = match.iloc[0].to_dict()
+            if not latest_run_meta and not runs_src.empty:
+                latest_run_meta = runs_src.iloc[0].to_dict()
+
         cash = safe_float(latest.get("cash_eur"))
         invest = safe_float(latest.get("equity_eur"))
         total_val = safe_float(latest.get("total_value_eur"))
@@ -4000,6 +4021,16 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             "alerts_24h": int(alerts_24h),
             "last_run_id": str(latest.get("run_id") or ""),
             "last_model": str(latest.get("model") or ""),
+            "last_strategy_version": str(latest_run_meta.get("strategy_version") or ""),
+            "last_config_version": str(latest_run_meta.get("config_version") or ""),
+            "last_prompt_version": str(latest_run_meta.get("prompt_version") or ""),
+            "last_data_ok_for_trading": latest_run_meta.get("data_ok_for_trading"),
+            "last_price_coverage_pct": (
+                float(safe_float(latest_run_meta.get("price_coverage_pct")))
+                if latest_run_meta.get("price_coverage_pct") is not None
+                else None
+            ),
+            "last_decision_summary": str(latest_run_meta.get("decision_summary") or ""),
             "last_update": pd.to_datetime(latest.get("snapshot_ts"), errors="coerce", utc=True),
         }
 
@@ -4149,6 +4180,687 @@ roi = (total_val - init_cap) / init_cap if init_cap else 0
 cash_pct = (cash / total_val) * 100 if total_val else 0
 
 
+COMPARE_PERIOD_DAYS = {"7j": 7, "30j": 30, "90j": 90, "All": None}
+COMPARE_WINNER_META = {
+    "ROI": {"key": "roi_pct", "higher_is_better": True},
+    "TotalValue": {"key": "total_val", "higher_is_better": True},
+    "MaxDD": {"key": "max_drawdown_pct", "higher_is_better": True},  # less negative is better
+    "Sharpe": {"key": "sharpe", "higher_is_better": True},
+}
+
+
+def _fmt_currency(v: object, digits: int = 2, unit: str = "EUR") -> str:
+    n = safe_float(v)
+    if pd.isna(n):
+        return "—"
+    return f"{n:,.{digits}f} {unit}".replace(",", " ")
+
+
+def _fmt_number(v: object, digits: int = 0) -> str:
+    n = safe_float(v)
+    if pd.isna(n):
+        return "—"
+    return f"{n:,.{digits}f}".replace(",", " ")
+
+
+def _fmt_pct(v: object, digits: int = 2, suffix: str = "%") -> str:
+    n = safe_float(v)
+    if pd.isna(n):
+        return "—"
+    return f"{n:.{digits}f} {suffix}"
+
+
+def _fmt_delta_eur(v: object, digits: int = 2) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    n = safe_float(v)
+    return f"{n:+,.{digits}f} EUR".replace(",", " ")
+
+
+def _fmt_delta_pp(v: object, digits: int = 2) -> str:
+    if v is None or pd.isna(v):
+        return "—"
+    n = safe_float(v)
+    return f"{n:+.{digits}f} pp"
+
+
+def _fmt_paris_datetime(ts: object, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    dt = pd.to_datetime(ts, errors="coerce", utc=True)
+    if pd.isna(dt):
+        return "N/A"
+    try:
+        return dt.tz_convert("Europe/Paris").strftime(fmt)
+    except Exception:
+        return dt.strftime(fmt)
+
+
+def _short_run_id(run_id: object, keep: int = 20) -> str:
+    s = str(run_id or "").strip()
+    if not s:
+        return "N/A"
+    if len(s) <= keep:
+        return s
+    return f"{s[:keep]}…"
+
+
+def _coerce_bool_or_none(v: object) -> bool | None:
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)) and not pd.isna(v):
+        return bool(v)
+    s = str(v).strip().lower()
+    if s in {"true", "1", "yes", "ok"}:
+        return True
+    if s in {"false", "0", "no"}:
+        return False
+    return None
+
+
+def _slice_timeseries_by_period(df: pd.DataFrame, period_key: str) -> pd.DataFrame:
+    if df is None or df.empty or "timestamp" not in df.columns:
+        return pd.DataFrame(columns=df.columns if isinstance(df, pd.DataFrame) else [])
+
+    out = df.copy()
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce", utc=True)
+    out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
+    if out.empty:
+        return out
+
+    days = COMPARE_PERIOD_DAYS.get(str(period_key), None)
+    if days is None:
+        return out
+
+    end_ts = out["timestamp"].max()
+    start_ts = end_ts - pd.Timedelta(days=int(days))
+    pre = out[out["timestamp"] < start_ts].tail(1)
+    cur = out[out["timestamp"] >= start_ts]
+    return pd.concat([pre, cur], ignore_index=True).drop_duplicates(subset=["timestamp"], keep="last").sort_values("timestamp")
+
+
+def _slice_events_by_period(df: pd.DataFrame, period_key: str, ts_col_candidates: list[str] | None = None, ref_end: object = None) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame(columns=df.columns if isinstance(df, pd.DataFrame) else [])
+    cands = ts_col_candidates or ["timestamp", "updatedat", "created_at", "date"]
+    ts_col = _first_existing_column(df, cands)
+    if not ts_col:
+        return df.copy()
+
+    out = df.copy()
+    out[ts_col] = pd.to_datetime(out[ts_col], errors="coerce", utc=True)
+    out = out.dropna(subset=[ts_col])
+    if out.empty:
+        return out
+
+    days = COMPARE_PERIOD_DAYS.get(str(period_key), None)
+    if days is None:
+        return out
+
+    end_ts = pd.to_datetime(ref_end, errors="coerce", utc=True)
+    if pd.isna(end_ts):
+        end_ts = out[ts_col].max()
+    start_ts = end_ts - pd.Timedelta(days=int(days))
+    return out[(out[ts_col] >= start_ts) & (out[ts_col] <= end_ts)]
+
+
+def _compute_position_pnl_lists(df_port: pd.DataFrame) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    if df_port is None or df_port.empty or "symbol" not in df_port.columns:
+        return [], []
+
+    df = df_port.copy()
+    df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+    df = df[~df["symbol"].isin(["", "CASH_EUR", "__META__"])].copy()
+    if df.empty:
+        return [], []
+
+    for c in ["marketvalue", "unrealizedpnl", "quantity", "avgprice"]:
+        if c not in df.columns:
+            df[c] = 0.0
+        df[c] = safe_float_series(df[c])
+
+    basis = (df.get("avgprice", 0.0) * df.get("quantity", 0.0)).where(df.get("quantity", 0.0) > 0, df["marketvalue"] - df["unrealizedpnl"])
+    df["unrealizedpnl_pct"] = 0.0
+    valid = basis != 0
+    df.loc[valid, "unrealizedpnl_pct"] = (df.loc[valid, "unrealizedpnl"] / basis[valid]) * 100
+
+    if "name" not in df.columns:
+        df["name"] = df["symbol"]
+    df["name"] = df["name"].fillna("").astype(str).str.strip().replace("", pd.NA).fillna(df["symbol"])
+
+    top = df.sort_values("unrealizedpnl", ascending=False).head(3)
+    worst = df.sort_values("unrealizedpnl", ascending=True).head(3)
+
+    def _rows(src: pd.DataFrame) -> list[dict[str, object]]:
+        rows = []
+        for _, r in src.iterrows():
+            rows.append(
+                {
+                    "symbol": str(r.get("symbol") or ""),
+                    "name": str(r.get("name") or r.get("symbol") or ""),
+                    "pnl_eur": float(safe_float(r.get("unrealizedpnl"))),
+                    "pnl_pct": float(safe_float(r.get("unrealizedpnl_pct"))),
+                }
+            )
+        return rows
+
+    return _rows(top), _rows(worst)
+
+
+def _compute_concentration_and_sectors(df_port: pd.DataFrame) -> dict[str, object]:
+    out = {
+        "equity_pct": 0.0,
+        "cash_pct": 0.0,
+        "top1_weight_pct": None,
+        "top3_weight_pct": None,
+        "hhi": None,
+        "sector_rows": [],
+    }
+    if df_port is None or df_port.empty or "symbol" not in df_port.columns:
+        return out
+
+    df = df_port.copy()
+    df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+    if "marketvalue" not in df.columns:
+        df["marketvalue"] = 0.0
+    df["marketvalue"] = safe_float_series(df["marketvalue"])
+
+    total_val_local = float(df["marketvalue"].sum()) if not df.empty else 0.0
+    cash_val = float(df[df["symbol"] == "CASH_EUR"]["marketvalue"].sum()) if not df.empty else 0.0
+    equity_df = df[~df["symbol"].isin(["CASH_EUR", "__META__"])].copy()
+    equity_df = equity_df[equity_df["marketvalue"] > 0]
+    equity_val = float(equity_df["marketvalue"].sum()) if not equity_df.empty else 0.0
+
+    out["cash_pct"] = (cash_val / total_val_local * 100.0) if total_val_local > 0 else 0.0
+    out["equity_pct"] = (equity_val / total_val_local * 100.0) if total_val_local > 0 else 0.0
+
+    if not equity_df.empty and equity_val > 0:
+        weights = (equity_df["marketvalue"] / equity_val * 100.0).sort_values(ascending=False)
+        out["top1_weight_pct"] = float(weights.head(1).sum()) if not weights.empty else None
+        out["top3_weight_pct"] = float(weights.head(3).sum()) if not weights.empty else None
+        out["hhi"] = float(((weights / 100.0) ** 2).sum() * 10000.0)
+
+        if "sector" not in equity_df.columns:
+            equity_df["sector"] = ""
+        equity_df["sector"] = equity_df["sector"].fillna("").astype(str).str.strip().replace("", "Unknown")
+        sectors = (
+            equity_df.groupby("sector", dropna=False)["marketvalue"].sum().sort_values(ascending=False)
+            / equity_val
+            * 100.0
+        )
+        sector_rows = [{"label": str(k), "weight_pct": float(v)} for k, v in sectors.head(5).items()]
+        others = float(sectors.iloc[5:].sum()) if len(sectors) > 5 else 0.0
+        if others > 0:
+            sector_rows.append({"label": "Others", "weight_pct": others})
+        out["sector_rows"] = sector_rows
+
+    return out
+
+
+def _compute_order_completeness(df_tx_raw: pd.DataFrame, run_id: str, trades_this_run: int) -> float | None:
+    if df_tx_raw is None or df_tx_raw.empty:
+        return 100.0 if int(trades_this_run or 0) == 0 else None
+
+    df = df_tx_raw.copy()
+    if "run_id" in df.columns and str(run_id or "").strip():
+        df = df[df["run_id"].astype(str).str.strip() == str(run_id).strip()]
+    if df.empty:
+        return 100.0 if int(trades_this_run or 0) == 0 else None
+
+    for c in ["symbol", "side", "order_type"]:
+        if c not in df.columns:
+            df[c] = ""
+        df[c] = df[c].fillna("").astype(str).str.strip()
+    for c in ["quantity", "price"]:
+        if c not in df.columns:
+            df[c] = 0.0
+        df[c] = safe_float_series(df[c])
+
+    required_ok = (
+        (df["symbol"] != "")
+        & (df["side"] != "")
+        & (df["order_type"] != "")
+        & (df["quantity"] > 0)
+        & (df["price"] > 0)
+    )
+    if len(required_ok) == 0:
+        return 100.0 if int(trades_this_run or 0) == 0 else None
+    return float(required_ok.mean() * 100.0)
+
+
+def _compute_freshness_score(last_data_update: object, price_coverage_pct: object, ag1_output_ok: bool | None, critical_anoms: int, diag: dict[str, object]) -> tuple[int | None, float | None]:
+    dt = pd.to_datetime(last_data_update, errors="coerce", utc=True)
+    if pd.isna(dt):
+        return None, None
+
+    age_hours = max(0.0, (pd.Timestamp.now(tz="UTC") - dt).total_seconds() / 3600.0)
+    score = 100.0
+    if age_hours > 3:
+        score -= 8
+    if age_hours > 12:
+        score -= 12
+    if age_hours > 24:
+        score -= 20
+    if age_hours > 72:
+        score -= 25
+
+    cov = None if price_coverage_pct is None else safe_float(price_coverage_pct)
+    if cov is not None and not pd.isna(cov):
+        cov = max(0.0, min(100.0, float(cov)))
+        score -= min(25.0, (100.0 - cov) * 0.35)
+
+    if ag1_output_ok is False:
+        score -= 20
+
+    score -= min(25.0, max(0, int(critical_anoms)) * 10.0)
+
+    only_ledger = diag.get("positions_only_in_ledger") or []
+    only_mtm = diag.get("positions_only_in_mtm") or []
+    if only_ledger or only_mtm:
+        score -= 10
+
+    return int(max(0, min(100, round(score)))), float(age_hours)
+
+
+def _make_scoreboard_status(payload_status: str, ag1_output_ok: bool | None, freshness_score: int | None, critical_anoms: int, diag: dict[str, object], has_perf: bool) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    status = "OK"
+
+    if str(payload_status or "").lower() != "ok":
+        return "ERROR", ["Chargement DB KO"]
+    if not has_perf:
+        status = "WARN"
+        reasons.append("Historique perf indisponible")
+    if ag1_output_ok is False:
+        status = "WARN"
+        reasons.append("data_ok_for_trading=false")
+    if critical_anoms > 0:
+        status = "WARN"
+        reasons.append(f"{critical_anoms} alerte(s) critiques 24h")
+    if freshness_score is not None and freshness_score < 70:
+        status = "WARN"
+        reasons.append(f"freshness={freshness_score}/100")
+    if (diag.get("positions_only_in_ledger") or []) or (diag.get("positions_only_in_mtm") or []):
+        status = "WARN"
+        reasons.append("Divergence ledger/MTM")
+
+    return status, reasons
+
+
+def _build_mini_equity_curve(card: dict[str, object], mode: str = "EUR", y_range: tuple[float, float] | None = None, show_drawdown_overlay: bool = False) -> go.Figure:
+    curve = card.get("curve_df")
+    accent = str(card.get("accent") or "#60a5fa")
+    label = "TotalValue" if str(mode).upper() in {"EUR", "€"} else "Base 100"
+
+    if not isinstance(curve, pd.DataFrame) or curve.empty or "timestamp" not in curve.columns or "display_value" not in curve.columns:
+        fig = go.Figure()
+        fig.update_layout(
+            height=145,
+            margin=dict(t=8, b=8, l=8, r=8),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[dict(text="No curve", x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False, font=dict(size=10, color="#888"))],
+        )
+        return fig
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=curve["timestamp"],
+            y=curve["display_value"],
+            mode="lines",
+            line=dict(color=accent, width=2.2),
+            fill="tozeroy",
+            fillcolor="rgba(99,102,241,0.04)",
+            name=label,
+            hovertemplate="%{x|%d/%m %H:%M}<br>%{y:.2f}<extra></extra>",
+        )
+    )
+    if show_drawdown_overlay and "drawdown_pct" in curve.columns:
+        fig.add_trace(
+            go.Scatter(
+                x=curve["timestamp"],
+                y=curve["drawdown_pct"],
+                mode="lines",
+                line=dict(color="rgba(239,68,68,0.65)", width=1.2, dash="dot"),
+                name="DD%",
+                yaxis="y2",
+                hovertemplate="%{x|%d/%m %H:%M}<br>DD %{y:.2f}%<extra></extra>",
+            )
+        )
+
+    fig.update_layout(
+        height=150,
+        margin=dict(t=8, b=8, l=8, r=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        yaxis=dict(showgrid=True, gridcolor="rgba(128,128,128,0.15)", zeroline=False, showticklabels=False),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.0, font=dict(size=9)),
+    )
+    if y_range is not None and all(pd.notna(x) for x in y_range):
+        fig.update_yaxes(range=[float(y_range[0]), float(y_range[1])])
+    if show_drawdown_overlay:
+        fig.update_layout(
+            yaxis2=dict(
+                overlaying="y",
+                side="right",
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                range=[-25, 5],
+            )
+        )
+    return fig
+
+
+def _build_compare_overlay_chart(cards: list[dict[str, object]], mode: str = "EUR", show_drawdown: bool = False) -> tuple[go.Figure | None, go.Figure | None]:
+    fig_eq = go.Figure()
+    fig_dd = go.Figure()
+    has_eq = False
+    has_dd = False
+
+    for c in cards:
+        curve = c.get("curve_df")
+        if not isinstance(curve, pd.DataFrame) or curve.empty:
+            continue
+        if "timestamp" not in curve.columns or "display_value" not in curve.columns:
+            continue
+        name = str(c.get("label") or c.get("key") or "Portfolio")
+        color = str(c.get("accent") or "#888")
+        fig_eq.add_trace(
+            go.Scatter(
+                x=curve["timestamp"],
+                y=curve["display_value"],
+                mode="lines",
+                name=name,
+                line=dict(width=2.2, color=color),
+            )
+        )
+        has_eq = True
+        if show_drawdown and "drawdown_pct" in curve.columns:
+            fig_dd.add_trace(
+                go.Scatter(
+                    x=curve["timestamp"],
+                    y=curve["drawdown_pct"],
+                    mode="lines",
+                    name=name,
+                    line=dict(width=2.0, color=color),
+                )
+            )
+            has_dd = True
+
+    if has_eq:
+        fig_eq.update_layout(
+            height=260,
+            margin=dict(t=36, b=20, l=20, r=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="EUR" if str(mode).upper() in {"EUR", "€"} else "Base 100"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            title=f"Equity curves comparees ({'EUR' if str(mode).upper() in {'EUR', '€'} else 'normalise base 100'})",
+        )
+    if has_dd:
+        fig_dd.update_layout(
+            height=210,
+            margin=dict(t=36, b=20, l=20, r=20),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+            yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="Drawdown %"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+            title="Drawdown compare",
+        )
+    return (fig_eq if has_eq else None), (fig_dd if has_dd else None)
+
+
+def _prepare_compare_card(portfolio_key: str, payload: dict[str, object], period_key: str, curve_mode: str) -> dict[str, object]:
+    summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+    diag = payload.get("diagnostics", {}) if isinstance(payload, dict) else {}
+    label = str(payload.get("label") or portfolio_key)
+    accent = str(payload.get("accent") or "#888")
+
+    df_port = payload.get("df_portfolio", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_perf_raw = payload.get("df_performance", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_tx_raw = payload.get("df_transactions", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_runs = payload.get("df_runs", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_sig = payload.get("df_ai_signals", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_alt = payload.get("df_alerts", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+
+    perf_ts = _prepare_performance_timeseries(df_perf_raw)
+    tx_norm = _prepare_transactions(df_tx_raw)
+    perf_period = _slice_timeseries_by_period(perf_ts, period_key)
+
+    ref_end = None
+    if perf_ts is not None and not perf_ts.empty and "timestamp" in perf_ts.columns:
+        ref_end = pd.to_datetime(perf_ts["timestamp"], errors="coerce", utc=True).max()
+    if pd.isna(pd.to_datetime(ref_end, errors="coerce", utc=True)):
+        ref_end = summary.get("last_update")
+
+    tx_period = _slice_events_by_period(tx_norm, period_key, ["timestamp"], ref_end)
+    sig_period = _slice_events_by_period(df_sig, period_key, ["timestamp"], ref_end)
+    alt_period = _slice_events_by_period(df_alt, period_key, ["timestamp"], ref_end)
+
+    init_cap_local = float(safe_float(summary.get("init_cap", 50000.0)) or 50000.0)
+    total_val_local = float(safe_float(summary.get("total_val", 0.0)))
+    cash_local = float(safe_float(summary.get("cash", 0.0)))
+    invest_local = float(safe_float(summary.get("invest", 0.0)))
+    roi_pct_local = float(safe_float(summary.get("roi", 0.0)) * 100.0)
+    cash_pct_local = float(safe_float(summary.get("cash_pct", 0.0)))
+    pnl_total_local = total_val_local - init_cap_local
+
+    period_delta_eur = None
+    roi_delta_pp = None
+    cash_delta_pp = None
+    if perf_period is not None and not perf_period.empty and "total_value" in perf_period.columns:
+        perf_period = perf_period.copy()
+        perf_period["timestamp"] = pd.to_datetime(perf_period["timestamp"], errors="coerce", utc=True)
+        perf_period = perf_period.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if not perf_period.empty:
+            start_row = perf_period.iloc[0]
+            end_row = perf_period.iloc[-1]
+            start_total = float(safe_float(start_row.get("total_value")))
+            end_total = float(safe_float(end_row.get("total_value")))
+            period_delta_eur = end_total - start_total
+            if init_cap_local > 0:
+                start_roi_pct = ((start_total / init_cap_local) - 1.0) * 100.0
+                roi_delta_pp = roi_pct_local - start_roi_pct
+            start_cash = float(safe_float(start_row.get("cash_value")))
+            start_cash_pct = (start_cash / start_total * 100.0) if start_total > 0 else None
+            if start_cash_pct is not None:
+                cash_delta_pp = cash_pct_local - start_cash_pct
+
+    underwater = _build_underwater_dataframe(perf_period)
+    current_drawdown_pct = float(underwater["drawdown_pct"].iloc[-1]) if not underwater.empty else float(safe_float(summary.get("drawdown_pct", 0.0)))
+    risk_cards = _compute_risk_scorecards(perf_period, tx_period)
+    max_drawdown_pct = float(risk_cards.get("max_drawdown_pct", 0.0))
+    sharpe = risk_cards.get("sharpe")
+
+    vol_30d = None
+    if perf_ts is not None and not perf_ts.empty and "timestamp" in perf_ts.columns:
+        perf_30 = _slice_timeseries_by_period(perf_ts, "30j")
+        if perf_30 is not None and not perf_30.empty:
+            rets = perf_30["total_value"].pct_change().replace([float("inf"), float("-inf")], pd.NA).dropna()
+            if len(rets) >= 2:
+                std = float(rets.std(ddof=0))
+                if std > 0:
+                    vol_30d = std * (252 ** 0.5) * 100.0
+
+    alloc = _compute_concentration_and_sectors(df_port)
+    top_positions, worst_positions = _compute_position_pnl_lists(df_port)
+
+    latest_run_id = str(summary.get("last_run_id") or "").strip()
+    latest_run_row = {}
+    if df_runs is not None and not df_runs.empty:
+        runs = df_runs.copy()
+        if "run_id" in runs.columns:
+            runs["run_id"] = runs["run_id"].astype(str).str.strip()
+            match = runs[runs["run_id"] == latest_run_id] if latest_run_id else pd.DataFrame()
+            if not match.empty:
+                latest_run_row = match.iloc[0].to_dict()
+            elif not runs.empty:
+                latest_run_row = runs.iloc[0].to_dict()
+
+    ag1_output_ok = _coerce_bool_or_none(summary.get("last_data_ok_for_trading"))
+    if ag1_output_ok is None:
+        ag1_output_ok = _coerce_bool_or_none(latest_run_row.get("data_ok_for_trading"))
+    price_coverage_pct = summary.get("last_price_coverage_pct")
+    if price_coverage_pct is None:
+        price_coverage_pct = latest_run_row.get("price_coverage_pct")
+
+    # Critical anomalies in 24h (operational view)
+    critical_anoms_24h = 0
+    if df_alt is not None and not df_alt.empty:
+        alt = df_alt.copy()
+        if "timestamp" in alt.columns:
+            alt["timestamp"] = pd.to_datetime(alt["timestamp"], errors="coerce", utc=True)
+            alt = alt.dropna(subset=["timestamp"])
+            alt = alt[alt["timestamp"] >= (pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24))]
+        sev_col = _first_existing_column(alt, ["severity"])
+        if sev_col:
+            critical_anoms_24h = int((alt[sev_col].astype(str).str.upper() == "CRITICAL").sum())
+
+    trades_this_run = int(safe_float(summary.get("trades_this_run", 0)))
+    order_completeness_pct = _compute_order_completeness(df_tx_raw, latest_run_id, trades_this_run)
+
+    # Last data update = max across portfolio/perf/signals/alerts/tx
+    last_updates = [pd.to_datetime(summary.get("last_update"), errors="coerce", utc=True)]
+    for df_obj, cols in [
+        (df_port, ["updatedat"]),
+        (perf_ts, ["timestamp"]),
+        (tx_norm, ["timestamp"]),
+        (df_sig, ["timestamp"]),
+        (df_alt, ["timestamp"]),
+    ]:
+        if isinstance(df_obj, pd.DataFrame) and not df_obj.empty:
+            c = _first_existing_column(df_obj, cols)
+            if c:
+                ts_ser = pd.to_datetime(df_obj[c], errors="coerce", utc=True)
+                if ts_ser.notna().any():
+                    last_updates.append(ts_ser.max())
+    last_data_update = max([t for t in last_updates if pd.notna(t)], default=pd.NaT)
+
+    freshness_score, freshness_age_h = _compute_freshness_score(
+        last_data_update,
+        price_coverage_pct,
+        ag1_output_ok,
+        critical_anoms_24h,
+        diag if isinstance(diag, dict) else {},
+    )
+
+    has_perf = isinstance(perf_ts, pd.DataFrame) and not perf_ts.empty
+    status_level, status_reasons = _make_scoreboard_status(
+        str(payload.get("status") or ""),
+        ag1_output_ok,
+        freshness_score,
+        critical_anoms_24h,
+        diag if isinstance(diag, dict) else {},
+        has_perf,
+    )
+
+    # Curve payload for mini charts / overlay
+    curve_df = pd.DataFrame(columns=["timestamp", "display_value", "drawdown_pct"])
+    if isinstance(perf_period, pd.DataFrame) and not perf_period.empty:
+        tmp = perf_period.copy()
+        tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce", utc=True)
+        tmp = tmp.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if not tmp.empty:
+            tmp_ud = _build_underwater_dataframe(tmp)
+            tmp = tmp.merge(tmp_ud, on="timestamp", how="left")
+            if curve_mode == "Normalise":
+                base = float(safe_float(tmp.iloc[0].get("total_value")))
+                tmp["display_value"] = (tmp["total_value"] / base * 100.0) if base > 0 else pd.NA
+            else:
+                tmp["display_value"] = tmp["total_value"]
+            curve_df = tmp[["timestamp", "display_value", "drawdown_pct"]].replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["display_value"])
+
+    # Agent robustness score (operational synthetic score)
+    agent_score_components: list[float] = []
+    if freshness_score is not None:
+        agent_score_components.append(float(freshness_score))
+    if order_completeness_pct is not None:
+        agent_score_components.append(float(order_completeness_pct))
+    if ag1_output_ok is not None:
+        agent_score_components.append(100.0 if ag1_output_ok else 40.0)
+    agent_score_components.append(max(0.0, 100.0 - (critical_anoms_24h * 20.0)))
+    operational_agent_score = float(sum(agent_score_components) / len(agent_score_components)) if agent_score_components else None
+
+    # Optional PM score if present in runs
+    pm_score = None
+    for candidate in ["agent_score", "pm_score", "score", "score_agent"]:
+        if candidate in latest_run_row and latest_run_row.get(candidate) not in [None, ""]:
+            pm_score = float(safe_float(latest_run_row.get(candidate)))
+            break
+
+    last_run_ts = latest_run_row.get("ts_end") or latest_run_row.get("ts_start") or summary.get("last_update")
+
+    return {
+        "key": portfolio_key,
+        "label": label,
+        "short_label": str(payload.get("short_label") or portfolio_key),
+        "accent": accent,
+        "payload_status": str(payload.get("status") or ""),
+        "error": str(payload.get("error") or ""),
+        "summary": summary,
+        "diagnostics": diag if isinstance(diag, dict) else {},
+        "status_level": status_level,
+        "status_reasons": status_reasons,
+        "init_cap": init_cap_local,
+        "total_val": total_val_local,
+        "cash": cash_local,
+        "invest": invest_local,
+        "pnl_total": pnl_total_local,
+        "roi_pct": roi_pct_local,
+        "cash_pct": cash_pct_local,
+        "positions_count": int(safe_float(summary.get("positions_count", 0))),
+        "period_delta_eur": period_delta_eur,
+        "roi_delta_pp": roi_delta_pp,
+        "cash_delta_pp": cash_delta_pp,
+        "current_drawdown_pct": current_drawdown_pct,
+        "max_drawdown_pct": max_drawdown_pct,
+        "exposure_pct": 100.0 - cash_pct_local if total_val_local > 0 else alloc.get("equity_pct", 0.0),
+        "top1_weight_pct": alloc.get("top1_weight_pct"),
+        "top3_weight_pct": alloc.get("top3_weight_pct"),
+        "hhi": alloc.get("hhi"),
+        "volatility_30d_pct": vol_30d,
+        "sharpe": sharpe,
+        "signals_24h": int(safe_float(summary.get("signals_24h", 0))),
+        "alerts_24h": int(safe_float(summary.get("alerts_24h", 0))),
+        "trades_period": int(len(tx_period)) if isinstance(tx_period, pd.DataFrame) else 0,
+        "trades_this_run": trades_this_run,
+        "cum_fees_eur": float(safe_float(summary.get("cum_fees_eur", 0.0))),
+        "cum_ai_cost_eur": float(safe_float(summary.get("cum_ai_cost_eur", 0.0))),
+        "last_data_update": last_data_update,
+        "ag1_output_ok": ag1_output_ok,
+        "order_completeness_pct": order_completeness_pct,
+        "critical_anoms_24h": critical_anoms_24h,
+        "freshness_score": freshness_score,
+        "freshness_age_h": freshness_age_h,
+        "operational_agent_score": operational_agent_score,
+        "pm_agent_score": pm_score,
+        "price_coverage_pct": (float(safe_float(price_coverage_pct)) if price_coverage_pct is not None else None),
+        "last_run_id": latest_run_id,
+        "last_run_ts": last_run_ts,
+        "last_model": str(summary.get("last_model") or latest_run_row.get("model") or ""),
+        "last_strategy_version": str(summary.get("last_strategy_version") or latest_run_row.get("strategy_version") or ""),
+        "last_config_version": str(summary.get("last_config_version") or latest_run_row.get("config_version") or ""),
+        "last_prompt_version": str(summary.get("last_prompt_version") or latest_run_row.get("prompt_version") or ""),
+        "last_decision_summary": str(summary.get("last_decision_summary") or latest_run_row.get("decision_summary") or ""),
+        "sector_rows": alloc.get("sector_rows", []),
+        "cash_alloc_pct": alloc.get("cash_pct", 0.0),
+        "equity_alloc_pct": alloc.get("equity_pct", 0.0),
+        "top_positions": top_positions,
+        "worst_positions": worst_positions,
+        "curve_df": curve_df,
+        "df_portfolio": df_port,
+        "df_performance": perf_ts,
+        "df_transactions_norm": tx_norm,
+    }
+
+
 # ============================================================
 # PAGE 1: DASHBOARD
 # ============================================================
@@ -4162,146 +4874,390 @@ if page == "Dashboard Trading":
 
     st.title("AI Trading Executor Dashboard")
 
-    if st.button("Rafraichir"):
-        load_data.clear()
-        load_duckdb_data.clear()
-        load_ag1_multi_portfolios.clear()
-        st.rerun()
-
     ag1_multi = load_ag1_multi_portfolios()
+    compare_keys = [k for k in AG1_MULTI_PORTFOLIO_CONFIG.keys() if k in ag1_multi]
     available_keys = [
         k for k, p in ag1_multi.items()
         if isinstance(p, dict) and str(p.get("status", "")).lower() == "ok"
     ]
 
-    # Fallback to legacy single-portfolio behavior if the new AG1-V2 ledgers are not available.
+    ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
+    with ctrl_period:
+        compare_period = st.radio(
+            "Periode",
+            options=["7j", "30j", "90j", "All"],
+            horizontal=True,
+            key="dashboard_compare_period",
+            index=["7j", "30j", "90j", "All"].index(st.session_state.get("dashboard_compare_period", "30j"))
+            if st.session_state.get("dashboard_compare_period", "30j") in ["7j", "30j", "90j", "All"] else 1,
+        )
+    with ctrl_mode:
+        compare_curve_mode = st.radio(
+            "Affichage",
+            options=["EUR", "Normalise"],
+            horizontal=True,
+            key="dashboard_compare_curve_mode",
+            index=["EUR", "Normalise"].index(st.session_state.get("dashboard_compare_curve_mode", "EUR"))
+            if st.session_state.get("dashboard_compare_curve_mode", "EUR") in ["EUR", "Normalise"] else 0,
+        )
+    with ctrl_kpi:
+        compare_winner_kpi = st.selectbox(
+            "KPI winner / tri",
+            options=["ROI", "TotalValue", "MaxDD", "Sharpe"],
+            index=["ROI", "TotalValue", "MaxDD", "Sharpe"].index(st.session_state.get("dashboard_compare_winner_kpi", "ROI"))
+            if st.session_state.get("dashboard_compare_winner_kpi", "ROI") in ["ROI", "TotalValue", "MaxDD", "Sharpe"] else 0,
+            key="dashboard_compare_winner_kpi",
+        )
+    with ctrl_bonus:
+        compare_show_dd = st.checkbox(
+            "Drawdown compare",
+            value=bool(st.session_state.get("dashboard_compare_show_dd", False)),
+            key="dashboard_compare_show_dd",
+            help="Affiche la courbe de drawdown comparee sous les 3 colonnes (bonus).",
+        )
+    with ctrl_refresh:
+        st.write("")
+        st.write("")
+        if st.button("Rafraichir", use_container_width=True):
+            load_data.clear()
+            load_duckdb_data.clear()
+            load_ag1_multi_portfolios.clear()
+            st.rerun()
+
+    # Comparative scoreboard (3 AG1 variants) + Focus on one portfolio for detailed tabs below.
     selected_portfolio_key = None
     active_portfolio = None
     active_positions_source_note = ""
-    if available_keys:
-        default_key = st.session_state.get("dashboard_active_portfolio", available_keys[0])
-        if default_key not in available_keys:
-            default_key = available_keys[0]
 
-        portfolio_labels = {k: ag1_multi[k].get("label", k) for k in available_keys}
-        selected_label = st.radio(
-            "Portefeuille actif (les 3 premiers onglets suivent cette selection)",
-            options=[portfolio_labels[k] for k in available_keys],
-            index=[portfolio_labels[k] for k in available_keys].index(portfolio_labels[default_key]),
-            horizontal=True,
-            key="dashboard_active_portfolio_label",
-        )
-        selected_portfolio_key = next(k for k in available_keys if portfolio_labels[k] == selected_label)
-        st.session_state["dashboard_active_portfolio"] = selected_portfolio_key
-        active_portfolio = ag1_multi[selected_portfolio_key]
+    if compare_keys:
+        default_focus = st.session_state.get("dashboard_active_portfolio")
+        if default_focus not in compare_keys:
+            default_focus = available_keys[0] if available_keys else compare_keys[0]
+        selected_portfolio_key = default_focus
 
-        # Comparative header cards (3 portfolios)
-        st.caption("Vue comparative AG1-V2 (ChatGPT 5.2 / Grok 4.1 Reasoning / Gemini 3.0 Pro)")
-        comp_cols = st.columns(len(available_keys))
-        comp_rows = []
-        for idx, key in enumerate(available_keys):
-            p = ag1_multi[key]
-            s = p.get("summary", {}) if isinstance(p, dict) else {}
-            total_v = safe_float(s.get("total_val", 0.0))
-            init_v = safe_float(s.get("init_cap", 50000.0))
-            roi_v = float(s.get("roi", 0.0) or 0.0)
-            cash_v = safe_float(s.get("cash", 0.0))
-            invest_v = safe_float(s.get("invest", 0.0))
-            cash_pct_v = float(s.get("cash_pct", 0.0) or 0.0)
-            last_update_v = pd.to_datetime(s.get("last_update"), errors="coerce", utc=True)
-            last_update_txt = (
-                last_update_v.tz_convert("Europe/Paris").strftime("%d/%m %H:%M")
-                if pd.notna(last_update_v)
-                else "N/A"
-            )
-            is_active = key == selected_portfolio_key
-            title = p.get("label", key)
-            with comp_cols[idx]:
+        st.caption("Vue comparative AG1-V2 (3 colonnes fixes : portefeuille + qualite agent)")
+
+        compare_cards: list[dict[str, object]] = []
+        cards_by_key: dict[str, dict[str, object]] = {}
+        for key in compare_keys:
+            card = _prepare_compare_card(key, ag1_multi.get(key, {}), compare_period, compare_curve_mode)
+            compare_cards.append(card)
+            cards_by_key[key] = card
+
+        # Winner / loser badges based on selected KPI.
+        best_key = None
+        worst_key = None
+        winner_cfg = COMPARE_WINNER_META.get(compare_winner_kpi, COMPARE_WINNER_META["ROI"])
+        winner_value_key = winner_cfg.get("key")
+        higher_is_better = bool(winner_cfg.get("higher_is_better", True))
+        ranked_values = []
+        for c in compare_cards:
+            val = c.get(winner_value_key) if winner_value_key else None
+            if val is None or pd.isna(val):
+                continue
+            ranked_values.append((c["key"], float(safe_float(val))))
+        if ranked_values:
+            ranked_values = sorted(ranked_values, key=lambda x: x[1], reverse=higher_is_better)
+            best_key = ranked_values[0][0]
+            if len(ranked_values) > 1:
+                worst_key = ranked_values[-1][0]
+                if worst_key == best_key:
+                    worst_key = None
+
+        # Shared mini-curve Y range for scanability.
+        curve_vals = []
+        for c in compare_cards:
+            curve_df = c.get("curve_df")
+            if isinstance(curve_df, pd.DataFrame) and not curve_df.empty and "display_value" in curve_df.columns:
+                curve_vals.extend([float(v) for v in pd.to_numeric(curve_df["display_value"], errors="coerce").dropna().tolist()])
+        curve_y_range = None
+        if curve_vals:
+            ymin, ymax = min(curve_vals), max(curve_vals)
+            if ymin == ymax:
+                pad = max(1.0, abs(ymin) * 0.02)
+            else:
+                pad = (ymax - ymin) * 0.08
+            curve_y_range = (ymin - pad, ymax + pad)
+
+        status_colors = {"OK": "#16a34a", "WARN": "#d97706", "ERROR": "#dc2626"}
+        focus_clicked_key = None
+
+        sb_cols = st.columns(3, gap="large")
+        for idx in range(3):
+            if idx >= len(compare_keys):
+                continue
+            key = compare_keys[idx]
+            c = cards_by_key[key]
+            is_focus = key == selected_portfolio_key
+            status_level = str(c.get("status_level") or "WARN").upper()
+            status_color = status_colors.get(status_level, "#6b7280")
+            accent = str(c.get("accent") or "#6b7280")
+
+            winner_badges = []
+            if key == best_key:
+                winner_badges.append(f"<span style='padding:2px 8px;border-radius:999px;background:rgba(22,163,74,.12);color:#16a34a;border:1px solid rgba(22,163,74,.35);font-size:0.75rem;'>Best {html.escape(compare_winner_kpi)}</span>")
+            if key == worst_key:
+                winner_badges.append(f"<span style='padding:2px 8px;border-radius:999px;background:rgba(220,38,38,.10);color:#dc2626;border:1px solid rgba(220,38,38,.30);font-size:0.75rem;'>Worst {html.escape(compare_winner_kpi)}</span>")
+
+            with sb_cols[idx]:
                 with st.container(border=True):
-                    st.markdown(f"**{'[Actif] ' if is_active else ''}{title}**")
-                    st.metric("Valeur totale", f"{total_v:,.2f} EUR", delta=f"{total_v - init_v:,.2f} EUR")
-                    c_a, c_b = st.columns(2)
-                    c_a.metric("ROI", f"{roi_v * 100:.2f} %")
-                    c_b.metric("% Cash", f"{cash_pct_v:.1f} %")
-                    c_c, c_d = st.columns(2)
-                    c_c.metric("Cash", f"{cash_v:,.0f}")
-                    c_d.metric("Investi", f"{invest_v:,.0f}")
-                    st.caption(
-                        f"Pos: {int(s.get('positions_count', 0))} | Signaux 24h: {int(s.get('signals_24h', 0))} | "
-                        f"Alertes 24h: {int(s.get('alerts_24h', 0))} | MAJ: {last_update_txt}"
+                    st.markdown(
+                        (
+                            "<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:8px;'>"
+                            f"<div style='border-left:4px solid {accent};padding-left:8px;'>"
+                            f"<div style='font-weight:700;font-size:1rem;'>{html.escape(str(c.get('label') or key))}{' <span style=\"color:#94a3b8;\">[Focus]</span>' if is_focus else ''}</div>"
+                            f"<div style='margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;'>"
+                            f"<span style='padding:2px 8px;border-radius:999px;background:{status_color}22;color:{status_color};border:1px solid {status_color}55;font-size:0.75rem;font-weight:600;'>{status_level}</span>"
+                            + "".join(winner_badges) +
+                            "</div></div></div>"
+                        ),
+                        unsafe_allow_html=True,
                     )
 
+                    last_run_txt = _short_run_id(c.get("last_run_id"))
+                    last_run_ts_txt = _fmt_paris_datetime(c.get("last_run_ts"), "%d/%m %H:%M")
+                    st.caption(
+                        f"Dernier run: {last_run_txt} | {last_run_ts_txt}"
+                    )
+                    st.caption(
+                        f"Model: {c.get('last_model') or 'N/A'} | "
+                        f"strategy={c.get('last_strategy_version') or '—'} | "
+                        f"config={c.get('last_config_version') or '—'}"
+                    )
+                    if c.get("status_reasons"):
+                        st.caption(" | ".join([str(x) for x in c.get("status_reasons", [])[:2]]))
+
+                    # KPI principaux
+                    k1, k2 = st.columns(2)
+                    k1.metric("Valeur totale", _fmt_currency(c.get("total_val"), 2), _fmt_delta_eur(c.get("period_delta_eur")))
+                    k2.metric("PnL total", _fmt_currency(c.get("pnl_total"), 2), _fmt_delta_eur(c.get("period_delta_eur")))
+                    k3, k4 = st.columns(2)
+                    k3.metric("ROI", _fmt_pct(c.get("roi_pct"), 2), _fmt_delta_pp(c.get("roi_delta_pp")))
+                    k4.metric("% Cash", _fmt_pct(c.get("cash_pct"), 1), _fmt_delta_pp(c.get("cash_delta_pp"), 1))
+                    k5, k6 = st.columns(2)
+                    k5.metric("Positions", _fmt_number(c.get("positions_count"), 0))
+                    k6.metric("Score agent", _fmt_pct(c.get("operational_agent_score"), 0, "/100"))
+
+                    # Mini equity curve
+                    st.caption(f"Equity curve ({compare_period} | {'EUR' if compare_curve_mode == 'EUR' else 'Base 100'})")
+                    st.plotly_chart(
+                        _build_mini_equity_curve(c, mode=compare_curve_mode, y_range=curve_y_range, show_drawdown_overlay=False),
+                        use_container_width=True,
+                        config={"displayModeBar": False},
+                    )
+
+                    # Risque & exposition
+                    st.caption("Risque & exposition")
+                    r1, r2 = st.columns(2)
+                    r1.metric("DD courant", _fmt_pct(c.get("current_drawdown_pct"), 2))
+                    r2.metric("MaxDD periode", _fmt_pct(c.get("max_drawdown_pct"), 2))
+                    r3, r4 = st.columns(2)
+                    r3.metric("Expo actions", _fmt_pct(c.get("exposure_pct"), 1))
+                    r4.metric("Top3 poids", _fmt_pct(c.get("top3_weight_pct"), 1) if c.get("top3_weight_pct") is not None else "—")
+                    sharpe_val = c.get("sharpe")
+                    sharpe_txt = (
+                        f"{safe_float(sharpe_val):.2f}"
+                        if sharpe_val is not None and not pd.isna(sharpe_val)
+                        else "—"
+                    )
+                    st.caption(
+                        f"Top1: {_fmt_pct(c.get('top1_weight_pct'), 1) if c.get('top1_weight_pct') is not None else '—'} | "
+                        f"HHI: {_fmt_number(c.get('hhi'), 0) if c.get('hhi') is not None else '—'} | "
+                        f"Vol 30j: {_fmt_pct(c.get('volatility_30d_pct'), 1) if c.get('volatility_30d_pct') is not None else '—'} | "
+                        f"Sharpe: {sharpe_txt}"
+                    )
+
+                    # Activite / couts / ops
+                    st.caption("Activite / couts / ops")
+                    a1, a2 = st.columns(2)
+                    a1.metric("Signaux 24h", _fmt_number(c.get("signals_24h"), 0))
+                    a2.metric("Alertes 24h", _fmt_number(c.get("alerts_24h"), 0))
+                    a3, a4 = st.columns(2)
+                    a3.metric(f"Trades {compare_period}", _fmt_number(c.get("trades_period"), 0))
+                    a4.metric("Trades run", _fmt_number(c.get("trades_this_run"), 0))
+                    st.caption(
+                        f"CumFees: {_fmt_currency(c.get('cum_fees_eur'), 2)} | "
+                        f"CumAiCost: {_fmt_currency(c.get('cum_ai_cost_eur'), 2)} | "
+                        f"Derniere MAJ data: {_fmt_paris_datetime(c.get('last_data_update'), '%d/%m %H:%M')}"
+                    )
+
+                    # Qualite agent AG1
+                    st.caption("Qualite agent AG1")
+                    ag1_ok = c.get("ag1_output_ok")
+                    ag1_ok_txt = "OK" if ag1_ok is True else ("KO" if ag1_ok is False else "—")
+                    q1, q2 = st.columns(2)
+                    q1.metric("AG1 Output", ag1_ok_txt)
+                    q2.metric("Completeness", _fmt_pct(c.get("order_completeness_pct"), 0) if c.get("order_completeness_pct") is not None else "—")
+                    q3, q4 = st.columns(2)
+                    q3.metric("Anom. critiques", _fmt_number(c.get("critical_anoms_24h"), 0))
+                    q4.metric("Freshness", _fmt_pct(c.get("freshness_score"), 0, "/100") if c.get("freshness_score") is not None else "—")
+                    cov_txt = _fmt_pct(c.get("price_coverage_pct"), 1) if c.get("price_coverage_pct") is not None else "—"
+                    age_txt = f"{float(c.get('freshness_age_h')):.1f}h" if c.get("freshness_age_h") is not None else "—"
+                    st.caption(f"Price coverage: {cov_txt} | Age data: {age_txt}")
+                    if c.get("pm_agent_score") is not None:
+                        st.caption(f"Score agent (PM): {safe_float(c.get('pm_agent_score')):.1f}/100")
+
+                    # Mini allocation
+                    st.caption("Allocation (mini)")
+                    eq_pct = max(0.0, min(100.0, float(safe_float(c.get("equity_alloc_pct", 0.0)))))
+                    cash_pct_bar = max(0.0, min(100.0, float(safe_float(c.get("cash_alloc_pct", 0.0)))))
+                    st.caption(f"Equity {eq_pct:.1f}% | Cash {cash_pct_bar:.1f}%")
+                    st.progress(int(round(eq_pct)))
+                    for srow in c.get("sector_rows", [])[:5]:
+                        lbl = str(srow.get("label") or "Unknown")
+                        w = float(safe_float(srow.get("weight_pct", 0.0)))
+                        st.caption(f"{lbl}: {w:.1f}%")
+
+                    # Top/Worst positions
+                    st.caption("Top / Worst positions")
+                    tw1, tw2 = st.columns(2)
+                    with tw1:
+                        st.caption("Top 3 PnL")
+                        top_rows = c.get("top_positions") or []
+                        if top_rows:
+                            for row in top_rows:
+                                st.markdown(
+                                    f"- `{row.get('symbol')}` {safe_float(row.get('pnl_eur')):+,.0f} EUR ({safe_float(row.get('pnl_pct')):+.1f}%)".replace(",", " ")
+                                )
+                        else:
+                            st.caption("—")
+                    with tw2:
+                        st.caption("Worst 3 PnL")
+                        worst_rows = c.get("worst_positions") or []
+                        if worst_rows:
+                            for row in worst_rows:
+                                st.markdown(
+                                    f"- `{row.get('symbol')}` {safe_float(row.get('pnl_eur')):+,.0f} EUR ({safe_float(row.get('pnl_pct')):+.1f}%)".replace(",", " ")
+                                )
+                        else:
+                            st.caption("—")
+
+                    if st.button(
+                        "Focus",
+                        key=f"focus_{key}",
+                        use_container_width=True,
+                        type="primary" if is_focus else "secondary",
+                    ):
+                        focus_clicked_key = key
+
+        if focus_clicked_key in compare_keys:
+            selected_portfolio_key = focus_clicked_key
+
+        st.session_state["dashboard_active_portfolio"] = selected_portfolio_key
+        st.session_state["active_portfolio_id"] = selected_portfolio_key
+
+        # Bonus: overlay chart compare
+        fig_cmp_eq, fig_cmp_dd = _build_compare_overlay_chart(compare_cards, mode=compare_curve_mode, show_drawdown=compare_show_dd)
+        if fig_cmp_eq is not None:
+            st.plotly_chart(fig_cmp_eq, use_container_width=True)
+        if compare_show_dd and fig_cmp_dd is not None:
+            st.plotly_chart(fig_cmp_dd, use_container_width=True)
+
+        # Detailed numeric table moved to expander.
+        comp_rows = []
+        for c in compare_cards:
             comp_rows.append(
                 {
-                    "Modele": p.get("label", key),
-                    "Valeur Totale (EUR)": total_v,
-                    "P&L (EUR)": total_v - init_v,
-                    "ROI (%)": roi_v * 100.0,
-                    "Cash (%)": cash_pct_v,
-                    "Positions": int(s.get("positions_count", 0)),
-                    "Signaux 24h": int(s.get("signals_24h", 0)),
-                    "Alertes 24h": int(s.get("alerts_24h", 0)),
-                    "Drawdown (%)": float(s.get("drawdown_pct", 0.0) or 0.0),
+                    "Modele": c.get("label"),
+                    "Statut": c.get("status_level"),
+                    "Valeur Totale (EUR)": c.get("total_val"),
+                    "P&L (EUR)": c.get("pnl_total"),
+                    "ROI (%)": c.get("roi_pct"),
+                    "Cash (%)": c.get("cash_pct"),
+                    "MaxDD periode (%)": c.get("max_drawdown_pct"),
+                    "Sharpe": c.get("sharpe"),
+                    "Score agent (/100)": c.get("operational_agent_score"),
+                    "Anom. critiques 24h": c.get("critical_anoms_24h"),
                 }
             )
+        with st.expander("Details chiffres comparatifs", expanded=False):
+            if comp_rows:
+                comp_df = pd.DataFrame(comp_rows)
+                sort_col_map = {
+                    "ROI": "ROI (%)",
+                    "TotalValue": "Valeur Totale (EUR)",
+                    "MaxDD": "MaxDD periode (%)",
+                    "Sharpe": "Sharpe",
+                }
+                sort_col = sort_col_map.get(compare_winner_kpi, "ROI (%)")
+                # MaxDD is typically negative; best is the least negative value.
+                ascending = False
+                if sort_col in comp_df.columns:
+                    comp_df = comp_df.sort_values(sort_col, ascending=ascending, na_position="last")
+                st.dataframe(comp_df, use_container_width=True)
 
-        if comp_rows:
-            comp_df = pd.DataFrame(comp_rows).sort_values("ROI (%)", ascending=False)
-            st.dataframe(comp_df, use_container_width=True)
-
-        # Override dashboard datasets/metrics with the selected AG1 portfolio.
-        selected_summary = active_portfolio.get("summary", {}) if isinstance(active_portfolio, dict) else {}
-        df_port = active_portfolio.get("df_portfolio", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
-        df_perf = active_portfolio.get("df_performance", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
-        df_trans = active_portfolio.get("df_transactions", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
-        df_sig_dashboard = active_portfolio.get("df_ai_signals", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
-        df_alt_dashboard = active_portfolio.get("df_alerts", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
-
-        # Keep enrichment by Universe to preserve names/sector fallback if needed.
-        df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
-        df_trans = enrich_df_with_name(df_trans, df_univ) if df_trans is not None else pd.DataFrame()
-
-        init_cap = safe_float(selected_summary.get("init_cap", 50000.0)) or 50000.0
-        total_val = safe_float(selected_summary.get("total_val", 0.0))
-        cash = safe_float(selected_summary.get("cash", 0.0))
-        invest = safe_float(selected_summary.get("invest", 0.0))
-        roi = float(selected_summary.get("roi", 0.0) or 0.0)
-        cash_pct = float(selected_summary.get("cash_pct", 0.0) or 0.0)
-
-        last_model_txt = str(selected_summary.get("last_model", "") or "")
-        last_update_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
-        last_update_txt = (
-            last_update_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
-            if pd.notna(last_update_ts)
-            else "N/A"
-        )
-        st.info(
-            f"Portefeuille actif: {active_portfolio.get('label', selected_portfolio_key)} | "
-            f"Dernier run: {selected_summary.get('last_run_id', 'N/A')} | "
-            f"Modele: {last_model_txt or 'N/A'} | MAJ: {last_update_txt}"
-        )
-
-        diag = active_portfolio.get("diagnostics", {}) if isinstance(active_portfolio, dict) else {}
-        if isinstance(diag, dict):
-            ledger_run = str(diag.get("ledger_run_id") or selected_summary.get("last_run_id") or "").strip() or "N/A"
-            mtm_run = str(diag.get("mtm_run_id") or "").strip() or "N/A"
-            active_positions_source_note = (
-                "Source Positions: AG1-V2 ledger `core.positions_snapshot` "
-                f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run})"
+        # Focused details zone (same tabs below) uses selected portfolio if healthy, otherwise fallback to first healthy.
+        details_key = selected_portfolio_key if selected_portfolio_key in available_keys else (available_keys[0] if available_keys else None)
+        if details_key and details_key != selected_portfolio_key:
+            st.warning(
+                f"Le portefeuille en Focus ({cards_by_key[selected_portfolio_key]['label']}) n'est pas exploitable pour les details. "
+                f"Bascule details sur {cards_by_key[details_key]['label']}."
             )
 
-            only_ledger = [str(s) for s in (diag.get("positions_only_in_ledger") or []) if str(s).strip()]
-            only_mtm = [str(s) for s in (diag.get("positions_only_in_mtm") or []) if str(s).strip()]
-            if only_ledger or only_mtm:
-                diff_parts = []
-                if only_ledger:
-                    diff_parts.append("uniquement dans ledger: " + ", ".join(only_ledger))
-                if only_mtm:
-                    diff_parts.append("uniquement dans MTM: " + ", ".join(only_mtm))
-                st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
+        if details_key:
+            active_portfolio = ag1_multi[details_key]
+            selected_portfolio_key = details_key
+
+            # Override dashboard datasets/metrics with the selected AG1 portfolio for the detailed tabs.
+            selected_summary = active_portfolio.get("summary", {}) if isinstance(active_portfolio, dict) else {}
+            df_port = active_portfolio.get("df_portfolio", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+            df_perf = active_portfolio.get("df_performance", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+            df_trans = active_portfolio.get("df_transactions", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+            df_sig_dashboard = active_portfolio.get("df_ai_signals", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+            df_alt_dashboard = active_portfolio.get("df_alerts", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+
+            df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
+            df_trans = enrich_df_with_name(df_trans, df_univ) if df_trans is not None else pd.DataFrame()
+
+            init_cap = safe_float(selected_summary.get("init_cap", 50000.0)) or 50000.0
+            total_val = safe_float(selected_summary.get("total_val", 0.0))
+            cash = safe_float(selected_summary.get("cash", 0.0))
+            invest = safe_float(selected_summary.get("invest", 0.0))
+            roi = float(selected_summary.get("roi", 0.0) or 0.0)
+            cash_pct = float(selected_summary.get("cash_pct", 0.0) or 0.0)
+
+            last_model_txt = str(selected_summary.get("last_model", "") or "")
+            last_update_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+            last_update_txt = (
+                last_update_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
+                if pd.notna(last_update_ts)
+                else "N/A"
+            )
+            st.info(
+                f"Portefeuille actif (Focus): {active_portfolio.get('label', selected_portfolio_key)} | "
+                f"Dernier run: {selected_summary.get('last_run_id', 'N/A')} | "
+                f"Modele: {last_model_txt or 'N/A'} | MAJ: {last_update_txt}"
+            )
+
+            diag = active_portfolio.get("diagnostics", {}) if isinstance(active_portfolio, dict) else {}
+            if isinstance(diag, dict):
+                ledger_run = str(diag.get("ledger_run_id") or selected_summary.get("last_run_id") or "").strip() or "N/A"
+                mtm_run = str(diag.get("mtm_run_id") or "").strip() or "N/A"
+                active_positions_source_note = (
+                    "Source Positions: AG1-V2 ledger `core.positions_snapshot` "
+                    f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run})"
+                )
+
+                only_ledger = [str(s) for s in (diag.get("positions_only_in_ledger") or []) if str(s).strip()]
+                only_mtm = [str(s) for s in (diag.get("positions_only_in_mtm") or []) if str(s).strip()]
+                if only_ledger or only_mtm:
+                    diff_parts = []
+                    if only_ledger:
+                        diff_parts.append("uniquement dans ledger: " + ", ".join(only_ledger))
+                    if only_mtm:
+                        diff_parts.append("uniquement dans MTM: " + ", ".join(only_mtm))
+                    st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
+        else:
+            st.warning(
+                "Aucune base AG1-V2 exploitable pour la zone details. "
+                "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
+            )
+            df_sig_dashboard = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
+            df_alt_dashboard = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+            active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
     else:
         st.warning(
-            "Aucune base AG1-V2 multi-portefeuille disponible. "
+            "Aucun portefeuille AG1-V2 configure pour la vue comparative. "
             "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
         )
         df_sig_dashboard = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
@@ -4376,51 +5332,54 @@ if page == "Dashboard Trading":
                     st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
-            st.subheader("Portfolio Sparklines (90j)")
-            render_portfolio_sparklines(
-                df_clean,
-                df_trans,
-                yfinance_api_url=YFINANCE_API_URL,
-                lookback_days=90,
-                columns_per_row=3,
-            )
+            port_subtab_sparks, port_subtab_positions = st.tabs(["Sparklines (90j)", "Positions"])
 
-            st.divider()
-            st.subheader("Positions")
-            qty_basis = (
-                df_clean.get("avgprice", pd.Series(0.0, index=df_clean.index))
-                * df_clean.get("quantity", pd.Series(0.0, index=df_clean.index))
-            )
-            mv_basis = (
-                df_clean.get("marketvalue", pd.Series(0.0, index=df_clean.index))
-                - df_clean.get("unrealizedpnl", pd.Series(0.0, index=df_clean.index))
-            )
-            cost_basis = qty_basis.where(qty_basis > 0, mv_basis)
-            df_clean["unrealizedpnl_pct"] = 0.0
-            valid_basis = cost_basis != 0
-            df_clean.loc[valid_basis, "unrealizedpnl_pct"] = (
-                df_clean.loc[valid_basis, "unrealizedpnl"] / cost_basis[valid_basis] * 100
-            )
-            df_clean["unrealizedpnl_pct"] = df_clean["unrealizedpnl_pct"].round(2)
+            with port_subtab_sparks:
+                st.subheader("Portfolio Sparklines (90j)")
+                render_portfolio_sparklines(
+                    df_clean,
+                    df_trans,
+                    yfinance_api_url=YFINANCE_API_URL,
+                    lookback_days=90,
+                    columns_per_row=3,
+                )
 
-            cols_show = [
-                "name",
-                "symbol",
-                "sector",
-                "industry",
-                "quantity",
-                "avgprice",
-                "lastprice",
-                "marketvalue",
-                "unrealizedpnl",
-                "unrealizedpnl_pct",
-            ]
-            cols_exist = [c for c in cols_show if c in df_clean.columns]
-            df_view = df_clean[cols_exist].copy()
-            if "marketvalue" in df_view.columns:
-                df_view = df_view.sort_values("marketvalue", ascending=False)
-            pos_key = f"positions_{selected_portfolio_key}" if selected_portfolio_key else "positions"
-            render_interactive_table(df_view, key_suffix=pos_key, hide_index=True)
+            with port_subtab_positions:
+                st.subheader("Positions")
+                qty_basis = (
+                    df_clean.get("avgprice", pd.Series(0.0, index=df_clean.index))
+                    * df_clean.get("quantity", pd.Series(0.0, index=df_clean.index))
+                )
+                mv_basis = (
+                    df_clean.get("marketvalue", pd.Series(0.0, index=df_clean.index))
+                    - df_clean.get("unrealizedpnl", pd.Series(0.0, index=df_clean.index))
+                )
+                cost_basis = qty_basis.where(qty_basis > 0, mv_basis)
+                df_clean["unrealizedpnl_pct"] = 0.0
+                valid_basis = cost_basis != 0
+                df_clean.loc[valid_basis, "unrealizedpnl_pct"] = (
+                    df_clean.loc[valid_basis, "unrealizedpnl"] / cost_basis[valid_basis] * 100
+                )
+                df_clean["unrealizedpnl_pct"] = df_clean["unrealizedpnl_pct"].round(2)
+
+                cols_show = [
+                    "name",
+                    "symbol",
+                    "sector",
+                    "industry",
+                    "quantity",
+                    "avgprice",
+                    "lastprice",
+                    "marketvalue",
+                    "unrealizedpnl",
+                    "unrealizedpnl_pct",
+                ]
+                cols_exist = [c for c in cols_show if c in df_clean.columns]
+                df_view = df_clean[cols_exist].copy()
+                if "marketvalue" in df_view.columns:
+                    df_view = df_view.sort_values("marketvalue", ascending=False)
+                pos_key = f"positions_{selected_portfolio_key}" if selected_portfolio_key else "positions"
+                render_interactive_table(df_view, key_suffix=pos_key, hide_index=True)
         else:
             st.info("Portefeuille vide.")
 
