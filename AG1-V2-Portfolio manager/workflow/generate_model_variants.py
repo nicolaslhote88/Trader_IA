@@ -42,6 +42,11 @@ VARIANTS = {
     "chatgpt52": {
         "workflow_name": "AG1 - Workflow général - ChatGPT 5.2",
         "db_path": "/files/duckdb/ag1_v2_chatgpt52.duckdb",
+        "run_defaults": {
+            "strategy_version": "strategy_v2",
+            "config_version": "config_v2",
+            "model": "gpt-5.2-2025-12-11",
+        },
         "agent_node": "Agent #1 - Portfolio manager",
         "extractor_node": "Information Extractor",
         "branch_nodes": {
@@ -70,6 +75,11 @@ VARIANTS = {
     "grok41_reasoning": {
         "workflow_name": "AG1 - Workflow général - Grok 4.1 Reasoning",
         "db_path": "/files/duckdb/ag1_v2_grok41_reasoning.duckdb",
+        "run_defaults": {
+            "strategy_version": "strategy_v2",
+            "config_version": "config_v2",
+            "model": "grok-4-1-fast-reasoning",
+        },
         "agent_node": "Agent #1 - Portfolio manager1",
         "extractor_node": "Information Extractor1",
         "branch_nodes": {
@@ -98,6 +108,11 @@ VARIANTS = {
     "gemini30_pro": {
         "workflow_name": "AG1 - Workflow général - Gemini 3.0 Pro",
         "db_path": "/files/duckdb/ag1_v2_gemini30_pro.duckdb",
+        "run_defaults": {
+            "strategy_version": "strategy_v2",
+            "config_version": "config_v2",
+            "model": "models/gemini-3-pro-preview",
+        },
         "agent_node": "Agent #1 - Portfolio manager2",
         "extractor_node": "Information Extractor2",
         "branch_nodes": {
@@ -131,6 +146,13 @@ OLD_PATHS = (
     "/local-files/duckdb/ag1_v2.duckdb",
 )
 
+VARIANT_TRIGGER_INTERVALS = [
+    {"field": "cronExpression", "expression": "0 15 9 * * 1-5"},   # 09:15 Mon-Fri
+    {"field": "cronExpression", "expression": "0 30 12 * * 1-5"},  # 12:30 Mon-Fri
+    {"field": "cronExpression", "expression": "0 45 16 * * 1-5"},  # 16:45 Mon-Fri
+]
+VARIANT_TIMEZONE = "Europe/Paris"
+
 
 def random_n8n_id(length: int = 21) -> str:
     alphabet = string.ascii_letters + string.digits
@@ -148,6 +170,65 @@ def deep_replace_ag1_path(value, new_path: str):
     if isinstance(value, dict):
         return {k: deep_replace_ag1_path(v, new_path) for k, v in value.items()}
     return value
+
+
+def patch_init_run_context_defaults(workflow: dict, cfg: dict) -> None:
+    run_defaults = cfg.get("run_defaults") or {}
+    if not run_defaults:
+        return
+
+    node = next((n for n in (workflow.get("nodes") or []) if n.get("name") == "2B - Init Run Context"), None)
+    if node is None:
+        raise ValueError("Node '2B - Init Run Context' not found")
+
+    params = node.get("parameters") or {}
+    js_code = params.get("jsCode")
+    if not isinstance(js_code, str) or not js_code.strip():
+        raise ValueError("Node '2B - Init Run Context' has no jsCode")
+
+    replacements = [
+        (
+            'strategyVersion: String(cfg.strategy_version || "strategy_v1")',
+            f'strategyVersion: String(cfg.strategy_version || "{run_defaults.get("strategy_version", "strategy_v1")}")',
+        ),
+        (
+            'configVersion: String(cfg.config_version || "config_v2")',
+            f'configVersion: String(cfg.config_version || "{run_defaults.get("config_version", "config_v2")}")',
+        ),
+        (
+            'model: String(cfg.model || "gpt-5.2")',
+            f'model: String(cfg.model || "{run_defaults.get("model", "gpt-5.2")}")',
+        ),
+    ]
+
+    for before, after in replacements:
+        if before not in js_code:
+            raise ValueError(f"Init Run Context patch failed, snippet not found: {before}")
+        js_code = js_code.replace(before, after, 1)
+
+    node.setdefault("parameters", {})["jsCode"] = js_code
+
+
+def patch_start_trigger_schedule(workflow: dict) -> None:
+    node = next((n for n in (workflow.get("nodes") or []) if n.get("name") == "1 - Hourly Trigger"), None)
+    if node is None:
+        raise ValueError("Node '1 - Hourly Trigger' not found")
+
+    node["type"] = "n8n-nodes-base.scheduleTrigger"
+    node["typeVersion"] = 1.3
+    node["parameters"] = {
+        "rule": {
+            "interval": copy.deepcopy(VARIANT_TRIGGER_INTERVALS),
+        }
+    }
+
+
+def patch_workflow_timezone(workflow: dict) -> None:
+    settings = workflow.get("settings")
+    if not isinstance(settings, dict):
+        settings = {}
+        workflow["settings"] = settings
+    settings["timezone"] = VARIANT_TIMEZONE
 
 
 def filter_connections(connections: dict, keep_nodes: set[str]) -> dict:
@@ -251,6 +332,9 @@ def build_variant(base_workflow: dict, key: str, cfg: dict) -> dict:
 
     # Replace AG1 DB default paths everywhere in the workflow export.
     wf = deep_replace_ag1_path(wf, cfg["db_path"])
+    patch_init_run_context_defaults(wf, cfg)
+    patch_start_trigger_schedule(wf)
+    patch_workflow_timezone(wf)
 
     validate_workflow(wf, cfg["agent_node"], cfg["extractor_node"], cfg["db_path"])
     return wf

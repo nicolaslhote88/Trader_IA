@@ -59,7 +59,7 @@ return [
         tz,
         offsetMin,
         executionId,
-        strategyVersion: String(cfg.strategy_version || "strategy_v1"),
+        strategyVersion: String(cfg.strategy_version || "strategy_v2"),
         configVersion: String(cfg.config_version || "config_v2"),
         promptVersion: String(cfg.prompt_version || "prompt_v2"),
         model: String(cfg.model || "gpt-5.2"),
