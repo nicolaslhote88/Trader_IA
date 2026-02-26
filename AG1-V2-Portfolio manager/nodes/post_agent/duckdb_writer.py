@@ -358,7 +358,7 @@ def _upsert_market_prices(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Mapp
     con.executemany(
         """
         INSERT INTO core.market_prices (
-          ts, symbol, open, high, low, close, adj_close, volume, source, asof
+          ts, symbol, open, high, low, close, adj_close, volume, source, "asof"
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (ts, symbol, source) DO UPDATE SET
@@ -368,7 +368,7 @@ def _upsert_market_prices(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Mapp
           close = excluded.close,
           adj_close = excluded.adj_close,
           volume = excluded.volume,
-          asof = excluded.asof
+          "asof" = excluded.asof
         """,
         rows,
     )
@@ -1076,7 +1076,7 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
             close,
             ROW_NUMBER() OVER (
               PARTITION BY symbol
-              ORDER BY COALESCE(asof, ts) DESC, ts DESC, source DESC
+              ORDER BY COALESCE("asof", ts) DESC, ts DESC, source DESC
             ) AS rn
           FROM core.market_prices
         )
