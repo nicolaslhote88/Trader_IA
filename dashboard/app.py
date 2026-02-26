@@ -3601,6 +3601,15 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
         "df_ai_signals": pd.DataFrame(),
         "df_alerts": pd.DataFrame(),
         "df_runs": pd.DataFrame(),
+        "diagnostics": {
+            "positions_source_table": "core.positions_snapshot",
+            "ledger_run_id": "",
+            "ledger_positions_count": 0,
+            "mtm_run_id": "",
+            "mtm_positions_count": None,
+            "positions_only_in_ledger": [],
+            "positions_only_in_mtm": [],
+        },
     }
 
 
@@ -3727,6 +3736,18 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             INNER JOIN latest l ON l.run_id = p.run_id
             LEFT JOIN core.instruments i ON i.symbol = p.symbol
             ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
+            """,
+        )
+
+        df_mtm_latest = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              symbol,
+              run_id,
+              updated_at
+            FROM portfolio_positions_mtm_latest
+            WHERE symbol IS NOT NULL
             """,
         )
 
@@ -3922,6 +3943,46 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             ts_alt = pd.to_datetime(df_alerts["timestamp"], errors="coerce", utc=True)
             alerts_24h = int((ts_alt >= (now_utc - pd.Timedelta(hours=24))).sum())
 
+        diagnostics = {
+            "positions_source_table": "core.positions_snapshot",
+            "ledger_run_id": str(latest.get("run_id") or ""),
+            "ledger_positions_count": 0,
+            "mtm_run_id": "",
+            "mtm_positions_count": None,
+            "positions_only_in_ledger": [],
+            "positions_only_in_mtm": [],
+        }
+
+        ledger_syms = set()
+        if df_pos is not None and not df_pos.empty and "symbol" in df_pos.columns:
+            ser = df_pos["symbol"].astype(str).str.strip().str.upper()
+            ledger_syms = {s for s in ser.tolist() if s and s not in {"CASH_EUR", "__META__"}}
+        diagnostics["ledger_positions_count"] = int(len(ledger_syms))
+
+        mtm_syms = set()
+        if df_mtm_latest is not None and not df_mtm_latest.empty:
+            mtm_cols = [str(c).strip().lower() for c in df_mtm_latest.columns]
+            df_mtm_latest.columns = mtm_cols
+            if "symbol" in df_mtm_latest.columns:
+                ser = df_mtm_latest["symbol"].astype(str).str.strip().str.upper()
+                mtm_syms = {s for s in ser.tolist() if s and s not in {"CASH_EUR", "__META__"}}
+                diagnostics["mtm_positions_count"] = int(len(mtm_syms))
+            if "run_id" in df_mtm_latest.columns:
+                mtm_run_ids = (
+                    df_mtm_latest["run_id"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                )
+                if not mtm_run_ids.empty:
+                    diagnostics["mtm_run_id"] = str(mtm_run_ids.iloc[0])
+
+        if ledger_syms or mtm_syms:
+            diagnostics["positions_only_in_ledger"] = sorted(list(ledger_syms - mtm_syms))[:20]
+            diagnostics["positions_only_in_mtm"] = sorted(list(mtm_syms - ledger_syms))[:20]
+
         summary = {
             "init_cap": float(init_cap),
             "cash": float(cash),
@@ -3952,6 +4013,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 "df_ai_signals": normalize_cols(df_ai_signals) if df_ai_signals is not None else pd.DataFrame(),
                 "df_alerts": normalize_cols(df_alerts) if df_alerts is not None else pd.DataFrame(),
                 "df_runs": normalize_cols(df_runs) if df_runs is not None else pd.DataFrame(),
+                "diagnostics": diagnostics,
             }
         )
         return payload
@@ -4115,6 +4177,7 @@ if page == "Dashboard Trading":
     # Fallback to legacy single-portfolio behavior if the new AG1-V2 ledgers are not available.
     selected_portfolio_key = None
     active_portfolio = None
+    active_positions_source_note = ""
     if available_keys:
         default_key = st.session_state.get("dashboard_active_portfolio", available_keys[0])
         if default_key not in available_keys:
@@ -4217,6 +4280,25 @@ if page == "Dashboard Trading":
             f"Dernier run: {selected_summary.get('last_run_id', 'N/A')} | "
             f"Modele: {last_model_txt or 'N/A'} | MAJ: {last_update_txt}"
         )
+
+        diag = active_portfolio.get("diagnostics", {}) if isinstance(active_portfolio, dict) else {}
+        if isinstance(diag, dict):
+            ledger_run = str(diag.get("ledger_run_id") or selected_summary.get("last_run_id") or "").strip() or "N/A"
+            mtm_run = str(diag.get("mtm_run_id") or "").strip() or "N/A"
+            active_positions_source_note = (
+                "Source Positions: AG1-V2 ledger `core.positions_snapshot` "
+                f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run})"
+            )
+
+            only_ledger = [str(s) for s in (diag.get("positions_only_in_ledger") or []) if str(s).strip()]
+            only_mtm = [str(s) for s in (diag.get("positions_only_in_mtm") or []) if str(s).strip()]
+            if only_ledger or only_mtm:
+                diff_parts = []
+                if only_ledger:
+                    diff_parts.append("uniquement dans ledger: " + ", ".join(only_ledger))
+                if only_mtm:
+                    diff_parts.append("uniquement dans MTM: " + ", ".join(only_mtm))
+                st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
     else:
         st.warning(
             "Aucune base AG1-V2 multi-portefeuille disponible. "
@@ -4224,6 +4306,10 @@ if page == "Dashboard Trading":
         )
         df_sig_dashboard = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
         df_alt_dashboard = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+        active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
+
+    if active_positions_source_note:
+        st.caption(active_positions_source_note)
 
     # Detailed KPI band (active portfolio / legacy fallback)
     c1, c2, c3, c4, c5, c6 = st.columns(6)
