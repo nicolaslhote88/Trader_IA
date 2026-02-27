@@ -8061,7 +8061,14 @@ if page == "Dashboard Trading":
                 st.info("Donnees insuffisantes pour construire la comparaison portefeuille/indices.")
             else:
                 value_cols = [c for c in aligned_norm.columns if c != "date"]
-                chart_df = aligned_norm.copy()
+                # Rebase all series on the first common displayed date so every curve starts at 100 (or 0% in Perf mode).
+                aligned_base = aligned_norm.copy()
+                for col in value_cols:
+                    base_val = pd.to_numeric(pd.Series([aligned_base[col].iloc[0]]), errors="coerce").iloc[0]
+                    if pd.notna(base_val) and float(base_val) != 0.0:
+                        aligned_base[col] = (pd.to_numeric(aligned_base[col], errors="coerce") / float(base_val)) * 100.0
+
+                chart_df = aligned_base.copy()
                 if bench_mode == "Perf (%)":
                     for col in value_cols:
                         chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce") - 100.0
@@ -8106,7 +8113,7 @@ if page == "Dashboard Trading":
 
                 perf_rows: list[dict[str, object]] = []
                 for col in value_cols:
-                    s = pd.to_numeric(aligned_norm[col], errors="coerce").dropna()
+                    s = pd.to_numeric(aligned_base[col], errors="coerce").dropna()
                     if s.empty:
                         continue
                     ret = _series_period_return_pct(s)
@@ -8128,13 +8135,13 @@ if page == "Dashboard Trading":
                     st.markdown("#### Synthese performance")
                     render_interactive_table(pd.DataFrame(perf_rows), key_suffix="benchmarks_perf_table", height=280)
 
-                if alpha_ref in aligned_norm.columns:
+                if alpha_ref in aligned_base.columns:
                     alpha_rows: list[dict[str, object]] = []
                     fig_alpha = go.Figure()
                     for p_label in portfolio_series_norm.keys():
-                        if p_label not in aligned_norm.columns:
+                        if p_label not in aligned_base.columns:
                             continue
-                        pair = aligned_norm[["date", p_label, alpha_ref]].dropna()
+                        pair = aligned_base[["date", p_label, alpha_ref]].dropna()
                         if pair.empty:
                             continue
                         alpha_curve = pd.to_numeric(pair[p_label], errors="coerce") - pd.to_numeric(pair[alpha_ref], errors="coerce")
