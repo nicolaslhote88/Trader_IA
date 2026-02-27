@@ -9746,6 +9746,7 @@ elif page == "Macro & News (AG4)":
                 key="ag4_history_limit",
             )
         )
+    scope_catalog, df_positions_active, active_ag1_key = _news_scope_catalog_from_ag1()
     active_label = AG1_MULTI_PORTFOLIO_CONFIG.get(active_ag1_key, {}).get("label", active_ag1_key or "—")
     use_active_sql_scope = st.toggle(
         "Limiter SQL news symbole au portefeuille actif",
