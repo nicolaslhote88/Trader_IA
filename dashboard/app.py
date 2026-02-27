@@ -6203,6 +6203,26 @@ def _fmt_delta_pp(v: object, digits: int = 2) -> str:
     return f"{n:+.{digits}f} pp"
 
 
+def _signed_color(v: object) -> str:
+    n = safe_float(v)
+    if pd.isna(n):
+        return "#94a3b8"
+    return "#16a34a" if float(n) >= 0.0 else "#dc2626"
+
+
+def _position_pnl_row_html(row: dict[str, object]) -> str:
+    symbol = html.escape(str(row.get("symbol") or "N/A"))
+    pnl_eur = safe_float(row.get("pnl_eur"))
+    pnl_pct = safe_float(row.get("pnl_pct"))
+    pnl_eur_txt = f"{pnl_eur:+,.0f} EUR".replace(",", " ") if not pd.isna(pnl_eur) else "N/A"
+    pnl_pct_txt = f"{pnl_pct:+.1f}%" if not pd.isna(pnl_pct) else "N/A"
+    return (
+        f"&bull; <code>{symbol}</code> "
+        f"<span style='color:{_signed_color(pnl_eur)};font-weight:700;'>{html.escape(pnl_eur_txt)}</span> "
+        f"(<span style='color:{_signed_color(pnl_pct)};font-weight:700;'>{html.escape(pnl_pct_txt)}</span>)"
+    )
+
+
 def _fmt_paris_datetime(ts: object, fmt: str = "%Y-%m-%d %H:%M") -> str:
     dt = pd.to_datetime(ts, errors="coerce", utc=True)
     if pd.isna(dt):
@@ -6960,7 +6980,6 @@ if page == "Dashboard Trading":
             curve_y_range = (ymin - pad, ymax + pad)
 
         status_colors = {"OK": "#16a34a", "WARN": "#d97706", "ERROR": "#dc2626"}
-        focus_clicked_key = None
 
         sb_cols = st.columns(3, gap="large")
         for idx in range(3):
@@ -7096,9 +7115,7 @@ if page == "Dashboard Trading":
                         top_rows = c.get("top_positions") or []
                         if top_rows:
                             for row in top_rows:
-                                st.markdown(
-                                    f"- `{row.get('symbol')}` {safe_float(row.get('pnl_eur')):+,.0f} EUR ({safe_float(row.get('pnl_pct')):+.1f}%)".replace(",", " ")
-                                )
+                                st.markdown(_position_pnl_row_html(row), unsafe_allow_html=True)
                         else:
                             st.caption("—")
                     with tw2:
@@ -7106,9 +7123,7 @@ if page == "Dashboard Trading":
                         worst_rows = c.get("worst_positions") or []
                         if worst_rows:
                             for row in worst_rows:
-                                st.markdown(
-                                    f"- `{row.get('symbol')}` {safe_float(row.get('pnl_eur')):+,.0f} EUR ({safe_float(row.get('pnl_pct')):+.1f}%)".replace(",", " ")
-                                )
+                                st.markdown(_position_pnl_row_html(row), unsafe_allow_html=True)
                         else:
                             st.caption("—")
 
@@ -7118,10 +7133,9 @@ if page == "Dashboard Trading":
                         use_container_width=True,
                         type="primary" if is_focus else "secondary",
                     ):
-                        focus_clicked_key = key
-
-        if focus_clicked_key in compare_keys:
-            selected_portfolio_key = focus_clicked_key
+                        st.session_state["dashboard_active_portfolio"] = key
+                        st.session_state["active_portfolio_id"] = key
+                        st.rerun()
 
         st.session_state["dashboard_active_portfolio"] = selected_portfolio_key
         st.session_state["active_portfolio_id"] = selected_portfolio_key
