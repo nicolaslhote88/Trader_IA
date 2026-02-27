@@ -3,14 +3,14 @@
 AG2-V2 workflow sync utility.
 
 Canonical source:
-- AG2-V2-workflow.final-loop-vector-test.json
+- AG2-V2 - Analyse technique.json
 
 This script can:
 1) Print/export the canonical workflow JSON
 2) Synchronize node source files (ag2-v2/nodes/*) from code nodes embedded in the canonical workflow
 
 Usage examples:
-  python build_workflow.py > AG2-V2-workflow.final-loop-vector-test.json
+  python build_workflow.py > "AG2-V2 - Analyse technique.json"
   python build_workflow.py --sync-nodes
   python build_workflow.py --write-files
 """
@@ -23,7 +23,7 @@ from pathlib import Path
 
 DIR = Path(__file__).resolve().parent
 NODES_DIR = DIR / "nodes"
-CANONICAL_FILE = DIR / "AG2-V2-workflow.final-loop-vector-test.json"
+CANONICAL_FILE = DIR / "AG2-V2 - Analyse technique.json"
 
 
 def load_workflow(path: Path) -> dict:

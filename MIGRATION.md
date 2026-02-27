@@ -4,7 +4,7 @@
 
 Workflows updated:
 
-- `ag2-v2/AG2-V2-workflow.final-loop-vector-test.json` (`financial_tech_v1`)
+- `ag2-v2/AG2-V2 - Analyse technique.json` (`financial_tech_v1`)
 - `AG3-V2/AG3-V2-workflow.json` (`fundamental_analysis`)
 - `AG4-SPE-V2/AG4-SPE-V2-workflow.json` (`financial_news_v3_clean`)
 

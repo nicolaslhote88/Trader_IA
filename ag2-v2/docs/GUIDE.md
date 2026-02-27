@@ -4,7 +4,7 @@
 
 Le workflow officiel est:
 
-- `ag2-v2/AG2-V2-workflow.final-loop-vector-test.json`
+- `ag2-v2/AG2-V2 - Analyse technique.json`
 
 Il n'y a plus de versions miroir.
 
@@ -18,7 +18,7 @@ Depuis `ag2-v2/`:
 
 ```bash
 # Afficher/exporter le workflow canonique
-python build_workflow.py > AG2-V2-workflow.final-loop-vector-test.json
+python build_workflow.py > "AG2-V2 - Analyse technique.json"
 
 # Resynchroniser les scripts nodes/* depuis le workflow canonique
 python build_workflow.py --sync-nodes
