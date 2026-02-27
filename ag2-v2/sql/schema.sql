@@ -1,10 +1,10 @@
--- ============================================================
+﻿-- ============================================================
 -- AG2-V2 : DuckDB Schema for Technical Analysis Pipeline
--- Replaces Google Sheets tabs: Universe, ag2_ai_cache, AG2 - étape 1 - sortie
+-- Replaces prior spreadsheet outputs with DuckDB-first persistence
 -- File: /files/duckdb/ag2_v2.duckdb (mounted in task-runners)
 -- ============================================================
 
--- ─── Universe (read from Google Sheets, cached locally) ───
+-- â”€â”€â”€ Universe (read from Google Sheets, cached locally) â”€â”€â”€
 CREATE TABLE IF NOT EXISTS universe (
     symbol          VARCHAR PRIMARY KEY,
     name            VARCHAR,
@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS universe (
     updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- ─── Technical Signals (main output - replaces "AG2 - étape 1 - sortie") ───
+-- â”€â”€â”€ Technical Signals (main output table) â”€â”€â”€
 CREATE TABLE IF NOT EXISTS technical_signals (
     -- Primary key: one row per symbol per run
     id              VARCHAR PRIMARY KEY,  -- {run_id}|{symbol}
@@ -147,7 +147,7 @@ CREATE INDEX IF NOT EXISTS idx_ts_date ON technical_signals(workflow_date);
 CREATE INDEX IF NOT EXISTS idx_ts_vector ON technical_signals(vector_status);
 CREATE INDEX IF NOT EXISTS idx_ts_pass_pm ON technical_signals(pass_pm);
 
--- ─── AI Dedup Cache (replaces "ag2_ai_cache") ───
+-- â”€â”€â”€ AI Dedup Cache (replaces "ag2_ai_cache") â”€â”€â”€
 CREATE TABLE IF NOT EXISTS ai_dedup_cache (
     symbol          VARCHAR NOT NULL,
     interval_key    VARCHAR NOT NULL,     -- 'h1' | 'd1' | 'combined'
@@ -162,7 +162,7 @@ CREATE TABLE IF NOT EXISTS ai_dedup_cache (
     PRIMARY KEY (symbol, interval_key)
 );
 
--- ─── Run Log (new: traceability) ───
+-- â”€â”€â”€ Run Log (new: traceability) â”€â”€â”€
 CREATE TABLE IF NOT EXISTS run_log (
     run_id          VARCHAR PRIMARY KEY,
     started_at      TIMESTAMP NOT NULL,
@@ -179,7 +179,7 @@ CREATE TABLE IF NOT EXISTS run_log (
     version         VARCHAR DEFAULT '2.0.0'
 );
 
--- ─── View: latest signal per symbol (useful for AG1 consumption) ───
+-- â”€â”€â”€ View: latest signal per symbol (useful for AG1 consumption) â”€â”€â”€
 CREATE OR REPLACE VIEW v_latest_signals AS
 SELECT ts.*
 FROM technical_signals ts
@@ -189,7 +189,7 @@ INNER JOIN (
     GROUP BY symbol
 ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date;
 
--- ─── View: signals ready for vectorization ───
+-- â”€â”€â”€ View: signals ready for vectorization â”€â”€â”€
 CREATE OR REPLACE VIEW v_pending_vectors AS
 SELECT ts.*, u.name, u.sector, u.industry, u.currency
 FROM technical_signals ts
@@ -198,7 +198,7 @@ WHERE ts.vector_status = 'PENDING'
   AND ts.h1_status = 'OK'
 ORDER BY ts.workflow_date DESC;
 
--- ─── View: AG1-ready summary (replaces static GSheets read) ───
+-- â”€â”€â”€ View: AG1-ready summary (replaces static GSheets read) â”€â”€â”€
 CREATE OR REPLACE VIEW v_ag1_summary AS
 SELECT
     symbol,
@@ -225,3 +225,4 @@ SELECT
     d1_volatility
 FROM v_latest_signals
 WHERE pass_pm = TRUE;
+

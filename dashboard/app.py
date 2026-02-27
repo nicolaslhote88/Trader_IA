@@ -792,16 +792,6 @@ def load_data() -> dict[str, pd.DataFrame]:
         return {}
 
     tabs_mapping = {
-        "Performance": "Performance",
-        "Risk_Metrics": "Risk_Metrics",
-        "Portefeuille": "Portefeuille",
-        "Transactions": "Transactions",
-        "AI_Runs": "AI_Runs",
-        "AI_Signals": "AI_Signals",
-        "Market_Prices": "Market_Prices",
-        "Market_News": "Market_News",
-        "Alerts": "Alerts",
-        "Backfill_Queue": "Backfill_Queue",
         "Universe": "Universe",
     }
 
@@ -3971,7 +3961,7 @@ def _news_pill_html(label: str, tone: str = "neutral") -> str:
 
 def _news_scope_catalog_from_ag1() -> tuple[dict[str, list[str]], pd.DataFrame, str]:
     catalog: dict[str, list[str]] = {
-        "Portefeuille actif": [],
+        "Allocation active": [],
         "Tous portefeuilles": [],
         "Universe complet": [],
     }
@@ -4004,7 +3994,7 @@ def _news_scope_catalog_from_ag1() -> tuple[dict[str, list[str]], pd.DataFrame, 
         all_syms.extend(syms)
         if key == active_key:
             df_positions_active = wk.copy()
-            catalog["Portefeuille actif"] = syms
+            catalog["Allocation active"] = syms
     catalog["Tous portefeuilles"] = all_syms
     return catalog, df_positions_active, active_key
 
@@ -4061,7 +4051,7 @@ def _render_macro_alert_card(row: pd.Series) -> None:
 
 def render_macro_alerts(df_macro: pd.DataFrame, *, key_prefix: str = "ag4_macro_alerts") -> None:
     with st.container(border=True):
-        st.markdown("#### Macro Alerts feed")
+        st.markdown("#### Macro Risk feed")
         st.caption("Tri actionnable = impact_score * (0.5 + urgency_norm) * (confidence/100)")
         if df_macro is None or df_macro.empty:
             st.info("Aucune news macro sur la periode.")
@@ -5770,39 +5760,10 @@ df_port = duckdb_data.get("df_portfolio_latest", pd.DataFrame()) if duckdb_data 
 if df_port is None:
     df_port = pd.DataFrame()
 
-# Fallback safety: if AG1 DuckDB is empty/unavailable, keep previous Sheets behavior.
-if (df_port is None or df_port.empty) and data_dict:
-    df_port = data_dict.get("Portefeuille", pd.DataFrame())
-
-# Preserve CASH_EUR / __META__ rows from Sheets when available, so dashboard metrics
-# (cash, initial capital) remain accurate even though positions come from DuckDB.
-if data_dict and df_port is not None and not df_port.empty:
-    df_port_sheet = data_dict.get("Portefeuille", pd.DataFrame())
-    if (
-        df_port_sheet is not None
-        and not df_port_sheet.empty
-        and "symbol" in df_port_sheet.columns
-    ):
-        technical_rows = df_port_sheet[
-            df_port_sheet["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
-        ].copy()
-        if not technical_rows.empty:
-            existing_syms = (
-                df_port.get("symbol", pd.Series("", index=df_port.index))
-                .astype(str)
-                .str.upper()
-                .str.strip()
-            )
-            missing_rows = technical_rows[
-                ~technical_rows["symbol"].astype(str).str.upper().isin(existing_syms)
-            ].copy()
-            if not missing_rows.empty:
-                df_port = pd.concat([df_port, missing_rows], ignore_index=True)
-
 df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
-df_perf = data_dict.get("Performance", pd.DataFrame()) if data_dict else pd.DataFrame()
-df_trans = enrich_df_with_name(data_dict.get("Transactions", pd.DataFrame()), df_univ) if data_dict else pd.DataFrame()
-df_prices = data_dict.get("Market_Prices", pd.DataFrame()) if data_dict else pd.DataFrame()
+df_perf = pd.DataFrame()
+df_trans = pd.DataFrame()
+df_prices = pd.DataFrame()
 
 total_val = 0.0
 cash = 0.0
@@ -6891,7 +6852,7 @@ if page == "Dashboard Trading":
                 else "N/A"
             )
             st.info(
-                f"Portefeuille actif (Focus): {active_portfolio.get('label', selected_portfolio_key)} | "
+                f"Allocation active (Focus): {active_portfolio.get('label', selected_portfolio_key)} | "
                 f"Dernier run: {selected_summary.get('last_run_id', 'N/A')} | "
                 f"Modele: {last_model_txt or 'N/A'} | MAJ: {last_update_txt}"
             )
@@ -6919,16 +6880,16 @@ if page == "Dashboard Trading":
                 "Aucune base AG1-V2 exploitable pour la zone details. "
                 "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
             )
-            df_sig_dashboard = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
-            df_alt_dashboard = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+            df_sig_dashboard = pd.DataFrame()
+            df_alt_dashboard = pd.DataFrame()
             active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
     else:
         st.warning(
             "Aucun portefeuille AG1-V2 configure pour la vue comparative. "
             "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
         )
-        df_sig_dashboard = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
-        df_alt_dashboard = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+        df_sig_dashboard = pd.DataFrame()
+        df_alt_dashboard = pd.DataFrame()
         active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
 
     if active_positions_source_note:
@@ -6945,8 +6906,8 @@ if page == "Dashboard Trading":
 
     t1, t2, t3, t4 = st.tabs(
         [
-            "Portefeuille (actif)",
-            "Performance (actif)",
+            "Allocation (actif)",
+            "Rendement (actif)",
             "Cerveau IA (actif)",
             "Marche & Recherche (global)",
         ]
@@ -7048,7 +7009,7 @@ if page == "Dashboard Trading":
                 pos_key = f"positions_{selected_portfolio_key}" if selected_portfolio_key else "positions"
                 render_interactive_table(df_view, key_suffix=pos_key, hide_index=True)
         else:
-            st.info("Portefeuille vide.")
+            st.info("Allocation vide.")
 
     # TAB 2: PERFORMANCE
     with t2:
@@ -7065,7 +7026,7 @@ if page == "Dashboard Trading":
 
         v_pnl, v_eff, v_quality, v_risk = st.tabs(
             [
-                "1) Performance Financiere",
+                "1) Rendement Financier",
                 "2) Efficacite du Capital",
                 "3) Qualite du Trading",
                 "4) Risque",
@@ -7341,12 +7302,12 @@ if page == "Dashboard Trading":
         if "df_sig_dashboard" in locals() and df_sig_dashboard is not None and not df_sig_dashboard.empty:
             df_sig = enrich_df_with_name(df_sig_dashboard, df_univ)
         else:
-            df_sig = enrich_df_with_name(data_dict.get("AI_Signals", pd.DataFrame()), df_univ)
+            df_sig = pd.DataFrame()
 
         if "df_alt_dashboard" in locals() and df_alt_dashboard is not None and not df_alt_dashboard.empty:
             df_alt = enrich_df_with_name(df_alt_dashboard, df_univ)
         else:
-            df_alt = enrich_df_with_name(data_dict.get("Alerts", pd.DataFrame()), df_univ)
+            df_alt = pd.DataFrame()
 
         if selected_portfolio_key and active_portfolio:
             st.caption(
@@ -7354,7 +7315,7 @@ if page == "Dashboard Trading":
                 f"({active_portfolio.get('db_path', '')})"
             )
         else:
-            st.caption("Source legacy (Google Sheets)")
+            st.caption("Source legacy (DuckDB)")
 
         st.subheader("🚦 Signaux")
         if df_sig is not None and not df_sig.empty:
@@ -9563,7 +9524,7 @@ elif page == "Macro & News (AG4)":
     top_tabs = st.tabs(["Vue Macro (Overview)", "News par valeur", "Historique runs", "Qualite pipeline"])
 
     with top_tabs[0]:
-        st.caption(f"Portefeuille actif (bridge AG1): {active_label}")
+        st.caption(f"Allocation active (bridge AG1): {active_label}")
         render_macro_overview(df_macro_news, df_macro_runs, df_positions_optional=df_positions_active)
 
     with top_tabs[1]:
@@ -10285,7 +10246,7 @@ elif page == "Analyse Fondamentale V2":
 
         st.divider()
 
-        # Performance du moteur fondamental par run
+        # Qualite du moteur fondamental par run
         if df_funda_history is not None and not df_funda_history.empty and "run_id" in df_funda_history.columns:
             hist = df_funda_history.copy()
             ts_col = _first_existing_column(hist, ["updated_at", "created_at", "fetched_at"])
@@ -10326,7 +10287,7 @@ elif page == "Analyse Fondamentale V2":
                             )
                         )
                         fig_run.update_layout(
-                            title="Performance des runs AG3 (qualité des sorties)",
+                            title="Qualite des runs AG3 (sorties)",
                             height=320,
                             margin=dict(t=40, b=20, l=20, r=20),
                             yaxis=dict(title="Score /100"),

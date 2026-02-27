@@ -425,73 +425,8 @@ def build() -> dict:
             'name': '20R1 - Finalize Run',
         },
         {
-            'parameters': {'language': 'pythonNative', 'pythonCode': load_code('17_sync_sheets.py')},
-            'type': 'n8n-nodes-base.code',
-            'typeVersion': 2,
-            'position': [-96, -112],
-            'id': 'df4381f4-24a6-4f40-9bc4-d76f9c700d57',
-            'name': '20R2 - Sync DuckDB to Rows',
-        },
-        {
             'parameters': {
-                'operation': 'appendOrUpdate',
-                'documentId': {
-                    '__rl': True,
-                    'mode': 'list',
-                    'value': '1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I',
-                    'cachedResultName': 'TradingSim_GoogleSheet_Template',
-                    'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk',
-                },
-                'sheetName': {
-                    '__rl': True,
-                    'mode': 'list',
-                    'value': 1351236563,
-                    'cachedResultName': 'News_History',
-                    'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1351236563',
-                },
-                'columns': {
-                    'mappingMode': 'defineBelow',
-                    'value': {
-                        'dedupeKey': '={{ $json.dedupeKey }}',
-                        'canonicalUrl': '={{ $json.canonicalUrl }}',
-                        'publishedAt': '={{ $json.publishedAt }}',
-                        'title': '={{ $json.title }}',
-                        'source': '={{ $json.source }}',
-                        'feedUrl': '={{ $json.feedUrl }}',
-                        'symbols': '={{ $json.symbols }}',
-                        'type': '={{ $json.type }}',
-                        'notes': '={{ $json.notes }}',
-                        'ImpactScore': '={{ $json.ImpactScore }}',
-                        'confidence': '={{ $json.confidence }}',
-                        'urgency': '={{ $json.urgency }}',
-                        'Snippet': '={{ $json.Snippet }}',
-                        'firstSeenAt': '={{ $json.firstSeenAt }}',
-                        'Strategy': '={{ $json.Strategy }}',
-                        'Losers': '={{ $json.Losers }}',
-                        'Winners': '={{ $json.Winners }}',
-                        'Theme': '={{ $json.Theme }}',
-                        'Regime': '={{ $json.Regime }}',
-                        'analyzedAt': '={{ $json.analyzedAt }}',
-                    },
-                    'matchingColumns': ['dedupeKey'],
-                    'attemptToConvertTypes': False,
-                    'convertFieldsToString': False,
-                },
-                'options': {},
-            },
-            'type': 'n8n-nodes-base.googleSheets',
-            'typeVersion': 4.7,
-            'position': [128, -112],
-            'id': '1bb3dca8-cca8-4b64-9972-58de2f461628',
-            'name': '20G5 - Append News_History',
-            'credentials': {
-                'googleSheetsOAuth2Api': {'id': 'aX5iAQEN9HK4UGjr', 'name': 'Google Sheets account'}
-            },
-            'onError': 'continueRegularOutput',
-        },
-        {
-            'parameters': {
-                'content': 'AG4-V2 News Watcher: DuckDB on VPS is source of truth. Google Sheets is sync output for human control.',
+                'content': 'AG4-V2 News Watcher: DuckDB on VPS is source of truth (Qdrant vectorization enabled).',
                 'height': 220,
                 'width': 1420,
                 'color': 5,
@@ -578,8 +513,6 @@ def build() -> dict:
         '20S1 - Build Skip Row': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 1}]]},
         '20Z - Merge analyzed + skipped': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
         '20DBW - Upsert News DuckDB': {'main': [[{'node': 'SplitInBatches ITEMS', 'type': 'main', 'index': 0}]]},
-        '20R1 - Finalize Run': {'main': [[{'node': '20R2 - Sync DuckDB to Rows', 'type': 'main', 'index': 0}]]},
-        '20R2 - Sync DuckDB to Rows': {'main': [[{'node': '20G5 - Append News_History', 'type': 'main', 'index': 0}]]},
     }
 
     return {

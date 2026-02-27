@@ -2,7 +2,7 @@
 
 ## Objectif
 AG4-V2 collecte les flux RSS, dedupe les news, analyse les impacts marche/secteurs pour Agent #1, et utilise DuckDB (VPS) comme source de verite.
-Google Sheets reste un miroir de controle humain.
+Google Sheets est utilise uniquement pour les entrees de configuration.
 
 ## Architecture
 1. Chargement des sources RSS depuis `Source_RSS`.
@@ -14,8 +14,7 @@ Google Sheets reste un miroir de controle humain.
    - `news_errors` pour erreurs RSS
 6. Fin de run:
    - maj `run_log`
-   - extraction des lignes du run depuis DuckDB
-   - sync vers Google Sheets `News_History`
+   - consolidation des sorties dans DuckDB
 
 ## Tables DuckDB
 - `news_history`
@@ -35,7 +34,6 @@ Google Sheet document:
 Onglets utilises:
 - `Source_RSS` (`gid=1628829420`)
 - `Universe` (`gid=1078848687`)
-- `News_History` (`gid=1351236563`)
 
 ## Regeneration
 ```bash
@@ -46,5 +44,4 @@ Puis importer `AG4-V2/AG4-V2-workflow.json` dans n8n.
 
 ## Notes
 - DuckDB est la reference pour dedupe et historique.
-- `News_History` est alimente en sortie pour supervision humaine.
-- Les erreurs RSS sont aussi synchronisees dans `News_History` avec `type=rss_error`.
+- Les sorties AG4 restent persistantes dans DuckDB et exploitables par le dashboard/agents.

@@ -584,86 +584,7 @@
     },
     {
       "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "import duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, date\n\nDB_PATH = \"/files/duckdb/ag4_v2.duckdb\"\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef fmt(v):\n    if v is None:\n        return \"\"\n    if isinstance(v, bool):\n        return \"TRUE\" if v else \"FALSE\"\n    if isinstance(v, (datetime, date)):\n        return v.isoformat()\n    s = str(v)\n    if s.lower() in (\"nan\", \"nat\", \"none\"):\n        return \"\"\n    return s\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nout = []\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\"SELECT run_id FROM run_log ORDER BY started_at DESC LIMIT 1\").fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return []\n\n    news_rows = con.execute(\n        \"\"\"\n        SELECT\n          dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,\n          symbols, type, notes, impact_score, confidence, urgency, snippet, first_seen_at,\n          strategy, losers, winners,\n          COALESCE(sectors_bullish, winners) AS sectors_bullish,\n          COALESCE(sectors_bearish, losers) AS sectors_bearish,\n          theme, regime, analyzed_at\n        FROM news_history\n        WHERE run_id = ?\n        ORDER BY COALESCE(published_at, analyzed_at) DESC, updated_at DESC\n        \"\"\",\n        [run_id],\n    ).fetchall()\n\n    for r in news_rows:\n        out.append({\n            \"json\": {\n                \"dedupeKey\": fmt(r[0]),\n                \"eventKey\": fmt(r[1]),\n                \"runId\": fmt(r[2]),\n                \"canonicalUrl\": fmt(r[3]),\n                \"publishedAt\": fmt(r[4]),\n                \"title\": fmt(r[5]),\n                \"source\": fmt(r[6]),\n                \"feedUrl\": fmt(r[7]),\n                \"symbols\": fmt(r[8]),\n                \"type\": fmt(r[9]),\n                \"notes\": fmt(r[10]),\n                \"ImpactScore\": fmt(r[11]),\n                \"confidence\": fmt(r[12]),\n                \"urgency\": fmt(r[13]),\n                \"Snippet\": fmt(r[14]),\n                \"firstSeenAt\": fmt(r[15]),\n                \"Strategy\": fmt(r[16]),\n                \"Losers\": fmt(r[17]),\n                \"Winners\": fmt(r[18]),\n                \"sectors_bullish\": fmt(r[19]),\n                \"sectors_bearish\": fmt(r[20]),\n                \"Theme\": fmt(r[21]),\n                \"Regime\": fmt(r[22]),\n                \"analyzedAt\": fmt(r[23]),\n            }\n        })\n\n    err_rows = con.execute(\n        \"\"\"\n        SELECT dedupe_key, run_id, feed_url, http_code, error_message, occurred_at\n        FROM news_errors\n        WHERE run_id = ?\n        ORDER BY occurred_at DESC\n        \"\"\",\n        [run_id],\n    ).fetchall()\n\n    for r in err_rows:\n        http_txt = f\" {int(r[3])}\" if r[3] is not None else \"\"\n        occurred = fmt(r[5])\n        feed_url = fmt(r[2])\n        out.append({\n            \"json\": {\n                \"dedupeKey\": fmt(r[0]),\n                \"eventKey\": \"\",\n                \"runId\": fmt(r[1]),\n                \"canonicalUrl\": feed_url,\n                \"publishedAt\": occurred,\n                \"title\": f\"RSS_ERROR{http_txt}\".strip(),\n                \"source\": \"rss_feed\",\n                \"feedUrl\": feed_url,\n                \"symbols\": \"\",\n                \"type\": \"rss_error\",\n                \"notes\": fmt(r[4]),\n                \"ImpactScore\": \"0\",\n                \"confidence\": \"1\",\n                \"urgency\": \"immediate\",\n                \"Snippet\": f\"RSS fetch error on {feed_url}\",\n                \"firstSeenAt\": occurred,\n                \"Strategy\": \"\",\n                \"Losers\": \"\",\n                \"Winners\": \"\",\n                \"sectors_bullish\": \"\",\n                \"sectors_bearish\": \"\",\n                \"Theme\": \"Pipeline/Error\",\n                \"Regime\": \"Neutral\",\n                \"analyzedAt\": occurred,\n            }\n        })\n\nreturn out\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -96,
-        -112
-      ],
-      "id": "df4381f4-24a6-4f40-9bc4-d76f9c700d57",
-      "name": "20R2 - Sync DuckDB to Rows"
-    },
-    {
-      "parameters": {
-        "operation": "appendOrUpdate",
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": 1351236563,
-          "cachedResultName": "News_History",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1351236563"
-        },
-        "columns": {
-          "mappingMode": "defineBelow",
-          "value": {
-            "dedupeKey": "={{ $json.dedupeKey }}",
-            "canonicalUrl": "={{ $json.canonicalUrl }}",
-            "publishedAt": "={{ $json.publishedAt }}",
-            "title": "={{ $json.title }}",
-            "source": "={{ $json.source }}",
-            "feedUrl": "={{ $json.feedUrl }}",
-            "symbols": "={{ $json.symbols }}",
-            "type": "={{ $json.type }}",
-            "notes": "={{ $json.notes }}",
-            "ImpactScore": "={{ $json.ImpactScore }}",
-            "confidence": "={{ $json.confidence }}",
-            "urgency": "={{ $json.urgency }}",
-            "Snippet": "={{ $json.Snippet }}",
-            "firstSeenAt": "={{ $json.firstSeenAt }}",
-            "Strategy": "={{ $json.Strategy }}",
-            "Losers": "={{ $json.Losers }}",
-            "Winners": "={{ $json.Winners }}",
-            "Theme": "={{ $json.Theme }}",
-            "Regime": "={{ $json.Regime }}",
-            "analyzedAt": "={{ $json.analyzedAt }}"
-          },
-          "matchingColumns": [
-            "dedupeKey"
-          ],
-          "attemptToConvertTypes": false,
-          "convertFieldsToString": false
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        128,
-        -112
-      ],
-      "id": "1bb3dca8-cca8-4b64-9972-58de2f461628",
-      "name": "20G5 - Append News_History",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      },
-      "onError": "continueRegularOutput"
-    },
-    {
-      "parameters": {
-        "content": "AG4-V2 News Watcher: DuckDB on VPS is source of truth. Google Sheets is sync output for human control.",
+        "content": "AG4-V2 News Watcher: DuckDB on VPS is source of truth (Qdrant vectorization enabled).",
         "height": 220,
         "width": 1420,
         "color": 5
@@ -1010,28 +931,6 @@
         [
           {
             "node": "SplitInBatches ITEMS",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "20R1 - Finalize Run": {
-      "main": [
-        [
-          {
-            "node": "20R2 - Sync DuckDB to Rows",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "20R2 - Sync DuckDB to Rows": {
-      "main": [
-        [
-          {
-            "node": "20G5 - Append News_History",
             "type": "main",
             "index": 0
           }

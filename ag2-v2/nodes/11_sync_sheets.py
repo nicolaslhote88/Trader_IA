@@ -1,7 +1,7 @@
 """
 Node 11 — Sync DuckDB → Google Sheets format.
 Reads signals from the LATEST RUN only and outputs items matching
-the expected column format of "AG2 - étape 1 - sortie" sheet.
+the expected legacy column format.
 Runs AFTER Finalize (node 10) — delta sync (batch only).
 """
 import duckdb, gc, json, time

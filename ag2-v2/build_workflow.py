@@ -62,7 +62,6 @@ def sync_nodes(workflow: dict) -> None:
         ({"name": "Build Vector Docs from DuckDB (Final Loop)"}, NODES_DIR / "12_build_vector_docs_final_loop.py", "pythonCode"),
         ({"name": "Mark Vectorized"}, NODES_DIR / "09_mark_vector.py", "pythonCode"),
         ({"name": "Finalize Run"}, NODES_DIR / "10_finalize.py", "pythonCode"),
-        ({"starts": "Sync DuckDB"}, NODES_DIR / "11_sync_sheets.py", "pythonCode"),
     ]
 
     for matcher, filepath, code_key in mapping:

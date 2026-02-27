@@ -246,7 +246,7 @@ def extract_valuation_scenarios(text: object) -> dict:
 
 
 def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -> pd.DataFrame:
-    """Barometre sectoriel base sur News_History (sectors_bullish/sectors_bearish, fallback winners/losers)."""
+    """Barometre sectoriel base sur le flux macro news (sectors_bullish/sectors_bearish, fallback winners/losers)."""
     if df_news is None or df_news.empty:
         return pd.DataFrame()
     if "publishedat" not in df_news.columns:
