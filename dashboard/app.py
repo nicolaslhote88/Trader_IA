@@ -5569,6 +5569,73 @@ def _ag1_fetchdf(conn, sql: str, params: list | None = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _ag1_expected_model_tokens(key: str, cfg: dict[str, str]) -> list[str]:
+    token_map = {
+        "chatgpt52": ["chatgpt", "gpt", "openai", "o3", "o4"],
+        "grok41_reasoning": ["grok", "xai"],
+        "gemini30_pro": ["gemini", "google"],
+    }
+    tokens = list(token_map.get(str(key), []))
+    label_blob = f"{cfg.get('label', '')} {cfg.get('short_label', '')}".lower()
+    for tok in re.findall(r"[a-z0-9]+", label_blob):
+        if len(tok) >= 4 and tok not in tokens:
+            tokens.append(tok)
+    return tokens
+
+
+def _ag1_model_matches_expected(model_name: object, key: str, cfg: dict[str, str]) -> bool:
+    raw = str(model_name or "").strip().lower()
+    if not raw:
+        return False
+    return any(tok in raw for tok in _ag1_expected_model_tokens(key, cfg))
+
+
+def _ag1_resolve_display_model(
+    key: str,
+    cfg: dict[str, str],
+    latest: dict[str, object],
+    latest_run_meta: dict[str, object],
+    df_runs: pd.DataFrame,
+) -> dict[str, object]:
+    expected_label = str(cfg.get("label") or key).strip() or str(key)
+    candidates: list[str] = []
+    for v in [latest.get("model"), latest_run_meta.get("model")]:
+        s = str(v or "").strip()
+        if s and s not in candidates:
+            candidates.append(s)
+
+    if isinstance(df_runs, pd.DataFrame) and not df_runs.empty and "model" in df_runs.columns:
+        ser = df_runs["model"].astype(str).str.strip()
+        for s in ser.tolist():
+            if s and s not in candidates:
+                candidates.append(s)
+            if len(candidates) >= 12:
+                break
+
+    raw_model = candidates[0] if candidates else ""
+    matched = next((m for m in candidates if _ag1_model_matches_expected(m, key, cfg)), "")
+    if matched:
+        return {
+            "display_model": matched,
+            "raw_model": raw_model,
+            "source": "runs",
+            "mismatch": False,
+        }
+    if raw_model:
+        return {
+            "display_model": expected_label,
+            "raw_model": raw_model,
+            "source": "config_fallback",
+            "mismatch": True,
+        }
+    return {
+        "display_model": expected_label,
+        "raw_model": "",
+        "source": "config",
+        "mismatch": False,
+    }
+
+
 def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
     return {
         "key": key,
@@ -5595,6 +5662,9 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
             "alerts_24h": 0,
             "last_run_id": "",
             "last_model": "",
+            "last_model_raw": "",
+            "last_model_source": "",
+            "last_model_mismatch": False,
             "last_strategy_version": "",
             "last_config_version": "",
             "last_prompt_version": "",
@@ -5880,6 +5950,8 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             if not latest_run_meta and not runs_src.empty:
                 latest_run_meta = runs_src.iloc[0].to_dict()
 
+        model_info = _ag1_resolve_display_model(key, cfg, latest, latest_run_meta, df_runs)
+
         cash = safe_float(latest.get("cash_eur"))
         invest = safe_float(latest.get("equity_eur"))
         total_val = safe_float(latest.get("total_value_eur"))
@@ -6022,7 +6094,10 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             "signals_24h": int(signals_24h),
             "alerts_24h": int(alerts_24h),
             "last_run_id": str(latest.get("run_id") or ""),
-            "last_model": str(latest.get("model") or ""),
+            "last_model": str(model_info.get("display_model") or ""),
+            "last_model_raw": str(model_info.get("raw_model") or ""),
+            "last_model_source": str(model_info.get("source") or ""),
+            "last_model_mismatch": bool(model_info.get("mismatch")),
             "last_strategy_version": str(latest_run_meta.get("strategy_version") or ""),
             "last_config_version": str(latest_run_meta.get("config_version") or ""),
             "last_prompt_version": str(latest_run_meta.get("prompt_version") or ""),
@@ -6843,7 +6918,13 @@ def _prepare_compare_card(portfolio_key: str, payload: dict[str, object], period
         "price_coverage_pct": (float(safe_float(price_coverage_pct)) if price_coverage_pct is not None else None),
         "last_run_id": latest_run_id,
         "last_run_ts": last_run_ts,
-        "last_model": str(summary.get("last_model") or latest_run_row.get("model") or ""),
+        "last_model": str(summary.get("last_model") or payload.get("label") or latest_run_row.get("model") or ""),
+        "last_model_raw": str(summary.get("last_model_raw") or latest_run_row.get("model") or ""),
+        "last_model_source": str(
+            summary.get("last_model_source")
+            or ("runs" if str(latest_run_row.get("model") or "").strip() else "config")
+        ),
+        "last_model_mismatch": bool(summary.get("last_model_mismatch", False)),
         "last_strategy_version": str(summary.get("last_strategy_version") or latest_run_row.get("strategy_version") or ""),
         "last_config_version": str(summary.get("last_config_version") or latest_run_row.get("config_version") or ""),
         "last_prompt_version": str(summary.get("last_prompt_version") or latest_run_row.get("prompt_version") or ""),
@@ -7023,6 +7104,8 @@ if page == "Dashboard Trading":
                         f"strategy={c.get('last_strategy_version') or '—'} | "
                         f"config={c.get('last_config_version') or '—'}"
                     )
+                    if bool(c.get("last_model_mismatch")) and str(c.get("last_model_raw") or "").strip():
+                        st.caption(f"Model source mismatch (core.runs.model={c.get('last_model_raw')}) -> fallback portefeuille")
                     if c.get("status_reasons"):
                         st.caption(" | ".join([str(x) for x in c.get("status_reasons", [])[:2]]))
 
@@ -7210,7 +7293,9 @@ if page == "Dashboard Trading":
             roi = float(selected_summary.get("roi", 0.0) or 0.0)
             cash_pct = float(selected_summary.get("cash_pct", 0.0) or 0.0)
 
-            last_model_txt = str(selected_summary.get("last_model", "") or "")
+            last_model_txt = str(selected_summary.get("last_model", "") or active_portfolio.get("label", "") or "")
+            last_model_raw_txt = str(selected_summary.get("last_model_raw", "") or "")
+            last_model_mismatch = bool(selected_summary.get("last_model_mismatch", False))
             last_update_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
             last_update_txt = (
                 last_update_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
@@ -7222,6 +7307,8 @@ if page == "Dashboard Trading":
                 f"Dernier run: {selected_summary.get('last_run_id', 'N/A')} | "
                 f"Modele: {last_model_txt or 'N/A'} | MAJ: {last_update_txt}"
             )
+            if last_model_mismatch and last_model_raw_txt:
+                st.caption(f"Model source mismatch (core.runs.model={last_model_raw_txt}) -> fallback portefeuille")
 
             diag = active_portfolio.get("diagnostics", {}) if isinstance(active_portfolio, dict) else {}
             if isinstance(diag, dict):
