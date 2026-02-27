@@ -62,6 +62,45 @@ AG1_MULTI_PORTFOLIO_CONFIG = {
     },
 }
 
+DEFAULT_BENCHMARKS = {
+    "CAC 40": {"ticker": "^FCHI"},
+    "S&P 500": {"ticker": "^GSPC"},
+    "EURO STOXX 50": {"ticker": "^STOXX50E"},
+}
+
+
+def _load_benchmarks_config_from_env() -> dict[str, dict[str, str]]:
+    raw = str(os.getenv("BENCHMARK_TICKERS_JSON", "") or "").strip()
+    if not raw:
+        return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+
+    if not isinstance(parsed, dict):
+        return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+
+    out: dict[str, dict[str, str]] = {}
+    for label, cfg in parsed.items():
+        lbl = str(label or "").strip()
+        if not lbl:
+            continue
+        ticker = ""
+        if isinstance(cfg, dict):
+            ticker = str(cfg.get("ticker", "") or "").strip().upper()
+        else:
+            ticker = str(cfg or "").strip().upper()
+        if ticker:
+            out[lbl] = {"ticker": ticker}
+
+    if out:
+        return out
+    return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+
+
+BENCHMARKS_CONFIG = _load_benchmarks_config_from_env()
+
 GRADE_COLOR_MAP = {"A": "#0072B2", "B": "#E69F00", "C": "#CC79A7"}
 GRADE_CONTOUR_WIDTH_MAP = {"A": 3.2, "B": 2.4, "C": 1.6}
 EV_SIGN_BORDER_MAP = {"EV_POS": "#2ECC71", "EV_NEG": "#FF4D4F"}
@@ -2187,6 +2226,130 @@ def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int
         return df
     except Exception:
         return pd.DataFrame()
+
+
+def _benchmark_lookback_days(period_key: str, min_start_ts: object = None) -> int:
+    mapping = {"7j": 15, "30j": 60, "90j": 150}
+    if str(period_key) in mapping:
+        return int(mapping[str(period_key)])
+
+    ts = pd.to_datetime(min_start_ts, errors="coerce", utc=True)
+    if pd.isna(ts):
+        return 730
+    days = int(max(30, (pd.Timestamp.now(tz="UTC") - ts).days + 30))
+    return int(min(days, 3650))
+
+
+@st.cache_data(ttl=1800, show_spinner=False)
+def fetch_benchmarks_history(
+    tickers: tuple[str, ...],
+    yfinance_api_url: str,
+    lookback_days: int,
+    interval: str = "1d",
+) -> dict[str, pd.DataFrame]:
+    out: dict[str, pd.DataFrame] = {}
+    cleaned = tuple(sorted({str(t).strip().upper() for t in tickers if str(t).strip()}))
+    if not cleaned:
+        return out
+
+    for ticker in cleaned:
+        try:
+            resp = requests.get(
+                f"{str(yfinance_api_url).rstrip('/')}/history",
+                params={
+                    "symbol": ticker,
+                    "interval": str(interval or "1d"),
+                    "lookback_days": int(max(1, lookback_days)),
+                    "allow_stale": "true",
+                },
+                timeout=10,
+            )
+            if resp.status_code != 200:
+                out[ticker] = pd.DataFrame()
+                continue
+            payload = resp.json()
+            bars = payload.get("bars", []) if isinstance(payload, dict) else []
+            if not payload.get("ok") or not isinstance(bars, list) or not bars:
+                out[ticker] = pd.DataFrame()
+                continue
+
+            df = pd.DataFrame(bars)
+            if df.empty:
+                out[ticker] = pd.DataFrame()
+                continue
+            df.rename(columns={"t": "timestamp", "c": "close"}, inplace=True)
+            if "timestamp" not in df.columns or "close" not in df.columns:
+                out[ticker] = pd.DataFrame()
+                continue
+            df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce", utc=True)
+            df["close"] = pd.to_numeric(df["close"], errors="coerce")
+            df = (
+                df.dropna(subset=["timestamp", "close"])
+                .sort_values("timestamp")
+                .drop_duplicates(subset=["timestamp"], keep="last")
+            )
+            out[ticker] = df[["timestamp", "close"]].copy()
+        except Exception:
+            out[ticker] = pd.DataFrame()
+    return out
+
+
+def normalize_to_base100(df: pd.DataFrame, ts_col: str = "timestamp", value_col: str = "value") -> pd.DataFrame:
+    if df is None or df.empty or ts_col not in df.columns or value_col not in df.columns:
+        return pd.DataFrame(columns=["timestamp", "value", "value_norm"])
+
+    wk = df[[ts_col, value_col]].copy()
+    wk[ts_col] = pd.to_datetime(wk[ts_col], errors="coerce", utc=True)
+    wk[value_col] = pd.to_numeric(wk[value_col], errors="coerce")
+    wk = wk.dropna(subset=[ts_col, value_col]).sort_values(ts_col)
+    wk = wk[wk[value_col] > 0]
+    if wk.empty:
+        return pd.DataFrame(columns=["timestamp", "value", "value_norm"])
+
+    base = float(wk[value_col].iloc[0])
+    if base <= 0:
+        return pd.DataFrame(columns=["timestamp", "value", "value_norm"])
+
+    wk["value_norm"] = (wk[value_col] / base) * 100.0
+    wk = wk.rename(columns={ts_col: "timestamp", value_col: "value"})
+    return wk[["timestamp", "value", "value_norm"]].copy()
+
+
+def _align_daily_normalized_series(series_map: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    merged: pd.DataFrame | None = None
+    for label, df in series_map.items():
+        if df is None or df.empty or "timestamp" not in df.columns or "value_norm" not in df.columns:
+            continue
+        wk = df.copy()
+        wk["date"] = pd.to_datetime(wk["timestamp"], errors="coerce", utc=True).dt.floor("D")
+        wk["value_norm"] = pd.to_numeric(wk["value_norm"], errors="coerce")
+        wk = wk.dropna(subset=["date", "value_norm"]).sort_values("date")
+        if wk.empty:
+            continue
+        wk = wk.groupby("date", as_index=False)["value_norm"].last().rename(columns={"value_norm": str(label)})
+        merged = wk if merged is None else merged.merge(wk, on="date", how="outer")
+
+    if merged is None:
+        return pd.DataFrame(columns=["date"])
+
+    merged = merged.sort_values("date")
+    value_cols = [c for c in merged.columns if c != "date"]
+    if value_cols:
+        merged[value_cols] = merged[value_cols].ffill()
+        merged = merged.dropna(subset=value_cols, how="all")
+        merged = merged.dropna(subset=value_cols, how="any")
+    return merged
+
+
+def _series_period_return_pct(series: pd.Series) -> float | None:
+    s = pd.to_numeric(series, errors="coerce").dropna()
+    if len(s) < 2:
+        return None
+    first = float(s.iloc[0])
+    last = float(s.iloc[-1])
+    if first == 0:
+        return None
+    return ((last / first) - 1.0) * 100.0
 
 
 @st.cache_data(ttl=20)
@@ -6696,6 +6859,7 @@ if page == "Dashboard Trading":
         k for k, p in ag1_multi.items()
         if isinstance(p, dict) and str(p.get("status", "")).lower() == "ok"
     ]
+    compare_cards: list[dict[str, object]] = []
 
     ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
     with ctrl_period:
@@ -6738,6 +6902,7 @@ if page == "Dashboard Trading":
             load_data.clear()
             load_dashboard_market_data.clear()
             load_ag1_multi_portfolios.clear()
+            fetch_benchmarks_history.clear()
             st.rerun()
 
     # Comparative scoreboard (3 AG1 variants) + Focus on one portfolio for detailed tabs below.
@@ -6753,7 +6918,6 @@ if page == "Dashboard Trading":
 
         st.caption("Vue comparative AG1-V2 (3 colonnes fixes : portefeuille + qualite agent)")
 
-        compare_cards: list[dict[str, object]] = []
         cards_by_key: dict[str, dict[str, object]] = {}
         for key in compare_keys:
             card = _prepare_compare_card(key, ag1_multi.get(key, {}), compare_period, compare_curve_mode)
@@ -7092,12 +7256,13 @@ if page == "Dashboard Trading":
     c5.metric("ROI", f"{roi * 100:.2f} %")
     c6.metric("% Cash", f"{cash_pct:.1f} %")
 
-    t1, t2, t3, t4 = st.tabs(
+    t1, t2, t3, t4, t5 = st.tabs(
         [
             "Allocation (actif)",
             "Rendement (actif)",
             "Cerveau IA (actif)",
             "Marche & Recherche (global)",
+            "Benchmarks & Indices",
         ]
     )
 
@@ -7735,6 +7900,286 @@ if page == "Dashboard Trading":
                     render_interactive_table(df_list, key_suffix="res_list")
                 else:
                     st.info("Aucune colonne exploitable pour afficher la liste complète.")
+
+    # TAB 5: BENCHMARKS & INDICES
+    with t5:
+        st.subheader("Benchmarks / Indices")
+        st.caption("Comparaison AG1 (GPT/Grok/Gemini) vs CAC 40 / S&P 500 / EURO STOXX 50 sur la meme fenetre.")
+
+        if not compare_cards:
+            st.info("Comparatif AG1 indisponible: aucun portefeuille multi-modele charge.")
+        else:
+            benchmark_labels_all = list(BENCHMARKS_CONFIG.keys())
+            if not benchmark_labels_all:
+                st.warning("Configuration benchmarks vide. Verifiez `BENCHMARK_TICKERS_JSON`.")
+                st.stop()
+
+            b1, b2, b3 = st.columns([2.0, 1.6, 1.4], gap="large")
+            selected_benchmarks = b1.multiselect(
+                "Benchmarks",
+                options=benchmark_labels_all,
+                default=benchmark_labels_all,
+                key="dashboard_bench_selected",
+            )
+
+            ref_default = "CAC 40" if "CAC 40" in selected_benchmarks else (selected_benchmarks[0] if selected_benchmarks else "")
+            alpha_ref = b2.selectbox(
+                "Benchmark reference (alpha)",
+                options=selected_benchmarks if selected_benchmarks else benchmark_labels_all,
+                index=(
+                    (selected_benchmarks if selected_benchmarks else benchmark_labels_all).index(ref_default)
+                    if ref_default in (selected_benchmarks if selected_benchmarks else benchmark_labels_all)
+                    else 0
+                ),
+                key="dashboard_bench_alpha_ref",
+            )
+            bench_mode = b3.radio(
+                "Mode",
+                options=["Normalise (base 100)", "Perf (%)"],
+                horizontal=False,
+                key="dashboard_bench_mode",
+            )
+
+            portfolio_series_norm: dict[str, pd.DataFrame] = {}
+            portfolio_accent: dict[str, str] = {}
+            portfolio_missing: list[str] = []
+            min_portfolio_starts: list[pd.Timestamp] = []
+
+            for card in compare_cards:
+                p_label = str(card.get("label") or card.get("key") or "").strip()
+                if not p_label:
+                    continue
+                portfolio_accent[p_label] = str(card.get("accent") or "#7c7c7c")
+
+                raw_series = pd.DataFrame()
+                perf_df = card.get("df_performance", pd.DataFrame())
+                if isinstance(perf_df, pd.DataFrame) and not perf_df.empty and {"timestamp", "total_value"}.issubset(set(perf_df.columns)):
+                    perf_period = _slice_timeseries_by_period(perf_df.copy(), compare_period)
+                    if perf_period is not None and not perf_period.empty:
+                        raw_series = perf_period[["timestamp", "total_value"]].rename(columns={"total_value": "value"})
+
+                if raw_series.empty:
+                    curve_df = card.get("curve_df", pd.DataFrame())
+                    if isinstance(curve_df, pd.DataFrame) and not curve_df.empty and {"timestamp", "display_value"}.issubset(set(curve_df.columns)):
+                        raw_series = curve_df[["timestamp", "display_value"]].rename(columns={"display_value": "value"})
+
+                norm_series = normalize_to_base100(raw_series, ts_col="timestamp", value_col="value")
+                if norm_series.empty:
+                    portfolio_missing.append(p_label)
+                    continue
+
+                portfolio_series_norm[p_label] = norm_series
+                first_ts = pd.to_datetime(norm_series["timestamp"], errors="coerce", utc=True).min()
+                if pd.notna(first_ts):
+                    min_portfolio_starts.append(first_ts)
+
+            if portfolio_missing:
+                st.warning("Series portefeuille indisponibles: " + ", ".join(portfolio_missing))
+
+            min_start_ts = min(min_portfolio_starts) if min_portfolio_starts else pd.NaT
+            lookback_days = _benchmark_lookback_days(compare_period, min_start_ts)
+            selected_tickers = tuple(
+                BENCHMARKS_CONFIG.get(lbl, {}).get("ticker", "")
+                for lbl in selected_benchmarks
+                if BENCHMARKS_CONFIG.get(lbl, {}).get("ticker", "")
+            )
+            benchmarks_raw = fetch_benchmarks_history(
+                selected_tickers,
+                YFINANCE_API_URL,
+                lookback_days=lookback_days,
+                interval="1d",
+            )
+
+            benchmark_series_norm: dict[str, pd.DataFrame] = {}
+            benchmark_kpis: list[dict[str, object]] = []
+            benchmark_missing: list[str] = []
+
+            for bench_label in selected_benchmarks:
+                ticker = str(BENCHMARKS_CONFIG.get(bench_label, {}).get("ticker", "")).strip().upper()
+                if not ticker:
+                    benchmark_missing.append(bench_label)
+                    continue
+
+                raw = benchmarks_raw.get(ticker, pd.DataFrame())
+                if raw is None or raw.empty or not {"timestamp", "close"}.issubset(set(raw.columns)):
+                    benchmark_missing.append(f"{bench_label} ({ticker})")
+                    continue
+
+                wk = raw[["timestamp", "close"]].rename(columns={"close": "total_value"})
+                wk = _slice_timeseries_by_period(wk, compare_period)
+                if wk is None or wk.empty:
+                    benchmark_missing.append(f"{bench_label} ({ticker})")
+                    continue
+
+                norm = normalize_to_base100(
+                    wk.rename(columns={"total_value": "value"}),
+                    ts_col="timestamp",
+                    value_col="value",
+                )
+                if norm.empty:
+                    benchmark_missing.append(f"{bench_label} ({ticker})")
+                    continue
+
+                benchmark_series_norm[bench_label] = norm
+                k_last = pd.to_numeric(wk.get("total_value", pd.Series(dtype=float)), errors="coerce").dropna()
+                k_last_close = float(k_last.iloc[-1]) if not k_last.empty else pd.NA
+                k_ret = _series_period_return_pct(pd.to_numeric(wk.get("total_value", pd.Series(dtype=float)), errors="coerce"))
+                k_ts = pd.to_datetime(wk.get("timestamp", pd.Series(dtype=object)), errors="coerce", utc=True).dropna()
+                k_last_ts = k_ts.iloc[-1] if not k_ts.empty else pd.NaT
+
+                benchmark_kpis.append(
+                    {
+                        "label": bench_label,
+                        "ticker": ticker,
+                        "last_close": k_last_close,
+                        "return_pct": k_ret,
+                        "last_ts": k_last_ts,
+                    }
+                )
+
+            if benchmark_missing:
+                st.warning("Benchmarks ignores (ticker invalide/vide): " + ", ".join(benchmark_missing))
+
+            if benchmark_kpis:
+                kpi_cols = st.columns(len(benchmark_kpis))
+                for idx, row in enumerate(benchmark_kpis):
+                    close_txt = f"{safe_float(row.get('last_close')):,.2f}".replace(",", " ") if pd.notna(row.get("last_close")) else "N/A"
+                    ret_v = row.get("return_pct")
+                    delta_txt = f"{float(ret_v):+.2f}%" if ret_v is not None and pd.notna(ret_v) else "N/A"
+                    kpi_cols[idx].metric(f"{row.get('label')} ({row.get('ticker')})", close_txt, delta=delta_txt)
+                    ts = pd.to_datetime(row.get("last_ts"), errors="coerce", utc=True)
+                    kpi_cols[idx].caption(f"Derniere barre: {_fmt_dt_short(ts)}")
+
+            combined_series: dict[str, pd.DataFrame] = {}
+            for p_label, p_df in portfolio_series_norm.items():
+                combined_series[p_label] = p_df
+            for b_label, b_df in benchmark_series_norm.items():
+                combined_series[b_label] = b_df
+
+            aligned_norm = _align_daily_normalized_series(combined_series)
+            if aligned_norm is None or aligned_norm.empty:
+                st.info("Donnees insuffisantes pour construire la comparaison portefeuille/indices.")
+            else:
+                value_cols = [c for c in aligned_norm.columns if c != "date"]
+                chart_df = aligned_norm.copy()
+                if bench_mode == "Perf (%)":
+                    for col in value_cols:
+                        chart_df[col] = pd.to_numeric(chart_df[col], errors="coerce") - 100.0
+                    y_title = "Performance cumulee (%)"
+                else:
+                    y_title = "Base 100"
+
+                fig_cmp = go.Figure()
+                for p_label in portfolio_series_norm.keys():
+                    if p_label not in chart_df.columns:
+                        continue
+                    fig_cmp.add_trace(
+                        go.Scatter(
+                            x=chart_df["date"],
+                            y=chart_df[p_label],
+                            mode="lines",
+                            name=p_label,
+                            line=dict(color=portfolio_accent.get(p_label, "#7c7c7c"), width=2.6),
+                        )
+                    )
+                for b_label in benchmark_series_norm.keys():
+                    if b_label not in chart_df.columns:
+                        continue
+                    fig_cmp.add_trace(
+                        go.Scatter(
+                            x=chart_df["date"],
+                            y=chart_df[b_label],
+                            mode="lines",
+                            name=b_label,
+                            line=dict(width=2.2, dash="dash"),
+                        )
+                    )
+
+                fig_cmp.update_layout(
+                    title=f"Portefeuilles AG1 vs Benchmarks ({compare_period})",
+                    height=460,
+                    margin=dict(t=50, b=20, l=20, r=20),
+                    yaxis=dict(title=y_title),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                )
+                st.plotly_chart(fig_cmp, use_container_width=True)
+
+                perf_rows: list[dict[str, object]] = []
+                for col in value_cols:
+                    s = pd.to_numeric(aligned_norm[col], errors="coerce").dropna()
+                    if s.empty:
+                        continue
+                    ret = _series_period_return_pct(s)
+                    daily_ret = s.pct_change().replace([float("inf"), float("-inf")], pd.NA).dropna()
+                    vol = float(daily_ret.std(ddof=0) * (252 ** 0.5) * 100.0) if len(daily_ret) >= 2 else pd.NA
+                    dd = ((s / s.cummax()) - 1.0) * 100.0
+                    max_dd = float(dd.min()) if not dd.empty else pd.NA
+                    perf_rows.append(
+                        {
+                            "Serie": col,
+                            "Type": "Portfolio" if col in portfolio_series_norm else "Benchmark",
+                            "Return periode (%)": round(float(ret), 2) if ret is not None and pd.notna(ret) else pd.NA,
+                            "Vol annualisee (%)": round(float(vol), 2) if pd.notna(vol) else pd.NA,
+                            "MaxDD (%)": round(float(max_dd), 2) if pd.notna(max_dd) else pd.NA,
+                        }
+                    )
+
+                if perf_rows:
+                    st.markdown("#### Synthese performance")
+                    render_interactive_table(pd.DataFrame(perf_rows), key_suffix="benchmarks_perf_table", height=280)
+
+                if alpha_ref in aligned_norm.columns:
+                    alpha_rows: list[dict[str, object]] = []
+                    fig_alpha = go.Figure()
+                    for p_label in portfolio_series_norm.keys():
+                        if p_label not in aligned_norm.columns:
+                            continue
+                        pair = aligned_norm[["date", p_label, alpha_ref]].dropna()
+                        if pair.empty:
+                            continue
+                        alpha_curve = pd.to_numeric(pair[p_label], errors="coerce") - pd.to_numeric(pair[alpha_ref], errors="coerce")
+                        if alpha_curve.dropna().empty:
+                            continue
+                        port_ret = _series_period_return_pct(pair[p_label])
+                        bench_ret = _series_period_return_pct(pair[alpha_ref])
+                        alpha_pp = (
+                            float(port_ret) - float(bench_ret)
+                            if port_ret is not None and bench_ret is not None and pd.notna(port_ret) and pd.notna(bench_ret)
+                            else pd.NA
+                        )
+                        alpha_rows.append(
+                            {
+                                "Portfolio": p_label,
+                                "Return portfolio (%)": round(float(port_ret), 2) if port_ret is not None and pd.notna(port_ret) else pd.NA,
+                                f"Return {alpha_ref} (%)": round(float(bench_ret), 2) if bench_ret is not None and pd.notna(bench_ret) else pd.NA,
+                                "Alpha (pp)": round(float(alpha_pp), 2) if pd.notna(alpha_pp) else pd.NA,
+                            }
+                        )
+
+                        fig_alpha.add_trace(
+                            go.Scatter(
+                                x=pair["date"],
+                                y=alpha_curve,
+                                mode="lines",
+                                name=p_label,
+                                line=dict(color=portfolio_accent.get(p_label, "#7c7c7c"), width=2.4),
+                            )
+                        )
+
+                    if alpha_rows:
+                        st.markdown("#### Alpha vs benchmark de reference")
+                        render_interactive_table(pd.DataFrame(alpha_rows), key_suffix="benchmarks_alpha_table", height=220)
+                        fig_alpha.add_hline(y=0.0, line_dash="dot", line_color="#888")
+                        fig_alpha.update_layout(
+                            title=f"Courbe alpha vs {alpha_ref}",
+                            height=360,
+                            margin=dict(t=45, b=20, l=20, r=20),
+                            yaxis=dict(title="Alpha (points base 100)"),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                        )
+                        st.plotly_chart(fig_alpha, use_container_width=True)
+
+                st.caption(f"Fenetre={compare_period} | Lookback indices={lookback_days} jours | Source indices={YFINANCE_API_URL}")
 
 
 # ============================================================
