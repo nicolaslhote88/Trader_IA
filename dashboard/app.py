@@ -834,378 +834,561 @@ def load_data() -> dict[str, pd.DataFrame]:
 
 
 # ============================================================
-# LOAD DATA - DuckDB (AG2-V2)
+# LOAD DATA - DuckDB (Lazy / page-level)
 # ============================================================
 
 
-@st.cache_data(ttl=30)
-def load_duckdb_data() -> dict[str, pd.DataFrame]:
-    """Charge les donnees DuckDB AG1/AG2/AG3/AG4/AG4-SPE + enrichissement daily YF (quote/options/calendar)."""
-    result = {
-        "df_portfolio_latest": pd.DataFrame(),
-        "df_universe": pd.DataFrame(),
-        "df_signals": pd.DataFrame(),
-        "df_runs": pd.DataFrame(),
-        "df_signals_all": pd.DataFrame(),
-        "df_funda_latest": pd.DataFrame(),
-        "df_funda_runs": pd.DataFrame(),
-        "df_funda_history": pd.DataFrame(),
-        "df_funda_consensus": pd.DataFrame(),
-        "df_funda_metrics": pd.DataFrame(),
-        "df_news_macro_history": pd.DataFrame(),
-        "df_news_macro_runs": pd.DataFrame(),
-        "df_news_symbol_history": pd.DataFrame(),
-        "df_news_symbol_latest": pd.DataFrame(),
-        "df_news_symbol_runs": pd.DataFrame(),
-        "df_yf_enrichment_latest": pd.DataFrame(),
-        "df_yf_enrichment_runs": pd.DataFrame(),
-        "df_yf_enrichment_history": pd.DataFrame(),
-    }
+def _env_int(name: str, default: int, minimum: int) -> int:
+    try:
+        return max(minimum, int(os.getenv(name, str(default))))
+    except Exception:
+        return max(minimum, default)
 
-    def _env_int(name: str, default: int, minimum: int) -> int:
-        try:
-            return max(minimum, int(os.getenv(name, str(default))))
-        except Exception:
-            return max(minimum, default)
 
-    def _env_float(name: str, default: float, minimum: float) -> float:
-        try:
-            return max(minimum, float(os.getenv(name, str(default))))
-        except Exception:
-            return max(minimum, default)
+def _env_float(name: str, default: float, minimum: float) -> float:
+    try:
+        return max(minimum, float(os.getenv(name, str(default))))
+    except Exception:
+        return max(minimum, default)
 
+
+DUCKDB_CACHE_TTL_SEC = _env_int("DASHBOARD_DUCKDB_CACHE_TTL_SEC", 1800, 60)
+RUN_LOG_LIMIT = _env_int("RUN_LOG_LIMIT", 200, 20)
+HISTORY_DAYS_DEFAULT = _env_int("HISTORY_DAYS_DEFAULT", 30, 1)
+HISTORY_LIMIT_DEFAULT = _env_int("HISTORY_LIMIT_DEFAULT", 20000, 1000)
+
+
+def duckdb_file_signature(path: str) -> tuple[str, float, int]:
+    """Signature stable de fichier pour invalider le cache par mtime/size."""
+    norm_path = str(path or "")
+    if not norm_path:
+        return ("", 0.0, 0)
+    try:
+        abs_path = str(Path(norm_path).resolve())
+    except Exception:
+        abs_path = norm_path
+    if not os.path.exists(norm_path):
+        return (abs_path, 0.0, 0)
+    try:
+        return (abs_path, float(os.path.getmtime(norm_path)), int(os.path.getsize(norm_path)))
+    except Exception:
+        return (abs_path, 0.0, 0)
+
+
+def _connect_readonly(path: str):
+    if not path or not os.path.exists(path):
+        return None
     max_retries = _env_int("DUCKDB_READ_RETRIES", 8, 3)
     base_delay = _env_float("DUCKDB_READ_BASE_DELAY_SEC", 0.25, 0.1)
     max_delay = _env_float("DUCKDB_READ_MAX_DELAY_SEC", 3.0, base_delay)
 
-    def _connect_readonly(path: str):
-        conn = None
-        for attempt in range(max_retries):
-            try:
-                conn = duckdb.connect(path, read_only=True)
-                return conn
-            except Exception as exc:
-                msg = str(exc).lower()
-                is_lock_like = isinstance(exc, duckdb.IOException) or ("lock" in msg) or ("busy" in msg)
-                if is_lock_like and attempt < max_retries - 1:
-                    sleep_s = min(base_delay * (2 ** attempt), max_delay)
-                    time.sleep(sleep_s)
-                    continue
-                return None
-        return conn
+    conn = None
+    for attempt in range(max_retries):
+        try:
+            conn = duckdb.connect(path, read_only=True)
+            return conn
+        except Exception as exc:
+            msg = str(exc).lower()
+            is_lock_like = isinstance(exc, duckdb.IOException) or ("lock" in msg) or ("busy" in msg)
+            if is_lock_like and attempt < max_retries - 1:
+                time.sleep(min(base_delay * (2 ** attempt), max_delay))
+                continue
+            return None
+    return conn
 
-    # -------------------------------
-    # AG1-PF-V1 (Portfolio MTM)
-    # -------------------------------
-    if os.path.exists(AG1_DUCKDB_PATH):
-        conn = _connect_readonly(AG1_DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_portfolio_latest"] = conn.execute("""
-                        SELECT
-                            symbol AS symbol,
-                            name AS name,
-                            asset_class AS assetclass,
-                            sector AS sector,
-                            industry AS industry,
-                            isin AS isin,
-                            quantity AS quantity,
-                            avg_price AS avgprice,
-                            last_price AS lastprice,
-                            market_value AS marketvalue,
-                            unrealized_pnl AS unrealizedpnl,
-                            updated_at AS updatedat
-                        FROM portfolio_positions_mtm_latest
-                        ORDER BY market_value DESC NULLS LAST, symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_portfolio_latest"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
 
-    # -------------------------------
-    # AG2-V2 (Technique)
-    # -------------------------------
-    if os.path.exists(DUCKDB_PATH):
-        conn = _connect_readonly(DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_universe"] = conn.execute("""
-                        SELECT * FROM universe ORDER BY symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_universe"] = pd.DataFrame()
+def _read_duckdb_df(path: str, query: str, params: tuple[object, ...] | None = None) -> pd.DataFrame:
+    conn = _connect_readonly(path)
+    if conn is None:
+        return pd.DataFrame()
+    try:
+        if params:
+            return conn.execute(query, list(params)).fetchdf()
+        return conn.execute(query).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
-                try:
-                    result["df_signals"] = conn.execute("""
-                        SELECT ts.*
-                        FROM technical_signals ts
-                        INNER JOIN (
-                            SELECT symbol, MAX(workflow_date) AS max_date
-                            FROM technical_signals
-                            GROUP BY symbol
-                        ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date
-                        ORDER BY ts.symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_signals"] = pd.DataFrame()
 
-                try:
-                    result["df_runs"] = conn.execute("""
-                        SELECT * FROM run_log ORDER BY started_at DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_runs"] = pd.DataFrame()
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_universe_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.DataFrame:
+    _ = db_sig
+    return _read_duckdb_df(db_path, "SELECT * FROM universe ORDER BY symbol")
 
-                try:
-                    result["df_signals_all"] = conn.execute("""
-                        SELECT * FROM technical_signals ORDER BY workflow_date DESC, symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_signals_all"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
 
-    # -------------------------------
-    # AG3-V2 (Fondamentale)
-    # -------------------------------
-    if os.path.exists(AG3_DUCKDB_PATH):
-        conn = _connect_readonly(AG3_DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_funda_latest"] = conn.execute("""
-                        SELECT * FROM v_latest_triage ORDER BY symbol
-                    """).fetchdf()
-                except Exception:
-                    try:
-                        result["df_funda_latest"] = conn.execute("""
-                            SELECT * EXCLUDE(rn)
-                            FROM (
-                              SELECT t.*,
-                                     ROW_NUMBER() OVER (
-                                       PARTITION BY t.symbol
-                                       ORDER BY COALESCE(t.updated_at, t.created_at) DESC, t.created_at DESC
-                                     ) AS rn
-                              FROM fundamentals_triage_history t
-                            )
-                            WHERE rn = 1
-                            ORDER BY symbol
-                        """).fetchdf()
-                    except Exception:
-                        result["df_funda_latest"] = pd.DataFrame()
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag1_portfolio_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.DataFrame:
+    _ = db_sig
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT
+            symbol AS symbol,
+            name AS name,
+            asset_class AS assetclass,
+            sector AS sector,
+            industry AS industry,
+            isin AS isin,
+            quantity AS quantity,
+            avg_price AS avgprice,
+            last_price AS lastprice,
+            market_value AS marketvalue,
+            unrealized_pnl AS unrealizedpnl,
+            updated_at AS updatedat
+        FROM portfolio_positions_mtm_latest
+        ORDER BY market_value DESC NULLS LAST, symbol
+        """,
+    )
 
-                try:
-                    result["df_funda_runs"] = conn.execute("""
-                        SELECT * FROM run_log ORDER BY started_at DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_funda_runs"] = pd.DataFrame()
 
-                try:
-                    result["df_funda_history"] = conn.execute("""
-                        SELECT * FROM fundamentals_triage_history
-                        ORDER BY COALESCE(updated_at, created_at) DESC, symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_funda_history"] = pd.DataFrame()
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag2_overview(db_path: str, db_sig: tuple[str, float, int], run_log_limit: int) -> dict[str, pd.DataFrame]:
+    _ = db_sig
+    run_limit = max(1, int(run_log_limit))
+    return {
+        "df_signals": _read_duckdb_df(
+            db_path,
+            """
+            SELECT ts.*
+            FROM technical_signals ts
+            INNER JOIN (
+                SELECT symbol, MAX(workflow_date) AS max_date
+                FROM technical_signals
+                GROUP BY symbol
+            ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date
+            ORDER BY ts.symbol
+            """,
+        ),
+        "df_runs": _read_duckdb_df(
+            db_path,
+            "SELECT * FROM run_log ORDER BY started_at DESC LIMIT ?",
+            (run_limit,),
+        ),
+    }
 
-                try:
-                    result["df_funda_consensus"] = conn.execute("""
-                        SELECT * FROM v_latest_consensus ORDER BY symbol
-                    """).fetchdf()
-                except Exception:
-                    try:
-                        result["df_funda_consensus"] = conn.execute("""
-                            SELECT * EXCLUDE(rn)
-                            FROM (
-                              SELECT c.*,
-                                     ROW_NUMBER() OVER (
-                                       PARTITION BY c.symbol
-                                       ORDER BY COALESCE(c.updated_at, c.created_at) DESC, c.created_at DESC
-                                     ) AS rn
-                              FROM analyst_consensus_history c
-                            )
-                            WHERE rn = 1
-                            ORDER BY symbol
-                        """).fetchdf()
-                    except Exception:
-                        result["df_funda_consensus"] = pd.DataFrame()
 
-                try:
-                    result["df_funda_metrics"] = conn.execute("""
-                        SELECT m.*
-                        FROM fundamental_metrics_history m
-                        INNER JOIN (
-                          SELECT symbol, metric, MAX(COALESCE(extracted_at, created_at)) AS latest_ts
-                          FROM fundamental_metrics_history
-                          GROUP BY symbol, metric
-                        ) x
-                          ON m.symbol = x.symbol
-                         AND m.metric = x.metric
-                         AND COALESCE(m.extracted_at, m.created_at) = x.latest_ts
-                        ORDER BY m.symbol, m.section, m.metric
-                    """).fetchdf()
-                except Exception:
-                    result["df_funda_metrics"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag2_history(
+    db_path: str,
+    db_sig: tuple[str, float, int],
+    window_days: int,
+    limit: int,
+) -> pd.DataFrame:
+    _ = db_sig
+    days = max(1, int(window_days))
+    lim = max(1, int(limit))
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT *
+        FROM technical_signals
+        WHERE workflow_date >= (NOW() - (? * INTERVAL '1 day'))
+        ORDER BY workflow_date DESC, symbol
+        LIMIT ?
+        """,
+        (days, lim),
+    )
 
-    # -------------------------------
-    # AG4-V2 (News Macro)
-    # -------------------------------
-    if os.path.exists(AG4_DUCKDB_PATH):
-        conn = _connect_readonly(AG4_DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_news_macro_history"] = conn.execute("""
-                        SELECT *
-                        FROM news_history
-                        WHERE COALESCE(type, 'macro') = 'macro'
-                        ORDER BY COALESCE(published_at, analyzed_at, last_seen_at, updated_at) DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_news_macro_history"] = pd.DataFrame()
 
-                try:
-                    result["df_news_macro_runs"] = conn.execute("""
-                        SELECT * FROM run_log ORDER BY started_at DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_news_macro_runs"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag3_overview(db_path: str, db_sig: tuple[str, float, int], run_log_limit: int) -> dict[str, pd.DataFrame]:
+    _ = db_sig
+    run_limit = max(1, int(run_log_limit))
 
-    # -------------------------------
-    # AG4-SPE-V2 (News Symbole)
-    # -------------------------------
-    if os.path.exists(AG4_SPE_DUCKDB_PATH):
-        conn = _connect_readonly(AG4_SPE_DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_news_symbol_history"] = conn.execute("""
-                        SELECT *
-                        FROM news_history
-                        ORDER BY COALESCE(published_at, analyzed_at, fetched_at, updated_at) DESC, symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_news_symbol_history"] = pd.DataFrame()
+    df_funda_latest = _read_duckdb_df(db_path, "SELECT * FROM v_latest_triage ORDER BY symbol")
+    if df_funda_latest.empty:
+        df_funda_latest = _read_duckdb_df(
+            db_path,
+            """
+            SELECT * EXCLUDE(rn)
+            FROM (
+                SELECT t.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY t.symbol
+                           ORDER BY COALESCE(t.updated_at, t.created_at) DESC, t.created_at DESC
+                       ) AS rn
+                FROM fundamentals_triage_history t
+            )
+            WHERE rn = 1
+            ORDER BY symbol
+            """,
+        )
 
-                try:
-                    result["df_news_symbol_latest"] = conn.execute("""
-                        SELECT * EXCLUDE(rn)
-                        FROM (
-                          SELECT n.*,
-                                 ROW_NUMBER() OVER (
-                                   PARTITION BY n.symbol
-                                   ORDER BY COALESCE(n.published_at, n.analyzed_at, n.fetched_at, n.updated_at, n.created_at) DESC
-                                 ) AS rn
-                          FROM news_history n
-                        )
-                        WHERE rn = 1
-                        ORDER BY symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_news_symbol_latest"] = pd.DataFrame()
+    df_funda_consensus = _read_duckdb_df(db_path, "SELECT * FROM v_latest_consensus ORDER BY symbol")
+    if df_funda_consensus.empty:
+        df_funda_consensus = _read_duckdb_df(
+            db_path,
+            """
+            SELECT * EXCLUDE(rn)
+            FROM (
+                SELECT c.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY c.symbol
+                           ORDER BY COALESCE(c.updated_at, c.created_at) DESC, c.created_at DESC
+                       ) AS rn
+                FROM analyst_consensus_history c
+            )
+            WHERE rn = 1
+            ORDER BY symbol
+            """,
+        )
 
-                try:
-                    result["df_news_symbol_runs"] = conn.execute("""
-                        SELECT * FROM run_log ORDER BY started_at DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_news_symbol_runs"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+    return {
+        "df_funda_latest": df_funda_latest,
+        "df_funda_runs": _read_duckdb_df(
+            db_path,
+            "SELECT * FROM run_log ORDER BY started_at DESC LIMIT ?",
+            (run_limit,),
+        ),
+        "df_funda_consensus": df_funda_consensus,
+        "df_funda_metrics": _read_duckdb_df(
+            db_path,
+            """
+            SELECT m.*
+            FROM fundamental_metrics_history m
+            INNER JOIN (
+              SELECT symbol, metric, MAX(COALESCE(extracted_at, created_at)) AS latest_ts
+              FROM fundamental_metrics_history
+              GROUP BY symbol, metric
+            ) x
+              ON m.symbol = x.symbol
+             AND m.metric = x.metric
+             AND COALESCE(m.extracted_at, m.created_at) = x.latest_ts
+            ORDER BY m.symbol, m.section, m.metric
+            """,
+        ),
+    }
 
-    # Fallback: si AG4-SPE vide, reutiliser les news "type=symbol" depuis AG4-V2.
-    if result["df_news_symbol_history"].empty and os.path.exists(AG4_DUCKDB_PATH):
-        conn = _connect_readonly(AG4_DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_news_symbol_history"] = conn.execute("""
-                        SELECT *
-                        FROM news_history
-                        WHERE COALESCE(type, '') = 'symbol'
-                        ORDER BY COALESCE(published_at, analyzed_at, last_seen_at, updated_at) DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_news_symbol_history"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
 
-    # -------------------------------
-    # YF ENRICHMENT DAILY (quote/options/calendar)
-    # -------------------------------
-    if os.path.exists(YF_ENRICH_DUCKDB_PATH):
-        conn = _connect_readonly(YF_ENRICH_DUCKDB_PATH)
-        if conn is not None:
-            try:
-                try:
-                    result["df_yf_enrichment_latest"] = conn.execute("""
-                        SELECT * FROM v_latest_symbol_enrichment ORDER BY symbol
-                    """).fetchdf()
-                except Exception:
-                    try:
-                        result["df_yf_enrichment_latest"] = conn.execute("""
-                            SELECT * EXCLUDE(rn)
-                            FROM (
-                              SELECT t.*,
-                                     ROW_NUMBER() OVER (
-                                       PARTITION BY t.symbol
-                                       ORDER BY COALESCE(t.fetched_at, t.created_at) DESC, t.created_at DESC
-                                     ) AS rn
-                              FROM yf_symbol_enrichment_history t
-                            )
-                            WHERE rn = 1
-                            ORDER BY symbol
-                        """).fetchdf()
-                    except Exception:
-                        result["df_yf_enrichment_latest"] = pd.DataFrame()
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag3_symbol_history(
+    db_path: str,
+    db_sig: tuple[str, float, int],
+    symbol: str,
+    window_days: int,
+    limit: int,
+) -> pd.DataFrame:
+    _ = db_sig
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return pd.DataFrame()
+    days = max(1, int(window_days))
+    lim = max(1, int(limit))
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT *
+        FROM fundamentals_triage_history
+        WHERE UPPER(symbol) = ?
+          AND COALESCE(updated_at, created_at, fetched_at) >= (NOW() - (? * INTERVAL '1 day'))
+        ORDER BY COALESCE(updated_at, created_at, fetched_at) DESC
+        LIMIT ?
+        """,
+        (sym, days, lim),
+    )
 
-                try:
-                    result["df_yf_enrichment_runs"] = conn.execute("""
-                        SELECT * FROM run_log ORDER BY started_at DESC
-                    """).fetchdf()
-                except Exception:
-                    result["df_yf_enrichment_runs"] = pd.DataFrame()
 
-                try:
-                    result["df_yf_enrichment_history"] = conn.execute("""
-                        SELECT * FROM yf_symbol_enrichment_history
-                        ORDER BY COALESCE(fetched_at, created_at) DESC, symbol
-                    """).fetchdf()
-                except Exception:
-                    result["df_yf_enrichment_history"] = pd.DataFrame()
-            finally:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag3_run_quality_history(
+    db_path: str,
+    db_sig: tuple[str, float, int],
+    window_days: int,
+    limit: int,
+) -> pd.DataFrame:
+    _ = db_sig
+    days = max(1, int(window_days))
+    lim = max(1, int(limit))
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT
+            run_id,
+            MAX(COALESCE(updated_at, created_at, fetched_at)) AS ts,
+            AVG(COALESCE(score, funda_conf)) AS avg_score,
+            AVG(risk_score) AS avg_risk,
+            COUNT(DISTINCT symbol) AS symbols
+        FROM fundamentals_triage_history
+        WHERE COALESCE(updated_at, created_at, fetched_at) >= (NOW() - (? * INTERVAL '1 day'))
+        GROUP BY run_id
+        ORDER BY ts DESC
+        LIMIT ?
+        """,
+        (days, lim),
+    )
 
-    return result
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag4_macro_history(
+    db_path: str,
+    db_sig: tuple[str, float, int],
+    window_days: int,
+    limit: int,
+) -> pd.DataFrame:
+    _ = db_sig
+    days = max(1, int(window_days))
+    lim = max(1, int(limit))
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT *
+        FROM news_history
+        WHERE COALESCE(type, 'macro') = 'macro'
+          AND COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) >= (NOW() - (? * INTERVAL '1 day'))
+        ORDER BY COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) DESC
+        LIMIT ?
+        """,
+        (days, lim),
+    )
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag4_macro_runs(db_path: str, db_sig: tuple[str, float, int], run_log_limit: int) -> pd.DataFrame:
+    _ = db_sig
+    run_limit = max(1, int(run_log_limit))
+    return _read_duckdb_df(db_path, "SELECT * FROM run_log ORDER BY started_at DESC LIMIT ?", (run_limit,))
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag4_symbol_history(
+    db_path: str,
+    db_sig: tuple[str, float, int],
+    window_days: int,
+    limit: int,
+    scope_symbols: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    _ = db_sig
+    days = max(1, int(window_days))
+    lim = max(1, int(limit))
+    clean_symbols = tuple(sorted({str(s).strip().upper() for s in scope_symbols if str(s).strip()}))
+
+    query = """
+        SELECT *
+        FROM news_history
+        WHERE COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) >= (NOW() - (? * INTERVAL '1 day'))
+    """
+    params: list[object] = [days]
+
+    if clean_symbols:
+        placeholders = ",".join(["?"] * len(clean_symbols))
+        query += f"\n  AND UPPER(symbol) IN ({placeholders})"
+        params.extend(clean_symbols)
+
+    query += "\nORDER BY COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) DESC, symbol\nLIMIT ?"
+    params.append(lim)
+    return _read_duckdb_df(db_path, query, tuple(params))
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag4_symbol_history_from_macro(
+    db_path: str,
+    db_sig: tuple[str, float, int],
+    window_days: int,
+    limit: int,
+    scope_symbols: tuple[str, ...] = (),
+) -> pd.DataFrame:
+    _ = db_sig
+    days = max(1, int(window_days))
+    lim = max(1, int(limit))
+    clean_symbols = tuple(sorted({str(s).strip().upper() for s in scope_symbols if str(s).strip()}))
+
+    query = """
+        SELECT *
+        FROM news_history
+        WHERE COALESCE(type, '') = 'symbol'
+          AND COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) >= (NOW() - (? * INTERVAL '1 day'))
+    """
+    params: list[object] = [days]
+
+    if clean_symbols:
+        placeholders = ",".join(["?"] * len(clean_symbols))
+        query += f"\n  AND UPPER(symbol) IN ({placeholders})"
+        params.extend(clean_symbols)
+
+    query += "\nORDER BY COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) DESC, symbol\nLIMIT ?"
+    params.append(lim)
+    return _read_duckdb_df(db_path, query, tuple(params))
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag4_symbol_runs(db_path: str, db_sig: tuple[str, float, int], run_log_limit: int) -> pd.DataFrame:
+    _ = db_sig
+    run_limit = max(1, int(run_log_limit))
+    return _read_duckdb_df(db_path, "SELECT * FROM run_log ORDER BY started_at DESC LIMIT ?", (run_limit,))
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_yf_enrichment_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.DataFrame:
+    _ = db_sig
+    df = _read_duckdb_df(db_path, "SELECT * FROM v_latest_symbol_enrichment ORDER BY symbol")
+    if not df.empty:
+        return df
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT * EXCLUDE(rn)
+        FROM (
+            SELECT t.*,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY t.symbol
+                       ORDER BY COALESCE(t.fetched_at, t.created_at) DESC, t.created_at DESC
+                   ) AS rn
+            FROM yf_symbol_enrichment_history t
+        )
+        WHERE rn = 1
+        ORDER BY symbol
+        """,
+    )
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_dashboard_market_data(
+    ag3_db_path: str,
+    ag3_db_sig: tuple[str, float, int],
+    ag4_db_path: str,
+    ag4_db_sig: tuple[str, float, int],
+    ag4_spe_db_path: str,
+    ag4_spe_db_sig: tuple[str, float, int],
+    window_days: int,
+    history_limit: int,
+    run_log_limit: int,
+) -> dict[str, pd.DataFrame]:
+    ag3_data = load_ag3_overview(ag3_db_path, ag3_db_sig, run_log_limit)
+    symbol_history = load_ag4_symbol_history(ag4_spe_db_path, ag4_spe_db_sig, window_days, history_limit)
+    if symbol_history.empty:
+        symbol_history = load_ag4_symbol_history_from_macro(
+            ag4_db_path,
+            ag4_db_sig,
+            window_days,
+            history_limit,
+        )
+    return {
+        "df_funda_latest": ag3_data.get("df_funda_latest", pd.DataFrame()),
+        "df_news_macro_history": load_ag4_macro_history(ag4_db_path, ag4_db_sig, window_days, history_limit),
+        "df_news_symbol_history": symbol_history,
+    }
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_system_health_page_data(
+    ag2_db_path: str,
+    ag2_db_sig: tuple[str, float, int],
+    ag3_db_path: str,
+    ag3_db_sig: tuple[str, float, int],
+    ag4_db_path: str,
+    ag4_db_sig: tuple[str, float, int],
+    ag4_spe_db_path: str,
+    ag4_spe_db_sig: tuple[str, float, int],
+    history_days: int,
+    history_limit: int,
+    run_log_limit: int,
+) -> dict[str, pd.DataFrame]:
+    ag2_data = load_ag2_overview(ag2_db_path, ag2_db_sig, run_log_limit)
+    ag3_data = load_ag3_overview(ag3_db_path, ag3_db_sig, run_log_limit)
+    macro_history = load_ag4_macro_history(ag4_db_path, ag4_db_sig, history_days, history_limit)
+    symbol_history = load_ag4_symbol_history(ag4_spe_db_path, ag4_spe_db_sig, history_days, history_limit)
+    if symbol_history.empty:
+        symbol_history = load_ag4_symbol_history_from_macro(
+            ag4_db_path,
+            ag4_db_sig,
+            history_days,
+            history_limit,
+        )
+    return {
+        "df_signals": ag2_data.get("df_signals", pd.DataFrame()),
+        "df_runs": ag2_data.get("df_runs", pd.DataFrame()),
+        "df_funda_latest": ag3_data.get("df_funda_latest", pd.DataFrame()),
+        "df_funda_runs": ag3_data.get("df_funda_runs", pd.DataFrame()),
+        "df_news_macro_history": macro_history,
+        "df_news_macro_runs": load_ag4_macro_runs(ag4_db_path, ag4_db_sig, run_log_limit),
+        "df_news_symbol_history": symbol_history,
+        "df_news_symbol_runs": load_ag4_symbol_runs(ag4_spe_db_path, ag4_spe_db_sig, run_log_limit),
+    }
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_multi_agent_page_data(
+    ag2_db_path: str,
+    ag2_db_sig: tuple[str, float, int],
+    ag3_db_path: str,
+    ag3_db_sig: tuple[str, float, int],
+    ag4_db_path: str,
+    ag4_db_sig: tuple[str, float, int],
+    ag4_spe_db_path: str,
+    ag4_spe_db_sig: tuple[str, float, int],
+    yf_db_path: str,
+    yf_db_sig: tuple[str, float, int],
+    history_days: int,
+    history_limit: int,
+    run_log_limit: int,
+) -> dict[str, pd.DataFrame]:
+    ag2_data = load_ag2_overview(ag2_db_path, ag2_db_sig, run_log_limit)
+    ag3_data = load_ag3_overview(ag3_db_path, ag3_db_sig, run_log_limit)
+    macro_history = load_ag4_macro_history(ag4_db_path, ag4_db_sig, history_days, history_limit)
+    symbol_history = load_ag4_symbol_history(ag4_spe_db_path, ag4_spe_db_sig, history_days, history_limit)
+    if symbol_history.empty:
+        symbol_history = load_ag4_symbol_history_from_macro(
+            ag4_db_path,
+            ag4_db_sig,
+            history_days,
+            history_limit,
+        )
+    return {
+        "df_signals": ag2_data.get("df_signals", pd.DataFrame()),
+        "df_funda_latest": ag3_data.get("df_funda_latest", pd.DataFrame()),
+        "df_news_macro_history": macro_history,
+        "df_news_symbol_history": symbol_history,
+        "df_yf_enrichment_latest": load_yf_enrichment_latest(yf_db_path, yf_db_sig),
+    }
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag4_page_data(
+    ag4_db_path: str,
+    ag4_db_sig: tuple[str, float, int],
+    ag4_spe_db_path: str,
+    ag4_spe_db_sig: tuple[str, float, int],
+    window_days: int,
+    history_limit: int,
+    run_log_limit: int,
+    scope_symbols: tuple[str, ...] = (),
+) -> dict[str, pd.DataFrame]:
+    symbol_history = load_ag4_symbol_history(ag4_spe_db_path, ag4_spe_db_sig, window_days, history_limit, scope_symbols)
+    if symbol_history.empty:
+        symbol_history = load_ag4_symbol_history_from_macro(
+            ag4_db_path,
+            ag4_db_sig,
+            window_days,
+            history_limit,
+            scope_symbols,
+        )
+    return {
+        "df_news_macro_history": load_ag4_macro_history(ag4_db_path, ag4_db_sig, window_days, history_limit),
+        "df_news_symbol_history": symbol_history,
+        "df_news_macro_runs": load_ag4_macro_runs(ag4_db_path, ag4_db_sig, run_log_limit),
+        "df_news_symbol_runs": load_ag4_symbol_runs(ag4_spe_db_path, ag4_spe_db_sig, run_log_limit),
+    }
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag2_page_data(
+    ag2_db_path: str,
+    ag2_db_sig: tuple[str, float, int],
+    run_log_limit: int,
+) -> dict[str, pd.DataFrame]:
+    return load_ag2_overview(ag2_db_path, ag2_db_sig, run_log_limit)
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag3_page_data(
+    ag3_db_path: str,
+    ag3_db_sig: tuple[str, float, int],
+    run_log_limit: int,
+) -> dict[str, pd.DataFrame]:
+    return load_ag3_overview(ag3_db_path, ag3_db_sig, run_log_limit)
 
 
 # ============================================================
@@ -5745,18 +5928,23 @@ data_dict = load_data()
 if not data_dict:
     st.warning("Donnees Google Sheets indisponibles. Les vues basees DuckDB (System Health, Vue consolidee, Analyse V2) restent disponibles.")
 
-# Load DuckDB data (non-blocking)
-duckdb_data = load_duckdb_data()
+# Signatures fichiers DuckDB (invalidation cache basee sur mtime/size)
+ag1_db_sig = duckdb_file_signature(AG1_DUCKDB_PATH)
+ag2_db_sig = duckdb_file_signature(DUCKDB_PATH)
+ag3_db_sig = duckdb_file_signature(AG3_DUCKDB_PATH)
+ag4_db_sig = duckdb_file_signature(AG4_DUCKDB_PATH)
+ag4_spe_db_sig = duckdb_file_signature(AG4_SPE_DUCKDB_PATH)
+yf_db_sig = duckdb_file_signature(YF_ENRICH_DUCKDB_PATH)
 
 # ------------------------------------------------------------
 # PRE-CALCULS (ROBUSTES)
 # ------------------------------------------------------------
 
 df_univ = data_dict.get("Universe", pd.DataFrame()) if data_dict else pd.DataFrame()
-if (df_univ is None or df_univ.empty) and duckdb_data:
-    df_univ = duckdb_data.get("df_universe", pd.DataFrame())
+if df_univ is None or df_univ.empty:
+    df_univ = load_universe_latest(DUCKDB_PATH, ag2_db_sig)
 # Portfolio source of truth is now DuckDB AG1.
-df_port = duckdb_data.get("df_portfolio_latest", pd.DataFrame()) if duckdb_data else pd.DataFrame()
+df_port = load_ag1_portfolio_latest(AG1_DUCKDB_PATH, ag1_db_sig)
 if df_port is None:
     df_port = pd.DataFrame()
 
@@ -6548,7 +6736,7 @@ if page == "Dashboard Trading":
         st.write("")
         if st.button("Rafraichir", use_container_width=True):
             load_data.clear()
-            load_duckdb_data.clear()
+            load_dashboard_market_data.clear()
             load_ag1_multi_portfolios.clear()
             st.rerun()
 
@@ -7335,9 +7523,20 @@ if page == "Dashboard Trading":
 
     # TAB 4: MARCHE & RECHERCHE
     with t4:
-        df_news = _normalize_macro_news_df(duckdb_data.get("df_news_macro_history", pd.DataFrame()))
-        df_news_sym = _normalize_symbol_news_df(duckdb_data.get("df_news_symbol_history", pd.DataFrame()))
-        df_res = _load_fundamentals_for_dashboard(duckdb_data)
+        dashboard_market_data = load_dashboard_market_data(
+            AG3_DUCKDB_PATH,
+            ag3_db_sig,
+            AG4_DUCKDB_PATH,
+            ag4_db_sig,
+            AG4_SPE_DUCKDB_PATH,
+            ag4_spe_db_sig,
+            HISTORY_DAYS_DEFAULT,
+            HISTORY_LIMIT_DEFAULT,
+            RUN_LOG_LIMIT,
+        )
+        df_news = _normalize_macro_news_df(dashboard_market_data.get("df_news_macro_history", pd.DataFrame()))
+        df_news_sym = _normalize_symbol_news_df(dashboard_market_data.get("df_news_symbol_history", pd.DataFrame()))
+        df_res = _load_fundamentals_for_dashboard(dashboard_market_data)
         df_res = enrich_df_with_name(df_res, df_univ)
 
         st_macro, st_research = st.tabs(["Macro & Buzz", "Recherche"])
@@ -7548,14 +7747,28 @@ elif page == "System Health (Monitoring)":
 
     if st.button("Rafraichir", key="refresh_system_health"):
         load_data.clear()
-        load_duckdb_data.clear()
+        load_system_health_page_data.clear()
         st.rerun()
 
+    system_health_data = load_system_health_page_data(
+        DUCKDB_PATH,
+        ag2_db_sig,
+        AG3_DUCKDB_PATH,
+        ag3_db_sig,
+        AG4_DUCKDB_PATH,
+        ag4_db_sig,
+        AG4_SPE_DUCKDB_PATH,
+        ag4_spe_db_sig,
+        HISTORY_DAYS_DEFAULT,
+        HISTORY_LIMIT_DEFAULT,
+        RUN_LOG_LIMIT,
+    )
+
     # Sources
-    tech_latest = normalize_cols(duckdb_data.get("df_signals", pd.DataFrame()).copy())
-    funda_latest = _load_fundamentals_for_dashboard(duckdb_data)
-    symbol_news = _normalize_symbol_news_df(duckdb_data.get("df_news_symbol_history", pd.DataFrame()))
-    macro_news = _normalize_macro_news_df(duckdb_data.get("df_news_macro_history", pd.DataFrame()))
+    tech_latest = normalize_cols(system_health_data.get("df_signals", pd.DataFrame()).copy())
+    funda_latest = _load_fundamentals_for_dashboard(system_health_data)
+    symbol_news = _normalize_symbol_news_df(system_health_data.get("df_news_symbol_history", pd.DataFrame()))
+    macro_news = _normalize_macro_news_df(system_health_data.get("df_news_macro_history", pd.DataFrame()))
 
     # Base symboles
     universe = normalize_cols(df_univ.copy()) if df_univ is not None and not df_univ.empty else pd.DataFrame()
@@ -7781,10 +7994,10 @@ elif page == "System Health (Monitoring)":
         return out
 
     run_rows = [
-        _latest_run_snapshot(duckdb_data.get("df_runs", pd.DataFrame()), "AG2 Technique"),
-        _latest_run_snapshot(duckdb_data.get("df_funda_runs", pd.DataFrame()), "AG3 Fondamentale"),
-        _latest_run_snapshot(duckdb_data.get("df_news_macro_runs", pd.DataFrame()), "AG4 Macro"),
-        _latest_run_snapshot(duckdb_data.get("df_news_symbol_runs", pd.DataFrame()), "AG4 SPE News Symbole"),
+        _latest_run_snapshot(system_health_data.get("df_runs", pd.DataFrame()), "AG2 Technique"),
+        _latest_run_snapshot(system_health_data.get("df_funda_runs", pd.DataFrame()), "AG3 Fondamentale"),
+        _latest_run_snapshot(system_health_data.get("df_news_macro_runs", pd.DataFrame()), "AG4 Macro"),
+        _latest_run_snapshot(system_health_data.get("df_news_symbol_runs", pd.DataFrame()), "AG4 SPE News Symbole"),
     ]
     runs_df = pd.DataFrame(run_rows)
 
@@ -7897,16 +8110,32 @@ elif page == "Vue consolidee Multi-Agents":
 
     if st.button("Rafraichir", key="refresh_multi_agents"):
         load_data.clear()
-        load_duckdb_data.clear()
+        load_multi_agent_page_data.clear()
         st.rerun()
 
-    df_funda_for_view = _load_fundamentals_for_dashboard(duckdb_data)
+    multi_agent_data = load_multi_agent_page_data(
+        DUCKDB_PATH,
+        ag2_db_sig,
+        AG3_DUCKDB_PATH,
+        ag3_db_sig,
+        AG4_DUCKDB_PATH,
+        ag4_db_sig,
+        AG4_SPE_DUCKDB_PATH,
+        ag4_spe_db_sig,
+        YF_ENRICH_DUCKDB_PATH,
+        yf_db_sig,
+        HISTORY_DAYS_DEFAULT,
+        HISTORY_LIMIT_DEFAULT,
+        RUN_LOG_LIMIT,
+    )
+
+    df_funda_for_view = _load_fundamentals_for_dashboard(multi_agent_data)
     consolidated, macro_news_norm, symbol_news_norm = _prepare_multi_agent_view(
         df_universe=df_univ,
-        df_tech_latest=duckdb_data.get("df_signals", pd.DataFrame()),
+        df_tech_latest=multi_agent_data.get("df_signals", pd.DataFrame()),
         df_funda_latest=df_funda_for_view,
-        df_macro_news=duckdb_data.get("df_news_macro_history", pd.DataFrame()),
-        df_symbol_news=duckdb_data.get("df_news_symbol_history", pd.DataFrame()),
+        df_macro_news=multi_agent_data.get("df_news_macro_history", pd.DataFrame()),
+        df_symbol_news=multi_agent_data.get("df_news_symbol_history", pd.DataFrame()),
     )
 
     if consolidated is None or consolidated.empty:
@@ -7916,7 +8145,7 @@ elif page == "Vue consolidee Multi-Agents":
     matrix_df = _build_multi_agent_matrix(
         consolidated,
         df_port,
-        duckdb_data.get("df_yf_enrichment_latest", pd.DataFrame()),
+        multi_agent_data.get("df_yf_enrichment_latest", pd.DataFrame()),
     )
     use_matrix = matrix_df is not None and not matrix_df.empty
     view_df = matrix_df if use_matrix else consolidated
@@ -7945,7 +8174,7 @@ elif page == "Vue consolidee Multi-Agents":
                 if total_values
                 else 0.0
             )
-            freshness_df, freshness_summary = _build_multi_agent_data_freshness(duckdb_data, view_df)
+            freshness_df, freshness_summary = _build_multi_agent_data_freshness(multi_agent_data, view_df)
 
             st.markdown("#### Comment lire cette page en 30 secondes")
             st.markdown(
@@ -9496,20 +9725,66 @@ elif page == "Macro & News (AG4)":
     st.title("Macro & News (AG4)")
     st.caption("Vue macro AG4 + news par valeur AG4-SPE (normalisation robuste, scoring actionnable, observabilite pipeline).")
 
+    ctrl_days, ctrl_limit = st.columns([1.2, 1.2], gap="medium")
+    with ctrl_days:
+        ag4_window_days = int(
+            st.selectbox(
+                "Fenetre historique (jours)",
+                options=[7, 30, 90],
+                index=[7, 30, 90].index(HISTORY_DAYS_DEFAULT) if HISTORY_DAYS_DEFAULT in [7, 30, 90] else 1,
+                key="ag4_window_days",
+            )
+        )
+    with ctrl_limit:
+        ag4_history_limit = int(
+            st.number_input(
+                "Limite lignes",
+                min_value=1000,
+                max_value=100000,
+                step=1000,
+                value=int(min(max(HISTORY_LIMIT_DEFAULT, 1000), 100000)),
+                key="ag4_history_limit",
+            )
+        )
+    active_label = AG1_MULTI_PORTFOLIO_CONFIG.get(active_ag1_key, {}).get("label", active_ag1_key or "—")
+    use_active_sql_scope = st.toggle(
+        "Limiter SQL news symbole au portefeuille actif",
+        value=False,
+        key="ag4_sql_scope_active_only",
+    )
+    ag4_scope_symbols: tuple[str, ...] = ()
+    if use_active_sql_scope and df_positions_active is not None and not df_positions_active.empty and "symbol" in df_positions_active.columns:
+        ag4_scope_symbols = tuple(
+            sorted(
+                {
+                    str(s).strip().upper()
+                    for s in df_positions_active["symbol"].dropna().astype(str).tolist()
+                    if str(s).strip()
+                }
+            )
+        )
+
     if st.button("Rafraichir", key="refresh_ag4_news"):
         load_data.clear()
-        load_duckdb_data.clear()
+        load_ag4_page_data.clear()
         load_ag1_multi_portfolios.clear()
         st.rerun()
 
-    if not duckdb_data:
-        st.info("Base DuckDB non disponible. Verifiez les fichiers AG4 / AG4-SPE.")
-        st.stop()
+    ag4_page_data = load_ag4_page_data(
+        AG4_DUCKDB_PATH,
+        ag4_db_sig,
+        AG4_SPE_DUCKDB_PATH,
+        ag4_spe_db_sig,
+        ag4_window_days,
+        ag4_history_limit,
+        RUN_LOG_LIMIT,
+        ag4_scope_symbols,
+    )
 
-    df_macro_raw = duckdb_data.get("df_news_macro_history", pd.DataFrame())
-    df_spe_raw = duckdb_data.get("df_news_symbol_history", pd.DataFrame())
-    df_macro_runs = duckdb_data.get("df_news_macro_runs", pd.DataFrame())
-    df_spe_runs = duckdb_data.get("df_news_symbol_runs", pd.DataFrame())
+    df_macro_raw = ag4_page_data.get("df_news_macro_history", pd.DataFrame())
+    df_spe_raw = ag4_page_data.get("df_news_symbol_history", pd.DataFrame())
+    df_macro_runs = ag4_page_data.get("df_news_macro_runs", pd.DataFrame())
+    df_spe_runs = ag4_page_data.get("df_news_symbol_runs", pd.DataFrame())
 
     df_macro_news = normalize_news_schema(df_macro_raw, "MACRO")
     df_spe_news = normalize_news_schema(df_spe_raw, "SPE")
@@ -9517,9 +9792,6 @@ elif page == "Macro & News (AG4)":
     if (df_macro_news is None or df_macro_news.empty) and (df_spe_news is None or df_spe_news.empty):
         st.warning("Aucune donnee AG4 / AG4-SPE exploitable apres normalisation. Verifiez les tables `news_history` et le mapping.")
         st.stop()
-
-    scope_catalog, df_positions_active, active_ag1_key = _news_scope_catalog_from_ag1()
-    active_label = AG1_MULTI_PORTFOLIO_CONFIG.get(active_ag1_key, {}).get("label", active_ag1_key or "—")
 
     top_tabs = st.tabs(["Vue Macro (Overview)", "News par valeur", "Historique runs", "Qualite pipeline"])
 
@@ -9555,19 +9827,18 @@ elif page == "Analyse Technique V2":
 
     if st.button("Rafraichir", key="refresh_v2"):
         load_data.clear()
-        load_duckdb_data.clear()
+        load_ag2_page_data.clear()
+        load_ag2_history.clear()
         st.rerun()
 
-    if not duckdb_data:
-        st.info(
-            "Base DuckDB non disponible. Vérifiez que le fichier existe "
-            f"à l'emplacement : `{DUCKDB_PATH}`"
-        )
-        st.stop()
+    ag2_page_data = load_ag2_page_data(
+        DUCKDB_PATH,
+        ag2_db_sig,
+        RUN_LOG_LIMIT,
+    )
 
-    df_signals = duckdb_data.get("df_signals", pd.DataFrame())
-    df_runs = duckdb_data.get("df_runs", pd.DataFrame())
-    df_signals_all = duckdb_data.get("df_signals_all", pd.DataFrame())
+    df_signals = ag2_page_data.get("df_signals", pd.DataFrame())
+    df_runs = ag2_page_data.get("df_runs", pd.DataFrame())
 
     if df_signals is None or df_signals.empty:
         st.warning("Aucun signal technique V2 disponible dans DuckDB.")
@@ -10133,6 +10404,31 @@ elif page == "Analyse Technique V2":
 
             render_interactive_table(df_runs_show, key_suffix="v2_runs")
 
+            with st.expander("Historique signaux techniques (filtré)", expanded=False):
+                h1, h2 = st.columns([1.1, 1.1])
+                hist_days = int(h1.selectbox("Fenêtre (jours)", [7, 30, 90], index=1, key="ag2_hist_days"))
+                hist_limit = int(
+                    h2.number_input(
+                        "Limite lignes",
+                        min_value=1000,
+                        max_value=100000,
+                        value=int(min(max(HISTORY_LIMIT_DEFAULT, 1000), 100000)),
+                        step=1000,
+                        key="ag2_hist_limit",
+                    )
+                )
+                if st.toggle("Charger l'historique des signaux", value=False, key="ag2_hist_toggle"):
+                    df_hist_signals = load_ag2_history(
+                        DUCKDB_PATH,
+                        ag2_db_sig,
+                        hist_days,
+                        hist_limit,
+                    )
+                    if df_hist_signals is None or df_hist_signals.empty:
+                        st.info("Aucun historique technique disponible sur la fenêtre sélectionnée.")
+                    else:
+                        render_interactive_table(df_hist_signals, key_suffix="ag2_signals_history", height=320)
+
 
 # ================================================================
 # PAGE 4: ANALYSE FONDAMENTALE V2
@@ -10142,14 +10438,21 @@ elif page == "Analyse Fondamentale V2":
 
     if st.button("Rafraichir", key="refresh_funda_v2"):
         load_data.clear()
-        load_duckdb_data.clear()
+        load_ag3_page_data.clear()
+        load_ag3_run_quality_history.clear()
+        load_ag3_symbol_history.clear()
         st.rerun()
 
-    df_funda_latest = duckdb_data.get("df_funda_latest", pd.DataFrame())
-    df_funda_runs = duckdb_data.get("df_funda_runs", pd.DataFrame())
-    df_funda_history = duckdb_data.get("df_funda_history", pd.DataFrame())
-    df_funda_consensus = duckdb_data.get("df_funda_consensus", pd.DataFrame())
-    df_funda_metrics = duckdb_data.get("df_funda_metrics", pd.DataFrame())
+    ag3_page_data = load_ag3_page_data(
+        AG3_DUCKDB_PATH,
+        ag3_db_sig,
+        RUN_LOG_LIMIT,
+    )
+
+    df_funda_latest = ag3_page_data.get("df_funda_latest", pd.DataFrame())
+    df_funda_runs = ag3_page_data.get("df_funda_runs", pd.DataFrame())
+    df_funda_consensus = ag3_page_data.get("df_funda_consensus", pd.DataFrame())
+    df_funda_metrics = ag3_page_data.get("df_funda_metrics", pd.DataFrame())
 
     if df_funda_latest is None or df_funda_latest.empty:
         st.info(
@@ -10246,53 +10549,55 @@ elif page == "Analyse Fondamentale V2":
 
         st.divider()
 
-        # Qualite du moteur fondamental par run
-        if df_funda_history is not None and not df_funda_history.empty and "run_id" in df_funda_history.columns:
-            hist = df_funda_history.copy()
-            ts_col = _first_existing_column(hist, ["updated_at", "created_at", "fetched_at"])
-            if ts_col:
-                hist["ts"] = pd.to_datetime(hist[ts_col], errors="coerce")
-                hist = hist.dropna(subset=["ts"])
-                if not hist.empty:
-                    hist["score_num"] = _safe_series(hist, ["score", "funda_conf"])
-                    hist["risk_num"] = _safe_series(hist, ["risk_score"])
-                    run_perf = (
-                        hist.groupby("run_id", as_index=False)
-                        .agg(
-                            ts=("ts", "max"),
-                            avg_score=("score_num", "mean"),
-                            avg_risk=("risk_num", "mean"),
-                            symbols=("symbol", "nunique"),
-                        )
-                        .sort_values("ts")
+        # Qualite du moteur fondamental par run (requete agregee, fenetre glissante)
+        q1, q2 = st.columns([1.1, 1.1])
+        run_hist_days = int(q1.selectbox("Fenetre runs (jours)", [7, 30, 90], index=1, key="ag3_run_hist_days"))
+        run_hist_limit = int(
+            q2.number_input(
+                "Limite runs",
+                min_value=200,
+                max_value=100000,
+                value=int(min(max(HISTORY_LIMIT_DEFAULT, 200), 100000)),
+                step=200,
+                key="ag3_run_hist_limit",
+            )
+        )
+        run_perf = load_ag3_run_quality_history(
+            AG3_DUCKDB_PATH,
+            ag3_db_sig,
+            run_hist_days,
+            run_hist_limit,
+        )
+        if run_perf is not None and not run_perf.empty:
+            run_perf["ts"] = pd.to_datetime(run_perf.get("ts"), errors="coerce")
+            run_perf = run_perf.dropna(subset=["ts"]).sort_values("ts")
+            if not run_perf.empty:
+                fig_run = go.Figure()
+                fig_run.add_trace(
+                    go.Scatter(
+                        x=run_perf["ts"],
+                        y=run_perf["avg_score"],
+                        mode="lines+markers",
+                        name="Score moyen",
+                        line=dict(color="#28a745", width=2),
                     )
-                    if not run_perf.empty:
-                        fig_run = go.Figure()
-                        fig_run.add_trace(
-                            go.Scatter(
-                                x=run_perf["ts"],
-                                y=run_perf["avg_score"],
-                                mode="lines+markers",
-                                name="Score moyen",
-                                line=dict(color="#28a745", width=2),
-                            )
-                        )
-                        fig_run.add_trace(
-                            go.Scatter(
-                                x=run_perf["ts"],
-                                y=run_perf["avg_risk"],
-                                mode="lines+markers",
-                                name="Risque moyen",
-                                line=dict(color="#dc3545", width=2),
-                            )
-                        )
-                        fig_run.update_layout(
-                            title="Qualite des runs AG3 (sorties)",
-                            height=320,
-                            margin=dict(t=40, b=20, l=20, r=20),
-                            yaxis=dict(title="Score /100"),
-                        )
-                        st.plotly_chart(fig_run, use_container_width=True)
+                )
+                fig_run.add_trace(
+                    go.Scatter(
+                        x=run_perf["ts"],
+                        y=run_perf["avg_risk"],
+                        mode="lines+markers",
+                        name="Risque moyen",
+                        line=dict(color="#dc3545", width=2),
+                    )
+                )
+                fig_run.update_layout(
+                    title="Qualite des runs AG3 (sorties)",
+                    height=320,
+                    margin=dict(t=40, b=20, l=20, r=20),
+                    yaxis=dict(title="Score /100"),
+                )
+                st.plotly_chart(fig_run, use_container_width=True)
 
         # Tableau de synthèse
         show = pd.DataFrame()
@@ -10417,13 +10722,27 @@ elif page == "Analyse Fondamentale V2":
                 height=320,
             )
 
-            # Evolution historique du symbole
-            if (
-                df_funda_history is not None
-                and not df_funda_history.empty
-                and "symbol" in df_funda_history.columns
-            ):
-                h = df_funda_history[df_funda_history["symbol"] == selected_symbol].copy()
+            # Evolution historique du symbole (chargement lazy par symbole)
+            hs1, hs2 = st.columns([1.1, 1.1])
+            symbol_hist_days = int(hs1.selectbox("Fenetre historique symbole (jours)", [7, 30, 90], index=1, key="ag3_symbol_hist_days"))
+            symbol_hist_limit = int(
+                hs2.number_input(
+                    "Limite lignes symbole",
+                    min_value=200,
+                    max_value=100000,
+                    value=int(min(max(HISTORY_LIMIT_DEFAULT, 200), 100000)),
+                    step=200,
+                    key="ag3_symbol_hist_limit",
+                )
+            )
+            h = load_ag3_symbol_history(
+                AG3_DUCKDB_PATH,
+                ag3_db_sig,
+                selected_symbol,
+                symbol_hist_days,
+                symbol_hist_limit,
+            )
+            if h is not None and not h.empty:
                 ts_col = _first_existing_column(h, ["updated_at", "created_at", "fetched_at"])
                 if ts_col:
                     h["ts"] = pd.to_datetime(h[ts_col], errors="coerce")
