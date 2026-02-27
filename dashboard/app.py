@@ -10751,11 +10751,30 @@ elif page == "Analyse Technique V2":
                 _name_map[label] = sym
                 _label_list.append(label)
 
+            search_txt = st.text_input(
+                "Recherche texte (ticker ou nom)",
+                value="",
+                key="ag2_v2_symbol_search",
+                placeholder="Ex: 74SW.PA, 74software, AIRBUS...",
+            )
+            query = str(search_txt or "").strip().lower()
+            labels_filtered = [lbl for lbl in _label_list if query in lbl.lower()] if query else _label_list
+            if not labels_filtered:
+                st.warning("Aucun resultat pour cette recherche. La liste complete est rechargee.")
+                labels_filtered = _label_list
+
+            previous_label = st.session_state.get("ag2_v2_symbol_last", labels_filtered[0])
+            if previous_label not in labels_filtered:
+                previous_label = labels_filtered[0]
+            default_idx = labels_filtered.index(previous_label) if previous_label in labels_filtered else 0
+
             selected_label = st.selectbox(
                 "Sélectionner un symbole (recherche par nom ou ticker) :",
-                _label_list,
+                labels_filtered,
+                index=default_idx,
                 key="v2_symbol_select",
             )
+            st.session_state["ag2_v2_symbol_last"] = selected_label
             selected_symbol = _name_map.get(selected_label, selected_label)
 
             if selected_symbol:
@@ -11547,4 +11566,3 @@ elif page == "Analyse Fondamentale V2":
                 run_df[keep].rename(columns={k: v for k, v in ren_map.items() if k in keep}),
                 key_suffix="funda_v2_runs",
             )
-
