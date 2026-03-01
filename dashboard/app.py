@@ -27,16 +27,16 @@ st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="A
 
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
-DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v2.duckdb")
-AG1_DUCKDB_PATH = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v2.duckdb")
-AG1_CHATGPT52_DUCKDB_PATH = os.getenv("AG1_CHATGPT52_DUCKDB_PATH", "/files/duckdb/ag1_v2_chatgpt52.duckdb")
+DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v3.duckdb")
+AG1_DUCKDB_PATH = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v3.duckdb")
+AG1_CHATGPT52_DUCKDB_PATH = os.getenv("AG1_CHATGPT52_DUCKDB_PATH", "/files/duckdb/ag1_v3_chatgpt52.duckdb")
 AG1_GROK41_REASONING_DUCKDB_PATH = os.getenv(
     "AG1_GROK41_REASONING_DUCKDB_PATH",
-    "/files/duckdb/ag1_v2_grok41_reasoning.duckdb",
+    "/files/duckdb/ag1_v3_grok41_reasoning.duckdb",
 )
-AG1_GEMINI30_PRO_DUCKDB_PATH = os.getenv("AG1_GEMINI30_PRO_DUCKDB_PATH", "/files/duckdb/ag1_v2_gemini30_pro.duckdb")
+AG1_GEMINI30_PRO_DUCKDB_PATH = os.getenv("AG1_GEMINI30_PRO_DUCKDB_PATH", "/files/duckdb/ag1_v3_gemini30_pro.duckdb")
 AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
-AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v2.duckdb")
+AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v3.duckdb")
 AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb")
 YF_ENRICH_DUCKDB_PATH = os.getenv("YF_ENRICH_DUCKDB_PATH", "/files/duckdb/yf_enrichment_v1.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
@@ -5533,7 +5533,7 @@ def _prepare_multi_agent_view(
 
 
 # ============================================================
-# AG1 V2 - Multi-Portfolio Loader (ChatGPT / Grok / Gemini)
+# AG1 V3 - Multi-Portfolio Loader (ChatGPT / Grok / Gemini)
 # ============================================================
 
 
@@ -5722,7 +5722,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         if not has_ledger:
             payload["status"] = "error"
-            payload["error"] = "Schema AG1-V2 ledger non detecte (core.portfolio_snapshot absent)."
+            payload["error"] = "Schema AG1-V3 ledger non detecte (core.portfolio_snapshot absent)."
             return payload
 
         df_runs = _ag1_fetchdf(
@@ -7017,7 +7017,7 @@ if page == "Dashboard Trading":
             default_focus = available_keys[0] if available_keys else compare_keys[0]
         selected_portfolio_key = default_focus
 
-        st.caption("Vue comparative AG1-V2 (3 colonnes fixes : portefeuille + qualite agent)")
+        st.caption("Vue comparative AG1-V3 (3 colonnes fixes : portefeuille + qualite agent)")
 
         cards_by_key: dict[str, dict[str, object]] = {}
         for key in compare_keys:
@@ -7315,7 +7315,7 @@ if page == "Dashboard Trading":
                 ledger_run = str(diag.get("ledger_run_id") or selected_summary.get("last_run_id") or "").strip() or "N/A"
                 mtm_run = str(diag.get("mtm_run_id") or "").strip() or "N/A"
                 active_positions_source_note = (
-                    "Source Positions: AG1-V2 ledger `core.positions_snapshot` "
+                    "Source Positions: AG1-V3 ledger `core.positions_snapshot` "
                     f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run})"
                 )
 
@@ -7330,7 +7330,7 @@ if page == "Dashboard Trading":
                     st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
         else:
             st.warning(
-                "Aucune base AG1-V2 exploitable pour la zone details. "
+                "Aucune base AG1-V3 exploitable pour la zone details. "
                 "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
             )
             df_sig_dashboard = pd.DataFrame()
@@ -7338,7 +7338,7 @@ if page == "Dashboard Trading":
             active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
     else:
         st.warning(
-            "Aucun portefeuille AG1-V2 configure pour la vue comparative. "
+            "Aucun portefeuille AG1-V3 configure pour la vue comparative. "
             "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
         )
         df_sig_dashboard = pd.DataFrame()
@@ -7765,7 +7765,7 @@ if page == "Dashboard Trading":
 
         if selected_portfolio_key and active_portfolio:
             st.caption(
-                f"Source AG1-V2: {active_portfolio.get('label', selected_portfolio_key)} "
+                f"Source AG1-V3: {active_portfolio.get('label', selected_portfolio_key)} "
                 f"({active_portfolio.get('db_path', '')})"
             )
         else:
@@ -10520,22 +10520,22 @@ elif page == "Analyse Technique V2":
                 ai_status_options = sorted([x for x in df_ov.get("ai_decision_norm", pd.Series(dtype=str)).dropna().astype(str).unique().tolist() if x and x != "—"])
 
                 f1, f2, f3, f4, f5 = st.columns([1.4, 1.4, 1.6, 1.4, 1.2])
-                selected_d1_actions = f1.multiselect("Action D1", d1_actions_available, key="ag2_v2_f_d1")
-                selected_h1_actions = f2.multiselect("Action H1", h1_actions_available, key="ag2_v2_f_h1")
-                selected_sectors = f3.multiselect("Secteurs", sector_options, key="ag2_v2_f_sector")
-                selected_ai_status = f4.multiselect("IA status", ai_status_options, key="ag2_v2_f_ia")
-                graphs_scope = f5.radio("Scope graphes", ["All", "Filtered"], key="ag2_v2_scope_graphs")
+                selected_d1_actions = f1.multiselect("Action D1", d1_actions_available, key="ag2_v3_f_d1")
+                selected_h1_actions = f2.multiselect("Action H1", h1_actions_available, key="ag2_v3_f_h1")
+                selected_sectors = f3.multiselect("Secteurs", sector_options, key="ag2_v3_f_sector")
+                selected_ai_status = f4.multiselect("IA status", ai_status_options, key="ag2_v3_f_ia")
+                graphs_scope = f5.radio("Scope graphes", ["All", "Filtered"], key="ag2_v3_scope_graphs")
 
                 f6, f7, f8, f9, f10 = st.columns([1.2, 1.3, 1.6, 1.3, 1.0])
-                only_actionable = f6.toggle("Only actionable", value=False, key="ag2_v2_f_only_actionable")
-                only_divergences = f7.toggle("Only divergences", value=False, key="ag2_v2_f_only_div")
-                include_neutral_div = f8.toggle("Inclure div. NEUTRAL", value=False, key="ag2_v2_f_div_neutral")
-                show_advanced_cols = f9.toggle("Colonnes avancees", value=False, key="ag2_v2_f_cols_adv")
-                top_n = int(f10.selectbox("Top N", [10, 15, 20], index=1, key="ag2_v2_f_top_n"))
+                only_actionable = f6.toggle("Only actionable", value=False, key="ag2_v3_f_only_actionable")
+                only_divergences = f7.toggle("Only divergences", value=False, key="ag2_v3_f_only_div")
+                include_neutral_div = f8.toggle("Inclure div. NEUTRAL", value=False, key="ag2_v3_f_div_neutral")
+                show_advanced_cols = f9.toggle("Colonnes avancees", value=False, key="ag2_v3_f_cols_adv")
+                top_n = int(f10.selectbox("Top N", [10, 15, 20], index=1, key="ag2_v3_f_top_n"))
 
                 ai_quality_valid = pd.to_numeric(df_ov.get("ai_quality_num", pd.Series(pd.NA, index=df_ov.index)), errors="coerce").dropna()
                 max_quality = float(max(10.0, ai_quality_valid.max())) if not ai_quality_valid.empty else 10.0
-                quality_min = st.slider("Qualite IA min", 0.0, float(max_quality), 0.0, 0.5, key="ag2_v2_f_quality_min")
+                quality_min = st.slider("Qualite IA min", 0.0, float(max_quality), 0.0, 0.5, key="ag2_v3_f_quality_min")
 
                 d1_score_valid = pd.to_numeric(df_ov.get("d1_score_num", pd.Series(pd.NA, index=df_ov.index)), errors="coerce").dropna()
                 if not d1_score_valid.empty:
@@ -10544,7 +10544,7 @@ elif page == "Analyse Technique V2":
                     if score_lo == score_hi:
                         score_lo -= 1.0
                         score_hi += 1.0
-                    score_range = st.slider("Range D1 score", score_lo, score_hi, (score_lo, score_hi), 1.0, key="ag2_v2_f_score_range")
+                    score_range = st.slider("Range D1 score", score_lo, score_hi, (score_lo, score_hi), 1.0, key="ag2_v3_f_score_range")
                 else:
                     score_range = None
                     st.caption("Range D1 score indisponible (colonne absente ou vide).")
@@ -10695,7 +10695,7 @@ elif page == "Analyse Technique V2":
                     div_include_neutral = st.toggle(
                         "Inclure divergences avec NEUTRAL",
                         value=include_neutral_div,
-                        key="ag2_v2_div_tab_neutral",
+                        key="ag2_v3_div_tab_neutral",
                     )
                     div_df = df_filtered[df_filtered["h1_action_norm"] != df_filtered["d1_action_norm"]].copy()
                     if not div_include_neutral:
@@ -10754,7 +10754,7 @@ elif page == "Analyse Technique V2":
             search_txt = st.text_input(
                 "Recherche texte (ticker ou nom)",
                 value="",
-                key="ag2_v2_symbol_search",
+                key="ag2_v3_symbol_search",
                 placeholder="Ex: 74SW.PA, 74software, AIRBUS...",
             )
             query = str(search_txt or "").strip().lower()
@@ -10763,7 +10763,7 @@ elif page == "Analyse Technique V2":
                 st.warning("Aucun resultat pour cette recherche. La liste complete est rechargee.")
                 labels_filtered = _label_list
 
-            previous_label = st.session_state.get("ag2_v2_symbol_last", labels_filtered[0])
+            previous_label = st.session_state.get("ag2_v3_symbol_last", labels_filtered[0])
             if previous_label not in labels_filtered:
                 previous_label = labels_filtered[0]
             default_idx = labels_filtered.index(previous_label) if previous_label in labels_filtered else 0
@@ -10774,7 +10774,7 @@ elif page == "Analyse Technique V2":
                 index=default_idx,
                 key="v2_symbol_select",
             )
-            st.session_state["ag2_v2_symbol_last"] = selected_label
+            st.session_state["ag2_v3_symbol_last"] = selected_label
             selected_symbol = _name_map.get(selected_label, selected_label)
 
             if selected_symbol:
@@ -10941,7 +10941,7 @@ elif page == "Analyse Technique V2":
         if df_runs is None or df_runs.empty:
             st.info("Aucun historique de runs disponible.")
         else:
-            st.subheader("Historique des exécutions AG2-V2")
+            st.subheader("Historique des exécutions AG2-V3")
 
             df_runs_display = df_runs.copy()
 
