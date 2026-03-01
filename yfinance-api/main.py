@@ -13,10 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, Any, List
 
 import pandas as pd
-import requests
 import yfinance as yf
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
 
 # =========================
 # Config (ENV)
@@ -74,17 +71,6 @@ INTERVAL_MAX_LOOKBACK = {
     "1d": 5000, "5d": 5000, "1wk": 5000, "1mo": 5000, "3mo": 5000,
 }
 
-# Shared HTTP session for yfinance upstream calls with retry/backoff.
-yf_session = requests.Session()
-yf_retry = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[429, 500, 502, 503, 504],
-)
-yf_adapter = HTTPAdapter(max_retries=yf_retry)
-yf_session.mount("http://", yf_adapter)
-yf_session.mount("https://", yf_adapter)
-
 app = FastAPI(title="yfinance-api", version=APP_VERSION)
 
 
@@ -134,6 +120,32 @@ def _pick_str(*vals, max_len: int = 4000) -> str:
         if s:
             return s
     return ""
+
+
+def with_retries(func, max_retries: int = 3, backoff_factor: float = 1.5):
+    """
+    Retry helper for flaky upstream Yahoo calls.
+    Important: no custom session injection; yfinance keeps its own curl_cffi session.
+    """
+    retries = max(1, int(max_retries))
+    backoff = max(0.0, float(backoff_factor))
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(1, retries + 1):
+        try:
+            return func()
+        except Exception as exc:
+            last_exc = exc
+            if attempt >= retries:
+                break
+            wait_s = backoff * attempt
+            print(
+                f"[RETRY] attempt {attempt}/{retries} failed: {exc} | sleeping {wait_s:.1f}s",
+                flush=True,
+            )
+            time.sleep(wait_s)
+
+    raise last_exc if last_exc is not None else RuntimeError("with_retries failed without exception")
 
 
 # =========================
@@ -536,16 +548,18 @@ def _download_incremental(symbol: str, interval: str, start_dt: datetime, end_dt
     """Download data from yfinance with proper error handling."""
     print(f"[FETCH] {symbol} {interval} from {start_dt.isoformat()} to {end_dt.isoformat()}", flush=True)
 
-    raw = yf.download(
-        symbol,
-        start=start_dt,
-        end=end_dt,
-        interval=interval,
-        progress=False,
-        threads=False,
-        auto_adjust=False,
-        session=yf_session,
-    )
+    def _do_download():
+        return yf.download(
+            symbol,
+            start=start_dt,
+            end=end_dt,
+            interval=interval,
+            progress=False,
+            threads=False,
+            auto_adjust=False,
+        )
+
+    raw = with_retries(_do_download, max_retries=3, backoff_factor=1.5)
     return _normalize_download_df(raw)
 
 
@@ -577,7 +591,7 @@ RATELIMIT_MARKERS = [
 
 NETWORK_MARKERS = [
     "Failed to perform", "Could not connect", "Could not resolve host",
-    "ConnectionError", "TimeoutError", "ReadTimeout", "ConnectTimeout",
+    "ConnectionError", "TimeoutError", "ReadTimeout", "ConnectTimeout", "timed out",
 ]
 
 
@@ -1151,10 +1165,12 @@ def get_info(symbol: str = Query(...)):
     symbol = _safe_str(symbol, max_len=32).upper()
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol, session=yf_session)
-        isin = _safe_str(getattr(tick, "isin", ""), max_len=64)
-        info = tick.info or {}
-        fast = dict(tick.fast_info or {})
+        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
+        isin = _safe_str(with_retries(lambda: getattr(tick, "isin", ""), max_retries=3, backoff_factor=1.5), max_len=64)
+        info_raw = with_retries(lambda: tick.info, max_retries=3, backoff_factor=1.5)
+        info = info_raw if isinstance(info_raw, dict) else {}
+        fast_raw = with_retries(lambda: tick.fast_info, max_retries=3, backoff_factor=1.5)
+        fast = dict(fast_raw or {})
         if not info and not fast:
             return _json_error_response(
                 status_code=404,
@@ -1190,8 +1206,9 @@ def get_info(symbol: str = Query(...)):
     except Exception as e:
         err = str(e)
         print(f"[ERROR INFO] {symbol}: {err}")
+        status_code = 504 if _classify_error(err) == "network" else 500
         return _json_error_response(
-            status_code=500,
+            status_code=status_code,
             content={
                 "ok": False,
                 "symbol": symbol,
@@ -1247,9 +1264,11 @@ def get_quote(
 
         try:
             _global_rate_limit_sleep()
-            tick = yf.Ticker(sym, session=yf_session)
-            info = tick.info or {}
-            fast = dict(tick.fast_info or {})
+            tick = with_retries(lambda: yf.Ticker(sym), max_retries=3, backoff_factor=1.5)
+            info_raw = with_retries(lambda: tick.info, max_retries=3, backoff_factor=1.5)
+            info = info_raw if isinstance(info_raw, dict) else {}
+            fast_raw = with_retries(lambda: tick.fast_info, max_retries=3, backoff_factor=1.5)
+            fast = dict(fast_raw or {})
             row = _extract_quote_snapshot(sym, info, fast, qty=qty, side=side_u)
             row["fetchedAt"] = _utcnow().isoformat()
             row["source"] = "yahoo_finance_yfinance"
@@ -1315,8 +1334,8 @@ def get_options(
 
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol, session=yf_session)
-        expirations = list(tick.options or [])
+        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
+        expirations = with_retries(lambda: list(tick.options or []), max_retries=3, backoff_factor=1.5)
         selected_exp, exp_warning = _choose_expiration(
             expirations=expirations,
             requested=expiration,
@@ -1332,18 +1351,20 @@ def get_options(
             }
 
         _global_rate_limit_sleep()
-        chain = tick.option_chain(selected_exp)
+        chain = with_retries(lambda: tick.option_chain(selected_exp), max_retries=3, backoff_factor=1.5)
         calls_df = getattr(chain, "calls", pd.DataFrame())
         puts_df = getattr(chain, "puts", pd.DataFrame())
 
         info = {}
         fast = {}
         try:
-            info = tick.info or {}
+            info_raw = with_retries(lambda: tick.info, max_retries=3, backoff_factor=1.5)
+            info = info_raw if isinstance(info_raw, dict) else {}
         except Exception:
             info = {}
         try:
-            fast = dict(tick.fast_info or {})
+            fast_raw = with_retries(lambda: tick.fast_info, max_retries=3, backoff_factor=1.5)
+            fast = dict(fast_raw or {})
         except Exception:
             fast = {}
 
@@ -1463,8 +1484,9 @@ def get_options(
             out["stale"] = True
             out["error"] = err
             return out
+        status_code = 504 if _classify_error(err) == "network" else 500
         return _json_error_response(
-            status_code=500,
+            status_code=status_code,
             content={
                 "ok": False,
                 "symbol": symbol,
@@ -1495,11 +1517,11 @@ def get_calendar(
 
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol, session=yf_session)
+        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
 
         calendar_raw: Any = {}
         try:
-            calendar_raw = tick.calendar
+            calendar_raw = with_retries(lambda: tick.calendar, max_retries=3, backoff_factor=1.5)
         except Exception:
             calendar_raw = {}
 
@@ -1521,7 +1543,11 @@ def get_calendar(
         earnings_df = None
         try:
             _global_rate_limit_sleep()
-            earnings_df = tick.get_earnings_dates(limit=earnings_limit)
+            earnings_df = with_retries(
+                lambda: tick.get_earnings_dates(limit=earnings_limit),
+                max_retries=3,
+                backoff_factor=1.5,
+            )
         except Exception:
             try:
                 earnings_df = getattr(tick, "earnings_dates", None)
@@ -1595,8 +1621,9 @@ def get_calendar(
             out["stale"] = True
             out["error"] = err
             return out
+        status_code = 504 if _classify_error(err) == "network" else 500
         return _json_error_response(
-            status_code=500,
+            status_code=status_code,
             content={
                 "ok": False,
                 "symbol": symbol,
@@ -1627,23 +1654,25 @@ def get_fundamentals(symbol: str = Query(...)):
 
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol, session=yf_session)
+        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
 
         info = {}
         try:
-            info = tick.info or {}
+            info_raw = with_retries(lambda: tick.info, max_retries=3, backoff_factor=1.5)
+            info = info_raw if isinstance(info_raw, dict) else {}
         except Exception:
             info = {}
 
         fast = {}
         try:
-            fast = dict(tick.fast_info or {})
+            fast_raw = with_retries(lambda: tick.fast_info, max_retries=3, backoff_factor=1.5)
+            fast = dict(fast_raw or {})
         except Exception:
             fast = {}
 
         isin = ""
         try:
-            isin = _safe_str(tick.isin, max_len=64)
+            isin = _safe_str(with_retries(lambda: tick.isin, max_retries=3, backoff_factor=1.5), max_len=64)
         except Exception:
             isin = ""
 
@@ -1789,8 +1818,9 @@ def get_fundamentals(symbol: str = Query(...)):
     except Exception as e:
         err = str(e)
         print(f"[ERROR FUNDAMENTALS] {symbol}: {err}", flush=True)
+        status_code = 504 if _classify_error(err) == "network" else 500
         return _json_error_response(
-            status_code=500,
+            status_code=status_code,
             content={
                 "ok": False,
                 "symbol": symbol,
