@@ -1,27 +1,89 @@
 import gc
+import json
+import os
 import duckdb
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-DB_PATH = "/files/duckdb/ag2_v3.duckdb"
+DEFAULT_DB_PATH = "/files/duckdb/ag2_v3.duckdb"
+LEGACY_DB_PATH = "/files/duckdb/ag2_v2.duckdb"
+LEGACY_SOURCE_PATH = str(os.getenv("AG2_LEGACY_DUCKDB_PATH", LEGACY_DB_PATH) or LEGACY_DB_PATH).strip() or LEGACY_DB_PATH
+MIGRATION_KEY = "ag2_v2_bootstrap_v1"
+DB_PATH = str(os.getenv("AG2_DUCKDB_PATH", DEFAULT_DB_PATH) or DEFAULT_DB_PATH).strip() or DEFAULT_DB_PATH
+if DB_PATH == LEGACY_DB_PATH:
+    # Guardrail: AG2-V3 should never write to the V2 database.
+    DB_PATH = DEFAULT_DB_PATH
 DEFAULT_BATCH_SIZE = 10
-WORKFLOW_VERSION = "3.0.0"
+WORKFLOW_VERSION = "3.0.4"
+
+
+def _to_bool(v, dflt=False):
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return v != 0
+    s = str(v or "").strip().lower()
+    if not s:
+        return dflt
+    if s in ("1", "true", "yes", "y", "on", "enabled"):
+        return True
+    if s in ("0", "false", "no", "n", "off", "disabled"):
+        return False
+    return dflt
+
+
+MIGRATE_TECH_SIGNALS = _to_bool(os.getenv("AG2_MIGRATE_TECH_SIGNALS", "false"), False)
+RUN_LEGACY_MIGRATION = _to_bool(os.getenv("AG2_RUN_LEGACY_MIGRATION", "false"), False)
+
+
+def _is_wal_internal_error(exc):
+    msg = str(exc or "").lower()
+    return (
+        "failure while replaying wal file" in msg
+        or ("internal error" in msg and "wal file" in msg)
+        or "getdefaultdatabase" in msg
+    )
+
+
+def _candidate_db_paths(path):
+    p = str(path or "").strip() or DEFAULT_DB_PATH
+    out = [p]
+    if p == LEGACY_DB_PATH and DEFAULT_DB_PATH not in out:
+        out.append(DEFAULT_DB_PATH)
+    return out
 
 
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
     con = None
-    for attempt in range(retries):
-        try:
-            con = duckdb.connect(path)
-            break
-        except Exception as e:
-            if "lock" in str(e).lower() and attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
-            else:
+    last_exc = None
+    selected = None
+    for candidate in _candidate_db_paths(path):
+        for attempt in range(retries):
+            try:
+                con = duckdb.connect(candidate)
+                selected = candidate
+                break
+            except Exception as e:
+                last_exc = e
+                msg = str(e).lower()
+                if "lock" in msg and attempt < retries - 1:
+                    time.sleep(delay * (2 ** attempt))
+                    continue
+                # If legacy DB/WAL is broken, transparently fallback to V3 DB.
+                if candidate == LEGACY_DB_PATH and _is_wal_internal_error(e):
+                    break
                 raise
+        if con is not None:
+            break
+
+    if con is None:
+        raise last_exc or RuntimeError("DuckDB connection failed with unknown error.")
+
     try:
+        if selected and selected != path:
+            print(f"[AG2-V3] duckdb path fallback: '{path}' -> '{selected}'")
         yield con
     finally:
         if con is not None:
@@ -278,6 +340,168 @@ VIEW_STMTS = [
     """,
 ]
 
+
+def _safe_sql_str(s):
+    return str(s or "").replace("\\", "/").replace("'", "''")
+
+
+def _relation_columns(con, relation):
+    try:
+        con.execute(f"SELECT * FROM {relation} LIMIT 0")
+        return [str(d[0]) for d in (con.description or [])]
+    except Exception:
+        return []
+
+
+def _table_exists(con, relation):
+    try:
+        con.execute(f"SELECT 1 FROM {relation} LIMIT 1")
+        return True
+    except Exception:
+        return False
+
+
+def _symbol_expr(cols, alias):
+    candidates = []
+    for c in ("symbol_internal", "symbol", "symbol_yahoo"):
+        if c in cols:
+            candidates.append(f"NULLIF(TRIM({alias}.{c}), '')")
+    if not candidates:
+        return "''"
+    return "UPPER(TRIM(COALESCE(" + ", ".join(candidates) + ")))"
+
+
+def _freshness_expr(cols, alias):
+    for c in ("updated_at", "workflow_date", "created_at", "h1_date", "d1_date"):
+        if c in cols:
+            return f"{alias}.{c}"
+    return "CURRENT_TIMESTAMP"
+
+
+def _ensure_migration_log(con):
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+          key VARCHAR PRIMARY KEY,
+          status VARCHAR,
+          details VARCHAR,
+          applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+
+
+def _get_migration_status(con, key):
+    row = con.execute("SELECT status FROM schema_migrations WHERE key = ?", [key]).fetchone()
+    return str(row[0]) if row and row[0] is not None else ""
+
+
+def _set_migration_status(con, key, status, details_obj):
+    details = json.dumps(details_obj or {}, ensure_ascii=False)
+    con.execute(
+        """
+        INSERT OR REPLACE INTO schema_migrations (key, status, details, applied_at)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        [key, status, details],
+    )
+
+
+def migrate_legacy_v2(con, legacy_path):
+    report = {
+        "key": MIGRATION_KEY,
+        "status": "skipped",
+        "legacy_path": legacy_path,
+        "run_legacy_migration": RUN_LEGACY_MIGRATION,
+        "migrate_tech_signals": MIGRATE_TECH_SIGNALS,
+        "dedup_rows_copied": 0,
+        "signals_rows_copied": 0,
+        "error": "",
+    }
+
+    if not RUN_LEGACY_MIGRATION:
+        report["status"] = "disabled"
+        return report
+
+    _ensure_migration_log(con)
+    if _get_migration_status(con, MIGRATION_KEY) == "done":
+        report["status"] = "already_done"
+        return report
+
+    lp = str(legacy_path or "").strip()
+    if not lp:
+        report["status"] = "no_legacy_path"
+        return report
+    if os.path.abspath(lp) == os.path.abspath(DB_PATH):
+        report["status"] = "same_as_target"
+        return report
+    if not os.path.exists(lp):
+        report["status"] = "legacy_missing"
+        return report
+
+    attached = False
+    try:
+        con.execute(f"ATTACH '{_safe_sql_str(lp)}' AS legacy")
+        attached = True
+
+        # ---- 1) AI dedup cache migration (high-value for avoiding unnecessary AI calls)
+        if _table_exists(con, "legacy.ai_dedup_cache"):
+            target_cols = _relation_columns(con, "ai_dedup_cache")
+            source_cols = _relation_columns(con, "legacy.ai_dedup_cache")
+            common = [c for c in target_cols if c in source_cols]
+            if common:
+                cols_sql = ", ".join(common)
+                con.execute(
+                    f"INSERT OR REPLACE INTO ai_dedup_cache ({cols_sql}) SELECT {cols_sql} FROM legacy.ai_dedup_cache"
+                )
+                report["dedup_rows_copied"] = -1
+
+        # ---- 2) Optional technical signals bootstrap (can be heavy on large databases)
+        if MIGRATE_TECH_SIGNALS and _table_exists(con, "legacy.technical_signals"):
+            target_cols = _relation_columns(con, "technical_signals")
+            source_cols = _relation_columns(con, "legacy.technical_signals")
+            common = [c for c in target_cols if c in source_cols]
+            required = {"id", "run_id", "symbol", "workflow_date"}
+            if required.issubset(set(common)):
+                cols_sql = ", ".join(common)
+                symbol_expr = _symbol_expr(source_cols, "src")
+                freshness_expr = _freshness_expr(source_cols, "src")
+                con.execute(
+                    f"""
+                    WITH ranked AS (
+                      SELECT
+                        src.*,
+                        ROW_NUMBER() OVER (
+                          PARTITION BY {symbol_expr}
+                          ORDER BY {freshness_expr} DESC NULLS LAST
+                        ) AS __rn
+                      FROM legacy.technical_signals src
+                    )
+                    INSERT OR REPLACE INTO technical_signals ({cols_sql})
+                    SELECT {", ".join([f"ranked.{c}" for c in common])}
+                    FROM ranked
+                    WHERE ranked.__rn = 1
+                      AND {_symbol_expr(source_cols, "ranked")} <> ''
+                    """
+                )
+                report["signals_rows_copied"] = -1
+
+        report["status"] = "done"
+        _set_migration_status(con, MIGRATION_KEY, "done", report)
+        return report
+
+    except Exception as e:
+        report["status"] = "failed"
+        report["error"] = str(e)[:1200]
+        _set_migration_status(con, MIGRATION_KEY, "failed", report)
+        return report
+    finally:
+        if attached:
+            try:
+                con.execute("DETACH legacy")
+            except Exception:
+                pass
+
 items = _items or []
 first_json = items[0].get("json", {}) if items else {}
 
@@ -316,6 +540,8 @@ with db_con() as con:
             con.execute(stmt)
         except Exception:
             pass
+
+    legacy_migration_report = migrate_legacy_v2(con, LEGACY_SOURCE_PATH)
 
     # Universe sync
     universe = first_json.get("_universe", []) or []
@@ -368,7 +594,7 @@ with db_con() as con:
 
     now = datetime.now(timezone.utc)
     ts = now.strftime("%Y%m%d%H%M%S")
-    run_id = f"AG2V2_{ts}_{idx}"
+    run_id = f"AG2V3_{ts}_{idx}"
 
     con.execute(
         """
@@ -396,6 +622,8 @@ for i, entry in enumerate(batch):
                 "price_decimals": entry.get("price_decimals"),
                 "trading_hours": entry.get("trading_hours"),
                 "run_id": run_id,
+                "db_path": DB_PATH,
+                "legacy_migration": legacy_migration_report,
                 "yfinance_api_base": config["yfinance_api_base"],
                 "intraday": config["intraday"],
                 "daily": config["daily"],
