@@ -147,4 +147,94 @@ with db_con(db_path) as con:
             }
         })
 
+    # Optional FX outputs for AG4 V3.
+    try:
+        fx_macro = con.execute(
+            """
+            SELECT
+              run_id, as_of, market_regime, drivers, confidence,
+              usd_bias, eur_bias, jpy_bias, gbp_bias, chf_bias, aud_bias, cad_bias, nzd_bias
+            FROM ag4_fx_macro
+            WHERE run_id = ?
+            """,
+            [run_id],
+        ).fetchone()
+        if fx_macro:
+            out.append(
+                {
+                    "json": {
+                        "dedupeKey": f"FX_MACRO_{fmt(fx_macro[0])}",
+                        "eventKey": "",
+                        "runId": fmt(fx_macro[0]),
+                        "canonicalUrl": "",
+                        "publishedAt": fmt(fx_macro[1]),
+                        "title": "AG4_FX_MACRO",
+                        "source": "ag4_fx",
+                        "feedUrl": "",
+                        "symbols": "",
+                        "type": "fx_macro",
+                        "notes": fmt(fx_macro[3]),
+                        "ImpactScore": "",
+                        "confidence": fmt(fx_macro[4]),
+                        "urgency": "normal",
+                        "Snippet": f"USD={fmt(fx_macro[5])}, EUR={fmt(fx_macro[6])}, JPY={fmt(fx_macro[7])}",
+                        "firstSeenAt": fmt(fx_macro[1]),
+                        "Strategy": "",
+                        "Losers": "",
+                        "Winners": "",
+                        "sectors_bullish": "",
+                        "sectors_bearish": "",
+                        "Theme": "FX Macro",
+                        "Regime": fmt(fx_macro[2]),
+                        "analyzedAt": fmt(fx_macro[1]),
+                    }
+                }
+            )
+    except Exception:
+        pass
+
+    try:
+        fx_pairs = con.execute(
+            """
+            SELECT pair, directional_bias, rationale, confidence, urgent_event_window, as_of
+            FROM ag4_fx_pairs
+            WHERE run_id = ?
+            ORDER BY pair
+            """,
+            [run_id],
+        ).fetchall()
+        for r in fx_pairs:
+            out.append(
+                {
+                    "json": {
+                        "dedupeKey": f"FX_PAIR_{fmt(run_id)}_{fmt(r[0])}",
+                        "eventKey": "",
+                        "runId": fmt(run_id),
+                        "canonicalUrl": "",
+                        "publishedAt": fmt(r[5]),
+                        "title": f"AG4_FX_PAIR_{fmt(r[0])}",
+                        "source": "ag4_fx",
+                        "feedUrl": "",
+                        "symbols": fmt(r[0]),
+                        "type": "fx_pair",
+                        "notes": fmt(r[2]),
+                        "ImpactScore": "",
+                        "confidence": fmt(r[3]),
+                        "urgency": "high" if str(r[4]).lower() in ("true", "1") else "normal",
+                        "Snippet": fmt(r[2]),
+                        "firstSeenAt": fmt(r[5]),
+                        "Strategy": "",
+                        "Losers": "",
+                        "Winners": "",
+                        "sectors_bullish": "",
+                        "sectors_bearish": "",
+                        "Theme": "FX Pair Impact",
+                        "Regime": fmt(r[1]),
+                        "analyzedAt": fmt(r[5]),
+                    }
+                }
+            )
+    except Exception:
+        pass
+
 return out

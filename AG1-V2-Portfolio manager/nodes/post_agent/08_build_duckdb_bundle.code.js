@@ -89,6 +89,8 @@ function mapSignal(action) {
   const a = String(action || "").toUpperCase();
   if (a === "OPEN" || a === "INCREASE" || a === "BUY") return "BUY";
   if (a === "DECREASE" || a === "CLOSE" || a === "SELL") return "SELL";
+  if (a === "PROPOSE_OPEN") return "PROPOSE_OPEN";
+  if (a === "PROPOSE_CLOSE") return "PROPOSE_CLOSE";
   if (a === "WATCH") return "WATCH";
   if (a === "HOLD") return "HOLD";
   return "NEUTRAL";
@@ -140,12 +142,12 @@ const pctFee = Math.max(0, toNum(feesConfig.orderFeePct, 0));
 const strategyVersion =
   clampText(config.strategyVersion, 64) ||
   clampText(agentDecision?.decisionMeta?.strategy_version, 64) ||
-  "strategy_v1";
-const configVersion = clampText(config.configVersion, 64) || "config_v1";
+  "strategy_v3";
+const configVersion = clampText(config.configVersion, 64) || "config_v3";
 const promptVersion =
   clampText(runCtx.promptVersion, 64) ||
   clampText(agentDecision?.decisionMeta?.prompt_version, 64) ||
-  "prompt_v1";
+  "prompt_v3";
 const model =
   clampText(runCtx.model, 64) ||
   clampText(agentDecision?.decisionMeta?.model, 64) ||
@@ -179,6 +181,9 @@ const run = {
     ok_for_trading: dataOkForTrading,
     data_quality: dataQuality,
     decision,
+    input_snapshot: runCtx.inputSnapshot || null,
+    universe_scope: runCtx.universe_scope || ["EQUITY", "CRYPTO"],
+    enable_fx: runCtx.enable_fx === true,
   },
 };
 
@@ -315,7 +320,8 @@ if (aiCost > 0) {
 
 for (let i = 0; i < actions.length; i++) {
   const a = actions[i] || {};
-  const symbol = normSymbol(a.symbol);
+  const isFx = String(a.assetClass || "").toUpperCase() === "FX" || String(a.symbol || "").toUpperCase().startsWith("FX:");
+  const symbol = normSymbol((isFx ? (a.symbol_internal || a.symbol) : a.symbol));
   if (!symbol) continue;
   const entryPlan = isObj(a.entryPlan) ? a.entryPlan : {};
   const riskPlan = isObj(a.riskPlan) ? a.riskPlan : {};
@@ -422,10 +428,11 @@ const symbolsAll = uniq([
 
 const instruments = symbolsAll.map((symbol) => {
   const p = positions.find((x) => normSymbol(x.Symbol ?? x.symbol) === symbol) || {};
+  const inferredFx = String(symbol || "").toUpperCase().startsWith("FX:");
   return {
     symbol,
     name: clampText(p.Name ?? p.name, 240) || null,
-    asset_class: clampText(p.AssetClass ?? p.assetClass, 64) || "Equity",
+    asset_class: clampText(p.AssetClass ?? p.assetClass, 64) || (inferredFx ? "FX" : "Equity"),
     currency: "EUR",
     isin: clampText(p.ISIN ?? p.isin, 64) || null,
     sector: clampText(p.Sector ?? p.sector, 120) || null,

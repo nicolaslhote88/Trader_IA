@@ -41,6 +41,13 @@ const timestampParis = `${isoLocal}${offsetStr}`;
 const timestampUtc = now.toISOString();
 
 const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
+const enableFxRaw = cfg.enable_fx ?? cfg.ENABLE_FX ?? false;
+const enableFx =
+  typeof enableFxRaw === "boolean"
+    ? enableFxRaw
+    : ["1", "true", "yes", "y", "on", "enabled"].includes(String(enableFxRaw || "").trim().toLowerCase());
+const universeScope = ["EQUITY", "CRYPTO"];
+if (enableFx) universeScope.push("FX");
 
 // run_id: RUN_YYYYMMDD_HHMMSS_<executionId|rand>
 const yyyymmdd = `${parts.year}${parts.month}${parts.day}`;
@@ -59,10 +66,15 @@ return [
         tz,
         offsetMin,
         executionId,
-        strategyVersion: String(cfg.strategy_version || "strategy_v2"),
-        configVersion: String(cfg.config_version || "config_v2"),
-        promptVersion: String(cfg.prompt_version || "prompt_v2"),
+        strategyVersion: String(cfg.strategy_version || "strategy_v3"),
+        configVersion: String(cfg.config_version || "config_v3"),
+        promptVersion: String(cfg.prompt_version || "prompt_v3"),
         model: String(cfg.model || "gpt-5.2"),
+        enable_fx: enableFx,
+        universe_scope: universeScope,
+        inputSnapshot: {
+          universe_scope: universeScope,
+        },
       },
     },
   },

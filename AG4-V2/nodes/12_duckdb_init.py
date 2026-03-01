@@ -3,7 +3,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DB_PATH = "/files/duckdb/ag4_v2.duckdb"
-WORKFLOW_VERSION = "2.0.0"
+WORKFLOW_VERSION = "3.0.0"
 
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
@@ -91,7 +91,43 @@ SCHEMA = [
       items_skipped INTEGER DEFAULT 0,
       errors_logged INTEGER DEFAULT 0,
       error_detail VARCHAR,
-      version VARCHAR DEFAULT '2.0.0'
+      version VARCHAR DEFAULT '3.0.0'
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ag4_fx_macro (
+      run_id VARCHAR PRIMARY KEY,
+      as_of TIMESTAMP NOT NULL,
+      market_regime VARCHAR,
+      drivers VARCHAR,
+      confidence DOUBLE,
+      usd_bias DOUBLE,
+      eur_bias DOUBLE,
+      jpy_bias DOUBLE,
+      gbp_bias DOUBLE,
+      chf_bias DOUBLE,
+      aud_bias DOUBLE,
+      cad_bias DOUBLE,
+      nzd_bias DOUBLE,
+      bias_json VARCHAR,
+      source_window_days INTEGER DEFAULT 7,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ag4_fx_pairs (
+      id VARCHAR PRIMARY KEY,
+      run_id VARCHAR NOT NULL,
+      pair VARCHAR NOT NULL,
+      symbol_internal VARCHAR,
+      directional_bias VARCHAR,
+      rationale VARCHAR,
+      confidence DOUBLE,
+      urgent_event_window BOOLEAN DEFAULT FALSE,
+      as_of TIMESTAMP NOT NULL,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
 ]
@@ -108,6 +144,13 @@ with db_con() as con:
         con.execute("ALTER TABLE news_history ADD COLUMN sectors_bullish VARCHAR")
     if "sectors_bearish" not in cols:
         con.execute("ALTER TABLE news_history ADD COLUMN sectors_bearish VARCHAR")
+
+    try:
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_run ON news_history(run_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_type ON news_history(type)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_fx_pairs_run ON ag4_fx_pairs(run_id)")
+    except Exception:
+        pass
 
     con.execute(
         """

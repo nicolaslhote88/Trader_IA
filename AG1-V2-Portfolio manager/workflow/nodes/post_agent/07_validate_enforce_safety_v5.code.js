@@ -16,12 +16,153 @@ function toNumOrNull(x) {
   return Number.isFinite(n) ? n : null;
 }
 
+function toBool(v, dflt = false) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return dflt;
+  if (["1", "true", "yes", "y", "on", "enabled"].includes(s)) return true;
+  if (["0", "false", "no", "n", "off", "disabled"].includes(s)) return false;
+  return dflt;
+}
+
 function clampText(s, n) {
   return String(s ?? "").replace(/\s+/g, " ").trim().slice(0, n);
 }
 
 function normSymbol(v) {
   return String(v ?? "").trim();
+}
+
+function normAssetClass(v, symbol) {
+  const raw = String(v ?? "").trim().toUpperCase();
+  if (raw === "FX" || raw === "FOREX") return "FX";
+  if (raw === "CRYPTO") return "CRYPTO";
+  if (raw === "EQUITY" || raw === "STOCK" || raw === "ETF") return "EQUITY";
+  const s = String(symbol ?? "").toUpperCase();
+  if (s.startsWith("FX:") || s.endsWith("=X")) return "FX";
+  return "EQUITY";
+}
+
+function fxSymbolInternal(symbol) {
+  const s = String(symbol ?? "").toUpperCase();
+  if (s.startsWith("FX:")) return s;
+  const pair = s.replace("=X", "").replace("/", "").replace(/[^A-Z]/g, "").slice(0, 6);
+  return pair.length === 6 ? `FX:${pair}` : s;
+}
+
+function fxSymbolYahoo(symbol) {
+  const s = String(symbol ?? "").toUpperCase();
+  if (s.endsWith("=X")) return s;
+  const pair = s.replace("FX:", "").replace("/", "").replace(/[^A-Z]/g, "").slice(0, 6);
+  return pair.length === 6 ? `${pair}=X` : s;
+}
+
+function normalizeAgentActionsForFx(agentDecision) {
+  if (!Array.isArray(agentDecision?.actions)) return agentDecision;
+
+  const next = [];
+  for (const raw of agentDecision.actions) {
+    const a = isObj(raw) ? deepClone(raw) : {};
+    const sym = normSymbol(a.symbol);
+    const assetClass = normAssetClass(a.assetClass ?? a.asset_class, sym);
+    const actIn = String(a.action ?? "").toUpperCase();
+
+    a.assetClass = assetClass;
+    a.asset_class = undefined;
+
+    if (assetClass === "FX") {
+      let fxAction = actIn;
+      if (["OPEN", "INCREASE", "BUY", "PROPOSE_OPEN"].includes(actIn)) fxAction = "PROPOSE_OPEN";
+      else if (["DECREASE", "CLOSE", "SELL", "PROPOSE_CLOSE"].includes(actIn)) fxAction = "PROPOSE_CLOSE";
+      else if (!["WATCH", "HOLD"].includes(actIn)) fxAction = "WATCH";
+
+      a.action = fxAction;
+      a.symbol_internal = fxSymbolInternal(sym);
+      a.symbol_yahoo = fxSymbolYahoo(sym);
+      a.execution_required = false;
+      a.needs_risk_approval = true;
+
+      if (!Array.isArray(a.dependencies)) {
+        const deps = a.dependencies || {};
+        const list = [];
+        if (deps.needPrice) list.push("PRICE");
+        if (deps.needNote) list.push("NOTE");
+        if (deps.needNews) list.push("NEWS");
+        if (deps.needTechnical) list.push("TECHNICAL");
+        if (deps.needConsensus) list.push("CONSENSUS");
+        a.dependencies = list;
+      }
+      if (!a.dependencies.includes("AG5_RISK_APPROVAL")) a.dependencies.push("AG5_RISK_APPROVAL");
+      if (!a.dependencies.includes("AG6_EXECUTION")) a.dependencies.push("AG6_EXECUTION");
+
+      if (!isObj(a.proposed_position)) {
+        a.proposed_position = {
+          direction: fxAction === "PROPOSE_OPEN" ? "LONG" : (fxAction === "PROPOSE_CLOSE" ? "NEUTRAL" : "NEUTRAL"),
+          conviction: Number.isFinite(Number(a.confidence)) ? Number(a.confidence) : null,
+        };
+      }
+    } else {
+      if (a.execution_required === undefined) a.execution_required = null;
+      if (a.needs_risk_approval === undefined) a.needs_risk_approval = null;
+    }
+
+    next.push(a);
+  }
+
+  agentDecision.actions = next;
+  return agentDecision;
+}
+
+function appendFxPairProposals(agentDecision, input) {
+  const fxPairs = Array.isArray(input?.fx_pairs) ? input.fx_pairs : [];
+  if (!fxPairs.length) return agentDecision;
+
+  const existing = new Set();
+  for (const a of agentDecision.actions || []) {
+    const ac = normAssetClass(a?.assetClass ?? a?.asset_class, a?.symbol);
+    if (ac !== "FX") continue;
+    const sym = fxSymbolInternal(a?.symbol_internal || a?.symbol || "");
+    if (sym) existing.add(sym);
+  }
+
+  for (const p of fxPairs) {
+    const symbolInternal = fxSymbolInternal(p?.symbol_internal || p?.pair || p?.symbol || "");
+    if (!symbolInternal || existing.has(symbolInternal)) continue;
+
+    const bias = String(p?.directional_bias ?? "NEUTRAL").toUpperCase();
+    const action = bias === "BUY_BASE" ? "PROPOSE_OPEN" : (bias === "SELL_BASE" ? "PROPOSE_CLOSE" : "WATCH");
+    const confRaw = Number(p?.confidence);
+    const confidence = Number.isFinite(confRaw) ? Math.max(0, Math.min(100, Math.round(confRaw))) : null;
+    const urgent = toBool(p?.urgent_event_window, false);
+
+    (agentDecision.actions = Array.isArray(agentDecision.actions) ? agentDecision.actions : []).push({
+      symbol: symbolInternal,
+      symbol_internal: symbolInternal,
+      symbol_yahoo: fxSymbolYahoo(symbolInternal),
+      assetClass: "FX",
+      action,
+      priority: action === "WATCH" ? 3 : 2,
+      confidence,
+      horizonDays: action === "WATCH" ? null : 5,
+      targetWeightPct: null,
+      targetQty: null,
+      rationale: clampText(p?.rationale || `${symbolInternal} ${bias}`, 300),
+      entryPlan: { orderType: null, limitPrice: null, timeInForce: null },
+      riskPlan: { stopLossPct: null, takeProfitPct: null, maxLossEUR: null },
+      dependencies: ["AG5_RISK_APPROVAL", "AG6_EXECUTION"],
+      execution_required: false,
+      needs_risk_approval: true,
+      proposed_position: {
+        direction: action === "PROPOSE_OPEN" ? "LONG" : (action === "PROPOSE_CLOSE" ? "NEUTRAL" : "NEUTRAL"),
+        conviction: confidence,
+      },
+      nextReviewDays: urgent ? 1 : 3,
+    });
+    existing.add(symbolInternal);
+  }
+
+  return agentDecision;
 }
 
 function uniq(arr) {
@@ -232,7 +373,9 @@ function generateOrdersFromActions(agentDecision, portfolioSummary, prices, fees
   for (const a of actions) {
     const sym = normSymbol(a?.symbol);
     const act = String(a?.action ?? "").toUpperCase();
+    const assetClass = normAssetClass(a?.assetClass ?? a?.asset_class, sym);
     if (!sym) continue;
+    if (assetClass === "FX") continue; // AG5/AG6 not in scope: FX stays non-executable.
     if (!["OPEN", "INCREASE", "DECREASE", "CLOSE"].includes(act)) continue;
 
     const px = Number(prices?.[sym]?.lastPrice ?? NaN);
@@ -377,6 +520,9 @@ const upstreamNewsItems = extractNewsItems(input);
 // Agent decision parsing
 let agentDecision = extractAgentDecisionObject(input);
 agentDecision = coerceAgentDecisionToExpectedShape(agentDecision);
+agentDecision = normalizeAgentActionsForFx(agentDecision);
+agentDecision = appendFxPairProposals(agentDecision, input);
+agentDecision = normalizeAgentActionsForFx(agentDecision);
 
 // Prices merge (fallback from portfolio)
 const pricesFallback = buildPricesFallbackFromPortfolio(portfolioSummary);
@@ -402,7 +548,12 @@ if (Array.isArray(agentDecision.actions)) {
 const heldSymbols = getPortfolioPositionsSymbols(portfolioSummary);
 const tradeSymbols = uniq(
   (Array.isArray(agentDecision?.actions) ? agentDecision.actions : [])
-    .filter((a) => ["OPEN", "INCREASE", "DECREASE", "CLOSE"].includes(String(a?.action ?? "").toUpperCase()))
+    .filter((a) => {
+      const act = String(a?.action ?? "").toUpperCase();
+      const sym = normSymbol(a?.symbol);
+      const ac = normAssetClass(a?.assetClass ?? a?.asset_class, sym);
+      return ac !== "FX" && ["OPEN", "INCREASE", "DECREASE", "CLOSE"].includes(act);
+    })
     .map((a) => normSymbol(a?.symbol))
 );
 
@@ -475,15 +626,33 @@ const runId =
   String(agentDecision?.decisionMeta?.run_id ?? "").trim() ||
   "";
 
+const strategyVersion =
+  String(input?.strategyVersion ?? input?.ctx?.run?.strategyVersion ?? input?.config?.strategyVersion ?? "").trim() ||
+  String(agentDecision?.decisionMeta?.strategy_version ?? "").trim() ||
+  "strategy_v3";
+
+const configVersion =
+  String(input?.configVersion ?? input?.ctx?.run?.configVersion ?? input?.config?.configVersion ?? "").trim() ||
+  String(agentDecision?.decisionMeta?.config_version ?? "").trim() ||
+  "config_v3";
+
 const promptVersion =
   String(input?.promptVersion ?? input?.ctx?.run?.promptVersion ?? "").trim() ||
-  String(agentDecision?.decisionMeta?.strategy_version ?? "").trim() ||
-  "prompt_v1";
+  String(agentDecision?.decisionMeta?.prompt_version ?? "").trim() ||
+  "prompt_v3";
 
 const model =
   String(input?.model ?? input?.ctx?.run?.model ?? "").trim() ||
   String(agentDecision?.decisionMeta?.model ?? "").trim() ||
   "gpt-5.2";
+
+const enableFx = toBool(input?.run?.enable_fx ?? input?.ctx?.run?.enable_fx ?? input?.config?.enable_fx, false);
+const universeScope = Array.isArray(input?.run?.universe_scope)
+  ? input.run.universe_scope
+  : (enableFx ? ["EQUITY", "CRYPTO", "FX"] : ["EQUITY", "CRYPTO"]);
+const inputSnapshot = isObj(input?.run?.inputSnapshot) ? deepClone(input.run.inputSnapshot) : {};
+if (!Array.isArray(inputSnapshot.universe_scope)) inputSnapshot.universe_scope = universeScope;
+if (inputSnapshot.enable_fx === undefined) inputSnapshot.enable_fx = enableFx;
 
 // Data quality object consumed by Node 8B
 const dataQuality = {
@@ -504,7 +673,12 @@ const ctx = {
     runId,
     timestampParis: ts,
     model,
+    strategyVersion,
+    configVersion,
     promptVersion,
+    enable_fx: enableFx,
+    universe_scope: universeScope,
+    inputSnapshot,
   },
   portfolioSummary,
   market: {
@@ -516,9 +690,12 @@ const ctx = {
 
 const cash0 = Number(portfolioSummary?.cashEUR ?? 0);
 const actionsCount = Array.isArray(agentDecision?.actions) ? agentDecision.actions.length : 0;
+const fxActionsCount = Array.isArray(agentDecision?.actions)
+  ? agentDecision.actions.filter((a) => normAssetClass(a?.assetClass ?? a?.asset_class, a?.symbol) === "FX").length
+  : 0;
 const caveatsCount = Array.isArray(agentDecision?.dataCaveats) ? agentDecision.dataCaveats.length : 0;
 
-const commentary = `PM_DECISION=${decision} | orders=${orders.length} | actions=${actionsCount} | cash0=${cash0} | caveats=${caveatsCount} | priceCoverage=${Math.round(pricesCoverageRequested * 1000) / 10}%`;
+const commentary = `PM_DECISION=${decision} | orders=${orders.length} | actions=${actionsCount} | fx_actions=${fxActionsCount} | cash0=${cash0} | caveats=${caveatsCount} | priceCoverage=${Math.round(pricesCoverageRequested * 1000) / 10}%`;
 
 return [
   {

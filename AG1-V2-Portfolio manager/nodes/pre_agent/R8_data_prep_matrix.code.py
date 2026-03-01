@@ -97,6 +97,21 @@ def truthy(v):
     return s in ("1", "true", "yes", "y", "ok")
 
 
+def normalize_fx_symbol(v):
+    s = str(v or "").strip().upper()
+    if not s:
+        return ""
+    if s.startswith("FX:"):
+        core = s[3:]
+    else:
+        core = s.replace("=X", "")
+    core = core.replace("/", "").replace("-", "").replace("_", "")
+    core = "".join(ch for ch in core if ch.isalpha())
+    if len(core) < 6:
+        return ""
+    return "FX:" + core[:6]
+
+
 @contextmanager
 def db_con(path, retries=5, delay=0.25):
     con = None
@@ -163,9 +178,14 @@ universe_rows = run_query(
     cfg["ag2_db_path"],
     """
     SELECT UPPER(TRIM(symbol)) AS symbol,
+           UPPER(TRIM(COALESCE(symbol_yahoo, symbol))) AS symbol_yahoo,
            COALESCE(name, '') AS name,
+           UPPER(TRIM(COALESCE(asset_class, 'EQUITY'))) AS asset_class,
            COALESCE(sector, '') AS sector,
-           COALESCE(industry, '') AS industry
+           COALESCE(industry, '') AS industry,
+           UPPER(TRIM(COALESCE(base_ccy, ''))) AS base_ccy,
+           UPPER(TRIM(COALESCE(quote_ccy, ''))) AS quote_ccy,
+           pip_size
     FROM universe
     WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''
     ORDER BY symbol
@@ -260,6 +280,38 @@ macro_rows = run_query(
     FROM news_history
     WHERE COALESCE(type, 'macro') = 'macro'
     ORDER BY publishedat DESC
+    """,
+)
+
+fx_macro_rows = run_query(
+    cfg["ag4_db_path"],
+    """
+    SELECT
+      run_id,
+      as_of,
+      market_regime,
+      drivers,
+      confidence,
+      usd_bias, eur_bias, jpy_bias, gbp_bias, chf_bias, aud_bias, cad_bias, nzd_bias
+    FROM ag4_fx_macro
+    ORDER BY as_of DESC
+    LIMIT 1
+    """,
+)
+
+fx_pair_rows = run_query(
+    cfg["ag4_db_path"],
+    """
+    SELECT
+      UPPER(TRIM(COALESCE(symbol_internal, pair))) AS symbol_internal,
+      UPPER(TRIM(COALESCE(pair, ''))) AS pair,
+      UPPER(TRIM(COALESCE(directional_bias, 'NEUTRAL'))) AS directional_bias,
+      COALESCE(rationale, '') AS rationale,
+      COALESCE(confidence, 0) AS confidence,
+      COALESCE(urgent_event_window, FALSE) AS urgent_event_window,
+      as_of
+    FROM ag4_fx_pairs
+    ORDER BY as_of DESC, pair
     """,
 )
 
@@ -385,9 +437,14 @@ for r in universe_rows:
     if not sym:
         continue
     universe[sym] = {
+        "symbol_yahoo": str(r.get("symbol_yahoo") or sym).strip().upper(),
         "name": str(r.get("name") or "").strip(),
+        "asset_class": str(r.get("asset_class") or "EQUITY").strip().upper(),
         "sector": str(r.get("sector") or "").strip(),
         "industry": str(r.get("industry") or "").strip(),
+        "base_ccy": str(r.get("base_ccy") or "").strip().upper(),
+        "quote_ccy": str(r.get("quote_ccy") or "").strip().upper(),
+        "pip_size": safe_float(r.get("pip_size"), 0.0),
     }
 
 tech_map = {}
@@ -475,12 +532,25 @@ for r in macro_rows:
         }
     )
 
+fx_macro = fx_macro_rows[0] if fx_macro_rows else {}
+fx_pair_map = {}
+for r in fx_pair_rows:
+    sym = normalize_fx_symbol(r.get("symbol_internal") or r.get("pair"))
+    if not sym:
+        continue
+    prev = fx_pair_map.get(sym)
+    cur_ts = parse_dt(r.get("as_of"))
+    old_ts = parse_dt(prev.get("as_of")) if prev else None
+    if prev is None or old_ts is None or (cur_ts is not None and cur_ts >= old_ts):
+        fx_pair_map[sym] = dict(r)
+
 symbols = set()
 symbols.update(universe.keys())
 symbols.update(tech_map.keys())
 symbols.update(funda_map.keys())
 symbols.update(sym_news_agg.keys())
 symbols.update(yf_map.keys())
+symbols.update(fx_pair_map.keys())
 
 out = []
 for sym in sorted(symbols):
@@ -489,8 +559,25 @@ for sym in sorted(symbols):
     f = funda_map.get(sym, {})
     sn = sym_news_agg.get(sym, {})
     yf = yf_map.get(sym, {})
+    fxp = fx_pair_map.get(normalize_fx_symbol(sym), {})
 
-    name = str(u.get("name") or "").strip() or sym
+    asset_class = str(u.get("asset_class") or ("FX" if normalize_fx_symbol(sym) else "EQUITY")).strip().upper()
+    symbol_yahoo = str(u.get("symbol_yahoo") or (sym.replace("FX:", "") + "=X" if asset_class == "FX" else sym)).strip().upper()
+    base_ccy = str(u.get("base_ccy") or "").strip().upper()
+    quote_ccy = str(u.get("quote_ccy") or "").strip().upper()
+    pip_size = safe_float(u.get("pip_size"), 0.0)
+
+    if asset_class == "FX":
+        pair = normalize_fx_symbol(sym).replace("FX:", "")
+        if len(pair) == 6:
+            if not base_ccy:
+                base_ccy = pair[:3]
+            if not quote_ccy:
+                quote_ccy = pair[3:]
+        if pip_size <= 0:
+            pip_size = 0.01 if quote_ccy == "JPY" else 0.0001
+
+    name = str(u.get("name") or "").strip() or (base_ccy + "/" + quote_ccy if asset_class == "FX" and base_ccy and quote_ccy else sym)
     sector = str(u.get("sector") or "").strip()
     industry = str(u.get("industry") or "").strip()
 
@@ -526,9 +613,14 @@ for sym in sorted(symbols):
     out.append(
         {
             "Symbol": sym,
+            "Symbol_Yahoo": symbol_yahoo,
             "Name": name,
+            "AssetClass": asset_class,
             "Sector": sector,
             "Industry": industry,
+            "Base_CCY": base_ccy,
+            "Quote_CCY": quote_ccy,
+            "Pip_Size": pip_size,
             "Tech_Action": str(t.get("d1_action") or "").upper().strip(),
             "Tech_Confidence": safe_float(t.get("d1_score"), 0.0),
             "Last_Close": safe_float(t.get("last_close"), 0.0),
@@ -574,6 +666,14 @@ for sym in sorted(symbols):
             "YF_Fetched_At": to_iso(yf.get("fetched_at")),
             "Sector_Weight_Pct": safe_float(sec_weight.get(sector, 0.0), 0.0),
             "Symbol_Weight_Pct": safe_float(sym_weight.get(sym, 0.0), 0.0),
+            "FX_Directional_Bias": str(fxp.get("directional_bias") or "").strip().upper(),
+            "FX_Bias_Confidence": safe_float(fxp.get("confidence"), 0.0),
+            "FX_Rationale": str(fxp.get("rationale") or "").strip(),
+            "FX_Urgent_Event_Window": truthy(fxp.get("urgent_event_window")),
+            "FX_As_Of": to_iso(fxp.get("as_of")),
+            "FX_Macro_Regime": str(fx_macro.get("market_regime") or "").strip(),
+            "FX_Macro_Confidence": safe_float(fx_macro.get("confidence"), 0.0),
+            "FX_Macro_As_Of": to_iso(fx_macro.get("as_of")),
         }
     )
 

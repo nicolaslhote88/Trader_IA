@@ -1,4 +1,4 @@
-// AG2-V2 - Build AI Validation Context (V2: strict contract + real H1 bars)
+// AG2-V3 - Build AI Validation Context (strict contract + FX metadata)
 
 const item = $input.item.json;
 
@@ -108,8 +108,25 @@ return [{
   json: {
     ...item,
     ai_context: {
-      schema_version: "ag2_ai_context_v2",
-      symbol: item.symbol,
+      schema_version: "ag2_ai_context_v3",
+      symbol: item.symbol_internal || item.symbol,
+      symbol_yahoo: item.symbol_yahoo || item.symbol,
+      asset_class: item.asset_class || "EQUITY",
+      base_ccy: item.base_ccy || null,
+      quote_ccy: item.quote_ccy || null,
+      pip_size: item.pip_size ?? null,
+      atr_pips_h1: item.atr_pips_h1 ?? null,
+      atr_pips_d1: item.atr_pips_d1 ?? null,
+      stop_pips_suggested: item.stop_pips_suggested ?? null,
+      data_quality_flags: Array.isArray(item.data_quality_flags)
+        ? item.data_quality_flags
+        : (() => {
+            try {
+              return JSON.parse(item.data_quality_flags || "[]");
+            } catch {
+              return [];
+            }
+          })(),
       run_context: { run_id: item.run_id, timestamp: new Date().toISOString() },
 
       // Canonical facts (the prompt will use THESE names)

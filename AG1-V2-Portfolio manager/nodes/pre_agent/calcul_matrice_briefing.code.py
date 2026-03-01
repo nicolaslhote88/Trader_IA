@@ -134,6 +134,8 @@ for r in rows:
     if not symbol:
         continue
 
+    asset_class = str(r.get("AssetClass") or "EQUITY").strip().upper()
+    symbol_yahoo = str(r.get("Symbol_Yahoo") or symbol).strip().upper()
     name = str(r.get("Name") or symbol).strip() or symbol
     sector = str(r.get("Sector") or "N/A").strip() or "N/A"
 
@@ -190,6 +192,12 @@ for r in rows:
     slip_pct = safe_float(r.get("SlippageProxyPct"), 0.0)
     symbol_news_impact = safe_float(r.get("Symbol_News_Impact_7d"), 0.0)
     macro_impact = safe_float(r.get("Macro_Impact_30d"), 0.0)
+    fx_bias = str(r.get("FX_Directional_Bias") or "").strip().upper()
+    fx_bias_conf = safe_float(r.get("FX_Bias_Confidence"), 0.0)
+    fx_urgent = truthy(r.get("FX_Urgent_Event_Window"))
+    fx_macro_regime = str(r.get("FX_Macro_Regime") or "").strip()
+    fx_macro_conf = safe_float(r.get("FX_Macro_Confidence"), 0.0)
+    fx_rationale = str(r.get("FX_Rationale") or "").strip()
     sector_weight = safe_float(r.get("Sector_Weight_Pct"), 0.0)
     symbol_weight = safe_float(r.get("Symbol_Weight_Pct"), 0.0)
 
@@ -220,6 +228,9 @@ for r in rows:
         event_risk = min(45.0, 25.0 + d * 0.5)
     else:
         event_risk = 42.0
+
+    if asset_class == "FX":
+        event_risk = max(event_risk, 70.0 if fx_urgent else 35.0)
 
     vol_risk = clamp(d1_atr_pct * 20.0, 0.0, 100.0)
     liq_risk = clamp(spread_pct * 35.0 + slip_pct * 20.0, 0.0, 100.0)
@@ -407,7 +418,9 @@ for r in rows:
     matrix_rows.append(
         {
             "symbol": symbol,
+            "symbol_yahoo": symbol_yahoo,
             "name": name,
+            "asset_class": asset_class,
             "sector": sector,
             "entry_price": entry,
             "stop_price": stop,
@@ -460,6 +473,14 @@ for r in rows:
             "target_price": target_price,
             "funda_horizon": str(r.get("Funda_Horizon") or "").strip(),
             "macro_themes": str(r.get("Macro_Themes") or "").strip(),
+            "fx_directional_bias": fx_bias,
+            "fx_bias_confidence": fx_bias_conf,
+            "fx_urgent_event_window": fx_urgent,
+            "fx_macro_regime": fx_macro_regime,
+            "fx_macro_confidence": fx_macro_conf,
+            "fx_rationale": fx_rationale,
+            "fx_as_of": fmt_date(r.get("FX_As_Of")),
+            "fx_macro_as_of": fmt_date(r.get("FX_Macro_As_Of")),
         }
     )
 
@@ -514,34 +535,54 @@ for r in matrix_rows:
     )
 
     reasons = []
-    if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state):
-        action = "Entrer / Renforcer"
-        reasons.append("SETUP_OK")
-    elif reduce_core:
-        action = "Reduire / Sortir"
-        reasons.append("RISK_REWARD_UNFAVORABLE")
+    if str(r.get("asset_class") or "").upper() == "FX":
+        if r.get("fx_directional_bias") == "BUY_BASE":
+            action = "Entrer / Renforcer"
+            reasons.append("FX_BIAS_BUY_BASE")
+        elif r.get("fx_directional_bias") == "SELL_BASE":
+            action = "Reduire / Sortir"
+            reasons.append("FX_BIAS_SELL_BASE")
+        else:
+            action = "Surveiller"
+            reasons.append("FX_NEUTRAL_BIAS")
     else:
-        action = "Surveiller"
-        reasons.append("WAIT_CONFIRMATION")
-        if quality_block:
-            reasons.append("DATA_QUALITY_GATE")
-        if earnings_block:
-            reasons.append("EARNINGS_GATE")
-        if rr_outlier:
-            reasons.append("RR_OUTLIER_GATE")
-        if invalid_options_state:
-            reasons.append("INVALID_OPTIONS_STATE_GATE")
+        if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state):
+            action = "Entrer / Renforcer"
+            reasons.append("SETUP_OK")
+        elif reduce_core:
+            action = "Reduire / Sortir"
+            reasons.append("RISK_REWARD_UNFAVORABLE")
+        else:
+            action = "Surveiller"
+            reasons.append("WAIT_CONFIRMATION")
+            if quality_block:
+                reasons.append("DATA_QUALITY_GATE")
+            if earnings_block:
+                reasons.append("EARNINGS_GATE")
+            if rr_outlier:
+                reasons.append("RR_OUTLIER_GATE")
+            if invalid_options_state:
+                reasons.append("INVALID_OPTIONS_STATE_GATE")
 
     ev_component = clamp((ev_r / 1.5) * 100.0, 0.0, 100.0)
     risk_component = clamp(100.0 - risk_u, 0.0, 100.0)
     size_score = 0.55 * ev_component + 0.25 * risk_component + 0.20 * data_quality
 
-    if action == "Entrer / Renforcer":
-        size_pct = clamp(size_score, 10.0, 100.0)
-    elif action == "Surveiller":
-        size_pct = clamp(size_score * 0.50, 0.0, 50.0)
+    if str(r.get("asset_class") or "").upper() == "FX":
+        fx_size = clamp(safe_float(r.get("fx_bias_confidence"), 0.0), 0.0, 100.0)
+        if action == "Entrer / Renforcer":
+            size_pct = max(10.0, fx_size * 0.7)
+        elif action == "Surveiller":
+            size_pct = fx_size * 0.25
+        else:
+            size_pct = 0.0
     else:
-        size_pct = 0.0
+        if action == "Entrer / Renforcer":
+            size_pct = clamp(size_score, 10.0, 100.0)
+        elif action == "Surveiller":
+            size_pct = clamp(size_score * 0.50, 0.0, 50.0)
+        else:
+            size_pct = 0.0
     if earnings_block:
         size_pct = min(size_pct, 30.0)
     if invalid_options_state:
@@ -580,7 +621,7 @@ avg_pwin = (sum(safe_float(r.get("p_win"), 0.0) for r in matrix_rows) / total * 
 def fmt_row(r):
     gates = r.get("gate_summary") or "OK"
     return (
-        f"- {r['symbol']} ({r['name']}) [{r['sector']}] | {r['matrix_action']} | G{r['setup_grade']} | "
+        f"- {r['symbol']} ({r['name']}) [{r.get('asset_class','EQUITY')}:{r['sector']}] | {r['matrix_action']} | G{r['setup_grade']} | "
         f"Risk {int(r['risk_score_u'])}/100 | Reward {int(r['reward_score_u'])}/100 | "
         f"R {safe_float(r['r_multiple']):.2f} | EV {safe_float(r['ev_r']):.2f} | pWin {safe_float(r['p_win'])*100:.1f}% | "
         f"DataQ {safe_float(r['data_quality_score']):.0f}/100 | size {safe_float(r['size_reco_pct']):.1f}% | "
@@ -662,7 +703,9 @@ for r in matrix_rows[:200]:
     pack_rows.append(
         {
             "symbol": r["symbol"],
+            "symbol_yahoo": r.get("symbol_yahoo") or "",
             "name": r["name"],
+            "asset_class": r.get("asset_class") or "EQUITY",
             "sector": r["sector"],
             "decision": r["matrix_action"],
             "grade": r["setup_grade"],
@@ -682,6 +725,12 @@ for r in matrix_rows[:200]:
             "spread_pct": round(safe_float(r.get("spread_pct"), 0.0), 4),
             "macro_themes": r.get("macro_themes") or "",
             "action_reason": r.get("action_reason") or "",
+            "fx_directional_bias": r.get("fx_directional_bias") or "",
+            "fx_bias_confidence": round(safe_float(r.get("fx_bias_confidence"), 0.0), 2),
+            "fx_urgent_event_window": bool(r.get("fx_urgent_event_window")),
+            "fx_macro_regime": r.get("fx_macro_regime") or "",
+            "fx_macro_confidence": round(safe_float(r.get("fx_macro_confidence"), 0.0), 2),
+            "fx_rationale": r.get("fx_rationale") or "",
         }
     )
 
@@ -692,6 +741,37 @@ opportunity_pack = {
     "rows": pack_rows,
 }
 
+fx_pairs = []
+for r in matrix_rows:
+    if str(r.get("asset_class") or "").upper() != "FX":
+        continue
+    pair = str(r.get("symbol") or "").replace("FX:", "")
+    if len(pair) < 6:
+        continue
+    fx_pairs.append(
+        {
+            "pair": pair[:6],
+            "symbol_internal": "FX:" + pair[:6],
+            "symbol_yahoo": pair[:6] + "=X",
+            "directional_bias": str(r.get("fx_directional_bias") or "NEUTRAL"),
+            "rationale": str(r.get("fx_rationale") or r.get("action_reason") or ""),
+            "confidence": round(safe_float(r.get("fx_bias_confidence"), 0.0), 2),
+            "urgent_event_window": bool(r.get("fx_urgent_event_window")),
+            "asOf": r.get("fx_as_of") or r.get("fx_macro_as_of") or opportunity_pack["generatedAt"],
+        }
+    )
+
+fx_macro = None
+for r in matrix_rows:
+    if str(r.get("asset_class") or "").upper() != "FX":
+        continue
+    fx_macro = {
+        "as_of": r.get("fx_macro_as_of") or opportunity_pack["generatedAt"],
+        "market_regime": r.get("fx_macro_regime") or "Neutral",
+        "confidence": round(safe_float(r.get("fx_macro_confidence"), 0.0), 2),
+    }
+    break
+
 return [
     {
         "json": {
@@ -699,6 +779,8 @@ return [
             "opportunity_pack": opportunity_pack,
             "opportunity_stats": stats,
             "matrix_thresholds": thresholds,
+            "fx_pairs": fx_pairs,
+            "fx_macro": fx_macro,
         }
     }
 ]
