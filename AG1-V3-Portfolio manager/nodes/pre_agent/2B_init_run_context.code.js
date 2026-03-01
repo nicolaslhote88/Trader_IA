@@ -41,7 +41,7 @@ const timestampParis = `${isoLocal}${offsetStr}`;
 const timestampUtc = now.toISOString();
 
 const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
-const enableFxRaw = cfg.enable_fx ?? cfg.ENABLE_FX ?? false;
+const enableFxRaw = cfg.enable_fx ?? false;
 const enableFx =
   typeof enableFxRaw === "boolean"
     ? enableFxRaw

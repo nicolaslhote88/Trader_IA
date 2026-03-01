@@ -119,9 +119,6 @@ function buildInstrument(row) {
 const items = $input.all();
 
 const cfgSource = items[0]?.json || {};
-const enableFx =
-  toBool(getField(cfgSource, ["ENABLE_FX", "enable_fx"]), false) ||
-  toBool($env.ENABLE_FX, false);
 const batchSizeRaw = toNum(getField(cfgSource, ["AG2_BATCH_SIZE", "batch_size"]), null);
 const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.floor(batchSizeRaw) : 10;
 
@@ -135,9 +132,11 @@ for (const row of universeRaw) {
 
 const processQueue = universe.filter((u) => {
   if (!u.enabled) return false;
-  if (u.asset_class === "FX" && !enableFx) return false;
   return true;
 });
+
+const fxUniverseCount = processQueue.filter((u) => u.asset_class === "FX").length;
+const enableFx = fxUniverseCount > 0;
 
 if (processQueue.length === 0) {
   return [
@@ -153,7 +152,6 @@ if (processQueue.length === 0) {
   ];
 }
 
-const fxUniverseCount = processQueue.filter((u) => u.asset_class === "FX").length;
 const universeScope = ["EQUITY", "CRYPTO"];
 if (enableFx) universeScope.push("FX");
 

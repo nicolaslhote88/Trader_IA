@@ -13,7 +13,10 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, Any, List
 
 import pandas as pd
+import requests
 import yfinance as yf
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 # =========================
 # Config (ENV)
@@ -70,6 +73,17 @@ INTERVAL_MAX_LOOKBACK = {
     "60m": 730, "1h": 730, "90m": 60,
     "1d": 5000, "5d": 5000, "1wk": 5000, "1mo": 5000, "3mo": 5000,
 }
+
+# Shared HTTP session for yfinance upstream calls with retry/backoff.
+yf_session = requests.Session()
+yf_retry = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=[429, 500, 502, 503, 504],
+)
+yf_adapter = HTTPAdapter(max_retries=yf_retry)
+yf_session.mount("http://", yf_adapter)
+yf_session.mount("https://", yf_adapter)
 
 app = FastAPI(title="yfinance-api", version=APP_VERSION)
 
@@ -530,6 +544,7 @@ def _download_incremental(symbol: str, interval: str, start_dt: datetime, end_dt
         progress=False,
         threads=False,
         auto_adjust=False,
+        session=yf_session,
     )
     return _normalize_download_df(raw)
 
@@ -575,6 +590,10 @@ def _classify_error(msg: str) -> str:
     if "EMPTY" in msg.upper() or "No data" in msg:
         return "empty"
     return "other"
+
+
+def _json_error_response(status_code: int, content: dict) -> JSONResponse:
+    return JSONResponse(status_code=status_code, content=content)
 
 
 def _extract_quote_snapshot(
@@ -1132,10 +1151,28 @@ def get_info(symbol: str = Query(...)):
     symbol = _safe_str(symbol, max_len=32).upper()
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol)
+        tick = yf.Ticker(symbol, session=yf_session)
         isin = _safe_str(getattr(tick, "isin", ""), max_len=64)
         info = tick.info or {}
         fast = dict(tick.fast_info or {})
+        if not info and not fast:
+            return _json_error_response(
+                status_code=404,
+                content={
+                    "ok": False,
+                    "symbol": symbol,
+                    "error": "NO_MARKET_DATA_FOUND",
+                    "sector": "",
+                    "industry": "",
+                    "isin": "",
+                    "shortName": "",
+                    "country": "",
+                    "quoteType": "",
+                    "quote": {},
+                    "fetchedAt": _utcnow().isoformat(),
+                    "source": "yahoo_finance_yfinance",
+                },
+            )
         quote = _extract_quote_snapshot(symbol, info, fast)
         return {
             "ok": True,
@@ -1153,15 +1190,23 @@ def get_info(symbol: str = Query(...)):
     except Exception as e:
         err = str(e)
         print(f"[ERROR INFO] {symbol}: {err}")
-        return {
-            "ok": False,
-            "symbol": symbol,
-            "error": err,
-            "sector": "",
-            "industry": "",
-            "isin": "",
-            "quoteType": "",
-        }
+        return _json_error_response(
+            status_code=500,
+            content={
+                "ok": False,
+                "symbol": symbol,
+                "error": err,
+                "sector": "",
+                "industry": "",
+                "isin": "",
+                "shortName": "",
+                "country": "",
+                "quoteType": "",
+                "quote": {},
+                "fetchedAt": _utcnow().isoformat(),
+                "source": "yahoo_finance_yfinance",
+            },
+        )
 
 
 @app.get("/quote")
@@ -1202,7 +1247,7 @@ def get_quote(
 
         try:
             _global_rate_limit_sleep()
-            tick = yf.Ticker(sym)
+            tick = yf.Ticker(sym, session=yf_session)
             info = tick.info or {}
             fast = dict(tick.fast_info or {})
             row = _extract_quote_snapshot(sym, info, fast, qty=qty, side=side_u)
@@ -1270,7 +1315,7 @@ def get_options(
 
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol)
+        tick = yf.Ticker(symbol, session=yf_session)
         expirations = list(tick.options or [])
         selected_exp, exp_warning = _choose_expiration(
             expirations=expirations,
@@ -1418,14 +1463,17 @@ def get_options(
             out["stale"] = True
             out["error"] = err
             return out
-        return {
-            "ok": False,
-            "symbol": symbol,
-            "source": "yahoo_finance_yfinance",
-            "fetchedAt": _utcnow().isoformat(),
-            "error": err,
-            "expirationRequested": expiration or None,
-        }
+        return _json_error_response(
+            status_code=500,
+            content={
+                "ok": False,
+                "symbol": symbol,
+                "source": "yahoo_finance_yfinance",
+                "fetchedAt": _utcnow().isoformat(),
+                "error": err,
+                "expirationRequested": expiration or None,
+            },
+        )
 
 
 @app.get("/calendar")
@@ -1447,7 +1495,7 @@ def get_calendar(
 
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol)
+        tick = yf.Ticker(symbol, session=yf_session)
 
         calendar_raw: Any = {}
         try:
@@ -1547,16 +1595,19 @@ def get_calendar(
             out["stale"] = True
             out["error"] = err
             return out
-        return {
-            "ok": False,
-            "symbol": symbol,
-            "source": "yahoo_finance_yfinance",
-            "fetchedAt": _utcnow().isoformat(),
-            "error": err,
-            "calendar": {},
-            "earningsDates": [],
-            "nextEarningsDate": None,
-        }
+        return _json_error_response(
+            status_code=500,
+            content={
+                "ok": False,
+                "symbol": symbol,
+                "source": "yahoo_finance_yfinance",
+                "fetchedAt": _utcnow().isoformat(),
+                "error": err,
+                "calendar": {},
+                "earningsDates": [],
+                "nextEarningsDate": None,
+            },
+        )
 
 
 @app.get("/fundamentals")
@@ -1576,7 +1627,7 @@ def get_fundamentals(symbol: str = Query(...)):
 
     try:
         _global_rate_limit_sleep()
-        tick = yf.Ticker(symbol)
+        tick = yf.Ticker(symbol, session=yf_session)
 
         info = {}
         try:
@@ -1738,22 +1789,25 @@ def get_fundamentals(symbol: str = Query(...)):
     except Exception as e:
         err = str(e)
         print(f"[ERROR FUNDAMENTALS] {symbol}: {err}", flush=True)
-        return {
-            "ok": False,
-            "symbol": symbol,
-            "source": "yahoo_finance_yfinance",
-            "fetchedAt": fetched_at,
-            "error": err,
-            "profile": profile,
-            "price": price,
-            "valuation": valuation,
-            "profitability": profitability,
-            "growth": growth,
-            "financialHealth": financial_health,
-            "consensus": consensus,
-            "dividends": dividends,
-            "meta": {"dataPoints": 0, "dataCoveragePctApprox": 0.0},
-        }
+        return _json_error_response(
+            status_code=500,
+            content={
+                "ok": False,
+                "symbol": symbol,
+                "source": "yahoo_finance_yfinance",
+                "fetchedAt": fetched_at,
+                "error": err,
+                "profile": profile,
+                "price": price,
+                "valuation": valuation,
+                "profitability": profitability,
+                "growth": growth,
+                "financialHealth": financial_health,
+                "consensus": consensus,
+                "dividends": dividends,
+                "meta": {"dataPoints": 0, "dataCoveragePctApprox": 0.0},
+            },
+        )
 
 
 if __name__ == "__main__":

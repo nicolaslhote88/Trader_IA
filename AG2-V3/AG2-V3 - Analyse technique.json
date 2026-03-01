@@ -74,7 +74,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// AG2-V3 - Init Config (multi-asset with FX addon)\n// Batch rotation remains handled by DuckDB init.\n\nfunction getField(row, names) {\n  if (!row || typeof row !== \"object\") return undefined;\n  const keys = Object.keys(row);\n  for (const name of names) {\n    if (row[name] !== undefined) return row[name];\n    const lower = String(name).toLowerCase();\n    for (const k of keys) {\n      if (String(k).toLowerCase() === lower) return row[k];\n    }\n  }\n  return undefined;\n}\n\nfunction toBool(v, dflt = false) {\n  if (typeof v === \"boolean\") return v;\n  if (typeof v === \"number\") return v !== 0;\n  const s = String(v ?? \"\").trim().toLowerCase();\n  if (!s) return dflt;\n  if ([\"1\", \"true\", \"yes\", \"y\", \"on\", \"enabled\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\", \"off\", \"disabled\"].includes(s)) return false;\n  return dflt;\n}\n\nfunction toNum(v, dflt = null) {\n  if (v === null || v === undefined || v === \"\") return dflt;\n  const n = Number(v);\n  return Number.isFinite(n) ? n : dflt;\n}\n\nfunction normAssetClass(v, symbolYahoo) {\n  const raw = String(v ?? \"\").trim().toUpperCase();\n  if (raw === \"FX\" || raw === \"FOREX\") return \"FX\";\n  if (raw === \"CRYPTO\") return \"CRYPTO\";\n  if (raw === \"EQUITY\" || raw === \"STOCK\" || raw === \"ETF\") return \"EQUITY\";\n  if (String(symbolYahoo || \"\").trim().toUpperCase().endsWith(\"=X\")) return \"FX\";\n  return \"EQUITY\";\n}\n\nfunction sanitizePair6(v) {\n  const s = String(v ?? \"\")\n    .toUpperCase()\n    .replace(/^FX:/, \"\")\n    .replace(\"=X\", \"\")\n    .replace(/[^A-Z]/g, \"\");\n  if (s.length < 6) return \"\";\n  return s.slice(0, 6);\n}\n\nfunction toFxYahoo(raw) {\n  const pair = sanitizePair6(raw);\n  return pair ? `${pair}=X` : \"\";\n}\n\nfunction buildInstrument(row) {\n  const rawSymbol = String(\n    getField(row, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\", \"symbol_yahoo\", \"YahooSymbol\"]) ?? \"\"\n  )\n    .trim()\n    .toUpperCase();\n  if (!rawSymbol) return null;\n\n  const enabled = toBool(getField(row, [\"Enabled\", \"enabled\", \"Active\", \"active\"]), true);\n  let symbolYahoo = String(getField(row, [\"symbol_yahoo\", \"YahooSymbol\"]) ?? rawSymbol).trim().toUpperCase();\n  const assetClass = normAssetClass(getField(row, [\"AssetClass\", \"assetClass\", \"asset_class\"]), symbolYahoo);\n\n  let baseCcy = String(getField(row, [\"base_ccy\", \"BaseCCY\", \"baseCcy\"]) ?? \"\")\n    .trim()\n    .toUpperCase();\n  let quoteCcy = String(getField(row, [\"quote_ccy\", \"QuoteCCY\", \"quoteCcy\"]) ?? \"\")\n    .trim()\n    .toUpperCase();\n  let symbolInternal = \"\";\n  let pipSize = toNum(getField(row, [\"pip_size\", \"PipSize\"]), null);\n  let priceDecimals = toNum(getField(row, [\"price_decimals\", \"PriceDecimals\"]), null);\n  let tradingHours = String(getField(row, [\"trading_hours\", \"TradingHours\"]) ?? \"\").trim();\n\n  if (assetClass === \"FX\") {\n    symbolYahoo = toFxYahoo(symbolYahoo || rawSymbol);\n    const pair = sanitizePair6(symbolYahoo);\n    if (!pair) return null;\n    baseCcy = baseCcy || pair.slice(0, 3);\n    quoteCcy = quoteCcy || pair.slice(3, 6);\n    symbolInternal =\n      String(getField(row, [\"symbol_internal\", \"SymbolInternal\"]) ?? \"\").trim().toUpperCase() || `FX:${pair}`;\n    if (pipSize === null) pipSize = quoteCcy === \"JPY\" ? 0.01 : 0.0001;\n    if (priceDecimals === null) priceDecimals = quoteCcy === \"JPY\" ? 3 : 5;\n    if (!tradingHours) tradingHours = \"24x5\";\n  } else {\n    symbolInternal =\n      String(getField(row, [\"symbol_internal\", \"SymbolInternal\"]) ?? \"\").trim().toUpperCase() || rawSymbol;\n    if (!tradingHours) tradingHours = \"\";\n  }\n\n  return {\n    symbol: symbolInternal,\n    symbol_internal: symbolInternal,\n    symbol_yahoo: symbolYahoo || rawSymbol,\n    name: String(getField(row, [\"Name\", \"name\"]) ?? symbolInternal).trim(),\n    asset_class: assetClass,\n    exchange: String(getField(row, [\"Exchange\", \"exchange\"]) ?? \"Euronext Paris\").trim(),\n    currency: String(getField(row, [\"Currency\", \"currency\"]) ?? \"EUR\").trim().toUpperCase(),\n    country: String(getField(row, [\"Country\", \"country\"]) ?? \"\").trim(),\n    sector: String(getField(row, [\"Sector\", \"sector\"]) ?? \"\").trim(),\n    industry: String(getField(row, [\"Industry\", \"industry\"]) ?? \"\").trim(),\n    isin: String(getField(row, [\"ISIN\", \"isin\"]) ?? \"\").trim(),\n    enabled,\n    boursorama_ref: String(getField(row, [\"BoursoramaRef\", \"boursorama_ref\"]) ?? \"\").trim(),\n    base_ccy: baseCcy || null,\n    quote_ccy: quoteCcy || null,\n    pip_size: pipSize,\n    price_decimals: priceDecimals,\n    trading_hours: tradingHours,\n  };\n}\n\nconst items = $input.all();\n\nconst cfgSource = items[0]?.json || {};\nconst enableFx =\n  toBool(getField(cfgSource, [\"ENABLE_FX\", \"enable_fx\"]), false) ||\n  toBool($env.ENABLE_FX, false);\nconst batchSizeRaw = toNum(getField(cfgSource, [\"AG2_BATCH_SIZE\", \"batch_size\"]), null);\nconst batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.floor(batchSizeRaw) : 10;\n\nconst universeRaw = items.map((i) => i.json || {});\nconst universe = [];\nfor (const row of universeRaw) {\n  const inst = buildInstrument(row);\n  if (!inst) continue;\n  universe.push(inst);\n}\n\nconst processQueue = universe.filter((u) => {\n  if (!u.enabled) return false;\n  if (u.asset_class === \"FX\" && !enableFx) return false;\n  return true;\n});\n\nif (processQueue.length === 0) {\n  return [\n    {\n      json: {\n        ok: false,\n        error: \"NO_SYMBOLS\",\n        enable_fx: enableFx,\n        universe_total: universe.length,\n        symbols: [],\n      },\n    },\n  ];\n}\n\nconst fxUniverseCount = processQueue.filter((u) => u.asset_class === \"FX\").length;\nconst universeScope = [\"EQUITY\", \"CRYPTO\"];\nif (enableFx) universeScope.push(\"FX\");\n\nreturn [\n  {\n    json: {\n      ok: true,\n      _universe: universe,\n      _process_queue: processQueue,\n      _all_symbols: processQueue.map((u) => u.symbol),\n      yfinance_api_base: String(getField(cfgSource, [\"yfinance_api_base\"]) ?? \"http://yfinance-api:8080\"),\n      intraday: { interval: \"1h\", lookback_days: 60, max_bars: 200, min_bars: 50 },\n      daily: { interval: \"1d\", lookback_days: 400, max_bars: 400, min_bars: 200 },\n      batch_size: batchSize,\n      enable_fx: enableFx,\n      fx_universe_count: fxUniverseCount,\n      strategy_version: \"strategy_v3\",\n      config_version: \"config_v3\",\n      prompt_version: \"prompt_v3\",\n      universe_scope: universeScope,\n    },\n  },\n];\n"
+        "jsCode": "// AG2-V3 - Init Config (multi-asset with FX addon)\n// Batch rotation remains handled by DuckDB init.\n\nfunction getField(row, names) {\n  if (!row || typeof row !== \"object\") return undefined;\n  const keys = Object.keys(row);\n  for (const name of names) {\n    if (row[name] !== undefined) return row[name];\n    const lower = String(name).toLowerCase();\n    for (const k of keys) {\n      if (String(k).toLowerCase() === lower) return row[k];\n    }\n  }\n  return undefined;\n}\n\nfunction toBool(v, dflt = false) {\n  if (typeof v === \"boolean\") return v;\n  if (typeof v === \"number\") return v !== 0;\n  const s = String(v ?? \"\").trim().toLowerCase();\n  if (!s) return dflt;\n  if ([\"1\", \"true\", \"yes\", \"y\", \"on\", \"enabled\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\", \"off\", \"disabled\"].includes(s)) return false;\n  return dflt;\n}\n\nfunction toNum(v, dflt = null) {\n  if (v === null || v === undefined || v === \"\") return dflt;\n  const n = Number(v);\n  return Number.isFinite(n) ? n : dflt;\n}\n\nfunction normAssetClass(v, symbolYahoo) {\n  const raw = String(v ?? \"\").trim().toUpperCase();\n  if (raw === \"FX\" || raw === \"FOREX\") return \"FX\";\n  if (raw === \"CRYPTO\") return \"CRYPTO\";\n  if (raw === \"EQUITY\" || raw === \"STOCK\" || raw === \"ETF\") return \"EQUITY\";\n  if (String(symbolYahoo || \"\").trim().toUpperCase().endsWith(\"=X\")) return \"FX\";\n  return \"EQUITY\";\n}\n\nfunction sanitizePair6(v) {\n  const s = String(v ?? \"\")\n    .toUpperCase()\n    .replace(/^FX:/, \"\")\n    .replace(\"=X\", \"\")\n    .replace(/[^A-Z]/g, \"\");\n  if (s.length < 6) return \"\";\n  return s.slice(0, 6);\n}\n\nfunction toFxYahoo(raw) {\n  const pair = sanitizePair6(raw);\n  return pair ? `${pair}=X` : \"\";\n}\n\nfunction buildInstrument(row) {\n  const rawSymbol = String(\n    getField(row, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\", \"symbol_yahoo\", \"YahooSymbol\"]) ?? \"\"\n  )\n    .trim()\n    .toUpperCase();\n  if (!rawSymbol) return null;\n\n  const enabled = toBool(getField(row, [\"Enabled\", \"enabled\", \"Active\", \"active\"]), true);\n  let symbolYahoo = String(getField(row, [\"symbol_yahoo\", \"YahooSymbol\"]) ?? rawSymbol).trim().toUpperCase();\n  const assetClass = normAssetClass(getField(row, [\"AssetClass\", \"assetClass\", \"asset_class\"]), symbolYahoo);\n\n  let baseCcy = String(getField(row, [\"base_ccy\", \"BaseCCY\", \"baseCcy\"]) ?? \"\")\n    .trim()\n    .toUpperCase();\n  let quoteCcy = String(getField(row, [\"quote_ccy\", \"QuoteCCY\", \"quoteCcy\"]) ?? \"\")\n    .trim()\n    .toUpperCase();\n  let symbolInternal = \"\";\n  let pipSize = toNum(getField(row, [\"pip_size\", \"PipSize\"]), null);\n  let priceDecimals = toNum(getField(row, [\"price_decimals\", \"PriceDecimals\"]), null);\n  let tradingHours = String(getField(row, [\"trading_hours\", \"TradingHours\"]) ?? \"\").trim();\n\n  if (assetClass === \"FX\") {\n    symbolYahoo = toFxYahoo(symbolYahoo || rawSymbol);\n    const pair = sanitizePair6(symbolYahoo);\n    if (!pair) return null;\n    baseCcy = baseCcy || pair.slice(0, 3);\n    quoteCcy = quoteCcy || pair.slice(3, 6);\n    symbolInternal =\n      String(getField(row, [\"symbol_internal\", \"SymbolInternal\"]) ?? \"\").trim().toUpperCase() || `FX:${pair}`;\n    if (pipSize === null) pipSize = quoteCcy === \"JPY\" ? 0.01 : 0.0001;\n    if (priceDecimals === null) priceDecimals = quoteCcy === \"JPY\" ? 3 : 5;\n    if (!tradingHours) tradingHours = \"24x5\";\n  } else {\n    symbolInternal =\n      String(getField(row, [\"symbol_internal\", \"SymbolInternal\"]) ?? \"\").trim().toUpperCase() || rawSymbol;\n    if (!tradingHours) tradingHours = \"\";\n  }\n\n  return {\n    symbol: symbolInternal,\n    symbol_internal: symbolInternal,\n    symbol_yahoo: symbolYahoo || rawSymbol,\n    name: String(getField(row, [\"Name\", \"name\"]) ?? symbolInternal).trim(),\n    asset_class: assetClass,\n    exchange: String(getField(row, [\"Exchange\", \"exchange\"]) ?? \"Euronext Paris\").trim(),\n    currency: String(getField(row, [\"Currency\", \"currency\"]) ?? \"EUR\").trim().toUpperCase(),\n    country: String(getField(row, [\"Country\", \"country\"]) ?? \"\").trim(),\n    sector: String(getField(row, [\"Sector\", \"sector\"]) ?? \"\").trim(),\n    industry: String(getField(row, [\"Industry\", \"industry\"]) ?? \"\").trim(),\n    isin: String(getField(row, [\"ISIN\", \"isin\"]) ?? \"\").trim(),\n    enabled,\n    boursorama_ref: String(getField(row, [\"BoursoramaRef\", \"boursorama_ref\"]) ?? \"\").trim(),\n    base_ccy: baseCcy || null,\n    quote_ccy: quoteCcy || null,\n    pip_size: pipSize,\n    price_decimals: priceDecimals,\n    trading_hours: tradingHours,\n  };\n}\n\nconst items = $input.all();\n\nconst cfgSource = items[0]?.json || {};\nconst batchSizeRaw = toNum(getField(cfgSource, [\"AG2_BATCH_SIZE\", \"batch_size\"]), null);\nconst batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.floor(batchSizeRaw) : 10;\n\nconst universeRaw = items.map((i) => i.json || {});\nconst universe = [];\nfor (const row of universeRaw) {\n  const inst = buildInstrument(row);\n  if (!inst) continue;\n  universe.push(inst);\n}\n\nconst processQueue = universe.filter((u) => {\n  if (!u.enabled) return false;\n  return true;\n});\n\nconst fxUniverseCount = processQueue.filter((u) => u.asset_class === \"FX\").length;\nconst enableFx = fxUniverseCount > 0;\n\nif (processQueue.length === 0) {\n  return [\n    {\n      json: {\n        ok: false,\n        error: \"NO_SYMBOLS\",\n        enable_fx: enableFx,\n        universe_total: universe.length,\n        symbols: [],\n      },\n    },\n  ];\n}\n\nconst universeScope = [\"EQUITY\", \"CRYPTO\"];\nif (enableFx) universeScope.push(\"FX\");\n\nreturn [\n  {\n    json: {\n      ok: true,\n      _universe: universe,\n      _process_queue: processQueue,\n      _all_symbols: processQueue.map((u) => u.symbol),\n      yfinance_api_base: String(getField(cfgSource, [\"yfinance_api_base\"]) ?? \"http://yfinance-api:8080\"),\n      intraday: { interval: \"1h\", lookback_days: 60, max_bars: 200, min_bars: 50 },\n      daily: { interval: \"1d\", lookback_days: 400, max_bars: 400, min_bars: 200 },\n      batch_size: batchSize,\n      enable_fx: enableFx,\n      fx_universe_count: fxUniverseCount,\n      strategy_version: \"strategy_v3\",\n      config_version: \"config_v3\",\n      prompt_version: \"prompt_v3\",\n      universe_scope: universeScope,\n    },\n  },\n];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -351,10 +351,10 @@
           "values": [
             {
               "role": "system",
-              "content": "Tu es l'Agent #2 (Technical Analyst Validator): tu valides un signal H1 ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  la lumiÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨re du rÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©gime D1.\n\nRÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â¹ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â GLES (ZÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°RO HALLUCINATION)\n- Tu n'utilises QUE les champs du JSON reÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â§u (ai_context).\n- Si une donnÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©e obligatoire est null/absente => ajoute-la ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  missing_fields et dÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©cide REJECT, validated=false, quality_score<=3.\n- Tu ne dois JAMAIS ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©crire \"Prix > SMA200\" si d1.price ou d1.sma200 est null.\n\nDONNÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â°ES OBLIGATOIRES\n- d1.price, d1.sma200 (pour bias)\n- h1.action, h1.score\n- h1.bars_count\n\nLOGIQUE\n1) bias_sma200:\n   - BULLISH si d1.price > d1.sma200\n   - BEARISH sinon\n2) rÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©gime D1 = d1.regime_d1 (dÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©jÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â  calculÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â© dans le contexte, tu le recopies et tu le confirmes)\n3) Alignement:\n   - WITH_BIAS si (BUY & bias=BULLISH) ou (SELL & bias=BEARISH)\n   - AGAINST_BIAS sinon (ou MIXED si score H1 faible)\n4) RR gate (BUY uniquement):\n   - si rr_theoretical est null: WATCH si WITH_BIAS, sinon REJECT\n   - rr < 1.2 => REJECT\n   - 1.2 <= rr < 1.5 => WATCH\n   - rr >= 1.5 => APPROVE (uniquement si stop_loss_suggestion non null)\n5) STOP:\n   - Utilise stop_loss_suggested tel quel (ne lÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¾Ãƒâ€šÃ‚Â¢invente pas). Si null => validated=false.\n6) validated=true uniquement si decision=APPROVE et stop_loss_suggestion non null.\n\nREASONING (max 2 phrases)\n- Doit citer des valeurs: d1.price, d1.sma200, rr_theoretical (si non null), h1.bars_count.\n"
+              "content": "Tu es l'Agent #2 (Technical Analyst Validator - ACTIONS) : tu valides un signal H1 a la lumiere du regime D1 pour le marche boursier.\n\nREGLES (ZERO HALLUCINATION)\n- Tu n'utilises QUE les champs du JSON recu (ai_context).\n- Si une donnee obligatoire est null/absente => ajoute-la a missing_fields et decide REJECT, validated=false, quality_score<=3.\n- Tu ne dois JAMAIS ecrire \"Prix > SMA200\" si d1.price ou d1.sma200 est null.\n\nDONNEES OBLIGATOIRES\n- d1.price, d1.sma200 (pour bias)\n- h1.action, h1.score\n- h1.bars_count\n\nLOGIQUE\n1) bias_sma200:\n   - BULLISH si d1.price > d1.sma200\n   - BEARISH sinon\n2) regime D1 = d1.regime_d1 (deja calcule dans le contexte, tu le recopies et tu le confirmes)\n3) Alignement:\n   - WITH_BIAS si (BUY & bias=BULLISH) ou (SELL & bias=BEARISH)\n   - AGAINST_BIAS sinon (ou MIXED si score H1 faible)\n4) RR gate (Strategie Long-Only : BUY uniquement):\n   - Si h1.action est SELL => REJECT (Strategie Actions axee sur l'achat).\n   - Si rr_theoretical est null: WATCH si WITH_BIAS, sinon REJECT.\n   - rr < 1.2 => REJECT\n   - 1.2 <= rr < 1.5 => WATCH\n   - rr >= 1.5 => APPROVE (uniquement si stop_loss_suggestion non null)\n5) STOP:\n   - Utilise stop_loss_suggested tel quel (ne l'invente pas). Si null => validated=false.\n6) validated=true uniquement si decision=APPROVE et stop_loss_suggestion non null.\n\nREASONING (max 2 phrases)\n- Doit citer des valeurs: d1.price, d1.sma200, rr_theoretical (si non null), h1.bars_count."
             },
             {
-              "content": "=Voici le contexte JSON (ai_context). Applique les rÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¨gles et rÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©ponds UNIQUEMENT avec le JSON conforme au schÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â©ma.\n\nDATA:\n{{ JSON.stringify($json.ai_context, null, 2) }}\n"
+              "content": "=Voici le contexte JSON (ai_context). Applique les regles et reponds UNIQUEMENT avec le JSON conforme au schema.\n\nDATA:\n{{ JSON.stringify($json.ai_context, null, 2) }}"
             }
           ]
         },
@@ -372,11 +372,11 @@
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 2.1,
       "position": [
-        1408,
-        208
+        1540,
+        112
       ],
       "id": "1893a4e2-30d8-41d6-8192-aab2ea965fb8",
-      "name": "AI Validation GPT",
+      "name": "AI Validation GPT - ACTIONS/ETF",
       "credentials": {
         "openAiApi": {
           "id": "rILpYjTayqc4jXXZ",
@@ -654,6 +654,85 @@
       ],
       "id": "09f58ce5-f272-4d63-a0fb-58d843314952",
       "name": "Merge Vector Doc + Delete (TECH)"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-5-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es l'Agent #2 (Technical Analyst Validator - FOREX) : tu valides un signal H1 a la lumiere du regime D1 pour le marche des devises.\n\nREGLES (ZERO HALLUCINATION)\n- Tu n'utilises QUE les champs du JSON recu (ai_context).\n- Si une donnee obligatoire est null/absente => ajoute-la a missing_fields et decide REJECT, validated=false, quality_score<=3.\n- Tu ne dois JAMAIS ecrire \"Prix > SMA200\" si d1.price ou d1.sma200 est null.\n\nDONNEES OBLIGATOIRES\n- d1.price, d1.sma200 (pour bias)\n- h1.action, h1.score\n- h1.bars_count\n\nLOGIQUE\n1) bias_sma200:\n   - BULLISH si d1.price > d1.sma200\n   - BEARISH sinon\n2) regime D1 = d1.regime_d1 (deja calcule dans le contexte, tu le recopies et tu le confirmes)\n3) Alignement:\n   - WITH_BIAS si (BUY & bias=BULLISH) ou (SELL & bias=BEARISH)\n   - AGAINST_BIAS sinon (ou MIXED si score H1 faible)\n4) RR gate (Strategie Bidirectionnelle : BUY et SELL):\n   - Si rr_theoretical est null: WATCH si WITH_BIAS, sinon REJECT.\n   - rr < 1.2 => REJECT\n   - 1.2 <= rr < 1.5 => WATCH\n   - rr >= 1.5 => APPROVE (uniquement si stop_loss_suggestion non null)\n5) STOP:\n   - Utilise stop_loss_suggested tel quel (ne l'invente pas). Si null => validated=false.\n6) validated=true uniquement si decision=APPROVE et stop_loss_suggestion non null.\n\nREASONING (max 2 phrases)\n- Doit citer des valeurs: d1.price, d1.sma200, rr_theoretical (si non null), h1.bars_count."
+            },
+            {
+              "content": "=Voici le contexte JSON (ai_context). Applique les regles et reponds UNIQUEMENT avec le JSON conforme au schema.\n\nDATA:\n{{ JSON.stringify($json.ai_context, null, 2) }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "schema": "{\n  \"type\":\"object\",\n  \"additionalProperties\":false,\n  \"properties\":{\n    \"validated\":{\"type\":\"boolean\"},\n    \"decision\":{\"type\":\"string\",\"enum\":[\"APPROVE\",\"REJECT\",\"WATCH\"]},\n    \"quality_score\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":10},\n    \"bias_sma200\":{\"type\":\"string\",\"enum\":[\"BULLISH\",\"BEARISH\",\"UNKNOWN\"]},\n    \"regime_d1\":{\"type\":\"string\",\"enum\":[\"BULLISH\",\"BEARISH\",\"NEUTRAL_RANGE\",\"TRANSITION\",\"UNKNOWN\"]},\n    \"h1_d1_alignment\":{\"type\":\"string\",\"enum\":[\"WITH_BIAS\",\"AGAINST_BIAS\",\"MIXED\",\"UNKNOWN\"]},\n    \"reasoning\":{\"type\":\"string\"},\n    \"chart_pattern\":{\"type\":\"string\"},\n    \"stop_loss_suggestion\":{\"type\":[\"number\",\"null\"]},\n    \"stop_loss_basis\":{\"type\":\"string\"},\n    \"missing_fields\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}},\n    \"anomalies\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}\n  },\n  \"required\":[\"validated\",\"decision\",\"quality_score\",\"reasoning\",\"bias_sma200\",\"regime_d1\",\"h1_d1_alignment\",\"chart_pattern\",\"stop_loss_suggestion\",\"stop_loss_basis\",\"missing_fields\",\"anomalies\"]\n}\n",
+              "strict": true
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1540,
+        304
+      ],
+      "id": "c4a8871f-fdad-4422-97b2-b7582e45cfc5",
+      "name": "AI Validation GPT - FOREX",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "1",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              },
+              "leftValue": "={{ (((($json.ai_context || {}).asset_class) || $json.asset_class || '').toString().trim().toUpperCase() === 'FX') }}",
+              "rightValue": "true"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1368,
+        208
+      ],
+      "id": "3eb3da2f-89e1-489f-a86d-a9d187215425",
+      "name": "Route AI Agent (FX?)"
     }
   ],
   "connections": {
@@ -833,18 +912,7 @@
       "main": [
         [
           {
-            "node": "AI Validation GPT",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AI Validation GPT": {
-      "main": [
-        [
-          {
-            "node": "Merge AI + Context",
+            "node": "Route AI Agent (FX?)",
             "type": "main",
             "index": 0
           }
@@ -983,6 +1051,46 @@
         [
           {
             "node": "Qdrant Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route AI Agent (FX?)": {
+      "main": [
+        [
+          {
+            "node": "AI Validation GPT - FOREX",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Validation GPT - ACTIONS/ETF",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Validation GPT - ACTIONS/ETF": {
+      "main": [
+        [
+          {
+            "node": "Merge AI + Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Validation GPT - FOREX": {
+      "main": [
+        [
+          {
+            "node": "Merge AI + Context",
             "type": "main",
             "index": 0
           }

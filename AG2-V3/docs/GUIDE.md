@@ -12,6 +12,22 @@ Il n'y a plus de versions miroir.
 
 Les fichiers `AG2-V3/nodes/*` sont sync depuis le workflow final via `build_workflow.py`.
 
+## Double agent technique (ACTIONS/ETF + FOREX)
+
+Le workflow AG2-V3 inclut maintenant un routage LLM dedie:
+
+- `Route AI Agent (FX?)`:
+  - `true` si `asset_class == "FX"` -> nœud `AI Validation GPT - FOREX`
+  - `false` sinon (EQUITY/ETF/CRYPTO) -> nœud `AI Validation GPT - ACTIONS/ETF`
+- Les deux branches convergent vers `Merge AI + Context`, puis `Extract AI + Write`.
+
+Points importants:
+
+- Prompt USER identique sur les 2 agents (injecte `ai_context` brut).
+- Prompt SYSTEM specifique par univers:
+  - ACTIONS/ETF: gate long-only (SELL => REJECT)
+  - FOREX: gate bidirectionnel (BUY/SELL)
+
 ## Commandes utiles
 
 Depuis `AG2-V3/`:
