@@ -26,7 +26,17 @@ Points importants:
 - Prompt USER identique sur les 2 agents (injecte `ai_context` brut).
 - Prompt SYSTEM specifique par univers:
   - ACTIONS/ETF: gate long-only (SELL => REJECT)
-  - FOREX: gate bidirectionnel (BUY/SELL)
+  - FOREX: gate bidirectionnel (BUY/SELL) avec filtres SMA200 + Bollinger + RSI.
+
+## Champs Forex AI ajoutes (V3)
+
+Le validator FOREX renvoie et persiste aussi:
+
+- `bb_status` -> `ai_bb_status`
+- `rsi_status` -> `ai_rsi_status`
+
+Ces champs sont disponibles dans DuckDB (`technical_signals`), la vue `v_ag2_fx_output`,
+les payloads vectoriels, et la sortie Google Sheets (si le node de sync est utilise).
 
 ## Commandes utiles
 

@@ -105,6 +105,8 @@ FIELD_MAP = {
     "ai_bias_sma200": "AI_Bias_SMA200",
     "ai_regime_d1": "AI_Regime_D1",
     "ai_alignment": "AI_Alignment",
+    "ai_bb_status": "AI_BB_Status",
+    "ai_rsi_status": "AI_RSI_Status",
     "ai_stop_loss": "AI_StopLoss",
     "ai_stop_basis": "AI_StopLoss_Basis",
     "ai_missing": "AI_MissingFields",

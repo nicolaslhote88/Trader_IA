@@ -41,9 +41,14 @@ if (d1_price !== null && d1_sma200 !== null && d1_sma50 !== null) {
 
 // Canonical H1 fields
 const h1_entry = pickNum(h1Ind.last_close, item.h1_last_close, item.last_close);
+const h1_price = h1_entry;
 const h1_atr   = pickNum(h1Ind.atr, item.h1_atr);
 const h1_sup   = pickNum(h1Ind.support, item.h1_support);
 const h1_res   = pickNum(h1Ind.resistance, item.h1_resistance);
+const h1_bb_upper = pickNum(h1Ind.bb_upper, item.h1_bb_upper);
+const h1_bb_lower = pickNum(h1Ind.bb_lower, item.h1_bb_lower);
+const h1_bb_width = pickNum(h1Ind.bb_width, item.h1_bb_width);
+const h1_rsi = pickNum(h1Ind.rsi14, h1Ind.rsi, item.h1_rsi14);
 
 // Stop suggestion (conservative: choose wider stop to avoid RR gaming)
 let stop_loss_suggested = null;
@@ -142,10 +147,15 @@ return [{
 
       h1: {
         action: h1.action, score: h1.score, confidence: h1.confidence, rationale: h1.rationale,
+        price: h1_price,
         entry: h1_entry,
         atr: h1_atr,
         support: h1_sup,
         resistance: h1_res,
+        bb_upper: h1_bb_upper,
+        bb_lower: h1_bb_lower,
+        bb_width: h1_bb_width,
+        rsi: h1_rsi,
         indicators_raw: h1Ind,
         bars_count: item.h1_bars_count ?? recentBars.length,
       },

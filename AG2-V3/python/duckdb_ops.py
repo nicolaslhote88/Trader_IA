@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     ai_decision VARCHAR, ai_validated BOOLEAN, ai_quality INTEGER, ai_reasoning VARCHAR,
     ai_chart_pattern VARCHAR, ai_stop_loss DOUBLE, ai_stop_basis VARCHAR,
     ai_bias_sma200 VARCHAR, ai_regime_d1 VARCHAR, ai_alignment VARCHAR,
+    ai_bb_status VARCHAR, ai_rsi_status VARCHAR,
     ai_missing VARCHAR, ai_anomalies VARCHAR, ai_output_ref VARCHAR, ai_rr_theoretical DOUBLE,
     vector_status VARCHAR DEFAULT 'PENDING', vector_id VARCHAR,
     vectorized_at TIMESTAMP, row_hash VARCHAR,

@@ -218,6 +218,8 @@ SCHEMA_STMTS = [
       ai_bias_sma200 VARCHAR,
       ai_regime_d1 VARCHAR,
       ai_alignment VARCHAR,
+      ai_bb_status VARCHAR,
+      ai_rsi_status VARCHAR,
       ai_missing VARCHAR,
       ai_anomalies VARCHAR,
       ai_output_ref VARCHAR,
@@ -293,6 +295,8 @@ MIGRATE_STMTS = [
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_quality_flags VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_h1_hours DOUBLE",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_d1_hours DOUBLE",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bb_status VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_rsi_status VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS should_vectorize BOOLEAN DEFAULT FALSE",
 ]
 
@@ -333,6 +337,8 @@ VIEW_STMTS = [
       data_age_d1_hours,
       ai_decision,
       ai_quality,
+      ai_bb_status,
+      ai_rsi_status,
       pass_pm,
       updated_at
     FROM technical_signals

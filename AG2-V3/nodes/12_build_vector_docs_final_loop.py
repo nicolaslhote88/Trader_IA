@@ -168,6 +168,7 @@ def render_vector_text(payload):
         add_line(lines, "[AI]")
         add_line(lines, f"decision={ai.get('decision')} validated={ai.get('validated')} quality={ai.get('quality')} rr={ai.get('rr_theoretical')}")
         add_line(lines, f"stop_loss={ai.get('stop_loss')} stop_basis={ai.get('stop_basis')} bias_sma200={ai.get('bias_sma200')} regime_d1={ai.get('regime_d1')} alignment={ai.get('alignment')}")
+        add_line(lines, f"bb_status={ai.get('bb_status')} rsi_status={ai.get('rsi_status')}")
         reasoning = ai.get("reasoning")
         if reasoning:
             reasoning = str(reasoning)
@@ -293,6 +294,8 @@ for tup in rows:
             "bias_sma200": row.get("ai_bias_sma200"),
             "regime_d1": row.get("ai_regime_d1"),
             "alignment": row.get("ai_alignment"),
+            "bb_status": row.get("ai_bb_status"),
+            "rsi_status": row.get("ai_rsi_status"),
             "missing": row.get("ai_missing"),
             "anomalies": row.get("ai_anomalies"),
             "output_ref": row.get("ai_output_ref"),

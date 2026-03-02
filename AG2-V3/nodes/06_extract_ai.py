@@ -190,6 +190,8 @@ def ensure_schema(con):
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bias_sma200 TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_regime_d1 TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_alignment TEXT;")
+    con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bb_status TEXT;")
+    con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_rsi_status TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_missing TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_anomalies TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_output_ref TEXT;")
@@ -227,6 +229,8 @@ with db_con() as con:
         bias = "UNKNOWN"
         regime = "UNKNOWN"
         alignment = "UNKNOWN"
+        bb_status = "UNKNOWN"
+        rsi_status = "UNKNOWN"
         reasoning = ""
         chart_pattern = "None"
         stop_loss = None
@@ -249,12 +253,24 @@ with db_con() as con:
             quality = safe_int(ai_obj.get("quality_score", ai_obj.get("quality", ai_obj.get("QualityScore"))), default=0)
             quality = max(0, min(10, quality if quality is not None else 0))
 
-            bias = (ai_obj.get("bias_sma200") or ai_obj.get("bias") or ai_obj.get("Bias_SMA200") or "UNKNOWN")
+            bias = (
+                ai_obj.get("bias_sma200")
+                or ai_obj.get("bias")
+                or ai_obj.get("Bias_SMA200")
+                or get_nested(d, ["ai_context", "d1", "bias_sma200"])
+                or "UNKNOWN"
+            )
             bias = str(bias).strip().upper()
             if bias not in ("BULLISH", "BEARISH", "UNKNOWN"):
                 bias = "UNKNOWN"
 
-            regime = (ai_obj.get("regime_d1") or ai_obj.get("regime") or ai_obj.get("Regime_D1") or "UNKNOWN")
+            regime = (
+                ai_obj.get("regime_d1")
+                or ai_obj.get("regime")
+                or ai_obj.get("Regime_D1")
+                or get_nested(d, ["ai_context", "d1", "regime_d1"])
+                or "UNKNOWN"
+            )
             regime = str(regime).strip().upper()
             if regime not in ("BULLISH", "BEARISH", "NEUTRAL_RANGE", "TRANSITION", "UNKNOWN"):
                 regime = "UNKNOWN"
@@ -263,6 +279,16 @@ with db_con() as con:
             alignment = str(alignment).strip().upper()
             if alignment not in ("WITH_BIAS", "AGAINST_BIAS", "MIXED", "UNKNOWN"):
                 alignment = "UNKNOWN"
+
+            bb_status = (ai_obj.get("bb_status") or ai_obj.get("BB_Status") or "UNKNOWN")
+            bb_status = str(bb_status).strip().upper()
+            if bb_status not in ("AT_UPPER_BAND", "AT_LOWER_BAND", "MID_RANGE", "SQUEEZE", "UNKNOWN"):
+                bb_status = "UNKNOWN"
+
+            rsi_status = (ai_obj.get("rsi_status") or ai_obj.get("RSI_Status") or "UNKNOWN")
+            rsi_status = str(rsi_status).strip().upper()
+            if rsi_status not in ("OVERBOUGHT", "OVERSOLD", "NEUTRAL", "UNKNOWN"):
+                rsi_status = "UNKNOWN"
 
             reasoning = (ai_obj.get("reasoning") or ai_obj.get("Reasoning") or "").strip()
             chart_pattern = (ai_obj.get("chart_pattern") or ai_obj.get("ChartPattern") or "None").strip()
@@ -338,6 +364,8 @@ with db_con() as con:
             "ai_bias_sma200": bias,
             "ai_regime_d1": regime,
             "ai_alignment": alignment,
+            "ai_bb_status": bb_status,
+            "ai_rsi_status": rsi_status,
             "ai_missing": ai_missing,
             "ai_anomalies": ai_anomalies,
             "ai_output_ref": ai_output_ref[:500],
@@ -383,6 +411,8 @@ with db_con() as con:
             "ai_bias_sma200": upd["ai_bias_sma200"],
             "ai_regime_d1": upd["ai_regime_d1"],
             "ai_alignment": upd["ai_alignment"],
+            "ai_bb_status": upd["ai_bb_status"],
+            "ai_rsi_status": upd["ai_rsi_status"],
             "ai_missing": upd["ai_missing"],
             "ai_anomalies": upd["ai_anomalies"],
             "ai_output_ref": upd["ai_output_ref"],

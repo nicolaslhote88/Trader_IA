@@ -151,6 +151,8 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     ai_bias_sma200      VARCHAR,              -- 'BULLISH' | 'BEARISH'
     ai_regime_d1        VARCHAR,              -- 'BULLISH' | 'BEARISH' | 'TRANSITION' | 'NEUTRAL_RANGE'
     ai_alignment        VARCHAR,              -- 'WITH_BIAS' | 'AGAINST_BIAS' | 'MIXED' | 'UNKNOWN'
+    ai_bb_status        VARCHAR,              -- 'AT_UPPER_BAND' | 'AT_LOWER_BAND' | 'MID_RANGE' | 'SQUEEZE' | 'UNKNOWN'
+    ai_rsi_status       VARCHAR,              -- 'OVERBOUGHT' | 'OVERSOLD' | 'NEUTRAL' | 'UNKNOWN'
     ai_missing          VARCHAR,              -- JSON array
     ai_anomalies        VARCHAR,              -- JSON array
     ai_output_ref       VARCHAR,
@@ -305,6 +307,8 @@ SELECT
     data_age_d1_hours,
     ai_decision,
     ai_quality,
+    ai_bb_status,
+    ai_rsi_status,
     pass_pm,
     updated_at
 FROM technical_signals

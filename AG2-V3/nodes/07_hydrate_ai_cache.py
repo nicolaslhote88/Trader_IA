@@ -36,6 +36,8 @@ for it in items:
         "ai_bias_sma200": "",
         "ai_regime_d1": "",
         "ai_alignment": "UNKNOWN",
+        "ai_bb_status": "UNKNOWN",
+        "ai_rsi_status": "UNKNOWN",
         "ai_missing": "[]",
         "ai_anomalies": "[]",
         "ai_output_ref": "",
@@ -62,6 +64,8 @@ for it in items:
             ai_data["ai_quality"] = quality
             ai_data["ai_reasoning"] = f"[CACHE] Reused AI decision from {last_ai_run_id}."
             ai_data["ai_output_ref"] = last_ai_output_ref or ""
+            ai_data["ai_bb_status"] = str(sj.get("bb_status", "UNKNOWN") or "UNKNOWN").strip().upper()
+            ai_data["ai_rsi_status"] = str(sj.get("rsi_status", "UNKNOWN") or "UNKNOWN").strip().upper()
 
             # recompute pass_pm same rule as Extract
             ai_data["pass_pm"] = (decision == "APPROVE") or (decision == "WATCH" and quality >= 5)
