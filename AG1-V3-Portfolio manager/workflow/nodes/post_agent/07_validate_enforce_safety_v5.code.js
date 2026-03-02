@@ -537,7 +537,7 @@ function buildFxEnabledSet(input, portfolioSummary) {
   for (const p of pos) {
     const ac = normAssetClass(p?.AssetClass ?? p?.assetClass ?? p?.asset_class, p?.Symbol ?? p?.symbol);
     if (ac !== "FX") continue;
-    const meta = parseFxMeta(p?.Symbol ?? p?.symbol || "");
+    const meta = parseFxMeta((p?.Symbol ?? p?.symbol) || "");
     if (meta?.symbolInternal) out.add(meta.symbolInternal);
   }
 

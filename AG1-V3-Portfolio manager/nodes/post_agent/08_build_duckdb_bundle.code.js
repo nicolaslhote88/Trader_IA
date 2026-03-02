@@ -16,6 +16,16 @@ function toInt(v, d = null) {
   return Number.isFinite(n) ? Math.round(n) : d;
 }
 
+function toBool(v, d = false) {
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0;
+  const s = String(v ?? "").trim().toLowerCase();
+  if (!s) return d;
+  if (["1", "true", "yes", "y", "on", "enabled"].includes(s)) return true;
+  if (["0", "false", "no", "n", "off", "disabled"].includes(s)) return false;
+  return d;
+}
+
 function clampText(v, max = 0) {
   const s = String(v ?? "").replace(/\s+/g, " ").trim();
   return max > 0 ? s.slice(0, max) : s;
