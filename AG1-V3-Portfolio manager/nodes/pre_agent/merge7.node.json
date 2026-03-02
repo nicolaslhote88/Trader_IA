@@ -1,6 +1,6 @@
 {
   "parameters": {
-    "numberInputs": 4
+    "numberInputs": 5
   },
   "type": "n8n-nodes-base.merge",
   "typeVersion": 3.2,

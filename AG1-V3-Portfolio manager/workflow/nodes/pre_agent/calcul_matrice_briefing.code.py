@@ -741,36 +741,239 @@ opportunity_pack = {
     "rows": pack_rows,
 }
 
-fx_pairs = []
+def parse_fx_pair6(sym):
+    s = str(sym or "").upper().strip()
+    if s.startswith("FX:"):
+        s = s[3:]
+    if s.endswith("=X"):
+        s = s[:-2]
+    s = re.sub(r"[^A-Z]", "", s)[:6]
+    return s if len(s) == 6 else ""
+
+
+def inverse_pair6(pair6):
+    p = parse_fx_pair6(pair6)
+    if not p:
+        return ""
+    return p[3:6] + p[0:3]
+
+
+def derive_fx_bias(entry_px, tp_px, raw_bias):
+    b = str(raw_bias or "").strip().upper()
+    if b in ("BUY_BASE", "SELL_BASE", "NEUTRAL"):
+        if b != "NEUTRAL":
+            return b
+    e = safe_float(entry_px, 0.0)
+    t = safe_float(tp_px, 0.0)
+    if e > 0 and t > 0:
+        if t > e:
+            return "BUY_BASE"
+        if t < e:
+            return "SELL_BASE"
+    return "NEUTRAL"
+
+
+def adjust_fx_confidence(conf, bias, base_ccy, quote_ccy, macro_regime):
+    c = clamp(round(safe_float(conf, 0.0)), 0, 100)
+    regime = str(macro_regime or "").strip().upper()
+    safe_haven = {"JPY", "CHF", "USD"}
+    beta_ccy = {"AUD", "NZD", "CAD"}
+    base_safe = base_ccy in safe_haven
+    quote_safe = quote_ccy in safe_haven
+    base_beta = base_ccy in beta_ccy
+    quote_beta = quote_ccy in beta_ccy
+
+    if "RISK-OFF" in regime:
+        if (bias == "BUY_BASE" and base_safe and not quote_safe) or (bias == "SELL_BASE" and quote_safe and not base_safe):
+            c += 8
+        if (bias == "BUY_BASE" and base_beta and not quote_beta) or (bias == "SELL_BASE" and quote_beta and not base_beta):
+            c -= 8
+    elif "RISK-ON" in regime:
+        if (bias == "BUY_BASE" and base_beta and not quote_beta) or (bias == "SELL_BASE" and quote_beta and not base_beta):
+            c += 8
+        if (bias == "BUY_BASE" and base_safe and not quote_safe) or (bias == "SELL_BASE" and quote_safe and not base_safe):
+            c -= 8
+    return int(clamp(c, 0, 100))
+
+
+def pair_quality_score(p):
+    bias_bonus = 1 if str(p.get("directional_bias") or "NEUTRAL") != "NEUTRAL" else 0
+    conf = safe_float(p.get("confidence"), 0.0)
+    evr = safe_float(p.get("ev_r"), 0.0)
+    dq = safe_float(p.get("data_quality"), 0.0)
+    has_px = 1 if safe_float(p.get("last_close"), 0.0) > 0 else 0
+    return bias_bonus * 1e8 + conf * 1e6 + evr * 1e4 + dq * 1e2 + has_px
+
+
+raw_fx_pairs = []
 for r in matrix_rows:
     if str(r.get("asset_class") or "").upper() != "FX":
         continue
-    pair = str(r.get("symbol") or "").replace("FX:", "")
-    if len(pair) < 6:
+    pair6 = parse_fx_pair6(r.get("symbol"))
+    if not pair6:
         continue
-    fx_pairs.append(
+    base_ccy, quote_ccy = pair6[:3], pair6[3:6]
+    entry_px = safe_float(r.get("entry_price"), 0.0)
+    last_close = entry_px if entry_px > 0 else safe_float(r.get("target_price"), 0.0)
+    tp_px = safe_float(r.get("tp_price"), 0.0)
+    stop_px = safe_float(r.get("stop_price"), 0.0)
+    p_win_pct = round(safe_float(r.get("p_win"), 0.0) * 100.0, 2)
+    macro_regime = str(r.get("fx_macro_regime") or "Neutral").strip() or "Neutral"
+    bias = derive_fx_bias(entry_px, tp_px, r.get("fx_directional_bias"))
+    conf = safe_float(r.get("fx_bias_confidence"), 0.0)
+    if conf <= 0:
+        conf = p_win_pct
+    conf = adjust_fx_confidence(conf, bias, base_ccy, quote_ccy, macro_regime)
+
+    raw_fx_pairs.append(
         {
-            "pair": pair[:6],
-            "symbol_internal": "FX:" + pair[:6],
-            "symbol_yahoo": pair[:6] + "=X",
-            "directional_bias": str(r.get("fx_directional_bias") or "NEUTRAL"),
-            "rationale": str(r.get("fx_rationale") or r.get("action_reason") or ""),
-            "confidence": round(safe_float(r.get("fx_bias_confidence"), 0.0), 2),
+            "pair": pair6,
+            "symbol_internal": "FX:" + pair6,
+            "symbol_yahoo": pair6 + "=X",
+            "base_ccy": base_ccy,
+            "quote_ccy": quote_ccy,
+            "last_close": round(last_close, 6) if last_close > 0 else None,
+            "quote_to_eur": None,
+            "eur_per_base": None,
+            "directional_bias": bias,
+            "confidence": conf,
             "urgent_event_window": bool(r.get("fx_urgent_event_window")),
+            "entry": round(entry_px, 6) if entry_px > 0 else None,
+            "stop": round(stop_px, 6) if stop_px > 0 else None,
+            "tp": round(tp_px, 6) if tp_px > 0 else None,
+            "p_win_pct": p_win_pct,
+            "risk": round(safe_float(r.get("risk_score_u"), 0.0), 2),
+            "reward": round(safe_float(r.get("reward_score_u"), 0.0), 2),
+            "ev_r": round(safe_float(r.get("ev_r"), 0.0), 4),
+            "data_quality": round(safe_float(r.get("data_quality_score"), 0.0), 2),
+            "gates": str(r.get("gate_summary") or "OK"),
+            "rationale": str(r.get("fx_rationale") or r.get("action_reason") or ""),
             "asOf": r.get("fx_as_of") or r.get("fx_macro_as_of") or opportunity_pack["generatedAt"],
+            "fx_macro_regime": macro_regime,
+            "fx_macro_confidence": round(safe_float(r.get("fx_macro_confidence"), 0.0), 2),
         }
     )
 
-fx_macro = None
-for r in matrix_rows:
-    if str(r.get("asset_class") or "").upper() != "FX":
+# Dedup exact pair duplicates.
+fx_pairs_by_pair = {}
+for p in raw_fx_pairs:
+    prev = fx_pairs_by_pair.get(p["pair"])
+    if prev is None or pair_quality_score(p) > pair_quality_score(prev):
+        fx_pairs_by_pair[p["pair"]] = p
+fx_pairs = list(fx_pairs_by_pair.values())
+
+# Build EUR conversion map: fx_rates[CCY] = EUR_per_1_unit_CCY.
+edges = []
+for p in fx_pairs:
+    px = safe_float(p.get("last_close"), 0.0)
+    if px > 0 and p.get("base_ccy") and p.get("quote_ccy"):
+        edges.append((p["base_ccy"], p["quote_ccy"], px))
+
+fx_rates = {"EUR": 1.0}
+changed = True
+guard = 0
+while changed and guard < 30:
+    changed = False
+    guard += 1
+    for base, quote, px in edges:
+        if fx_rates.get(base) and not fx_rates.get(quote):
+            fx_rates[quote] = fx_rates[base] / px
+            changed = True
+        if fx_rates.get(quote) and not fx_rates.get(base):
+            fx_rates[base] = fx_rates[quote] * px
+            changed = True
+
+for p in fx_pairs:
+    q2e = safe_float(fx_rates.get(p.get("quote_ccy")), None)
+    px = safe_float(p.get("last_close"), None)
+    p["quote_to_eur"] = round(q2e, 8) if q2e is not None else None
+    p["eur_per_base"] = round(px * q2e, 8) if (px is not None and q2e is not None) else None
+
+# Build macro context.
+macro_regime = "Neutral"
+macro_conf = 0.0
+macro_as_of = opportunity_pack["generatedAt"]
+if fx_pairs:
+    best_macro = max(
+        fx_pairs,
+        key=lambda p: safe_float(p.get("fx_macro_confidence"), 0.0),
+    )
+    macro_regime = str(best_macro.get("fx_macro_regime") or "Neutral") or "Neutral"
+    macro_conf = safe_float(best_macro.get("fx_macro_confidence"), 0.0)
+    macro_as_of = best_macro.get("asOf") or opportunity_pack["generatedAt"]
+
+fx_context = {
+    "as_of": macro_as_of,
+    "macro_regime": macro_regime,
+    "macro_confidence": int(clamp(round(macro_conf), 0, 100)),
+    "signals_freshness": {
+        "max_age_h1_hours": None,
+        "max_age_d1_hours": None,
+    },
+    "fx_universe_count": len(fx_pairs),
+    "fx_sleeve": {
+        "target_pct_min": 5,
+        "target_pct_max": 10,
+        "per_pair_pct_max": 3,
+        "default_pair_pct": 1.5,
+    },
+}
+
+fx_macro = {
+    "as_of": fx_context["as_of"],
+    "market_regime": fx_context["macro_regime"],
+    "confidence": fx_context["macro_confidence"],
+}
+
+# Build actionable top FX candidates.
+blocked_gates = {"DATA_QUALITY_LOW", "INVALID_OPTIONS_STATE", "LIQUIDITY_STRESS"}
+fx_candidates_raw = []
+for p in fx_pairs:
+    bias = str(p.get("directional_bias") or "NEUTRAL").upper()
+    conf = safe_float(p.get("confidence"), 0.0)
+    data_q = safe_float(p.get("data_quality"), 0.0)
+    gates = [g.strip().upper() for g in str(p.get("gates") or "OK").split("|") if g.strip()]
+    if bias == "NEUTRAL":
         continue
-    fx_macro = {
-        "as_of": r.get("fx_macro_as_of") or opportunity_pack["generatedAt"],
-        "market_regime": r.get("fx_macro_regime") or "Neutral",
-        "confidence": round(safe_float(r.get("fx_macro_confidence"), 0.0), 2),
-    }
-    break
+    if conf < 50:
+        continue
+    if data_q < 60:
+        continue
+    if any(g in blocked_gates for g in gates):
+        continue
+    fx_candidates_raw.append(dict(p))
+
+# Dedup pair/inverse at candidate stage, keep strongest.
+fx_candidates_by_key = {}
+for p in fx_candidates_raw:
+    inv = inverse_pair6(p.get("pair"))
+    key = "|".join(sorted([p.get("pair") or "", inv]))
+    prev = fx_candidates_by_key.get(key)
+    if prev is None or pair_quality_score(p) > pair_quality_score(prev):
+        fx_candidates_by_key[key] = p
+
+fx_candidates = list(fx_candidates_by_key.values())
+fx_candidates.sort(
+    key=lambda p: (
+        -safe_float(p.get("confidence"), 0.0),
+        -safe_float(p.get("ev_r"), 0.0),
+    )
+)
+fx_candidates = fx_candidates[:10]
+
+if fx_candidates:
+    top_fx = ", ".join(
+        [
+            f"{p['pair']} {p['directional_bias']} c={int(safe_float(p.get('confidence'), 0))} ev={safe_float(p.get('ev_r'), 0.0):.2f}"
+            for p in fx_candidates[:6]
+        ]
+    )
+    brief_lines.append("")
+    brief_lines.append("FX top candidates (max 6): " + top_fx)
+
+opportunity_pack["fx_context"] = fx_context
+opportunity_pack["fx_rates"] = fx_rates
+opportunity_pack["fx_candidates"] = fx_candidates
 
 return [
     {
@@ -781,6 +984,9 @@ return [
             "matrix_thresholds": thresholds,
             "fx_pairs": fx_pairs,
             "fx_macro": fx_macro,
+            "fx_context": fx_context,
+            "fx_rates": fx_rates,
+            "fx_candidates": fx_candidates,
         }
     }
 ]

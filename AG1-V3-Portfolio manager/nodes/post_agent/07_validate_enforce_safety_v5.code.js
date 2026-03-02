@@ -171,7 +171,51 @@ function normalizeAgentActionsForFx(agentDecision, enableFx) {
 }
 
 function appendFxPairProposals(agentDecision, input, enableFx) {
-  const fxPairs = Array.isArray(input?.fx_pairs) ? input.fx_pairs : [];
+  const rawCandidates = Array.isArray(input?.fx_candidates) && input.fx_candidates.length
+    ? input.fx_candidates
+    : (Array.isArray(input?.fx_pairs) ? input.fx_pairs : []);
+  if (!rawCandidates.length) return agentDecision;
+
+  const pairKey = (pair6) => {
+    const p = String(pair6 || "").toUpperCase().replace(/[^A-Z]/g, "").slice(0, 6);
+    if (p.length !== 6) return "";
+    const inv = `${p.slice(3, 6)}${p.slice(0, 3)}`;
+    return [p, inv].sort().join("|");
+  };
+
+  const prep = [];
+  for (const p of rawCandidates) {
+    const meta = parseFxMeta(p?.symbol_internal || p?.pair || p?.symbol || p?.symbol_yahoo || "");
+    if (!meta?.symbolInternal) continue;
+    const bias = String(p?.directional_bias ?? "NEUTRAL").toUpperCase();
+    const confRaw = Number(p?.confidence);
+    const confidence = Number.isFinite(confRaw) ? Math.max(0, Math.min(100, Math.round(confRaw))) : 0;
+    const gates = String(p?.gates ?? "OK").toUpperCase();
+    const blocked = ["DATA_QUALITY_LOW", "INVALID_OPTIONS_STATE", "LIQUIDITY_STRESS"].some((g) => gates.includes(g));
+    if (bias === "NEUTRAL" || confidence < 50 || blocked) continue;
+
+    prep.push({
+      ...p,
+      __meta: meta,
+      __bias: bias,
+      __confidence: confidence,
+      __key: pairKey(meta.pair6),
+      __ev: Number.isFinite(Number(p?.ev_r)) ? Number(p?.ev_r) : -999,
+    });
+  }
+
+  const dedup = new Map();
+  for (const p of prep) {
+    if (!p.__key) continue;
+    const prev = dedup.get(p.__key);
+    if (!prev || p.__confidence > prev.__confidence || (p.__confidence === prev.__confidence && p.__ev > prev.__ev)) {
+      dedup.set(p.__key, p);
+    }
+  }
+
+  const fxPairs = Array.from(dedup.values())
+    .sort((a, b) => (b.__confidence - a.__confidence) || (b.__ev - a.__ev))
+    .slice(0, 6);
   if (!fxPairs.length) return agentDecision;
 
   const existing = new Set();
@@ -183,13 +227,12 @@ function appendFxPairProposals(agentDecision, input, enableFx) {
   }
 
   for (const p of fxPairs) {
-    const meta = parseFxMeta(p?.symbol_internal || p?.pair || p?.symbol || "");
+    const meta = p.__meta || parseFxMeta(p?.symbol_internal || p?.pair || p?.symbol || "");
     if (!meta?.symbolInternal || existing.has(meta.symbolInternal)) continue;
 
-    const bias = String(p?.directional_bias ?? "NEUTRAL").toUpperCase();
+    const bias = p.__bias || String(p?.directional_bias ?? "NEUTRAL").toUpperCase();
     const action = bias === "BUY_BASE" ? "PROPOSE_OPEN" : (bias === "SELL_BASE" ? "PROPOSE_CLOSE" : "WATCH");
-    const confRaw = Number(p?.confidence);
-    const confidence = Number.isFinite(confRaw) ? Math.max(0, Math.min(100, Math.round(confRaw))) : null;
+    const confidence = Number.isFinite(Number(p.__confidence)) ? Number(p.__confidence) : null;
     const urgent = toBool(p?.urgent_event_window, false);
 
     (agentDecision.actions = Array.isArray(agentDecision.actions) ? agentDecision.actions : []).push({
