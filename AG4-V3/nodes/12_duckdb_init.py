@@ -53,6 +53,8 @@ SCHEMA = [
       winners VARCHAR,
       sectors_bullish VARCHAR,
       sectors_bearish VARCHAR,
+      currencies_bullish VARCHAR,
+      currencies_bearish VARCHAR,
       theme VARCHAR,
       regime VARCHAR,
       analyzed_at TIMESTAMP,
@@ -144,6 +146,10 @@ with db_con() as con:
         con.execute("ALTER TABLE news_history ADD COLUMN sectors_bullish VARCHAR")
     if "sectors_bearish" not in cols:
         con.execute("ALTER TABLE news_history ADD COLUMN sectors_bearish VARCHAR")
+    if "currencies_bullish" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN currencies_bullish VARCHAR")
+    if "currencies_bearish" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN currencies_bearish VARCHAR")
 
     try:
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_run ON news_history(run_id)")

@@ -136,6 +136,65 @@ def _parse_ts(v: Any, fallback: Optional[str] = None) -> str:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+def _parse_json_obj(v: Any) -> Dict[str, Any]:
+    if v is None:
+        return {}
+    if isinstance(v, dict):
+        return dict(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return {}
+        try:
+            parsed = json.loads(s)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _fx_meta_from_symbol(symbol: str) -> Optional[Tuple[str, str, str]]:
+    s = _norm_symbol(symbol)
+    if not s:
+        return None
+    if s.startswith("FX:"):
+        pair = "".join(ch for ch in s.replace("FX:", "") if ch.isalpha()).upper()[:6]
+    elif s.endswith("=X"):
+        pair = "".join(ch for ch in s.replace("=X", "") if ch.isalpha()).upper()[:6]
+    else:
+        pair = "".join(ch for ch in s if ch.isalpha()).upper()[:6]
+    if len(pair) != 6:
+        return None
+    return pair, pair[:3], pair[3:]
+
+
+def _resolve_quote_to_eur_from_price_map(
+    quote_ccy: str,
+    last_price_by_symbol: Mapping[str, float],
+    fallback: Optional[float] = None,
+) -> Optional[float]:
+    quote = _clean_text(quote_ccy, 3).upper()
+    if not quote:
+        return fallback
+    if quote == "EUR":
+        return 1.0
+    if fallback is not None and fallback > 0:
+        return float(fallback)
+
+    inverse_candidates = [f"FX:EUR{quote}", f"EUR{quote}=X", f"EUR{quote}"]
+    for c in inverse_candidates:
+        px = last_price_by_symbol.get(_norm_symbol(c))
+        if px is not None and px > 0:
+            return 1.0 / float(px)
+
+    direct_candidates = [f"FX:{quote}EUR", f"{quote}EUR=X", f"{quote}EUR"]
+    for c in direct_candidates:
+        px = last_price_by_symbol.get(_norm_symbol(c))
+        if px is not None and px > 0:
+            return float(px)
+    return None
+
+
 def _split_sql_statements(sql_text: str) -> List[str]:
     statements: List[str] = []
     buff: List[str] = []
@@ -759,6 +818,8 @@ def _rebuild_position_lots_from_fills(con: duckdb.DuckDBPyConnection) -> int:
           UPPER(COALESCE(o.side, '')) AS side
         FROM core.fills f
         JOIN core.orders o ON o.order_id = f.order_id
+        LEFT JOIN core.instruments i ON i.symbol = o.symbol
+        WHERE UPPER(COALESCE(i.asset_class, 'EQUITY')) <> 'FX'
         ORDER BY f.ts_fill, f.fill_id
         """
     ).fetchall()
@@ -1084,17 +1145,42 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
         """
     ).fetchall()
     last_price_by_symbol = {_norm_symbol(s): float(p) for s, p in price_rows if s and p is not None}
+    for sym, px in list(last_price_by_symbol.items()):
+        fx_meta = _fx_meta_from_symbol(sym)
+        if not fx_meta:
+            continue
+        pair, _, _ = fx_meta
+        last_price_by_symbol.setdefault(_norm_symbol(f"FX:{pair}"), float(px))
+        last_price_by_symbol.setdefault(_norm_symbol(f"{pair}=X"), float(px))
+        last_price_by_symbol.setdefault(_norm_symbol(pair), float(px))
 
-    sector_rows = con.execute(
-        "SELECT symbol, COALESCE(sector, 'UNKNOWN') FROM core.instruments"
+    instrument_rows = con.execute(
+        """
+        SELECT
+          symbol,
+          COALESCE(sector, 'UNKNOWN') AS sector,
+          UPPER(COALESCE(asset_class, 'EQUITY')) AS asset_class
+        FROM core.instruments
+        """
     ).fetchall()
-    sector_by_symbol = {_norm_symbol(s): _clean_text(sec, 128) or "UNKNOWN" for s, sec in sector_rows}
+    sector_by_symbol: Dict[str, str] = {}
+    asset_class_by_symbol: Dict[str, str] = {}
+    for s, sec, ac in instrument_rows:
+        symbol = _norm_symbol(s)
+        if not symbol:
+            continue
+        sector_by_symbol[symbol] = _clean_text(sec, 128) or "UNKNOWN"
+        asset_class_by_symbol[symbol] = _clean_text(ac, 32).upper() or "EQUITY"
 
     positions: List[Dict[str, Any]] = []
     equity_eur = 0.0
     sector_totals: Dict[str, float] = {}
+
+    # 1) Equity/ETF/crypto from FIFO lots
     for symbol, qty, avg_cost in lot_rows:
         symbol = _norm_symbol(symbol)
+        if asset_class_by_symbol.get(symbol, "EQUITY") == "FX":
+            continue
         qty = float(qty or 0.0)
         if qty <= 0:
             continue
@@ -1111,6 +1197,136 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
                 "qty": qty,
                 "avg_cost": avg_cost,
                 "last_price": last_price,
+                "market_value_eur": round(market_value, 2),
+                "unrealized_pnl_eur": round(unrealized, 2),
+                "weight_pct": 0.0,
+                "ts": ts,
+            }
+        )
+
+    # 2) FX net positions from fills + raw_fill_json metadata
+    fx_fill_rows = con.execute(
+        """
+        SELECT
+          f.ts_fill,
+          UPPER(COALESCE(o.symbol, '')) AS symbol,
+          UPPER(COALESCE(o.side, '')) AS side,
+          CAST(f.qty AS DOUBLE) AS qty,
+          CAST(f.price AS DOUBLE) AS price,
+          f.raw_fill_json
+        FROM core.fills f
+        JOIN core.orders o ON o.order_id = f.order_id
+        LEFT JOIN core.instruments i ON i.symbol = o.symbol
+        WHERE UPPER(COALESCE(i.asset_class, '')) = 'FX'
+        ORDER BY f.ts_fill, f.fill_id
+        """
+    ).fetchall()
+
+    fx_states: Dict[str, Dict[str, Any]] = {}
+    for _ts_fill, symbol, side, qty, price, raw_fill_json in fx_fill_rows:
+        symbol = _norm_symbol(symbol)
+        side = _clean_text(side, 8).upper()
+        qty = float(qty or 0.0)
+        price = float(price or 0.0)
+        if not symbol or qty <= 0 or price <= 0 or side not in {"BUY", "SELL"}:
+            continue
+
+        raw = _parse_json_obj(raw_fill_json)
+        fx_meta = _fx_meta_from_symbol(symbol)
+        quote_ccy = _clean_text(raw.get("quote_ccy"), 3).upper() if raw else ""
+        if not quote_ccy and fx_meta is not None:
+            quote_ccy = fx_meta[2]
+
+        quote_to_eur_hint = _to_float(raw.get("quote_to_eur"), None)
+        quote_to_eur = _resolve_quote_to_eur_from_price_map(quote_ccy, last_price_by_symbol, quote_to_eur_hint)
+        if quote_to_eur is None and quote_ccy == "EUR":
+            quote_to_eur = 1.0
+
+        leverage = _to_float(raw.get("leverage"), None)
+        notional_eur = _to_float(raw.get("notional_eur"), None)
+        margin_used_fill = _to_float(raw.get("margin_used_eur"), None)
+        if margin_used_fill is None or margin_used_fill < 0:
+            if notional_eur is None and quote_to_eur is not None:
+                notional_eur = abs(qty * price * quote_to_eur)
+            lev = leverage if leverage is not None and leverage > 0 else 10.0
+            if notional_eur is not None and notional_eur >= 0:
+                margin_used_fill = float(notional_eur) / lev
+            else:
+                margin_used_fill = 0.0
+
+        state = fx_states.setdefault(
+            symbol,
+            {
+                "qty_base": 0.0,
+                "avg_entry_price": 0.0,
+                "margin_used_eur": 0.0,
+                "quote_ccy": quote_ccy,
+                "quote_to_eur": quote_to_eur,
+                "last_price": price,
+            },
+        )
+
+        if side == "BUY":
+            qty_before = float(state["qty_base"])
+            qty_after = qty_before + qty
+            if qty_after > 0:
+                if qty_before > 0:
+                    state["avg_entry_price"] = ((qty_before * float(state["avg_entry_price"])) + (qty * price)) / qty_after
+                else:
+                    state["avg_entry_price"] = price
+            state["qty_base"] = qty_after
+            state["margin_used_eur"] = float(state["margin_used_eur"]) + max(0.0, float(margin_used_fill or 0.0))
+        else:
+            qty_before = float(state["qty_base"])
+            close_qty = min(qty, qty_before) if qty_before > 0 else 0.0
+            if close_qty > 0:
+                margin_released = _to_float(raw.get("margin_released_eur"), None)
+                if margin_released is None:
+                    margin_released = float(state["margin_used_eur"]) * (close_qty / qty_before) if qty_before > 0 else 0.0
+                state["qty_base"] = max(0.0, qty_before - close_qty)
+                state["margin_used_eur"] = max(0.0, float(state["margin_used_eur"]) - max(0.0, float(margin_released or 0.0)))
+                if float(state["qty_base"]) <= 1e-12:
+                    state["qty_base"] = 0.0
+                    state["avg_entry_price"] = 0.0
+
+        if quote_ccy:
+            state["quote_ccy"] = quote_ccy
+        if quote_to_eur is not None and quote_to_eur > 0:
+            state["quote_to_eur"] = quote_to_eur
+        state["last_price"] = price
+
+    for symbol, st in fx_states.items():
+        qty_base = float(st.get("qty_base") or 0.0)
+        if qty_base <= 0:
+            continue
+        avg_entry_price = float(st.get("avg_entry_price") or 0.0)
+        if avg_entry_price <= 0:
+            continue
+        last_pair_price = float(last_price_by_symbol.get(symbol, st.get("last_price") or avg_entry_price))
+        if last_pair_price <= 0:
+            last_pair_price = avg_entry_price
+
+        fx_meta = _fx_meta_from_symbol(symbol)
+        quote_ccy = _clean_text(st.get("quote_ccy"), 3).upper() or (fx_meta[2] if fx_meta else "")
+        quote_to_eur = _resolve_quote_to_eur_from_price_map(quote_ccy, last_price_by_symbol, _to_float(st.get("quote_to_eur"), None))
+        if quote_to_eur is None and quote_ccy == "EUR":
+            quote_to_eur = 1.0
+        if quote_to_eur is None or quote_to_eur <= 0:
+            quote_to_eur = 0.0
+
+        margin_used = max(0.0, float(st.get("margin_used_eur") or 0.0))
+        unrealized = qty_base * (last_pair_price - avg_entry_price) * quote_to_eur
+        market_value = margin_used + unrealized
+
+        equity_eur += market_value
+        sector = sector_by_symbol.get(symbol, "FX")
+        sector_totals[sector] = sector_totals.get(sector, 0.0) + market_value
+        positions.append(
+            {
+                "symbol": symbol,
+                "qty": qty_base,
+                "avg_cost": avg_entry_price,
+                "last_price": last_pair_price,
                 "market_value_eur": round(market_value, 2),
                 "unrealized_pnl_eur": round(unrealized, 2),
                 "weight_pct": 0.0,

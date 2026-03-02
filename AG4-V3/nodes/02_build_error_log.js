@@ -48,6 +48,8 @@ return $input.all().map((i, idx) => {
       Strategy: '',
       sectors_bearish: '',
       sectors_bullish: '',
+      currencies_bearish: '',
+      currencies_bullish: '',
       Losers: '',
       Winners: '',
       Theme: 'Pipeline/Error',

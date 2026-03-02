@@ -1,7 +1,7 @@
 ﻿# AG4-V3 - News Watcher (DuckDB-first)
 
 ## Objectif
-AG4-V3 collecte les flux RSS, dedupe les news, analyse les impacts marche/secteurs pour Agent #1, et utilise DuckDB (VPS) comme source de verite.
+AG4-V3 collecte les flux RSS, dedupe les news, analyse les impacts marche/secteurs/devise pour Agent #1, et utilise DuckDB (VPS) comme source de verite.
 Google Sheets est utilise uniquement pour les entrees de configuration.
 
 ## Architecture
@@ -17,7 +17,7 @@ Google Sheets est utilise uniquement pour les entrees de configuration.
    - consolidation des sorties dans DuckDB
 
 ## Tables DuckDB
-- `news_history`
+- `news_history` (inclut `currencies_bullish` / `currencies_bearish`)
 - `news_errors`
 - `run_log`
 

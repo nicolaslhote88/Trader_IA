@@ -1,4 +1,4 @@
-{
+﻿{
   "name": "AG3-V2 - Fundamental Analyst (DuckDB-first)",
   "nodes": [
     {
@@ -15,8 +15,8 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.3,
       "position": [
-        64,
-        112
+        -1424,
+        -224
       ],
       "id": "dcd6b2a3-cc74-4f03-8588-b8a24fe9908d",
       "name": "Schedule Trigger"
@@ -26,8 +26,8 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        64,
-        272
+        -1424,
+        -64
       ],
       "id": "092be7cc-16e7-4904-8d73-bf0ae727f25a",
       "name": "Manual Trigger"
@@ -39,8 +39,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        304,
-        192
+        -1184,
+        -144
       ],
       "id": "013e013b-4655-4bdb-8f2b-66fdffb09e95",
       "name": "AG3V2.00 - Init Context"
@@ -56,26 +56,18 @@
         },
         "sheetName": {
           "__rl": true,
-          "value": 1078848687,
           "mode": "list",
+          "value": "Universe",
           "cachedResultName": "Universe",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
-        },
-        "filtersUI": {
-          "values": [
-            {
-              "lookupColumn": "Enabled",
-              "lookupValue": "true"
-            }
-          ]
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit"
         },
         "options": {}
       },
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
       "position": [
-        528,
-        192
+        -960,
+        -144
       ],
       "id": "8e3a18ed-9e2d-43f1-8b12-a90ff3daa49f",
       "name": "AG3V2.01 - Read Universe",
@@ -88,13 +80,13 @@
     },
     {
       "parameters": {
-        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nconst BATCH_SIZE = 50;\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst queue = [];\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  queue.push({\n    run_id: ctx.run_id || null,\n    nowIso: ctx.nowIso || new Date().toISOString(),\n    asOfDate: ctx.asOfDate || null,\n    api_base: ctx.api_base || \"http://yfinance-api:8080\",\n    db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n    strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n    config_version: ctx.config_version || \"ag3_v2_default\",\n    Symbol: symbol,\n    Name: name,\n    Sector: sector,\n    BoursoramaRef: boursoramaRef,\n    UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n  });\n}\n\n// Deterministic order for batch rotation.\nqueue.sort((a, b) => String(a.Symbol).localeCompare(String(b.Symbol)));\n\nconst maxSymbols = Number(ctx.max_symbols || 0);\nconst finalQueue = Number.isFinite(maxSymbols) && maxSymbols > 0 ? queue.slice(0, Math.floor(maxSymbols)) : queue;\n\nreturn [\n  {\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      max_symbols: Number.isFinite(maxSymbols) && maxSymbols > 0 ? Math.floor(maxSymbols) : 0,\n      batch_size: BATCH_SIZE,\n      _all_queue: finalQueue,\n      _total_pool: finalQueue.length,\n    },\n  },\n];\n"
+        "jsCode": "function pick(row, keys) {\n  if (!row || typeof row !== \"object\") return null;\n  for (const key of keys) {\n    if (row[key] !== undefined && row[key] !== null && String(row[key]).trim() !== \"\") {\n      return row[key];\n    }\n    const lower = key.toLowerCase();\n    for (const k of Object.keys(row)) {\n      if (String(k).toLowerCase() === lower) {\n        const v = row[k];\n        if (v !== undefined && v !== null && String(v).trim() !== \"\") return v;\n      }\n    }\n  }\n  return null;\n}\n\nfunction truthy(v) {\n  if (typeof v === \"boolean\") return v;\n  const s = String(v || \"\").trim().toLowerCase();\n  return [\"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"].includes(s);\n}\n\nfunction normalizeAssetClass(raw, symbol) {\n  const cls = String(raw || \"\").trim().toUpperCase();\n  if (cls === \"FX\" || cls === \"FOREX\") return \"FX\";\n  if (cls === \"CRYPTO\") return \"CRYPTO\";\n  if (cls === \"EQUITY\" || cls === \"ETF\" || cls === \"STOCK\") return \"EQUITY\";\n\n  const sym = String(symbol || \"\").trim().toUpperCase();\n  if (sym.startsWith(\"FX:\") || sym.endsWith(\"=X\")) return \"FX\";\n  return \"EQUITY\";\n}\n\nconst BATCH_SIZE = 50;\nconst ctx = $(\"AG3V2.00 - Init Context\").first().json || {};\nconst rows = $input.all().map((i) => i.json || {});\n\nconst queue = [];\nlet skippedNonEquityCount = 0;\nfor (const r of rows) {\n  const symbolRaw = pick(r, [\"Symbol\", \"symbol\", \"Ticker\", \"ticker\"]);\n  if (!symbolRaw) continue;\n\n  const symbol = String(symbolRaw).trim().toUpperCase();\n  if (!symbol) continue;\n\n  const assetClassRaw = pick(r, [\"AssetClass\", \"assetClass\", \"asset_class\", \"Type\", \"type\"]);\n  const assetClass = normalizeAssetClass(assetClassRaw, symbol);\n  if (assetClass !== \"EQUITY\") {\n    skippedNonEquityCount += 1;\n    continue;\n  }\n\n  const enabledRaw = pick(r, [\"Enabled\", \"enabled\", \"Active\", \"active\"]);\n  if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;\n\n  const name = String(pick(r, [\"Name\", \"name\", \"Company\", \"company\"]) || symbol).trim();\n  const sector = String(pick(r, [\"Sector\", \"sector\"]) || \"\").trim();\n  const boursoramaRef = String(pick(r, [\"BoursoramaRef\", \"boursorama_ref\", \"Boursorama\"]) || \"\").trim();\n\n  queue.push({\n    run_id: ctx.run_id || null,\n    nowIso: ctx.nowIso || new Date().toISOString(),\n    asOfDate: ctx.asOfDate || null,\n    api_base: ctx.api_base || \"http://yfinance-api:8080\",\n    db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n    strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n    config_version: ctx.config_version || \"ag3_v2_default\",\n    Symbol: symbol,\n    Name: name,\n    Sector: sector,\n    BoursoramaRef: boursoramaRef,\n    UniverseEnabled: enabledRaw === null ? true : truthy(enabledRaw),\n  });\n}\n\n// Deterministic order for batch rotation.\nqueue.sort((a, b) => String(a.Symbol).localeCompare(String(b.Symbol)));\n\nconst maxSymbols = Number(ctx.max_symbols || 0);\nconst finalQueue = Number.isFinite(maxSymbols) && maxSymbols > 0 ? queue.slice(0, Math.floor(maxSymbols)) : queue;\n\nreturn [\n  {\n    json: {\n      run_id: ctx.run_id || null,\n      nowIso: ctx.nowIso || new Date().toISOString(),\n      asOfDate: ctx.asOfDate || null,\n      api_base: ctx.api_base || \"http://yfinance-api:8080\",\n      db_path: ctx.db_path || \"/files/duckdb/ag3_v2.duckdb\",\n      strategy_version: ctx.strategy_version || \"ag3_v2_fundamentals\",\n      config_version: ctx.config_version || \"ag3_v2_default\",\n      max_symbols: Number.isFinite(maxSymbols) && maxSymbols > 0 ? Math.floor(maxSymbols) : 0,\n      batch_size: BATCH_SIZE,\n      skipped_non_equity_count: skippedNonEquityCount,\n      _all_queue: finalQueue,\n      _total_pool: finalQueue.length,\n    },\n  },\n];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        752,
-        192
+        -736,
+        -144
       ],
       "id": "d7dc6bbd-c6b9-402f-b2da-21594941e731",
       "name": "AG3V2.02 - Build Queue"
@@ -107,8 +99,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        976,
-        192
+        -512,
+        -144
       ],
       "id": "d75538b7-502e-463e-ad73-69b940339f2c",
       "name": "AG3V2.02B - DuckDB Init Run"
@@ -120,8 +112,8 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        1184,
-        192
+        -304,
+        -144
       ],
       "id": "b3f5f89f-7c85-49ad-907f-f715ea79754a",
       "name": "AG3V2.03 - Split Symbols"
@@ -145,8 +137,8 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4,
       "position": [
-        1520,
-        144
+        -80,
+        -256
       ],
       "id": "3208f39c-278d-4a0d-b3a6-c7f89f2e6f50",
       "name": "AG3V2.04 - HTTP Fundamentals",
@@ -165,8 +157,8 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        1728,
-        256
+        128,
+        -144
       ],
       "id": "045b4a91-afca-4c67-b1d9-03b7f0107f3a",
       "name": "AG3V2.05 - Merge Queue + API"
@@ -178,8 +170,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1936,
-        256
+        336,
+        -144
       ],
       "id": "f21995ee-8c01-43dc-b90a-fcf877539f61",
       "name": "AG3V2.06 - Score Fundamentals"
@@ -192,8 +184,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2160,
-        256
+        560,
+        -144
       ],
       "id": "568aee73-8511-4db6-885d-f90e85dc7ca8",
       "name": "AG3V2.07 - Write Fundamentals DuckDB"
@@ -206,8 +198,8 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        2384,
-        320
+        768,
+        -144
       ],
       "id": "51f057cb-5dcb-4bc9-95a7-a8161eb45f7b",
       "name": "AG3V2.08 - Wait Rate Limit"
@@ -220,8 +212,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1568,
-        -32
+        -80,
+        64
       ],
       "id": "1a4ac7a0-e2ac-4eb0-bbc5-eb33f2533204",
       "name": "AG3V2.09 - Finalize Run"
@@ -234,8 +226,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1680,
-        -512
+        128,
+        64
       ],
       "id": "5e6f56d1-1210-4ab7-9fec-f3aa5ec2f0e6",
       "name": "AG3V2.10 - Build Vector Docs from DuckDB",
@@ -250,8 +242,8 @@
       "type": "@n8n/n8n-nodes-langchain.embeddingsOpenAi",
       "typeVersion": 1.2,
       "position": [
-        2256,
-        -224
+        560,
+        -48
       ],
       "id": "0f4c4e5d-c8c7-41d9-a615-c2bfd2f6f7ba",
       "name": "Embeddings OpenAI",
@@ -264,15 +256,15 @@
     },
     {
       "parameters": {
-        "chunkSize": 2000,
+        "chunkSize": 30000,
         "chunkOverlap": 200,
         "options": {}
       },
       "type": "@n8n/n8n-nodes-langchain.textSplitterRecursiveCharacterTextSplitter",
       "typeVersion": 1,
       "position": [
-        2400,
-        -96
+        560,
+        224
       ],
       "id": "84fe2d6f-40f9-4b25-ab4e-3073958e359f",
       "name": "Text Splitter"
@@ -343,18 +335,6 @@
               {
                 "name": "db_path",
                 "value": "={{ $json.metadata.db_path }}"
-              },
-              {
-                "name": "doc_id",
-                "value": "={{ $json.metadata.id }}"
-              },
-              {
-                "name": "schema_version",
-                "value": "={{ $json.metadata.schema_version }}"
-              },
-              {
-                "name": "doc_kind",
-                "value": "={{ $json.metadata.doc_kind }}"
               }
             ]
           }
@@ -363,8 +343,8 @@
       "type": "@n8n/n8n-nodes-langchain.documentDefaultDataLoader",
       "typeVersion": 1,
       "position": [
-        2400,
-        -256
+        560,
+        416
       ],
       "id": "cb9b0d2b-9562-4e10-91f8-505eb3b39176",
       "name": "Default Data Loader"
@@ -386,8 +366,8 @@
       "type": "@n8n/n8n-nodes-langchain.vectorStoreQdrant",
       "typeVersion": 1.1,
       "position": [
-        2336,
-        -512
+        784,
+        64
       ],
       "id": "2b96ab39-6361-4763-a677-d1f883533901",
       "name": "Qdrant Upsert",
@@ -396,8 +376,7 @@
           "id": "q1CRmg2N6AmW6pC1",
           "name": "QdrantApi account"
         }
-      },
-      "alwaysOutputData": true
+      }
     },
     {
       "parameters": {
@@ -407,8 +386,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2784,
-        -144
+        1008,
+        64
       ],
       "id": "f4f72f66-5833-4ea6-83f6-a4d53e2d068c",
       "name": "AG3V2.11 - Mark Vectorized",
@@ -424,73 +403,11 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -128,
-        -544
+        -1488,
+        -336
       ],
       "id": "f46735a8-4b73-4685-9493-bf170c0afcb6",
       "name": "AG3V2 - Note"
-    },
-    {
-      "parameters": {
-        "batchSize": 1,
-        "options": {}
-      },
-      "type": "n8n-nodes-base.splitInBatches",
-      "typeVersion": 3,
-      "position": [
-        1904,
-        -544
-      ],
-      "id": "bfc636d7-d694-4d36-9a86-e79510ddf45b",
-      "name": "Split Vector Docs (FUNDA)"
-    },
-    {
-      "parameters": {
-        "method": "POST",
-        "url": "={{ (($json.metadata && $json.metadata.qdrant_url) || 'http://qdrant:6333') + '/collections/fundamental_analysis/points/delete?wait=true&ordering=strong' }}",
-        "sendHeaders": true,
-        "headerParameters": {
-          "parameters": [
-            {
-              "name": "api-key",
-              "value": "37f80c95cd31e3dc396413cf57a6e33629990bfe9606482e7c3dfcc1ee152ac9"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "specifyBody": "json",
-        "jsonBody": "={{ { \"filter\": { \"must\": [ { \"key\": \"doc_id\", \"match\": { \"value\": (($json.metadata && ($json.metadata.doc_id || $json.metadata.id)) || $json.doc_id || $json.id) } } ] } } }}",
-        "options": {
-          "timeout": 30000
-        }
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
-      "position": [
-        2128,
-        -512
-      ],
-      "id": "ec3e8703-8e8c-49dd-a7f2-a4bb8da3738a",
-      "name": "Qdrant Delete (FUNDA by doc_id)"
-    },
-    {
-      "parameters": {
-        "mode": "combine",
-        "combineBy": "combineByPosition",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3.2,
-      "position": [
-        2240,
-        -512
-      ],
-      "id": "c0c37f6e-7501-4cb6-9c2f-fb1bbd16fe80",
-      "name": "Merge Vector Doc + Delete (FUNDA)"
     }
   ],
   "connections": {
@@ -564,18 +481,6 @@
       "main": [
         [
           {
-            "node": "AG3V2.09 - Finalize Run",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "AG3V2.10 - Build Vector Docs from DuckDB",
-            "type": "main",
-            "index": 0
-          }
-        ],
-        [
-          {
             "node": "AG3V2.04 - HTTP Fundamentals",
             "type": "main",
             "index": 0
@@ -584,6 +489,18 @@
             "node": "AG3V2.05 - Merge Queue + API",
             "type": "main",
             "index": 1
+          }
+        ],
+        [
+          {
+            "node": "AG3V2.09 - Finalize Run",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "AG3V2.10 - Build Vector Docs from DuckDB",
+            "type": "main",
+            "index": 0
           }
         ]
       ]
@@ -643,6 +560,17 @@
         ]
       ]
     },
+    "AG3V2.10 - Build Vector Docs from DuckDB": {
+      "main": [
+        [
+          {
+            "node": "Qdrant Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Embeddings OpenAI": {
       "ai_embedding": [
         [
@@ -676,45 +604,6 @@
         ]
       ]
     },
-    "Split Vector Docs (FUNDA)": {
-      "main": [
-        [],
-        [
-          {
-            "node": "Qdrant Delete (FUNDA by doc_id)",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Merge Vector Doc + Delete (FUNDA)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "AG3V2.10 - Build Vector Docs from DuckDB": {
-      "main": [
-        [
-          {
-            "node": "Split Vector Docs (FUNDA)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Qdrant Delete (FUNDA by doc_id)": {
-      "main": [
-        [
-          {
-            "node": "Merge Vector Doc + Delete (FUNDA)",
-            "type": "main",
-            "index": 1
-          }
-        ]
-      ]
-    },
     "Qdrant Upsert": {
       "main": [
         [
@@ -728,24 +617,7 @@
     },
     "AG3V2.11 - Mark Vectorized": {
       "main": [
-        [
-          {
-            "node": "Split Vector Docs (FUNDA)",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Merge Vector Doc + Delete (FUNDA)": {
-      "main": [
-        [
-          {
-            "node": "Qdrant Upsert",
-            "type": "main",
-            "index": 0
-          }
-        ]
+        []
       ]
     }
   },

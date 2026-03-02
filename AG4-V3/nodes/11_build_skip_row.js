@@ -5,6 +5,8 @@ const now = new Date().toISOString();
 const symbols = Array.isArray(j.symbols) ? j.symbols.join(', ') : (j.symbols || '');
 const sectorsBullish = j.sectors_bullish || j.Winners || '';
 const sectorsBearish = j.sectors_bearish || j.Losers || '';
+const currenciesBullish = j.currencies_bullish || '';
+const currenciesBearish = j.currencies_bearish || '';
 
 return [{
   json: {
@@ -29,6 +31,8 @@ return [{
     Strategy: j.Strategy || '',
     sectors_bearish: sectorsBearish,
     sectors_bullish: sectorsBullish,
+    currencies_bearish: currenciesBearish,
+    currencies_bullish: currenciesBullish,
     Losers: j.Losers || sectorsBearish,
     Winners: j.Winners || sectorsBullish,
     Theme: j.Theme || 'Resultats/Micro',

@@ -21,17 +21,36 @@ function truthy(v) {
   return ["1", "true", "yes", "y", "oui", "ok", "enabled"].includes(s);
 }
 
+function normalizeAssetClass(raw, symbol) {
+  const cls = String(raw || "").trim().toUpperCase();
+  if (cls === "FX" || cls === "FOREX") return "FX";
+  if (cls === "CRYPTO") return "CRYPTO";
+  if (cls === "EQUITY" || cls === "ETF" || cls === "STOCK") return "EQUITY";
+
+  const sym = String(symbol || "").trim().toUpperCase();
+  if (sym.startsWith("FX:") || sym.endsWith("=X")) return "FX";
+  return "EQUITY";
+}
+
 const BATCH_SIZE = 50;
 const ctx = $("AG3V2.00 - Init Context").first().json || {};
 const rows = $input.all().map((i) => i.json || {});
 
 const queue = [];
+let skippedNonEquityCount = 0;
 for (const r of rows) {
   const symbolRaw = pick(r, ["Symbol", "symbol", "Ticker", "ticker"]);
   if (!symbolRaw) continue;
 
   const symbol = String(symbolRaw).trim().toUpperCase();
   if (!symbol) continue;
+
+  const assetClassRaw = pick(r, ["AssetClass", "assetClass", "asset_class", "Type", "type"]);
+  const assetClass = normalizeAssetClass(assetClassRaw, symbol);
+  if (assetClass !== "EQUITY") {
+    skippedNonEquityCount += 1;
+    continue;
+  }
 
   const enabledRaw = pick(r, ["Enabled", "enabled", "Active", "active"]);
   if (ctx.only_enabled && enabledRaw !== null && !truthy(enabledRaw)) continue;
@@ -74,6 +93,7 @@ return [
       config_version: ctx.config_version || "ag3_v2_default",
       max_symbols: Number.isFinite(maxSymbols) && maxSymbols > 0 ? Math.floor(maxSymbols) : 0,
       batch_size: BATCH_SIZE,
+      skipped_non_equity_count: skippedNonEquityCount,
       _all_queue: finalQueue,
       _total_pool: finalQueue.length,
     },

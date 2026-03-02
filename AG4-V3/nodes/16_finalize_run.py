@@ -113,6 +113,24 @@ def score_text_sentiment(text):
     return 0.0
 
 
+def parse_ccy_list(value):
+    out = []
+    seen = set()
+    if value is None:
+        return out
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw = str(value).split(",")
+    for v in raw:
+        ccy = str(v or "").strip().upper()
+        ccy = "".join(ch for ch in ccy if ch.isalpha())[:3]
+        if ccy in CURRENCIES and ccy not in seen:
+            seen.add(ccy)
+            out.append(ccy)
+    return out
+
+
 def extract_recent_macro(con, run_id):
     cutoff = datetime.now(timezone.utc) - timedelta(days=7)
     rows = con.execute(
@@ -125,7 +143,9 @@ def extract_recent_macro(con, run_id):
           COALESCE(urgency, 'low') AS urgency,
           COALESCE(title, '') AS title,
           COALESCE(snippet, '') AS snippet,
-          COALESCE(notes, '') AS notes
+          COALESCE(notes, '') AS notes,
+          COALESCE(currencies_bullish, '') AS currencies_bullish,
+          COALESCE(currencies_bearish, '') AS currencies_bearish
         FROM news_history
         WHERE run_id = ?
           AND COALESCE(type, 'macro') = 'macro'
@@ -147,6 +167,8 @@ def extract_recent_macro(con, run_id):
                 "impact": safe_float(r[3], 0.0),
                 "urgency": str(r[4] or "low").strip().lower(),
                 "text": " ".join([str(r[5] or ""), str(r[6] or ""), str(r[7] or "")]).strip(),
+                "currencies_bullish": parse_ccy_list(r[8]),
+                "currencies_bearish": parse_ccy_list(r[9]),
             }
         )
     return out
@@ -203,6 +225,12 @@ def derive_fx_macro(rows):
                 continue
             delta = hits * (0.3 + 0.15 * sent) * w
             bias[ccy] += delta
+
+        # Direct LLM FX stance from AG4 parse (stronger than keyword hints).
+        for ccy in row.get("currencies_bullish", []):
+            bias[ccy] += 0.8 * w
+        for ccy in row.get("currencies_bearish", []):
+            bias[ccy] -= 0.8 * w
 
     market_regime = max(regime_votes.items(), key=lambda kv: kv[1])[0]
     drivers = ", ".join([k for k, _ in sorted(theme_counts.items(), key=lambda kv: kv[1], reverse=True)[:5]])

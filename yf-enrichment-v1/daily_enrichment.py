@@ -7,12 +7,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 import duckdb
-import pandas as pd
 import requests
 
 
 DEFAULT_YF_ENRICH_DB_PATH = "/files/duckdb/yf_enrichment_v1.duckdb"
-DEFAULT_AG2_DB_PATH = "/files/duckdb/ag2_v2.duckdb"
+DEFAULT_AG2_DB_PATH = "/files/duckdb/ag2_v3.duckdb"
 DEFAULT_YF_API_URL = "http://yfinance-api:8080"
 DEFAULT_OPTIONS_RECHECK_DAYS = 7
 DEFAULT_QUOTE_CHUNK_SIZE = 80
@@ -189,35 +188,66 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
     )
 
 
-def load_symbols(ag2_db_path: str, symbols_csv: str, max_symbols: int) -> list[str]:
-    symbols: list[str] = []
+def normalize_asset_class(raw: Any, symbol: str) -> str:
+    cls = to_text(raw).strip().upper()
+    if cls in {"FX", "FOREX"}:
+        return "FX"
+    if cls == "CRYPTO":
+        return "CRYPTO"
+    if cls in {"EQUITY", "ETF", "STOCK"}:
+        return "EQUITY"
+    s = to_text(symbol).strip().upper()
+    if s.startswith("FX:") or s.endswith("=X"):
+        return "FX"
+    return "EQUITY"
+
+
+def load_symbols(ag2_db_path: str, symbols_csv: str, max_symbols: int) -> list[dict[str, str]]:
+    symbols: list[dict[str, str]] = []
 
     if symbols_csv:
-        symbols = [s.strip().upper() for s in str(symbols_csv).replace(";", ",").split(",") if s.strip()]
+        for raw in str(symbols_csv).replace(";", ",").split(","):
+            sym = raw.strip().upper()
+            if not sym:
+                continue
+            symbols.append({"symbol": sym, "asset_class": normalize_asset_class(None, sym)})
     elif os.path.exists(ag2_db_path):
         with db_con(ag2_db_path, read_only=True) as con:
             try:
                 df = con.execute(
                     """
-                    SELECT symbol
+                    SELECT
+                      symbol,
+                      UPPER(TRIM(COALESCE(asset_class, CASE WHEN UPPER(TRIM(symbol)) LIKE '%=X' THEN 'FX' ELSE 'EQUITY' END))) AS asset_class
                     FROM universe
                     WHERE COALESCE(enabled, TRUE) = TRUE
                     ORDER BY symbol
                     """
                 ).fetchdf()
             except Exception:
-                df = con.execute("SELECT symbol FROM universe ORDER BY symbol").fetchdf()
+                try:
+                    df = con.execute(
+                        """
+                        SELECT
+                          symbol,
+                          UPPER(TRIM(COALESCE(asset_class, CASE WHEN UPPER(TRIM(symbol)) LIKE '%=X' THEN 'FX' ELSE 'EQUITY' END))) AS asset_class
+                        FROM universe
+                        ORDER BY symbol
+                        """
+                    ).fetchdf()
+                except Exception:
+                    df = con.execute("SELECT symbol FROM universe ORDER BY symbol").fetchdf()
         if not df.empty and "symbol" in df.columns:
-            symbols = (
-                df["symbol"]
-                .fillna("")
-                .astype(str)
-                .str.strip()
-                .str.upper()
-                .loc[lambda s: s != ""]
-                .drop_duplicates()
-                .tolist()
-            )
+            dedup: dict[str, str] = {}
+            for _, row in df.iterrows():
+                sym = to_text(row.get("symbol")).strip().upper()
+                if not sym:
+                    continue
+                raw_cls = row.get("asset_class") if "asset_class" in df.columns else None
+                if sym in dedup:
+                    continue
+                dedup[sym] = normalize_asset_class(raw_cls, sym)
+            symbols = [{"symbol": sym, "asset_class": cls} for sym, cls in dedup.items()]
 
     if max_symbols > 0:
         symbols = symbols[:max_symbols]
@@ -466,7 +496,8 @@ def run_job(
 
     with db_con(yf_enrich_db_path, read_only=False) as con:
         init_schema(con)
-        symbols = load_symbols(ag2_db_path, symbols_csv, max_symbols=max_symbols)
+        symbol_rows = load_symbols(ag2_db_path, symbols_csv, max_symbols=max_symbols)
+        symbols = [r["symbol"] for r in symbol_rows]
         con.execute(
             """
             INSERT OR REPLACE INTO run_log (
@@ -475,10 +506,10 @@ def run_job(
             )
             VALUES (?, ?, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, NULL, ?)
             """,
-            [run_id, started, len(symbols), WORKFLOW_VERSION],
+            [run_id, started, len(symbol_rows), WORKFLOW_VERSION],
         )
 
-        if not symbols:
+        if not symbol_rows:
             finished = utcnow()
             con.execute(
                 """
@@ -508,30 +539,50 @@ def run_job(
             "options_empty": 0,
         }
 
-        for sym in symbols:
+        for spec in symbol_rows:
+            sym = spec["symbol"]
+            asset_class = normalize_asset_class(spec.get("asset_class"), sym)
             quote_row = quote_map.get(sym, {"ok": False, "symbol": sym, "error": "MISSING_QUOTE"})
-            skip_options, skip_reason = should_skip_options(con, sym, recheck_days=options_recheck_days)
-            if skip_options:
+            if asset_class == "FX":
+                skipped_ts = utcnow().isoformat()
                 options_row = {
                     "ok": False,
                     "symbol": sym,
-                    "error": skip_reason,
-                    "source": "cache_policy",
-                    "fetchedAt": utcnow().isoformat(),
+                    "error": "SKIPPED_FX",
+                    "source": "asset_class_policy",
+                    "fetchedAt": skipped_ts,
+                    "warnings": ["FX quote-only mode"],
+                }
+                calendar_row = {
+                    "ok": False,
+                    "symbol": sym,
+                    "error": "SKIPPED_FX",
+                    "source": "asset_class_policy",
+                    "fetchedAt": skipped_ts,
                 }
             else:
-                options_row = fetch_options(
+                skip_options, skip_reason = should_skip_options(con, sym, recheck_days=options_recheck_days)
+                if skip_options:
+                    options_row = {
+                        "ok": False,
+                        "symbol": sym,
+                        "error": skip_reason,
+                        "source": "cache_policy",
+                        "fetchedAt": utcnow().isoformat(),
+                    }
+                else:
+                    options_row = fetch_options(
+                        api_url=yf_api_url,
+                        symbol=sym,
+                        target_days=target_days,
+                        timeout_sec=timeout_sec,
+                    )
+
+                calendar_row = fetch_calendar(
                     api_url=yf_api_url,
                     symbol=sym,
-                    target_days=target_days,
                     timeout_sec=timeout_sec,
                 )
-
-            calendar_row = fetch_calendar(
-                api_url=yf_api_url,
-                symbol=sym,
-                timeout_sec=timeout_sec,
-            )
 
             row = build_row(
                 run_id=run_id,
@@ -628,4 +679,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

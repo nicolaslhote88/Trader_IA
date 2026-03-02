@@ -318,8 +318,8 @@ def build() -> dict:
                         {
                             'role': 'system',
                             'content': (
-                                'Tu es le Chief Market Strategist. Tu analyses une news pour decision portefeuille. '
-                                'Objectif: extraire regime de marche, theme macro, secteurs gagnants/perdants, resume actionnable. '
+                                'Tu es le Chief Market Strategist. Tu analyses une news pour decision de portefeuille (Actions et Forex). '
+                                'Objectif: extraire le regime de marche, le theme macro, les secteurs ET les devises gagnants/perdants, et fournir un resume actionnable. '
                                 'Reponds uniquement en JSON valide selon le schema.'
                             ),
                         },
@@ -327,11 +327,10 @@ def build() -> dict:
                             'content': (
                                 '=Analyse cette news:\n{{ $json.llmInput }}\n\n'
                                 'Regles de normalisation obligatoires:\n'
-                                '- Utilise uniquement les valeurs du champ universeSectors du JSON.\n'
-                                "- N'utilise jamais des industries; seulement des secteurs.\n"
-                                '- Si un secteur propose ne matche pas universeSectors, ne le retourne pas.\n'
-                                '- Max 5 secteurs par liste (sectors_bullish, sectors_bearish).\n'
-                                '- Si pas de lien macro/secteur clair -> '
+                                '- ACTIONS : Utilise uniquement les valeurs du champ universeSectors du JSON pour les secteurs. N\'utilise jamais des industries. Si un secteur propose ne matche pas, ne le retourne pas.\n'
+                                '- FOREX : Utilise uniquement les codes ISO a 3 lettres pour les devises (ex: USD, EUR, JPY, GBP, AUD, CAD, CHF, NZD). Associe les hausses de taux/faucons a une devise Bullish, et les baisses/colombes a une devise Bearish. Le statut "Risk-Off" favorise souvent JPY, CHF, USD en Bullish.\n'
+                                '- Laisse les listes vides (secteurs ou devises) si la news ne concerne pas cet univers. Max 5 elements par liste.\n'
+                                '- Si pas de lien macro/secteur/devise clair -> '
                                 'isActionable=false, impact_score=0, urgency=low, market_regime=Neutral, '
                                 'macro_theme=Resultats/Micro, notes=Noise.\n'
                                 '- Sinon, isActionable=true.'
@@ -352,16 +351,18 @@ def build() -> dict:
                                 '"properties":{'
                                 '"isActionable":{"type":"boolean"},'
                                 '"market_regime":{"type":"string","enum":["Risk-On","Risk-Off","Neutral","Sector Rotation"]},'
-                                '"macro_theme":{"type":"string","enum":["Inflation/Taux","Croissance/Recession","Geopolitique/Energie","Tech/AI","Resultats/Micro"]},'
+                                '"macro_theme":{"type":"string","enum":["Inflation/Taux","Banques Centrales","Croissance/Recession","Geopolitique/Energie","Tech/AI","Resultats/Micro"]},'
                                 '"sectors_bullish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
                                 '"sectors_bearish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
+                                '"currencies_bullish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
+                                '"currencies_bearish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
                                 '"strategic_summary":{"type":"string"},'
                                 '"impact_score":{"type":"integer","minimum":0,"maximum":10},'
                                 '"confidence":{"type":"number","minimum":0,"maximum":1},'
                                 '"urgency":{"type":"string","enum":["immediate","today","this_week","low"]},'
                                 '"notes":{"type":"string"}'
                                 '},'
-                                '"required":["isActionable","market_regime","macro_theme","sectors_bullish","sectors_bearish","strategic_summary","impact_score","confidence","urgency","notes"]'
+                                '"required":["isActionable","market_regime","macro_theme","sectors_bullish","sectors_bearish","currencies_bullish","currencies_bearish","strategic_summary","impact_score","confidence","urgency","notes"]'
                                 '}'
                             ),
                             'strict': True,

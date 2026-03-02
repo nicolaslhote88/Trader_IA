@@ -87,6 +87,23 @@ function normalizeSectorList(raw, allowed) {
   return out;
 }
 
+const ALLOWED_CURRENCIES = new Set(['USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'NZD']);
+
+function normalizeCurrencyList(raw) {
+  const out = [];
+  const seen = new Set();
+  for (const value of toArray(raw)) {
+    const ccy = String(value || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+    if (ccy.length !== 3) continue;
+    if (!ALLOWED_CURRENCIES.has(ccy)) continue;
+    if (seen.has(ccy)) continue;
+    seen.add(ccy);
+    out.push(ccy);
+    if (out.length >= 5) break;
+  }
+  return out;
+}
+
 const j = $json || {};
 const llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';
 const ai = safeJsonParse(llmRaw);
@@ -97,10 +114,15 @@ const winners = normalizeSectorList(ai.sectors_bullish, allowedSectors);
 const losers = normalizeSectorList(ai.sectors_bearish, allowedSectors);
 const winnersText = winners.join(', ');
 const losersText = losers.join(', ');
+const currenciesBullish = normalizeCurrencyList(ai.currencies_bullish);
+const currenciesBearish = normalizeCurrencyList(ai.currencies_bearish);
+const currenciesBullishText = currenciesBullish.join(', ');
+const currenciesBearishText = currenciesBearish.join(', ');
 
 const modelActionable = toBool(ai.isActionable, true);
 const hasSectorImpact = winners.length > 0 || losers.length > 0;
-const isActionable = modelActionable && hasSectorImpact;
+const hasCurrencyImpact = currenciesBullish.length > 0 || currenciesBearish.length > 0;
+const isActionable = modelActionable && (hasSectorImpact || hasCurrencyImpact);
 const notes = isActionable ? (ai.notes || '') : 'Noise';
 
 return [{
@@ -127,6 +149,8 @@ return [{
     Strategy: ai.strategic_summary || '',
     sectors_bearish: isActionable ? losersText : '',
     sectors_bullish: isActionable ? winnersText : '',
+    currencies_bearish: isActionable ? currenciesBearishText : '',
+    currencies_bullish: isActionable ? currenciesBullishText : '',
     Losers: isActionable ? losersText : '',
     Winners: isActionable ? winnersText : '',
     Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',

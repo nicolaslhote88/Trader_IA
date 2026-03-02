@@ -58,6 +58,8 @@ with db_con(db_path) as con:
           first_seen_at, strategy, losers, winners,
           COALESCE(sectors_bullish, winners) AS sectors_bullish,
           COALESCE(sectors_bearish, losers) AS sectors_bearish,
+          COALESCE(currencies_bullish, '') AS currencies_bullish,
+          COALESCE(currencies_bearish, '') AS currencies_bearish,
           theme, regime, analyzed_at
         FROM news_history
         WHERE COALESCE(last_seen_at, first_seen_at, published_at, analyzed_at, updated_at, created_at)
@@ -88,9 +90,11 @@ for idx, row in enumerate(rows, start=1):
         "Winners": row[17] or row[18] or "",
         "sectors_bullish": row[18] or "",
         "sectors_bearish": row[19] or "",
-        "Theme": row[20] or "Resultats/Micro",
-        "Regime": row[21] or "Neutral",
-        "analyzedAt": to_iso(row[22]),
+        "currencies_bullish": row[20] or "",
+        "currencies_bearish": row[21] or "",
+        "Theme": row[22] or "Resultats/Micro",
+        "Regime": row[23] or "Neutral",
+        "analyzedAt": to_iso(row[24]),
         "row_number": idx,
     }
 

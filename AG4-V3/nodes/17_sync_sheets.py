@@ -66,6 +66,8 @@ with db_con(db_path) as con:
           strategy, losers, winners,
           COALESCE(sectors_bullish, winners) AS sectors_bullish,
           COALESCE(sectors_bearish, losers) AS sectors_bearish,
+          COALESCE(currencies_bullish, '') AS currencies_bullish,
+          COALESCE(currencies_bearish, '') AS currencies_bearish,
           theme, regime, analyzed_at
         FROM news_history
         WHERE run_id = ?
@@ -98,9 +100,11 @@ with db_con(db_path) as con:
                 "Winners": fmt(r[18]),
                 "sectors_bullish": fmt(r[19]),
                 "sectors_bearish": fmt(r[20]),
-                "Theme": fmt(r[21]),
-                "Regime": fmt(r[22]),
-                "analyzedAt": fmt(r[23]),
+                "currencies_bullish": fmt(r[21]),
+                "currencies_bearish": fmt(r[22]),
+                "Theme": fmt(r[23]),
+                "Regime": fmt(r[24]),
+                "analyzedAt": fmt(r[25]),
             }
         })
 
@@ -141,6 +145,8 @@ with db_con(db_path) as con:
                 "Winners": "",
                 "sectors_bullish": "",
                 "sectors_bearish": "",
+                "currencies_bullish": "",
+                "currencies_bearish": "",
                 "Theme": "Pipeline/Error",
                 "Regime": "Neutral",
                 "analyzedAt": occurred,
@@ -184,6 +190,8 @@ with db_con(db_path) as con:
                         "Winners": "",
                         "sectors_bullish": "",
                         "sectors_bearish": "",
+                        "currencies_bullish": "",
+                        "currencies_bearish": "",
                         "Theme": "FX Macro",
                         "Regime": fmt(fx_macro[2]),
                         "analyzedAt": fmt(fx_macro[1]),
@@ -228,6 +236,8 @@ with db_con(db_path) as con:
                         "Winners": "",
                         "sectors_bullish": "",
                         "sectors_bearish": "",
+                        "currencies_bullish": "",
+                        "currencies_bearish": "",
                         "Theme": "FX Pair Impact",
                         "Regime": fmt(r[1]),
                         "analyzedAt": fmt(r[5]),

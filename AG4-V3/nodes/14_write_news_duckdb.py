@@ -114,6 +114,8 @@ with db_con(db_path) as con:
         strategy = str(j.get("Strategy", "") or "")
         sectors_bearish = to_text(j.get("sectors_bearish", j.get("Losers", "")))
         sectors_bullish = to_text(j.get("sectors_bullish", j.get("Winners", "")))
+        currencies_bearish = to_text(j.get("currencies_bearish", ""))
+        currencies_bullish = to_text(j.get("currencies_bullish", ""))
         losers = str(j.get("Losers", "") or sectors_bearish)
         winners = str(j.get("Winners", "") or sectors_bullish)
         theme = str(j.get("Theme", "") or "Resultats/Micro")
@@ -140,14 +142,16 @@ with db_con(db_path) as con:
               dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,
               symbols, type, notes, impact_score, confidence, urgency, snippet, first_seen_at,
               strategy, losers, winners, sectors_bullish, sectors_bearish,
+              currencies_bullish, currencies_bearish,
               theme, regime, analyzed_at, last_seen_at,
               source_tier, action, reason, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [
                 dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,
                 symbols, typ, notes, impact_score, confidence, urgency, snippet, first_seen_at,
                 strategy, losers, winners, sectors_bullish, sectors_bearish,
+                currencies_bullish, currencies_bearish,
                 theme, regime, analyzed_at, last_seen_at,
                 source_tier, action, reason,
             ],
