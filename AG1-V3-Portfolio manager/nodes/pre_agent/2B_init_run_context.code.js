@@ -41,13 +41,8 @@ const timestampParis = `${isoLocal}${offsetStr}`;
 const timestampUtc = now.toISOString();
 
 const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
-const enableFxRaw = cfg.enable_fx ?? false;
-const enableFx =
-  typeof enableFxRaw === "boolean"
-    ? enableFxRaw
-    : ["1", "true", "yes", "y", "on", "enabled"].includes(String(enableFxRaw || "").trim().toLowerCase());
-const universeScope = ["EQUITY", "CRYPTO"];
-if (enableFx) universeScope.push("FX");
+const enableFx = true;
+const universeScope = ["CURRENCY", "EQUITY", "ETF", "MUTUALFUND"];
 
 // run_id: RUN_YYYYMMDD_HHMMSS_<executionId|rand>
 const yyyymmdd = `${parts.year}${parts.month}${parts.day}`;
@@ -59,6 +54,8 @@ return [
   {
     json: {
       ...cfg,
+      enable_fx: enableFx,
+      universe_scope: universeScope,
       run: {
         runId,
         timestampParis,
