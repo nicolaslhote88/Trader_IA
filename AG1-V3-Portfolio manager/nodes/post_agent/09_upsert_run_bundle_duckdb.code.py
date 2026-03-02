@@ -166,6 +166,24 @@ def _parse_ts(v, fallback=None):
         return fallback or _iso_now()
 
 
+def _json_text(v):
+    if v is None:
+        return None
+    if isinstance(v, str):
+        s = v.strip()
+        if not s:
+            return None
+        try:
+            json.loads(s)
+            return s
+        except Exception:
+            return json.dumps(v, ensure_ascii=False)
+    try:
+        return json.dumps(v, ensure_ascii=False)
+    except Exception:
+        return json.dumps(str(v), ensure_ascii=False)
+
+
 def _extract_run_id(bundle):
     run = dict(bundle.get("run") or {})
     run_id = str(run.get("run_id") or run.get("runId") or "").strip()
