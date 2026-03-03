@@ -81,15 +81,12 @@ def _latest_existing_path(paths: list[str]) -> str | None:
 
 
 def _resolve_ag1_variant_duckdb_path(primary_env: str, default_filename: str) -> str:
-    # Variants AG1 can still write into ag1_v3.duckdb on some deployments.
-    # Pick the freshest available DB between variant-specific and shared paths.
+    # Strict variant routing: never fallback to shared ag1_v3.duckdb.
+    # Each variant must resolve to its own dedicated DB file.
     explicit_variant = str(os.getenv(primary_env, "") or "").strip()
-    shared_ag1 = str(os.getenv("AG1_DUCKDB_PATH", "") or "").strip()
     candidates = [
         explicit_variant,
-        shared_ag1,
         _duckdb_default_path(default_filename),
-        _duckdb_default_path("ag1_v3.duckdb"),
     ]
     freshest = _latest_existing_path(candidates)
     if freshest:
@@ -102,10 +99,37 @@ def _resolve_ag1_variant_duckdb_path(primary_env: str, default_filename: str) ->
 
 AG2_DUCKDB_PATH = _resolve_duckdb_path("AG2_DUCKDB_PATH", "ag2_v3.duckdb", "DUCKDB_PATH")
 DUCKDB_PATH = AG2_DUCKDB_PATH  # Backward compatibility across existing code paths.
-AG1_DUCKDB_PATH = _resolve_duckdb_path("AG1_DUCKDB_PATH", "ag1_v3.duckdb")
 AG1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_CHATGPT52_DUCKDB_PATH", "ag1_v3_chatgpt52.duckdb")
 AG1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GROK41_REASONING_DUCKDB_PATH", "ag1_v3_grok41_reasoning.duckdb")
 AG1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GEMINI30_PRO_DUCKDB_PATH", "ag1_v3_gemini30_pro.duckdb")
+
+
+def _resolve_ag1_legacy_duckdb_path() -> str:
+    # Legacy widgets should never default to the shared ag1_v3.duckdb anymore.
+    explicit = str(os.getenv("AG1_DUCKDB_PATH", "") or "").strip()
+    banned_shared_name = "ag1_v3.duckdb"
+    variant_candidates = [
+        AG1_CHATGPT52_DUCKDB_PATH,
+        AG1_GROK41_REASONING_DUCKDB_PATH,
+        AG1_GEMINI30_PRO_DUCKDB_PATH,
+    ]
+
+    if explicit and os.path.basename(explicit).lower() != banned_shared_name:
+        return explicit
+
+    freshest_variant = _latest_existing_path(variant_candidates)
+    if freshest_variant:
+        return freshest_variant
+
+    for p in variant_candidates:
+        if str(p or "").strip():
+            return str(p).strip()
+
+    # Last resort if no variant DB path is available.
+    return _duckdb_default_path("ag1_v3_chatgpt52.duckdb")
+
+
+AG1_DUCKDB_PATH = _resolve_ag1_legacy_duckdb_path()
 AG3_DUCKDB_PATH = _resolve_duckdb_path("AG3_DUCKDB_PATH", "ag3_v2.duckdb", fallback_filenames=("ag3_v3.duckdb",))
 AG4_DUCKDB_PATH = _resolve_duckdb_path("AG4_DUCKDB_PATH", "ag4_v3.duckdb")
 AG4_SPE_DUCKDB_PATH = _resolve_duckdb_path(
