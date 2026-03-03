@@ -5849,6 +5849,26 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         df_perf = _ag1_fetchdf(
             conn,
             """
+            WITH snapshots AS (
+              SELECT
+                ps.*,
+                COALESCE(json_extract_string(ps.meta_json, '$.writer'), '') AS snapshot_writer,
+                CASE
+                  WHEN UPPER(COALESCE(json_extract_string(ps.meta_json, '$.writer'), '')) = 'INLINE_MINIMAL' THEN 0
+                  ELSE 1
+                END AS is_preferred
+              FROM core.portfolio_snapshot ps
+            ),
+            pref AS (
+              SELECT MAX(is_preferred) AS has_preferred
+              FROM snapshots
+            ),
+            selected AS (
+              SELECT s.*
+              FROM snapshots s
+              CROSS JOIN pref p
+              WHERE p.has_preferred = 0 OR s.is_preferred = 1
+            )
             SELECT
               ps.ts AS timestamp,
               ps.run_id AS run_id,
@@ -5861,7 +5881,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
               ps.trades_this_run AS trades_this_run,
               CAST(ps.roi AS DOUBLE) AS roi,
               CAST(ps.drawdown_pct AS DOUBLE) AS drawdown_pct
-            FROM core.portfolio_snapshot ps
+            FROM selected ps
             LEFT JOIN core.runs r ON r.run_id = ps.run_id
             ORDER BY ps.ts
             """,
@@ -5870,10 +5890,22 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         df_latest = _ag1_fetchdf(
             conn,
             """
+            WITH snapshots AS (
+              SELECT
+                ps.*,
+                COALESCE(json_extract_string(ps.meta_json, '$.writer'), '') AS snapshot_writer,
+                CASE
+                  WHEN UPPER(COALESCE(json_extract_string(ps.meta_json, '$.writer'), '')) = 'INLINE_MINIMAL' THEN 0
+                  ELSE 1
+                END AS is_preferred
+              FROM core.portfolio_snapshot ps
+            )
             SELECT
               ps.ts AS snapshot_ts,
               ps.run_id AS run_id,
               r.model AS model,
+              ps.snapshot_writer AS snapshot_writer,
+              ps.is_preferred AS snapshot_is_preferred,
               CAST(ps.cash_eur AS DOUBLE) AS cash_eur,
               CAST(ps.equity_eur AS DOUBLE) AS equity_eur,
               CAST(ps.total_value_eur AS DOUBLE) AS total_value_eur,
@@ -5882,42 +5914,17 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
               ps.trades_this_run AS trades_this_run,
               CAST(ps.roi AS DOUBLE) AS roi,
               CAST(ps.drawdown_pct AS DOUBLE) AS drawdown_pct
-            FROM core.portfolio_snapshot ps
+            FROM snapshots ps
             LEFT JOIN core.runs r ON r.run_id = ps.run_id
-            ORDER BY ps.ts DESC, COALESCE(r.ts_end, r.ts_start) DESC NULLS LAST
+            ORDER BY
+              ps.is_preferred DESC,
+              ps.ts DESC,
+              COALESCE(r.ts_end, r.ts_start) DESC NULLS LAST
             LIMIT 1
             """,
         )
 
-        df_pos = _ag1_fetchdf(
-            conn,
-            """
-            WITH latest AS (
-              SELECT run_id
-              FROM core.portfolio_snapshot
-              ORDER BY ts DESC
-              LIMIT 1
-            )
-            SELECT
-              p.run_id AS run_id,
-              p.ts AS updatedat,
-              p.symbol AS symbol,
-              COALESCE(i.name, p.symbol) AS name,
-              COALESCE(i.asset_class, 'Equity') AS assetclass,
-              COALESCE(i.sector, '') AS sector,
-              COALESCE(i.industry, '') AS industry,
-              COALESCE(i.isin, '') AS isin,
-              CAST(p.qty AS DOUBLE) AS quantity,
-              CAST(p.avg_cost AS DOUBLE) AS avgprice,
-              CAST(p.last_price AS DOUBLE) AS lastprice,
-              CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
-              CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
-            FROM core.positions_snapshot p
-            INNER JOIN latest l ON l.run_id = p.run_id
-            LEFT JOIN core.instruments i ON i.symbol = p.symbol
-            ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
-            """,
-        )
+        df_pos = pd.DataFrame()
 
         df_mtm_latest = _ag1_fetchdf(
             conn,
@@ -6037,6 +6044,33 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                     init_cap = init_cap_val
 
         latest = df_latest.iloc[0].to_dict() if df_latest is not None and not df_latest.empty else {}
+        latest_run_id = str(latest.get("run_id") or "").strip()
+
+        if latest_run_id:
+            df_pos = _ag1_fetchdf(
+                conn,
+                """
+                SELECT
+                  p.run_id AS run_id,
+                  p.ts AS updatedat,
+                  p.symbol AS symbol,
+                  COALESCE(i.name, p.symbol) AS name,
+                  COALESCE(i.asset_class, 'Equity') AS assetclass,
+                  COALESCE(i.sector, '') AS sector,
+                  COALESCE(i.industry, '') AS industry,
+                  COALESCE(i.isin, '') AS isin,
+                  CAST(p.qty AS DOUBLE) AS quantity,
+                  CAST(p.avg_cost AS DOUBLE) AS avgprice,
+                  CAST(p.last_price AS DOUBLE) AS lastprice,
+                  CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
+                  CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
+                FROM core.positions_snapshot p
+                LEFT JOIN core.instruments i ON i.symbol = p.symbol
+                WHERE p.run_id = ?
+                ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
+                """,
+                [latest_run_id],
+            )
         latest_run_meta: dict[str, object] = {}
         if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
             last_run_id_guess = str(latest.get("run_id") or "").strip()
