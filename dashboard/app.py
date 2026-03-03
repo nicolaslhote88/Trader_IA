@@ -5784,6 +5784,9 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
             "ledger_positions_count": 0,
             "mtm_run_id": "",
             "mtm_positions_count": None,
+            "mtm_last_updated_at": None,
+            "mtm_age_hours": None,
+            "mtm_is_stale": None,
             "positions_only_in_ledger": [],
             "positions_only_in_mtm": [],
         },
@@ -6177,6 +6180,9 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             "ledger_positions_count": 0,
             "mtm_run_id": "",
             "mtm_positions_count": None,
+            "mtm_last_updated_at": None,
+            "mtm_age_hours": None,
+            "mtm_is_stale": None,
             "positions_only_in_ledger": [],
             "positions_only_in_mtm": [],
         }
@@ -6191,6 +6197,28 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         if df_mtm_latest is not None and not df_mtm_latest.empty:
             mtm_cols = [str(c).strip().lower() for c in df_mtm_latest.columns]
             df_mtm_latest.columns = mtm_cols
+            mtm_ts_latest = pd.NaT
+            mtm_run_id_latest = ""
+            if "updated_at" in df_mtm_latest.columns:
+                mtm_ts = pd.to_datetime(df_mtm_latest["updated_at"], errors="coerce", utc=True)
+                if mtm_ts is not None and len(mtm_ts) > 0:
+                    mtm_ts_latest = mtm_ts.max()
+                    if pd.notna(mtm_ts_latest):
+                        diagnostics["mtm_last_updated_at"] = mtm_ts_latest.isoformat()
+                    if "run_id" in df_mtm_latest.columns:
+                        tmp = df_mtm_latest.copy()
+                        tmp["__updated_at_utc"] = mtm_ts
+                        tmp = tmp.sort_values("__updated_at_utc", ascending=False, na_position="last")
+                        mtm_run_series = (
+                            tmp["run_id"]
+                            .dropna()
+                            .astype(str)
+                            .str.strip()
+                            .replace("", pd.NA)
+                            .dropna()
+                        )
+                        if not mtm_run_series.empty:
+                            mtm_run_id_latest = str(mtm_run_series.iloc[0])
             if "symbol" in df_mtm_latest.columns:
                 ser = df_mtm_latest["symbol"].astype(str).str.strip().str.upper()
                 mtm_syms = {s for s in ser.tolist() if s and s not in {"CASH_EUR", "__META__"}}
@@ -6205,7 +6233,17 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                     .dropna()
                 )
                 if not mtm_run_ids.empty:
-                    diagnostics["mtm_run_id"] = str(mtm_run_ids.iloc[0])
+                    diagnostics["mtm_run_id"] = mtm_run_id_latest or str(mtm_run_ids.iloc[0])
+
+            mtm_ref_ts = pd.to_datetime(latest.get("snapshot_ts"), errors="coerce", utc=True)
+            if pd.notna(mtm_ref_ts) and pd.notna(mtm_ts_latest):
+                mtm_age_hours = max(0.0, (mtm_ref_ts - mtm_ts_latest).total_seconds() / 3600.0)
+                diagnostics["mtm_age_hours"] = float(mtm_age_hours)
+                diagnostics["mtm_is_stale"] = bool(mtm_age_hours > 24.0)
+            elif pd.notna(mtm_ts_latest):
+                mtm_age_hours = max(0.0, (pd.Timestamp.now(tz="UTC") - mtm_ts_latest).total_seconds() / 3600.0)
+                diagnostics["mtm_age_hours"] = float(mtm_age_hours)
+                diagnostics["mtm_is_stale"] = bool(mtm_age_hours > 24.0)
 
         if ledger_syms or mtm_syms:
             diagnostics["positions_only_in_ledger"] = sorted(list(ledger_syms - mtm_syms))[:20]
@@ -6663,7 +6701,8 @@ def _compute_freshness_score(last_data_update: object, price_coverage_pct: objec
 
     only_ledger = diag.get("positions_only_in_ledger") or []
     only_mtm = diag.get("positions_only_in_mtm") or []
-    if only_ledger or only_mtm:
+    mtm_is_stale = bool(diag.get("mtm_is_stale"))
+    if (only_ledger or only_mtm) and not mtm_is_stale:
         score -= 10
 
     return int(max(0, min(100, round(score)))), float(age_hours)
@@ -6687,7 +6726,8 @@ def _make_scoreboard_status(payload_status: str, ag1_output_ok: bool | None, fre
     if freshness_score is not None and freshness_score < 70:
         status = "WARN"
         reasons.append(f"freshness={freshness_score}/100")
-    if (diag.get("positions_only_in_ledger") or []) or (diag.get("positions_only_in_mtm") or []):
+    mtm_is_stale = bool(diag.get("mtm_is_stale"))
+    if ((diag.get("positions_only_in_ledger") or []) or (diag.get("positions_only_in_mtm") or [])) and not mtm_is_stale:
         status = "WARN"
         reasons.append("Divergence ledger/MTM")
 
@@ -7447,9 +7487,17 @@ if page == "Dashboard Trading":
             if isinstance(diag, dict):
                 ledger_run = str(diag.get("ledger_run_id") or selected_summary.get("last_run_id") or "").strip() or "N/A"
                 mtm_run = str(diag.get("mtm_run_id") or "").strip() or "N/A"
+                mtm_age_hours = diag.get("mtm_age_hours")
+                mtm_is_stale = bool(diag.get("mtm_is_stale"))
+                mtm_age_txt = ""
+                if mtm_age_hours is not None:
+                    try:
+                        mtm_age_txt = f", age~{float(mtm_age_hours):.1f}h"
+                    except Exception:
+                        mtm_age_txt = ""
                 active_positions_source_note = (
                     "Source Positions: AG1-V3 ledger `core.positions_snapshot` "
-                    f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run})"
+                    f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run}{mtm_age_txt})"
                 )
 
                 only_ledger = [str(s) for s in (diag.get("positions_only_in_ledger") or []) if str(s).strip()]
@@ -7460,7 +7508,13 @@ if page == "Dashboard Trading":
                         diff_parts.append("uniquement dans ledger: " + ", ".join(only_ledger))
                     if only_mtm:
                         diff_parts.append("uniquement dans MTM: " + ", ".join(only_mtm))
-                    st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
+                    if mtm_is_stale:
+                        st.info(
+                            "Miroir MTM obsolete: divergence ledger/MTM ignoree pour ce run "
+                            f"(run_id={mtm_run}{mtm_age_txt})."
+                        )
+                    else:
+                        st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
         else:
             st.warning(
                 "Aucune base AG1-V3 exploitable pour la zone details. "
