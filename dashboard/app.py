@@ -52,12 +52,60 @@ def _resolve_duckdb_path(
     return candidates[0]
 
 
+def _dedupe_nonempty_paths(paths: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in paths:
+        p = str(raw or "").strip()
+        if not p or p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def _latest_existing_path(paths: list[str]) -> str | None:
+    candidates: list[tuple[float, int, str]] = []
+    for p in _dedupe_nonempty_paths(paths):
+        if not os.path.exists(p):
+            continue
+        try:
+            stat = os.stat(p)
+            candidates.append((float(stat.st_mtime), int(stat.st_size), p))
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    candidates.sort(key=lambda row: (row[0], row[1]), reverse=True)
+    return candidates[0][2]
+
+
+def _resolve_ag1_variant_duckdb_path(primary_env: str, default_filename: str) -> str:
+    # Variants AG1 can still write into ag1_v3.duckdb on some deployments.
+    # Pick the freshest available DB between variant-specific and shared paths.
+    explicit_variant = str(os.getenv(primary_env, "") or "").strip()
+    shared_ag1 = str(os.getenv("AG1_DUCKDB_PATH", "") or "").strip()
+    candidates = [
+        explicit_variant,
+        shared_ag1,
+        _duckdb_default_path(default_filename),
+        _duckdb_default_path("ag1_v3.duckdb"),
+    ]
+    freshest = _latest_existing_path(candidates)
+    if freshest:
+        return freshest
+    for p in candidates:
+        if str(p or "").strip():
+            return str(p).strip()
+    return _duckdb_default_path(default_filename)
+
+
 AG2_DUCKDB_PATH = _resolve_duckdb_path("AG2_DUCKDB_PATH", "ag2_v3.duckdb", "DUCKDB_PATH")
 DUCKDB_PATH = AG2_DUCKDB_PATH  # Backward compatibility across existing code paths.
 AG1_DUCKDB_PATH = _resolve_duckdb_path("AG1_DUCKDB_PATH", "ag1_v3.duckdb")
-AG1_CHATGPT52_DUCKDB_PATH = _resolve_duckdb_path("AG1_CHATGPT52_DUCKDB_PATH", "ag1_v3_chatgpt52.duckdb")
-AG1_GROK41_REASONING_DUCKDB_PATH = _resolve_duckdb_path("AG1_GROK41_REASONING_DUCKDB_PATH", "ag1_v3_grok41_reasoning.duckdb")
-AG1_GEMINI30_PRO_DUCKDB_PATH = _resolve_duckdb_path("AG1_GEMINI30_PRO_DUCKDB_PATH", "ag1_v3_gemini30_pro.duckdb")
+AG1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_CHATGPT52_DUCKDB_PATH", "ag1_v3_chatgpt52.duckdb")
+AG1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GROK41_REASONING_DUCKDB_PATH", "ag1_v3_grok41_reasoning.duckdb")
+AG1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GEMINI30_PRO_DUCKDB_PATH", "ag1_v3_gemini30_pro.duckdb")
 AG3_DUCKDB_PATH = _resolve_duckdb_path("AG3_DUCKDB_PATH", "ag3_v2.duckdb", fallback_filenames=("ag3_v3.duckdb",))
 AG4_DUCKDB_PATH = _resolve_duckdb_path("AG4_DUCKDB_PATH", "ag4_v3.duckdb")
 AG4_SPE_DUCKDB_PATH = _resolve_duckdb_path(
