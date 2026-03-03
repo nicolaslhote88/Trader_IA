@@ -27,18 +27,45 @@ st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="A
 
 SHEET_ID = os.getenv("SHEET_ID")
 CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
-DUCKDB_PATH = os.getenv("DUCKDB_PATH", "/files/duckdb/ag2_v3.duckdb")
-AG1_DUCKDB_PATH = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v3.duckdb")
-AG1_CHATGPT52_DUCKDB_PATH = os.getenv("AG1_CHATGPT52_DUCKDB_PATH", "/files/duckdb/ag1_v3_chatgpt52.duckdb")
-AG1_GROK41_REASONING_DUCKDB_PATH = os.getenv(
-    "AG1_GROK41_REASONING_DUCKDB_PATH",
-    "/files/duckdb/ag1_v3_grok41_reasoning.duckdb",
+
+def _duckdb_default_path(filename: str) -> str:
+    base_dir = str(os.getenv("DUCKDB_DIR", "/files/duckdb") or "/files/duckdb").strip()
+    base_dir = base_dir.rstrip("/\\")
+    return f"{base_dir}/{filename}"
+
+
+def _resolve_duckdb_path(
+    primary_env: str,
+    default_filename: str,
+    *legacy_envs: str,
+    fallback_filenames: tuple[str, ...] = (),
+) -> str:
+    for env_name in (primary_env, *legacy_envs):
+        raw = str(os.getenv(env_name, "") or "").strip()
+        if raw:
+            return raw
+
+    candidates = [_duckdb_default_path(default_filename), *[_duckdb_default_path(name) for name in fallback_filenames]]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[0]
+
+
+AG2_DUCKDB_PATH = _resolve_duckdb_path("AG2_DUCKDB_PATH", "ag2_v3.duckdb", "DUCKDB_PATH")
+DUCKDB_PATH = AG2_DUCKDB_PATH  # Backward compatibility across existing code paths.
+AG1_DUCKDB_PATH = _resolve_duckdb_path("AG1_DUCKDB_PATH", "ag1_v3.duckdb")
+AG1_CHATGPT52_DUCKDB_PATH = _resolve_duckdb_path("AG1_CHATGPT52_DUCKDB_PATH", "ag1_v3_chatgpt52.duckdb")
+AG1_GROK41_REASONING_DUCKDB_PATH = _resolve_duckdb_path("AG1_GROK41_REASONING_DUCKDB_PATH", "ag1_v3_grok41_reasoning.duckdb")
+AG1_GEMINI30_PRO_DUCKDB_PATH = _resolve_duckdb_path("AG1_GEMINI30_PRO_DUCKDB_PATH", "ag1_v3_gemini30_pro.duckdb")
+AG3_DUCKDB_PATH = _resolve_duckdb_path("AG3_DUCKDB_PATH", "ag3_v2.duckdb", fallback_filenames=("ag3_v3.duckdb",))
+AG4_DUCKDB_PATH = _resolve_duckdb_path("AG4_DUCKDB_PATH", "ag4_v3.duckdb")
+AG4_SPE_DUCKDB_PATH = _resolve_duckdb_path(
+    "AG4_SPE_DUCKDB_PATH",
+    "ag4_spe_v2.duckdb",
+    fallback_filenames=("ag4_spe_v3.duckdb",),
 )
-AG1_GEMINI30_PRO_DUCKDB_PATH = os.getenv("AG1_GEMINI30_PRO_DUCKDB_PATH", "/files/duckdb/ag1_v3_gemini30_pro.duckdb")
-AG3_DUCKDB_PATH = os.getenv("AG3_DUCKDB_PATH", "/files/duckdb/ag3_v2.duckdb")
-AG4_DUCKDB_PATH = os.getenv("AG4_DUCKDB_PATH", "/files/duckdb/ag4_v3.duckdb")
-AG4_SPE_DUCKDB_PATH = os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb")
-YF_ENRICH_DUCKDB_PATH = os.getenv("YF_ENRICH_DUCKDB_PATH", "/files/duckdb/yf_enrichment_v1.duckdb")
+YF_ENRICH_DUCKDB_PATH = _resolve_duckdb_path("YF_ENRICH_DUCKDB_PATH", "yf_enrichment_v1.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
 AG1_MULTI_PORTFOLIO_CONFIG = {

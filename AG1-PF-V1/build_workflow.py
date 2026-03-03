@@ -82,7 +82,7 @@ def build() -> dict:
                         {
                             "id": "pf00-07",
                             "name": "portfolio_db_path",
-                            "value": "/local-files/duckdb/ag1_v2_chatgpt52.duckdb",
+                            "value": "/local-files/duckdb/ag1_v3_chatgpt52.duckdb",
                             "type": "string",
                         },
                         {
@@ -90,9 +90,9 @@ def build() -> dict:
                             "name": "portfolio_db_paths_json",
                             "value": (
                                 "["
-                                "\"/local-files/duckdb/ag1_v2_chatgpt52.duckdb\","
-                                "\"/local-files/duckdb/ag1_v2_grok41_reasoning.duckdb\","
-                                "\"/local-files/duckdb/ag1_v2_gemini30_pro.duckdb\""
+                                "\"/local-files/duckdb/ag1_v3_chatgpt52.duckdb\","
+                                "\"/local-files/duckdb/ag1_v3_grok41_reasoning.duckdb\","
+                                "\"/local-files/duckdb/ag1_v3_gemini30_pro.duckdb\""
                                 "]"
                             ),
                             "type": "string",
@@ -100,13 +100,13 @@ def build() -> dict:
                         {
                             "id": "pf00-07c",
                             "name": "universe_db_path",
-                            "value": "/local-files/duckdb/ag2_v2.duckdb",
+                            "value": "/local-files/duckdb/ag2_v3.duckdb",
                             "type": "string",
                         },
                         {
                             "id": "pf00-08",
                             "name": "workflow_name",
-                            "value": "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)",
+                            "value": "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
                             "type": "string",
                         },
                         {
@@ -316,7 +316,7 @@ def build() -> dict:
     }
 
     return {
-        "name": "AG1-PF-V1 - Portfolio MTM (DuckDB-only, Multi AG1-V2)",
+        "name": "AG1-PF-V1 - Portfolio MTM (DuckDB-only, Multi AG1-V3)",
         "nodes": nodes,
         "connections": connections,
         "pinData": {},

@@ -4,7 +4,7 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, date
 
-DEFAULT_DB_PATH = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb"
+DEFAULT_DB_PATH = "/local-files/duckdb/ag1_v3_chatgpt52.duckdb"
 
 
 @contextmanager

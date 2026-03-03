@@ -25,9 +25,10 @@
 
 ### 3.1 Add config keys in `PF.00 — Config`
 Add these assignments:
-- `portfolio_db_path` = `/local-files/duckdb/ag1_v2_chatgpt52.duckdb` (fallback only)
-- `portfolio_db_paths_json` = `["/local-files/duckdb/ag1_v2_chatgpt52.duckdb","/local-files/duckdb/ag1_v2_grok41_reasoning.duckdb","/local-files/duckdb/ag1_v2_gemini30_pro.duckdb"]`
-- `workflow_name` = `PF Portfolio MTM Updater`
+- `portfolio_db_path` = `/local-files/duckdb/ag1_v3_chatgpt52.duckdb` (fallback only)
+- `portfolio_db_paths_json` = `["/local-files/duckdb/ag1_v3_chatgpt52.duckdb","/local-files/duckdb/ag1_v3_grok41_reasoning.duckdb","/local-files/duckdb/ag1_v3_gemini30_pro.duckdb"]`
+- `universe_db_path` = `/local-files/duckdb/ag2_v3.duckdb`
+- `workflow_name` = `PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)`
 - Optional `run_id` expression (if you want deterministic IDs):
   - `={{ 'PFMTM_' + $now.toFormat('yyyyLLddHHmmss') }}`
 

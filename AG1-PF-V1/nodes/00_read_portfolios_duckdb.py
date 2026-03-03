@@ -9,11 +9,11 @@ from datetime import datetime, timezone
 import duckdb
 
 DEFAULT_TARGETS = [
-    "/local-files/duckdb/ag1_v2_chatgpt52.duckdb",
-    "/local-files/duckdb/ag1_v2_grok41_reasoning.duckdb",
-    "/local-files/duckdb/ag1_v2_gemini30_pro.duckdb",
+    "/local-files/duckdb/ag1_v3_chatgpt52.duckdb",
+    "/local-files/duckdb/ag1_v3_grok41_reasoning.duckdb",
+    "/local-files/duckdb/ag1_v3_gemini30_pro.duckdb",
 ]
-DEFAULT_UNIVERSE_DB_PATH = "/local-files/duckdb/ag2_v2.duckdb"
+DEFAULT_UNIVERSE_DB_PATH = "/local-files/duckdb/ag2_v3.duckdb"
 DEFAULT_UNIVERSE_TABLE = "universe"
 
 
@@ -541,7 +541,7 @@ for db_path_cfg in targets:
             diag.append(d)
             continue
 
-        # AG1-V2 ledger (core.*) is the source of truth for current portfolio state.
+        # AG1-V3 ledger (core.*) is the source of truth for current portfolio state.
         # Legacy MTM table can lag behind after trades, so only use it as fallback.
         rows = _core_rows(con, db_path)
         source = "core_snapshots" if rows else None

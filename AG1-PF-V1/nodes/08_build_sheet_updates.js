@@ -114,7 +114,7 @@ function resolvePortfolioDbPaths(cfg, inItems, readRows) {
     ...inItems.map((j) => j?.portfolio_db_path || j?.db_path),
     ...readRows.map((r) => r?.portfolio_db_path || r?.db_path),
   ];
-  const fallback = ["/local-files/duckdb/ag1_v2_chatgpt52.duckdb"];
+  const fallback = ["/local-files/duckdb/ag1_v3_chatgpt52.duckdb"];
   return uniqPaths([...arr1, ...arr2, ...arr3, ...singles, ...fallback]).filter((p) => !isLegacyAg1DbPath(p));
 }
 
@@ -188,7 +188,7 @@ const positionUpdates = inItems
     const u = j.gs_update;
     let primaryDbPath = normPath(j.portfolio_db_path || j.db_path || cfg.portfolio_db_path);
     if (!primaryDbPath || isLegacyAg1DbPath(primaryDbPath)) {
-      primaryDbPath = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb";
+      primaryDbPath = "/local-files/duckdb/ag1_v3_chatgpt52.duckdb";
     }
     seenPositionDbs.add(primaryDbPath);
     const pfCtx = j.pf_ctx || ctxByDb.get(primaryDbPath) || {};
@@ -213,7 +213,7 @@ const positionUpdates = inItems
       AvgPrice: j.avgPrice ?? j.AvgPrice ?? "",
       run_id: j.run_id || sharedRunId,
       portfolio_db_path: primaryDbPath,
-      workflow_name: j.workflow_name || cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)",
+      workflow_name: j.workflow_name || cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
 
       mtm_ok: j.mtm_ok,
       mtm_status: j.mtm_status,
@@ -251,7 +251,7 @@ for (const dbPath of targetDbPaths) {
     AvgPrice: "",
     run_id: sharedRunId,
     portfolio_db_path: dbPath,
-    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)",
+    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
     mtm_ok: true,
     mtm_status: "NO_POSITION_ROWS",
     mtm_reason: "",
@@ -268,7 +268,7 @@ for (const dbPath of targetDbPaths) {
 if (positionUpdates.length === 0) {
   let primaryDbPath = normPath(cfg.portfolio_db_path);
   if (!primaryDbPath || isLegacyAg1DbPath(primaryDbPath)) {
-    primaryDbPath = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb";
+    primaryDbPath = "/local-files/duckdb/ag1_v3_chatgpt52.duckdb";
   }
   positionUpdates.push({
     row_number: null,
@@ -286,7 +286,7 @@ if (positionUpdates.length === 0) {
     AvgPrice: "",
     run_id: sharedRunId,
     portfolio_db_path: primaryDbPath,
-    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)",
+    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
     mtm_ok: true,
     mtm_status: "NO_POSITION_ROWS",
     mtm_reason: "NO_TARGET_PORTFOLIO_ROWS_FOUND",

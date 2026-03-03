@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 import duckdb
 
-DEFAULT_DB_PATH = "/local-files/duckdb/ag1_v2_chatgpt52.duckdb"
-DEFAULT_WORKFLOW_NAME = "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V2)"
+DEFAULT_DB_PATH = "/local-files/duckdb/ag1_v3_chatgpt52.duckdb"
+DEFAULT_WORKFLOW_NAME = "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)"
 
 
 @contextmanager
@@ -192,7 +192,7 @@ def group_items_by_db(items):
         j = (it or {}).get("json", {}) or {}
         db_path = to_text(pick(j.get("portfolio_db_path"), j.get("db_path"), j.get("duckdb_path"))) or DEFAULT_DB_PATH
         if is_legacy_ag1_db_path(db_path):
-            # Ignore stale mono-DB target and force dedicated AG1-v2 default.
+            # Ignore stale mono-DB target and force dedicated AG1-v3 default.
             db_path = DEFAULT_DB_PATH
         db_path = _resolve_rw_db_path(db_path)
         if db_path not in groups:
