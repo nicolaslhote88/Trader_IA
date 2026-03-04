@@ -33,7 +33,7 @@ services:
       dockerfile: Dockerfile
     container_name: yfinance-api
     environment:
-      - TZ=Europe/Paris
+      - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
       - YF_DATA_DIR=/data
       - YF_INIT_LOOKBACK_DAYS=400
       - YF_OVERLAP_BARS=3
@@ -75,13 +75,13 @@ services:
       - N8N_PROTOCOL=https
       - NODE_ENV=production
       - WEBHOOK_URL=https://${SUBDOMAIN}.${DOMAIN_NAME}/
-      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Paris}
       - N8N_RUNNERS_ENABLED=true
       - N8N_RUNNERS_MODE=external
       - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
       - N8N_RUNNERS_BROKER_PORT=5679
       # On force ici une valeur simple pour tester si le 403 disparait
-      - N8N_RUNNERS_AUTH_TOKEN=5IF4moeE571mNfi7LwzcBi301M22F9gE
+      - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN}
       - N8N_NATIVE_PYTHON_RUNNER=true
       - N8N_RUNNERS_TASK_REQUEST_TIMEOUT=1200
       - N8N_RUNNERS_HEARTBEAT_INTERVAL=1200
@@ -105,7 +105,6 @@ services:
       - n8n_data:/home/node/.n8n
       - /local-files:/files
       - /opt/trader-ia/AG1-V2-EXPORT:/files/AG1-V2-EXPORT:ro
-      - /opt/trader-ia/AG1-V3-EXPORT:/files/AG1-V3-EXPORT:ro
     depends_on:
       - yfinance-api
     networks:
@@ -124,9 +123,9 @@ services:
       # L'adresse interne du service n8n sur le réseau Docker "web"
       - N8N_RUNNERS_TASK_BROKER_URI=http://n8n:5679
       # DOIT être identique à la valeur dans le service n8n ci-dessus
-      - N8N_RUNNERS_AUTH_TOKEN=5IF4moeE571mNfi7LwzcBi301M22F9gE
+      - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN}
       - N8N_RUNNERS_MAX_CONCURRENCY=4
-      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Paris}
       - TRANSCRIPT_API_BASE=${TRANSCRIPT_API_BASE}
       - N8N_RUNNERS_PYTHON_ALLOW_LIST=duckdb,pandas,numpy,datetime,math,json
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
@@ -140,7 +139,6 @@ services:
       - /opt/trader-ia/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
       - /opt/trader-ia/duckdb_home:/home/runner/.duckdb:rw
       - /local-files:/files:rw
-      - /opt/trader-ia/AG1-V3-EXPORT:/files/AG1-V3-EXPORT:ro
       - /opt/yf-enrichment-v1:/opt/yf-enrichment-v1:ro
     depends_on:
       - n8n
@@ -154,7 +152,7 @@ services:
       dockerfile: Dockerfile
     container_name: yf-enrichment
     environment:
-      - TZ=Europe/Paris
+      - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
       # Script monté depuis /opt/yf-enrichment-v1 (déjà présent sur ton VPS)
       - YF_ENRICH_SCRIPT=/opt/yf-enrichment-v1/daily_enrichment.py
     restart: unless-stopped
@@ -170,9 +168,9 @@ services:
     image: python:3.12-slim
     working_dir: /app
     environment:
-      - SHEET_ID=1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I
+      - SHEET_ID=${GOOGLE_SHEET_ID}
       - GOOGLE_APPLICATION_CREDENTIALS=/secrets/service_account.json
-      - TZ=Europe/Paris
+      - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
       - DUCKDB_DIR=/files/duckdb
       - AG2_DUCKDB_PATH=/files/duckdb/ag2_v3.duckdb
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
@@ -187,13 +185,13 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=web
-      - traefik.http.routers.tradingdash.rule=Host(`dashboard.nlhconsulting.fr`)
+      - traefik.http.routers.tradingdash.rule=Host(`${DASHBOARD_DOMAIN}`)
       - traefik.http.routers.tradingdash.entrypoints=websecure
       - traefik.http.routers.tradingdash.tls=true
       - traefik.http.routers.tradingdash.tls.certresolver=mytlschallenge
       - traefik.http.services.tradingdash.loadbalancer.server.port=8501
       - traefik.http.routers.tradingdash.middlewares=tradingdash-auth
-      - traefik.http.middlewares.tradingdash-auth.basicauth.users=nicolas:$$2y$$05$$UboAT0t741bFU1a6dgfR1.FWSZ4PXeBPKC6fM7aaSOE5QXHavQ1vm,Cyril:$$2y$$05$$rsM.GSQbFxrnwfo0PlCpJ.7KfkTKNCfvFsqjskIF4Q93FheMeMZMW
+      - traefik.http.middlewares.tradingdash-auth.basicauth.users=${DASHBOARD_BASIC_AUTH}
     restart: unless-stopped
     volumes:
       - /opt/trading-dashboard/app:/app:ro

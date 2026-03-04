@@ -5929,17 +5929,25 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         df_pos = pd.DataFrame()
 
-        df_mtm_latest = _ag1_fetchdf(
-            conn,
-            """
-            SELECT
-              symbol,
-              run_id,
-              updated_at
-            FROM portfolio_positions_mtm_latest
-            WHERE symbol IS NOT NULL
-            """,
+        mtm_schema = _ag1_fetchdf(conn, "PRAGMA table_info('portfolio_positions_mtm_latest')")
+        mtm_available_cols = set()
+        if mtm_schema is not None and not mtm_schema.empty and "name" in mtm_schema.columns:
+            mtm_available_cols = {
+                str(c).strip().lower()
+                for c in mtm_schema["name"].dropna().astype(str).tolist()
+                if str(c).strip()
+            }
+        mtm_select_cols = ["symbol", "run_id", "updated_at"]
+        if "ag1_source_run_id" in mtm_available_cols:
+            mtm_select_cols.append("ag1_source_run_id")
+        if "ag1_source_snapshot_ts" in mtm_available_cols:
+            mtm_select_cols.append("ag1_source_snapshot_ts")
+        mtm_sql = (
+            "SELECT "
+            + ", ".join(mtm_select_cols)
+            + "\nFROM portfolio_positions_mtm_latest\nWHERE symbol IS NOT NULL"
         )
+        df_mtm_latest = _ag1_fetchdf(conn, mtm_sql)
 
         df_transactions = _ag1_fetchdf(
             conn,
@@ -6179,6 +6187,8 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             "ledger_run_id": str(latest.get("run_id") or ""),
             "ledger_positions_count": 0,
             "mtm_run_id": "",
+            "mtm_source_run_id": "",
+            "mtm_match_col": "",
             "mtm_positions_count": None,
             "mtm_last_updated_at": None,
             "mtm_age_hours": None,
@@ -6202,6 +6212,20 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             mtm_scan.columns = mtm_cols
             mtm_ts_latest = pd.NaT
             mtm_run_id_latest = ""
+            mtm_source_run_id_latest = ""
+            source_series_non_empty = False
+            if "ag1_source_run_id" in mtm_scan.columns:
+                source_series = (
+                    mtm_scan["ag1_source_run_id"]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                )
+                source_series_non_empty = not source_series.empty
+            mtm_match_col = "ag1_source_run_id" if source_series_non_empty else "run_id"
+            diagnostics["mtm_match_col"] = mtm_match_col
             if "updated_at" in mtm_scan.columns:
                 mtm_ts = pd.to_datetime(mtm_scan["updated_at"], errors="coerce", utc=True)
                 if mtm_ts is not None and len(mtm_ts) > 0:
@@ -6222,6 +6246,17 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                         )
                         if not mtm_run_series.empty:
                             mtm_run_id_latest = str(mtm_run_series.iloc[0])
+                        if mtm_match_col in tmp.columns:
+                            mtm_source_run_series = (
+                                tmp[mtm_match_col]
+                                .dropna()
+                                .astype(str)
+                                .str.strip()
+                                .replace("", pd.NA)
+                                .dropna()
+                            )
+                            if not mtm_source_run_series.empty:
+                                mtm_source_run_id_latest = str(mtm_source_run_series.iloc[0])
             if "run_id" in mtm_scan.columns:
                 mtm_run_ids = (
                     mtm_scan["run_id"]
@@ -6233,16 +6268,28 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 )
                 if not mtm_run_ids.empty:
                     diagnostics["mtm_run_id"] = mtm_run_id_latest or str(mtm_run_ids.iloc[0])
+            if mtm_match_col in mtm_scan.columns:
+                mtm_source_ids = (
+                    mtm_scan[mtm_match_col]
+                    .dropna()
+                    .astype(str)
+                    .str.strip()
+                    .replace("", pd.NA)
+                    .dropna()
+                )
+                if not mtm_source_ids.empty:
+                    diagnostics["mtm_source_run_id"] = mtm_source_run_id_latest or str(mtm_source_ids.iloc[0])
                 ledger_run_id = str(diagnostics.get("ledger_run_id") or "").strip()
                 if ledger_run_id:
-                    mtm_same_run = mtm_scan[mtm_scan["run_id"].astype(str).str.strip() == ledger_run_id]
+                    mtm_same_run = mtm_scan[mtm_scan[mtm_match_col].astype(str).str.strip() == ledger_run_id]
                     if mtm_same_run.empty:
                         compare_mtm_with_ledger = False
                         diagnostics["mtm_is_stale"] = True
                         diagnostics["mtm_reason"] = "run_id_mismatch"
                     else:
                         mtm_scan = mtm_same_run
-                        diagnostics["mtm_run_id"] = ledger_run_id
+                        if not diagnostics.get("mtm_source_run_id"):
+                            diagnostics["mtm_source_run_id"] = ledger_run_id
 
             if "symbol" in mtm_scan.columns:
                 ser = mtm_scan["symbol"].astype(str).str.strip().str.upper()
@@ -7503,6 +7550,8 @@ if page == "Dashboard Trading":
             if isinstance(diag, dict):
                 ledger_run = str(diag.get("ledger_run_id") or selected_summary.get("last_run_id") or "").strip() or "N/A"
                 mtm_run = str(diag.get("mtm_run_id") or "").strip() or "N/A"
+                mtm_source_run = str(diag.get("mtm_source_run_id") or "").strip() or "N/A"
+                mtm_match_col = str(diag.get("mtm_match_col") or "run_id").strip() or "run_id"
                 mtm_age_hours = diag.get("mtm_age_hours")
                 mtm_is_stale = bool(diag.get("mtm_is_stale"))
                 mtm_age_txt = ""
@@ -7513,7 +7562,8 @@ if page == "Dashboard Trading":
                         mtm_age_txt = ""
                 active_positions_source_note = (
                     "Source Positions: AG1-V3 ledger `core.positions_snapshot` "
-                    f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` (run_id={mtm_run}{mtm_age_txt})"
+                    f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` "
+                    f"(run_id={mtm_run}, source_run_id={mtm_source_run}, match_col={mtm_match_col}{mtm_age_txt})"
                 )
 
                 only_ledger = [str(s) for s in (diag.get("positions_only_in_ledger") or []) if str(s).strip()]

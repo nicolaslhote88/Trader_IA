@@ -5,7 +5,9 @@ import duckdb
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
-DB_PATH_DEFAULT = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v3.duckdb")
+# CHEMIN SPECIFIQUE A GROK
+DB_PATH_DEFAULT = os.getenv("AG1_GROK41_REASONING_DUCKDB_PATH", "/files/duckdb/ag1_v3_grok41_reasoning.duckdb")
+
 
 def to_num(v):
     try:
@@ -16,6 +18,7 @@ def to_num(v):
         return n if n == n else None
     except Exception:
         return None
+
 
 def to_iso(v):
     try:
@@ -36,8 +39,10 @@ def to_iso(v):
     except Exception:
         return str(v) if v is not None else "unknown"
 
+
 def _norm_text(v):
     return str(v or "").strip().upper()
+
 
 def is_cash_row(r):
     sym = _norm_text(r.get("Symbol") or r.get("symbol"))
@@ -52,10 +57,12 @@ def is_cash_row(r):
         or sector == "CASH"
     )
 
+
 def is_meta_row(r):
     sym = _norm_text(r.get("Symbol") or r.get("symbol"))
     name = _norm_text(r.get("Name") or r.get("name"))
     return sym == "__META__" or name == "__META__"
+
 
 @contextmanager
 def db_con(path, retries=5, delay=0.25):
@@ -80,6 +87,7 @@ def db_con(path, retries=5, delay=0.25):
                 pass
         gc.collect()
 
+
 def load_rows_from_duckdb(db_path):
     rows = []
     with db_con(db_path) as con:
@@ -87,36 +95,13 @@ def load_rows_from_duckdb(db_path):
             return rows
         sql_with_review = """
             SELECT
-              symbol,
-              name,
-              asset_class,
-              sector,
-              industry,
-              isin,
-              quantity,
-              avg_price,
-              last_price,
-              market_value,
-              unrealized_pnl,
-              updated_at,
-              next_review_date
+              symbol, name, asset_class, sector, industry, isin, quantity, avg_price, last_price, market_value, unrealized_pnl, updated_at, next_review_date
             FROM portfolio_positions_mtm_latest
             ORDER BY market_value DESC NULLS LAST, symbol
         """
         sql_fallback = """
             SELECT
-              symbol,
-              name,
-              asset_class,
-              sector,
-              industry,
-              isin,
-              quantity,
-              avg_price,
-              last_price,
-              market_value,
-              unrealized_pnl,
-              updated_at
+              symbol, name, asset_class, sector, industry, isin, quantity, avg_price, last_price, market_value, unrealized_pnl, updated_at
             FROM portfolio_positions_mtm_latest
             ORDER BY market_value DESC NULLS LAST, symbol
         """
@@ -134,26 +119,29 @@ def load_rows_from_duckdb(db_path):
                 out = []
 
         for idx, r in enumerate(out, start=1):
-            rows.append({
-                "row_number": idx,
-                "Symbol": str(r.get("symbol") or "").strip().upper(),
-                "Name": str(r.get("name") or "").strip(),
-                "AssetClass": str(r.get("asset_class") or "").strip(),
-                "Sector": str(r.get("sector") or "Unknown").strip() or "Unknown",
-                "Industry": str(r.get("industry") or "").strip(),
-                "ISIN": str(r.get("isin") or "").strip(),
-                "Quantity": to_num(r.get("quantity")),
-                "AvgPrice": to_num(r.get("avg_price")),
-                "LastPrice": to_num(r.get("last_price")),
-                "MarketValue": to_num(r.get("market_value")),
-                "UnrealizedPnL": to_num(r.get("unrealized_pnl")),
-                "UpdatedAt": to_iso(r.get("updated_at")),
-                "NextReviewDate": to_iso(r.get("next_review_date")) if r.get("next_review_date") is not None else None,
-            })
+            rows.append(
+                {
+                    "row_number": idx,
+                    "Symbol": str(r.get("symbol") or "").strip().upper(),
+                    "Name": str(r.get("name") or "").strip(),
+                    "AssetClass": str(r.get("asset_class") or "").strip(),
+                    "Sector": str(r.get("sector") or "Unknown").strip() or "Unknown",
+                    "Industry": str(r.get("industry") or "").strip(),
+                    "ISIN": str(r.get("isin") or "").strip(),
+                    "Quantity": to_num(r.get("quantity")),
+                    "AvgPrice": to_num(r.get("avg_price")),
+                    "LastPrice": to_num(r.get("last_price")),
+                    "MarketValue": to_num(r.get("market_value")),
+                    "UnrealizedPnL": to_num(r.get("unrealized_pnl")),
+                    "UpdatedAt": to_iso(r.get("updated_at")),
+                    "NextReviewDate": to_iso(r.get("next_review_date")) if r.get("next_review_date") is not None else None,
+                }
+            )
     return rows
 
 
 incoming = _items or []
+input0 = incoming[0].get("json", {}) if incoming and isinstance(incoming[0], dict) else {}
 
 db_path = DB_PATH_DEFAULT
 for it in incoming:
@@ -205,11 +193,27 @@ portfolio_summary = {
     "positions": positions,
 }
 
-return [{
-    "json": {
-        "portfolioRows": rows,
-        "portfolioSummary": portfolio_summary,
-        "meta": meta,
-        "portfolioSource": source,
+# CREATION DU PACK DE TRANSFERT
+transfer_pack = {
+    "db_path": str(db_path),
+    "run": input0.get("run", {}),
+    "config": input0.get("config", {}),
+    "feesConfig": input0.get("feesConfig", {}),
+    "meta": meta,
+}
+
+return [
+    {
+        "json": {
+            "portfolioRows": rows,
+            "portfolioSummary": portfolio_summary,
+            "meta": meta,
+            "portfolioSource": source,
+            "run": input0.get("run", {}),
+            "config": input0.get("config", {}),
+            "feesConfig": input0.get("feesConfig", {}),
+            "transfer_pack": transfer_pack,
+            "db_path": str(db_path),
+        }
     }
-}]
+]

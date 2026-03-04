@@ -29,8 +29,8 @@ const dtf = new Intl.DateTimeFormat("en-GB", {
 const parts = partsToObj(dtf.formatToParts(now));
 const isoLocal = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
 
-// Calcule l’offset (minutes) entre UTC et Europe/Paris à cet instant
-// Astuce : on interprète l'heure "Paris" comme UTC, et on compare à l'instant réel.
+// Calcule l'offset (minutes) entre UTC et Europe/Paris a cet instant
+// Astuce : on interprete l'heure "Paris" comme UTC, et on compare a l'instant reel.
 const msLocalAsUtc = Date.parse(`${isoLocal}Z`);
 const offsetMin = Math.round((msLocalAsUtc - now.getTime()) / 60000);
 const sign = offsetMin >= 0 ? "+" : "-";
@@ -66,7 +66,7 @@ return [
         strategyVersion: String(cfg.strategy_version || "strategy_v3"),
         configVersion: String(cfg.config_version || "config_v3"),
         promptVersion: String(cfg.prompt_version || "prompt_v3"),
-        model: String(cfg.model || "gpt-5.2"),
+        model: "Grok 4.1 Reasoning", // <--- Forcez cette valeur exacte
         enable_fx: enableFx,
         universe_scope: universeScope,
         inputSnapshot: {

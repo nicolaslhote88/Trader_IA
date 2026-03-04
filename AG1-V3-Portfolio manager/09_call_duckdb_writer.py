@@ -32,6 +32,10 @@ STATIC_WRITER_PATHS = (
     "/files/AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
     "/files/AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py",
     "/files/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V2-EXPORT/workflow/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V2-Portfolio manager/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V2-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
 )
 STATIC_SCHEMA_PATHS = (
     "/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql",
@@ -40,6 +44,10 @@ STATIC_SCHEMA_PATHS = (
     "/files/AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
     "/files/AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
     "/files/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V2-EXPORT/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V2-EXPORT/workflow/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V2-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V2-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
 )
 
 
@@ -122,6 +130,50 @@ def _sample_dir(path_text, limit=20):
     return ", ".join(entries) if entries else "<empty>"
 
 
+def _discover_named_file(
+    filename,
+    roots,
+    max_depth=7,
+    max_dirs=4000,
+):
+    seen = set()
+    visited = 0
+    for root in roots:
+        root_path = Path(_clean_path_text(root) or ".").expanduser()
+        if not root_path.exists() or not root_path.is_dir():
+            continue
+        stack = [(root_path, 0)]
+        while stack and visited < max_dirs:
+            cur, depth = stack.pop()
+            try:
+                key = str(cur.resolve()) if cur.exists() else str(cur)
+            except Exception:
+                key = str(cur)
+            if key in seen:
+                continue
+            seen.add(key)
+            visited += 1
+
+            candidate = cur / filename
+            if candidate.is_file():
+                return str(candidate)
+
+            if depth >= max_depth:
+                continue
+            try:
+                children = list(cur.iterdir())
+            except Exception:
+                continue
+            dirs = [p for p in children if p.is_dir()]
+            dirs.sort(key=lambda p: p.name.lower())
+            for d in reversed(dirs):
+                name = d.name.lower()
+                if name.startswith(".") or name in {"node_modules", ".git", "__pycache__"}:
+                    continue
+                stack.append((d, depth + 1))
+    return ""
+
+
 def _resolve_writer_path(preferred_path=""):
     cwd = Path.cwd()
     found, attempted = _first_existing_file(
@@ -136,6 +188,10 @@ def _resolve_writer_path(preferred_path=""):
         cwd / "AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
         cwd / "AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py",
         cwd / "AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V2-EXPORT/workflow/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V2-Portfolio manager/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V2-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
         Path("/home/runner/nodes/post_agent/duckdb_writer.py"),
         Path("/home/runner/workflow/nodes/post_agent/duckdb_writer.py"),
         Path("/home/runner/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py"),
@@ -143,17 +199,36 @@ def _resolve_writer_path(preferred_path=""):
         Path("/home/runner/AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py"),
         Path("/home/runner/AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py"),
         Path("/home/runner/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V2-EXPORT/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V2-EXPORT/workflow/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V2-Portfolio manager/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V2-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py"),
     )
     if found:
         os.environ[WRITER_ENV] = found
         return found
+
+    discovered = _discover_named_file(
+        "duckdb_writer.py",
+        roots=(
+            cwd,
+            "/files",
+            "/home/runner",
+        ),
+        max_depth=7,
+        max_dirs=4000,
+    )
+    if discovered:
+        os.environ[WRITER_ENV] = discovered
+        return discovered
 
     attempted_msg = ", ".join(attempted) if attempted else "(none)"
     debug = (
         f"cwd={cwd} | "
         f"env_{WRITER_ENV}={_clean_path_text(os.getenv(WRITER_ENV, '')) or '<empty>'} | "
         f"/files=[{_sample_dir('/files')}] | "
-        f"/files/AG1-V3-EXPORT=[{_sample_dir('/files/AG1-V3-EXPORT')}]"
+        f"/files/AG1-V3-EXPORT=[{_sample_dir('/files/AG1-V3-EXPORT')}] | "
+        f"/files/AG1-V2-EXPORT=[{_sample_dir('/files/AG1-V2-EXPORT')}]"
     )
     raise FileNotFoundError(
         "duckdb_writer.py not found. Set AG1_DUCKDB_WRITER_PATH to a valid mounted file. "
@@ -187,10 +262,28 @@ def _resolve_schema_path(preferred_schema_path="", writer_path_text=""):
         cwd / "AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
         cwd / "AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
         cwd / "AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V2-EXPORT/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V2-EXPORT/workflow/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V2-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V2-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
     )
     if found:
         os.environ[SCHEMA_ENV] = found
         return found
+    discovered = _discover_named_file(
+        "portfolio_ledger_schema_v2.sql",
+        roots=(
+            writer_root if writer_root else "",
+            cwd,
+            "/files",
+            "/home/runner",
+        ),
+        max_depth=7,
+        max_dirs=4000,
+    )
+    if discovered:
+        os.environ[SCHEMA_ENV] = discovered
+        return discovered
     return ""
 
 
@@ -207,15 +300,14 @@ def _load_writer_module(writer_path_text):
     sys.modules["ag1_duckdb_writer"] = module
     spec.loader.exec_module(module)
 
-    required = ("init_schema", "upsert_run_bundle", "compute_snapshots")
-    missing = []
-    for name in required:
-        fn = module.__dict__.get(name)
-        if fn is None:
-            missing.append(name)
-    if missing:
+    try:
+        _ = module.init_schema
+        _ = module.upsert_run_bundle
+        _ = module.compute_snapshots
+    except Exception:
         raise RuntimeError(
-            "duckdb_writer.py is missing required callables: " + ", ".join(missing)
+            "duckdb_writer.py is missing required callables: "
+            "init_schema, upsert_run_bundle, compute_snapshots"
         )
 
     return module, str(writer_path)
