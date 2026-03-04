@@ -208,7 +208,11 @@ def _load_writer_module(writer_path_text):
     spec.loader.exec_module(module)
 
     required = ("init_schema", "upsert_run_bundle", "compute_snapshots")
-    missing = [name for name in required if not callable(getattr(module, name, None))]
+    missing = []
+    for name in required:
+        fn = module.__dict__.get(name)
+        if fn is None:
+            missing.append(name)
     if missing:
         raise RuntimeError(
             "duckdb_writer.py is missing required callables: " + ", ".join(missing)
