@@ -4,7 +4,16 @@ import sys
 import traceback
 from pathlib import Path
 
-DEFAULT_DB_PATH = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v3.duckdb")
+DEFAULT_DB_PATH_FALLBACK = "/files/duckdb/ag1_v3.duckdb"
+GENERIC_DB_ENV_CANDIDATES = (
+    "AG1_DB_PATH",
+    "AG1_DUCKDB_PATH",
+)
+MODEL_DB_ENV_MAP = (
+    (("gpt-5", "chatgpt"), "AG1_CHATGPT52_DUCKDB_PATH"),
+    (("grok", "grok-4", "grok41"), "AG1_GROK41_REASONING_DUCKDB_PATH"),
+    (("gemini", "gemini-3"), "AG1_GEMINI30_PRO_DUCKDB_PATH"),
+)
 DEFAULT_WRITER_PATH = os.getenv(
     "AG1_DUCKDB_WRITER_PATH",
     "/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py",
@@ -14,70 +23,194 @@ DEFAULT_SCHEMA_PATH = os.getenv(
     "/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql",
 )
 SCHEMA_ENV = "AG1_LEDGER_SCHEMA_PATH"
+WRITER_ENV = "AG1_DUCKDB_WRITER_PATH"
+
+STATIC_WRITER_PATHS = (
+    "/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V3-EXPORT/workflow/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V3-EXPORT/AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py",
+    "/files/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
+)
+STATIC_SCHEMA_PATHS = (
+    "/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V3-EXPORT/workflow/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V3-EXPORT/AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
+    "/files/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
+)
 
 
-def _is_legacy_ag1_db_path(path_text: str) -> bool:
+def _clean_path_text(value):
+    return str(value or "").strip()
+
+
+def _resolve_default_db_path(bundle=None):
+    run = bundle.get("run") if isinstance(bundle, dict) else None
+    model_text = str((run or {}).get("model") or "").strip().lower()
+    for tokens, env_key in MODEL_DB_ENV_MAP:
+        if any(token in model_text for token in tokens):
+            value = _clean_path_text(os.getenv(env_key, ""))
+            if value:
+                return value
+    for key in GENERIC_DB_ENV_CANDIDATES:
+        value = _clean_path_text(os.getenv(key, ""))
+        if value:
+            return value
+    return DEFAULT_DB_PATH_FALLBACK
+
+
+def _is_legacy_ag1_db_path(path_text):
     p = str(path_text or "").strip().lower().replace("\\", "/")
     return p.endswith("/ag1_v3.duckdb")
 
 
-def _pick_db_path(payload: dict, bundle: dict) -> str:
-    # Prefer the explicit db_path emitted by node 08, then tolerate nested bundle.run.db_path.
+def _pick_db_path(payload, bundle):
     candidates = [
         payload.get("db_path"),
         payload.get("ag1_db_path"),
         bundle.get("db_path") if isinstance(bundle, dict) else None,
-        (bundle.get("run") or {}).get("db_path") if isinstance(bundle, dict) and isinstance(bundle.get("run"), dict) else None,
-        DEFAULT_DB_PATH,
+        (bundle.get("run") or {}).get("db_path")
+        if isinstance(bundle, dict) and isinstance(bundle.get("run"), dict)
+        else None,
+        _resolve_default_db_path(bundle),
     ]
     for c in candidates:
-        s = str(c or "").strip()
+        s = _clean_path_text(c)
         if s:
             return s
     return ""
 
 
-def _resolve_schema_path():
-    schema_path = os.getenv(SCHEMA_ENV, "").strip()
-    if schema_path and Path(schema_path).is_file():
-        return schema_path
+def _iter_candidate_paths(*candidates):
+    seen = set()
+    for candidate in candidates:
+        text = _clean_path_text(candidate)
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        yield path
 
-    default_schema = Path(DEFAULT_SCHEMA_PATH)
-    if default_schema.is_file():
-        schema_path = str(default_schema)
-        os.environ[SCHEMA_ENV] = schema_path
-        return schema_path
 
+def _first_existing_file(*candidates):
+    attempted = []
+    for path in _iter_candidate_paths(*candidates):
+        attempted.append(str(path))
+        if path.is_file():
+            return str(path), attempted
+    return "", attempted
+
+
+def _sample_dir(path_text, limit=20):
+    path = Path(path_text)
+    if not path.exists():
+        return "<missing>"
+    if not path.is_dir():
+        return "<not_a_directory>"
+    try:
+        entries = sorted(p.name for p in path.iterdir())
+    except Exception as exc:
+        return f"<error:{exc}>"
+    if len(entries) > limit:
+        entries = entries[:limit] + ["..."]
+    return ", ".join(entries) if entries else "<empty>"
+
+
+def _resolve_writer_path(preferred_path=""):
+    cwd = Path.cwd()
+    found, attempted = _first_existing_file(
+        preferred_path,
+        os.getenv(WRITER_ENV, ""),
+        DEFAULT_WRITER_PATH,
+        *STATIC_WRITER_PATHS,
+        cwd / "nodes/post_agent/duckdb_writer.py",
+        cwd / "workflow/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V3-EXPORT/workflow/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py",
+        cwd / "AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py",
+        Path("/home/runner/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/workflow/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V3-EXPORT/workflow/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V3-Portfolio manager/nodes/post_agent/duckdb_writer.py"),
+        Path("/home/runner/AG1-V3-Portfolio manager/workflow/nodes/post_agent/duckdb_writer.py"),
+    )
+    if found:
+        os.environ[WRITER_ENV] = found
+        return found
+
+    attempted_msg = ", ".join(attempted) if attempted else "(none)"
+    debug = (
+        f"cwd={cwd} | "
+        f"env_{WRITER_ENV}={_clean_path_text(os.getenv(WRITER_ENV, '')) or '<empty>'} | "
+        f"/files=[{_sample_dir('/files')}] | "
+        f"/files/AG1-V3-EXPORT=[{_sample_dir('/files/AG1-V3-EXPORT')}]"
+    )
+    raise FileNotFoundError(
+        "duckdb_writer.py not found. Set AG1_DUCKDB_WRITER_PATH to a valid mounted file. "
+        f"Tried: {attempted_msg}. Debug: {debug}"
+    )
+
+
+def _resolve_schema_path(preferred_schema_path="", writer_path_text=""):
+    cwd = Path.cwd()
+    writer_root = None
+    if _clean_path_text(writer_path_text):
+        writer_path = Path(writer_path_text)
+        if writer_path.name == "duckdb_writer.py":
+            try:
+                writer_root = writer_path.parents[2]
+            except Exception:
+                writer_root = None
+
+    found, _ = _first_existing_file(
+        preferred_schema_path,
+        os.getenv(SCHEMA_ENV, ""),
+        DEFAULT_SCHEMA_PATH,
+        *STATIC_SCHEMA_PATHS,
+        (writer_root / "sql/portfolio_ledger_schema_v2.sql") if writer_root else "",
+        (writer_root / "workflow/sql/portfolio_ledger_schema_v2.sql") if writer_root else "",
+        cwd / "sql/portfolio_ledger_schema_v2.sql",
+        cwd / "workflow/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V3-EXPORT/workflow/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V3-EXPORT/AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V3-EXPORT/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql",
+        cwd / "AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql",
+    )
+    if found:
+        os.environ[SCHEMA_ENV] = found
+        return found
     return ""
 
 
 def _load_writer_module(writer_path_text):
     writer_path = Path(writer_path_text)
     if not writer_path.is_file():
-        raise FileNotFoundError(
-            "duckdb_writer.py not found at "
-            f"'{writer_path}'. "
-            "Mount AG1-V3-EXPORT in the runner and set AG1_DUCKDB_WRITER_PATH."
-        )
+        raise FileNotFoundError(f"duckdb_writer.py not found at '{writer_path}'.")
 
     spec = importlib.util.spec_from_file_location("ag1_duckdb_writer", str(writer_path))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Cannot load module spec for '{writer_path}'.")
 
     module = importlib.util.module_from_spec(spec)
-    # Required for some Python/n8n runners when duckdb_writer defines @dataclass classes.
     sys.modules["ag1_duckdb_writer"] = module
     spec.loader.exec_module(module)
 
     required = ("init_schema", "upsert_run_bundle", "compute_snapshots")
-    missing = []
-    for fn_name in required:
-        fn = getattr(module, fn_name, None)
-        if not callable(fn):
-            missing.append(fn_name)
-
+    missing = [name for name in required if not callable(getattr(module, name, None))]
     if missing:
-        raise AttributeError(
+        raise RuntimeError(
             "duckdb_writer.py is missing required callables: " + ", ".join(missing)
         )
 
@@ -90,11 +223,15 @@ try:
         return []
 
     first_json = items[0].get("json", {}) if isinstance(items[0], dict) else {}
-    writer_path = str(first_json.get("duckdb_writer_path") or DEFAULT_WRITER_PATH).strip()
-    if not writer_path:
-        raise ValueError("AG1_DUCKDB_WRITER_PATH is empty.")
 
-    schema_path = _resolve_schema_path()
+    requested_writer_path = _clean_path_text(first_json.get("duckdb_writer_path"))
+    writer_path = _resolve_writer_path(requested_writer_path or DEFAULT_WRITER_PATH)
+
+    requested_schema_path = _clean_path_text(
+        first_json.get("ledger_schema_path") or first_json.get("schema_path")
+    )
+    schema_path = _resolve_schema_path(requested_schema_path, writer_path)
+
     writer, writer_path = _load_writer_module(writer_path)
 
     out = []
@@ -108,7 +245,7 @@ try:
 
         db_path = _pick_db_path(j, bundle)
         if not db_path:
-            raise ValueError("Missing db_path and AG1_DUCKDB_PATH is empty.")
+            raise ValueError("Missing db_path and AG1_*_DUCKDB_PATH env vars are empty.")
         if _is_legacy_ag1_db_path(db_path):
             raise ValueError(
                 "Refusing legacy AG1 DB path '/files/duckdb/ag1_v3.duckdb'. "
@@ -145,6 +282,7 @@ try:
         )
 
     return out
+
 except Exception as e:
     return [
         {
