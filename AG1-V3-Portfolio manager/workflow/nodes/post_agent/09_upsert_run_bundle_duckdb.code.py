@@ -79,9 +79,11 @@ def _resolve_writer_path(preferred_path=""):
         os.environ["AG1_DUCKDB_WRITER_PATH"] = found
         return found
 
-    # Fallback autonome: le noeud embarque un writer minimal inline.
-    os.environ["AG1_DUCKDB_WRITER_PATH"] = INLINE_WRITER_SENTINEL
-    return INLINE_WRITER_SENTINEL
+    attempted_msg = ", ".join(attempted) if attempted else "(none)"
+    raise FileNotFoundError(
+        "duckdb_writer.py not found. Set AG1_DUCKDB_WRITER_PATH to a valid mounted file. "
+        f"Tried: {attempted_msg}"
+    )
 
 
 def _resolve_schema_path(preferred_schema_path="", writer_path_text=""):
@@ -536,11 +538,10 @@ def _inline_compute_snapshots(db_path, run_id):
 
 def _load_writer_module(writer_path_text):
     if writer_path_text == INLINE_WRITER_SENTINEL:
-        return {
-            "init_schema": _inline_init_schema,
-            "upsert_run_bundle": _inline_upsert_run_bundle,
-            "compute_snapshots": _inline_compute_snapshots,
-        }, "INLINE:embedded"
+        raise RuntimeError(
+            "INLINE writer is disabled for AG1-V3 safety. "
+            "Mount duckdb_writer.py and set AG1_DUCKDB_WRITER_PATH."
+        )
 
     writer_path = Path(writer_path_text)
     if not writer_path.is_file():

@@ -6183,6 +6183,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             "mtm_last_updated_at": None,
             "mtm_age_hours": None,
             "mtm_is_stale": None,
+            "mtm_reason": "",
             "positions_only_in_ledger": [],
             "positions_only_in_mtm": [],
         }
@@ -6194,19 +6195,21 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         diagnostics["ledger_positions_count"] = int(len(ledger_syms))
 
         mtm_syms = set()
+        compare_mtm_with_ledger = True
         if df_mtm_latest is not None and not df_mtm_latest.empty:
-            mtm_cols = [str(c).strip().lower() for c in df_mtm_latest.columns]
-            df_mtm_latest.columns = mtm_cols
+            mtm_scan = df_mtm_latest.copy()
+            mtm_cols = [str(c).strip().lower() for c in mtm_scan.columns]
+            mtm_scan.columns = mtm_cols
             mtm_ts_latest = pd.NaT
             mtm_run_id_latest = ""
-            if "updated_at" in df_mtm_latest.columns:
-                mtm_ts = pd.to_datetime(df_mtm_latest["updated_at"], errors="coerce", utc=True)
+            if "updated_at" in mtm_scan.columns:
+                mtm_ts = pd.to_datetime(mtm_scan["updated_at"], errors="coerce", utc=True)
                 if mtm_ts is not None and len(mtm_ts) > 0:
                     mtm_ts_latest = mtm_ts.max()
                     if pd.notna(mtm_ts_latest):
                         diagnostics["mtm_last_updated_at"] = mtm_ts_latest.isoformat()
-                    if "run_id" in df_mtm_latest.columns:
-                        tmp = df_mtm_latest.copy()
+                    if "run_id" in mtm_scan.columns:
+                        tmp = mtm_scan.copy()
                         tmp["__updated_at_utc"] = mtm_ts
                         tmp = tmp.sort_values("__updated_at_utc", ascending=False, na_position="last")
                         mtm_run_series = (
@@ -6219,13 +6222,9 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                         )
                         if not mtm_run_series.empty:
                             mtm_run_id_latest = str(mtm_run_series.iloc[0])
-            if "symbol" in df_mtm_latest.columns:
-                ser = df_mtm_latest["symbol"].astype(str).str.strip().str.upper()
-                mtm_syms = {s for s in ser.tolist() if s and s not in {"CASH_EUR", "__META__"}}
-                diagnostics["mtm_positions_count"] = int(len(mtm_syms))
-            if "run_id" in df_mtm_latest.columns:
+            if "run_id" in mtm_scan.columns:
                 mtm_run_ids = (
-                    df_mtm_latest["run_id"]
+                    mtm_scan["run_id"]
                     .dropna()
                     .astype(str)
                     .str.strip()
@@ -6234,18 +6233,35 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 )
                 if not mtm_run_ids.empty:
                     diagnostics["mtm_run_id"] = mtm_run_id_latest or str(mtm_run_ids.iloc[0])
+                ledger_run_id = str(diagnostics.get("ledger_run_id") or "").strip()
+                if ledger_run_id:
+                    mtm_same_run = mtm_scan[mtm_scan["run_id"].astype(str).str.strip() == ledger_run_id]
+                    if mtm_same_run.empty:
+                        compare_mtm_with_ledger = False
+                        diagnostics["mtm_is_stale"] = True
+                        diagnostics["mtm_reason"] = "run_id_mismatch"
+                    else:
+                        mtm_scan = mtm_same_run
+                        diagnostics["mtm_run_id"] = ledger_run_id
+
+            if "symbol" in mtm_scan.columns:
+                ser = mtm_scan["symbol"].astype(str).str.strip().str.upper()
+                mtm_syms = {s for s in ser.tolist() if s and s not in {"CASH_EUR", "__META__"}}
+                diagnostics["mtm_positions_count"] = int(len(mtm_syms))
 
             mtm_ref_ts = pd.to_datetime(latest.get("snapshot_ts"), errors="coerce", utc=True)
             if pd.notna(mtm_ref_ts) and pd.notna(mtm_ts_latest):
                 mtm_age_hours = max(0.0, (mtm_ref_ts - mtm_ts_latest).total_seconds() / 3600.0)
                 diagnostics["mtm_age_hours"] = float(mtm_age_hours)
-                diagnostics["mtm_is_stale"] = bool(mtm_age_hours > 24.0)
+                if str(diagnostics.get("mtm_reason") or "") != "run_id_mismatch":
+                    diagnostics["mtm_is_stale"] = bool(mtm_age_hours > 24.0)
             elif pd.notna(mtm_ts_latest):
                 mtm_age_hours = max(0.0, (pd.Timestamp.now(tz="UTC") - mtm_ts_latest).total_seconds() / 3600.0)
                 diagnostics["mtm_age_hours"] = float(mtm_age_hours)
-                diagnostics["mtm_is_stale"] = bool(mtm_age_hours > 24.0)
+                if str(diagnostics.get("mtm_reason") or "") != "run_id_mismatch":
+                    diagnostics["mtm_is_stale"] = bool(mtm_age_hours > 24.0)
 
-        if ledger_syms or mtm_syms:
+        if compare_mtm_with_ledger and (ledger_syms or mtm_syms):
             diagnostics["positions_only_in_ledger"] = sorted(list(ledger_syms - mtm_syms))[:20]
             diagnostics["positions_only_in_mtm"] = sorted(list(mtm_syms - ledger_syms))[:20]
 
@@ -7502,6 +7518,11 @@ if page == "Dashboard Trading":
 
                 only_ledger = [str(s) for s in (diag.get("positions_only_in_ledger") or []) if str(s).strip()]
                 only_mtm = [str(s) for s in (diag.get("positions_only_in_mtm") or []) if str(s).strip()]
+                mtm_reason = str(diag.get("mtm_reason") or "").strip()
+                if mtm_reason == "run_id_mismatch":
+                    st.info(
+                        "Miroir MTM sur un run different du ledger actif: comparaison des positions desactivee pour eviter un faux ecart."
+                    )
                 if only_ledger or only_mtm:
                     diff_parts = []
                     if only_ledger:
