@@ -30,6 +30,13 @@ function toNum(v, dflt = null) {
   return Number.isFinite(n) ? n : dflt;
 }
 
+function normalizeUniverseMode(v) {
+  const s = String(v ?? "").trim().toUpperCase();
+  if (s === "FX_ONLY" || s === "FX") return "FX_ONLY";
+  if (s === "NON_FX_ONLY" || s === "NON_FX" || s === "EX_FX" || s === "EQUITY_ONLY") return "NON_FX_ONLY";
+  return "ALL";
+}
+
 function normAssetClass(v, symbolYahoo) {
   const raw = String(v ?? "").trim().toUpperCase();
   if (raw === "FX" || raw === "FOREX") return "FX";
@@ -121,6 +128,9 @@ const items = $input.all();
 const cfgSource = items[0]?.json || {};
 const batchSizeRaw = toNum(getField(cfgSource, ["AG2_BATCH_SIZE", "batch_size"]), null);
 const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.floor(batchSizeRaw) : 10;
+const FORCED_UNIVERSE_MODE = "";
+const universeModeRaw = getField(cfgSource, ["AG2_UNIVERSE_MODE", "universe_mode", "asset_scope"]);
+const universeMode = normalizeUniverseMode(FORCED_UNIVERSE_MODE || universeModeRaw);
 
 const universeRaw = items.map((i) => i.json || {});
 const universe = [];
@@ -132,11 +142,20 @@ for (const row of universeRaw) {
 
 const processQueue = universe.filter((u) => {
   if (!u.enabled) return false;
+  if (universeMode === "FX_ONLY") return u.asset_class === "FX";
+  if (universeMode === "NON_FX_ONLY") return u.asset_class !== "FX";
   return true;
 });
 
 const fxUniverseCount = processQueue.filter((u) => u.asset_class === "FX").length;
 const enableFx = fxUniverseCount > 0;
+const nonFxUniverseCount = processQueue.filter((u) => u.asset_class !== "FX").length;
+const batchStateKey =
+  universeMode === "FX_ONLY"
+    ? "last_index_fx"
+    : universeMode === "NON_FX_ONLY"
+      ? "last_index_non_fx"
+      : "last_index";
 
 if (processQueue.length === 0) {
   return [
@@ -145,6 +164,8 @@ if (processQueue.length === 0) {
         ok: false,
         error: "NO_SYMBOLS",
         enable_fx: enableFx,
+        universe_mode: universeMode,
+        batch_state_key: batchStateKey,
         universe_total: universe.length,
         symbols: [],
       },
@@ -166,8 +187,11 @@ return [
       intraday: { interval: "1h", lookback_days: 60, max_bars: 200, min_bars: 50 },
       daily: { interval: "1d", lookback_days: 400, max_bars: 400, min_bars: 200 },
       batch_size: batchSize,
+      universe_mode: universeMode,
+      batch_state_key: batchStateKey,
       enable_fx: enableFx,
       fx_universe_count: fxUniverseCount,
+      non_fx_universe_count: nonFxUniverseCount,
       strategy_version: "strategy_v3",
       config_version: "config_v3",
       prompt_version: "prompt_v3",

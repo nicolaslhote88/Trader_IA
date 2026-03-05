@@ -529,7 +529,10 @@ config = {
     "config_version": str(first_json.get("config_version") or "config_v3"),
     "prompt_version": str(first_json.get("prompt_version") or "prompt_v3"),
     "enable_fx": bool(first_json.get("enable_fx")),
+    "universe_mode": str(first_json.get("universe_mode") or "ALL").upper(),
+    "batch_state_key": str(first_json.get("batch_state_key") or "last_index"),
     "fx_universe_count": int(first_json.get("fx_universe_count") or 0),
+    "non_fx_universe_count": int(first_json.get("non_fx_universe_count") or 0),
     "universe_scope": first_json.get("universe_scope") or ["EQUITY", "CRYPTO"],
 }
 
@@ -584,7 +587,7 @@ with db_con() as con:
         )
 
     # Batch rotation (persistent).
-    row = con.execute("SELECT value FROM batch_state WHERE key = 'last_index'").fetchone()
+    row = con.execute("SELECT value FROM batch_state WHERE key = ?", [config["batch_state_key"]]).fetchone()
     idx = int(row[0]) if row else 0
     total = len(process_queue)
     if idx >= total:
@@ -594,8 +597,8 @@ with db_con() as con:
     next_idx = 0 if (idx + batch_size >= total) else idx + batch_size
 
     con.execute(
-        "INSERT OR REPLACE INTO batch_state (key, value, updated_at) VALUES ('last_index', ?, CURRENT_TIMESTAMP)",
-        [next_idx],
+        "INSERT OR REPLACE INTO batch_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
+        [config["batch_state_key"], next_idx],
     )
 
     now = datetime.now(timezone.utc)
@@ -637,7 +640,10 @@ for i, entry in enumerate(batch):
                 "config_version": config["config_version"],
                 "prompt_version": config["prompt_version"],
                 "enable_fx": config["enable_fx"],
+                "universe_mode": config["universe_mode"],
+                "batch_state_key": config["batch_state_key"],
                 "fx_universe_count": config["fx_universe_count"],
+                "non_fx_universe_count": config["non_fx_universe_count"],
                 "universe_scope": config["universe_scope"],
                 "batch_info": {"start": idx, "size": len(batch), "total": total},
                 "_index": i,
