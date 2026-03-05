@@ -102,11 +102,24 @@ items = _items or []
 if len(items) == 0:
     return []
 
-db_path = str((items[0].get("json", {}) or {}).get("db_path") or DEFAULT_DB_PATH)
+first_json = dict(items[0].get("json", {}) or {})
+flush_rows = first_json.get("_flushRows")
+rows = []
+if isinstance(flush_rows, list):
+    for row in flush_rows:
+        if isinstance(row, dict):
+            rows.append(dict(row))
+else:
+    for it in items:
+        rows.append(dict(it.get("json", {}) or {}))
+
+if len(rows) == 0:
+    return items
+
+db_path = str(first_json.get("db_path") or rows[0].get("db_path") or DEFAULT_DB_PATH)
 
 with db_con(db_path) as con:
-    for it in items:
-        j = dict(it.get("json", {}) or {})
+    for j in rows:
 
         symbol = str(j.get("symbol", "") or "").upper()
         canonical_url = str(j.get("canonicalUrl", "") or j.get("url", "") or "")

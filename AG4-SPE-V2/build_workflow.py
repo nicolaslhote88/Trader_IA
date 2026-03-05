@@ -87,6 +87,14 @@ def build() -> dict:
             "name": "S02 - Start Run",
         },
         {
+            "parameters": {"jsCode": load_code("02_reset_news_buffer.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [-960, -96],
+            "id": "7a41d9f4-c2cc-4eb2-9c8e-6d652e3696f7",
+            "name": "S02B - Reset News Buffer",
+        },
+        {
             "parameters": {"options": {"reset": False}},
             "type": "n8n-nodes-base.splitInBatches",
             "typeVersion": 3,
@@ -460,6 +468,22 @@ def build() -> dict:
             "name": "S21 - Build Skip Row",
         },
         {
+            "parameters": {"jsCode": load_code("12_buffer_news_rows.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [3376, -16],
+            "id": "58e6b6d8-7c65-4485-b1f4-fe8b75c32dc9",
+            "name": "S21B - Buffer News Rows",
+        },
+        {
+            "parameters": {"jsCode": load_code("12_flush_news_buffer.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [816, -256],
+            "id": "88889c9e-3204-4fc7-9183-bafc95f2dc2c",
+            "name": "S22B - Flush News Buffer",
+        },
+        {
             "parameters": {"language": "pythonNative", "pythonCode": load_code("12_write_news_duckdb.py")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
@@ -599,7 +623,8 @@ def build() -> dict:
         "S00A - Load Universe (Google Sheets)": {"main": [[{"node": "S00B - DuckDB Init Schema", "type": "main", "index": 0}]]},
         "S00B - DuckDB Init Schema": {"main": [[{"node": "S01 - Build Symbol Queue", "type": "main", "index": 0}]]},
         "S01 - Build Symbol Queue": {"main": [[{"node": "S02 - Start Run", "type": "main", "index": 0}]]},
-        "S02 - Start Run": {"main": [[{"node": "S03 - Split Symbols", "type": "main", "index": 0}]]},
+        "S02 - Start Run": {"main": [[{"node": "S02B - Reset News Buffer", "type": "main", "index": 0}]]},
+        "S02B - Reset News Buffer": {"main": [[{"node": "S03 - Split Symbols", "type": "main", "index": 0}]]},
         "S03 - Split Symbols": {
             "main": [
                 [
@@ -635,7 +660,7 @@ def build() -> dict:
         "S09 - Explode Articles": {"main": [[{"node": "S10 - Split Articles", "type": "main", "index": 0}]]},
         "S10 - Split Articles": {
             "main": [
-                [{"node": "S03 - Split Symbols", "type": "main", "index": 0}],
+                [{"node": "S22B - Flush News Buffer", "type": "main", "index": 0}],
                 [{"node": "S11 - Route New vs Seen", "type": "main", "index": 0}],
             ]
         },
@@ -683,9 +708,11 @@ def build() -> dict:
             "main": [[{"node": "S19M - Merge AI + Context", "type": "main", "index": 1}]]
         },
         "S19M - Merge AI + Context": {"main": [[{"node": "S20 - Parse LLM Output", "type": "main", "index": 0}]]},
-        "S20 - Parse LLM Output": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
-        "S21 - Build Skip Row": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
-        "S22 - Upsert News DuckDB": {"main": [[{"node": "S10 - Split Articles", "type": "main", "index": 0}]]},
+        "S20 - Parse LLM Output": {"main": [[{"node": "S21B - Buffer News Rows", "type": "main", "index": 0}]]},
+        "S21 - Build Skip Row": {"main": [[{"node": "S21B - Buffer News Rows", "type": "main", "index": 0}]]},
+        "S21B - Buffer News Rows": {"main": [[{"node": "S10 - Split Articles", "type": "main", "index": 0}]]},
+        "S22B - Flush News Buffer": {"main": [[{"node": "S22 - Upsert News DuckDB", "type": "main", "index": 0}]]},
+        "S22 - Upsert News DuckDB": {"main": [[{"node": "S03 - Split Symbols", "type": "main", "index": 0}]]},
         "S25 - Build Vector Docs": {"main": [[{"node": "S25A - IF Has Vector Docs?", "type": "main", "index": 0}]]},
         "S25A - IF Has Vector Docs?": {
             "main": [
