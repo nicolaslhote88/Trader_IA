@@ -66,7 +66,7 @@ return [
         strategyVersion: String(cfg.strategy_version || "strategy_v3"),
         configVersion: String(cfg.config_version || "config_v3"),
         promptVersion: String(cfg.prompt_version || "prompt_v3"),
-        model: "Grok 4.1 Reasoning", // <--- Forcez cette valeur exacte
+        model: "gpt-5.2", // <--- Forcez cette valeur exacte
         enable_fx: enableFx,
         universe_scope: universeScope,
         inputSnapshot: {

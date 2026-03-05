@@ -1,17 +1,17 @@
 key	id	name	type	code_len
 0_seed_portfolio	2e7a10b5-f1ad-45d5-a57e-e93d3b15a2f4	0 - SEED Portfolio	n8n-nodes-base.code	5208
-2B_init_run_context	8beefb94-cbc1-45c9-9662-cabb22d8d85c	2B - Init Run Context	n8n-nodes-base.code	2266
-4B_build_portfolio_context	bae45771-922b-41c3-989a-39eb8c6dcade	4B – Build Portfolio Context	n8n-nodes-base.code	6539
-4C_enrich_portfolio_with_market_prices	37e8ffda-d099-4168-b1f7-76ba652754cd	4C — Enrich Portfolio with Market Prices	n8n-nodes-base.code	7150
+2B_init_run_context	8beefb94-cbc1-45c9-9662-cabb22d8d85c	2B - Init Run Context	n8n-nodes-base.code	2579
+4B_build_portfolio_context	bae45771-922b-41c3-989a-39eb8c6dcade	4B – Build Portfolio Context	n8n-nodes-base.code	47511
+4C_enrich_portfolio_with_market_prices	37e8ffda-d099-4168-b1f7-76ba652754cd	4C — Enrich Portfolio with Market Prices	n8n-nodes-base.code	28003
 AG4_01_fetch_macro_news	64186756-2813-4b4e-b273-749beb57f7f6	AG4.01 - Récupération des news générales	n8n-nodes-base.code	4737
 20J_final_build_market_news_pack	9f3dac04-531d-4d3a-b2ad-e7e50f7ffb96	20J_FINAL — Build MarketNewsPack Final	n8n-nodes-base.code	13954
-R8_data_prep_matrix	7ae6efb0-c933-4b22-9884-29e92b0e3a97	R8 — Data Prep for Matrix (Fusion Filter)	n8n-nodes-base.code	18375
-calcul_matrice_briefing	6c6eaf35-cb7c-4300-9588-17b4c0df3ec3	Calcul Matrice & Briefing	n8n-nodes-base.code	26966
+R8_data_prep_matrix	7ae6efb0-c933-4b22-9884-29e92b0e3a97	R8 — Data Prep for Matrix (Fusion Filter)	n8n-nodes-base.code	22331
+calcul_matrice_briefing	6c6eaf35-cb7c-4300-9588-17b4c0df3ec3	Calcul Matrice & Briefing	n8n-nodes-base.code	38241
 merge7	38b971ce-7627-4b08-bc89-70a51ac5916d	Merge7	n8n-nodes-base.merge	0
-ag1_00_assemble_input_packs	aecdb9d1-a8c7-4958-82cd-6e8b30f5a54a	AG1.00 — Assemble Input Packs	n8n-nodes-base.code	2474
+ag1_00_assemble_input_packs	aecdb9d1-a8c7-4958-82cd-6e8b30f5a54a	AG1.00 — Assemble Input Packs	n8n-nodes-base.code	21587
 agent_1_portfolio_manager	6470a4f6-de6b-4bb6-9eb1-a251a944227b	Agent #1 - Portfolio manager	@n8n/n8n-nodes-langchain.agent	0
 information_extractor	dfa82252-3956-413a-ba26-55a1f6b97c90	Information Extractor	@n8n/n8n-nodes-langchain.informationExtractor	0
-07_validate_enforce_safety_v5	6227fed2-bce6-452f-ac55-62d14067d316	7 - Validate & Enforce Safety	n8n-nodes-base.code	17471
-08_build_duckdb_bundle	5e44caa2-132c-4c2f-a987-56c0591ce018	8 - Build DuckDB Bundle	n8n-nodes-base.code	14083
-09_upsert_run_bundle_duckdb	280869c6-b44f-4596-a38f-f68e8af9ea0a	9 - Upsert Run Bundle (DuckDB)	n8n-nodes-base.code	4016
-10_post_run_health	4a46de80-f4bd-4162-856b-1f44504db279	10 - Post-Run Health (DuckDB)	n8n-nodes-base.code	3408
+07_validate_enforce_safety_v5	6227fed2-bce6-452f-ac55-62d14067d316	7 - Validate & Enforce Safety	n8n-nodes-base.code	13714
+08_build_duckdb_bundle	5e44caa2-132c-4c2f-a987-56c0591ce018	8 - Build DuckDB Bundle	n8n-nodes-base.code	5820
+09_upsert_run_bundle_duckdb	280869c6-b44f-4596-a38f-f68e8af9ea0a	9 - Upsert Run Bundle (DuckDB)	n8n-nodes-base.code	16004
+10_post_run_health	4a46de80-f4bd-4162-856b-1f44504db279	10 - Post-Run Health (DuckDB)	n8n-nodes-base.code	5640

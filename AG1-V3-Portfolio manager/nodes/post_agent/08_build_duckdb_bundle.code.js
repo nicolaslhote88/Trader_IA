@@ -172,7 +172,7 @@ const bundle = {
 return [{
   json: {
     run_id,
-    db_path: normalizeDbPath(input.db_path || "/files/duckdb/ag1_v3_grok41_reasoning.duckdb"),
+    db_path: normalizeDbPath(input.db_path || "/files/duckdb/ag1_v3.duckdb"),
     bundle,
     summary: {
       decision: input.decision,

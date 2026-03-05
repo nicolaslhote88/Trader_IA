@@ -1,6 +1,6 @@
 # AG1 V3 Portfolio Manager Pack
 
-This folder contains the AG1 workflow pack rebuilt from the V3 template and exported model variants.
+This folder is the canonical AG1 workflow pack rebuilt from the maintained V3 template.
 
 ## Source of truth
 
@@ -8,7 +8,7 @@ This folder contains the AG1 workflow pack rebuilt from the V3 template and expo
 
 ## Generated export artifacts
 
-- `workflow/variants/AG1_workflow_v3__*.json` (model-specific import files)
+- `workflow/variants/AG1_workflow_v3__*.json` (model-specific workflows)
 - `workflow/nodes/*` (selected critical nodes and code)
 - `workflow/sql/portfolio_ledger_schema_v2.sql`
 - `workflow/docs/POST_AGENT_DUCKDB_LEDGER.md`
