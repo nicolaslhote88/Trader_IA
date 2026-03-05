@@ -476,22 +476,6 @@
     },
     {
       "parameters": {
-        "text": "={{ $json.output }}",
-        "schemaType": "manual",
-        "inputSchema": "{\n  \"type\": \"array\",\n  \"items\": {\n    \"type\": \"object\",\n    \"additionalProperties\": false,\n    \"required\": [\n      \"symbol\",\n      \"action\",\n      \"priority\",\n      \"confidence\",\n      \"horizonDays\",\n      \"targetWeightPct\",\n      \"targetQty\",\n      \"rationale\",\n      \"entryPlan\",\n      \"riskPlan\",\n      \"dependencies\",\n      \"nextReviewDays\"\n    ],\n    \"properties\": {\n      \"symbol\": {\n        \"type\": \"string\"\n      },\n      \"assetClass\": {\n        \"type\": [\n          \"string\",\n          \"null\"\n        ],\n        \"enum\": [\n          \"EQUITY\",\n          \"CRYPTO\",\n          \"FX\",\n          null\n        ]\n      },\n      \"symbol_internal\": {\n        \"type\": [\n          \"string\",\n          \"null\"\n        ]\n      },\n      \"symbol_yahoo\": {\n        \"type\": [\n          \"string\",\n          \"null\"\n        ]\n      },\n      \"action\": {\n        \"type\": \"string\",\n        \"enum\": [\n          \"OPEN\",\n          \"INCREASE\",\n          \"DECREASE\",\n          \"CLOSE\",\n          \"HOLD\",\n          \"WATCH\",\n          \"PROPOSE_OPEN\",\n          \"PROPOSE_CLOSE\"\n        ]\n      },\n      \"priority\": {\n        \"type\": \"integer\"\n      },\n      \"confidence\": {\n        \"type\": [\n          \"integer\",\n          \"null\"\n        ]\n      },\n      \"horizonDays\": {\n        \"type\": [\n          \"integer\",\n          \"null\"\n        ]\n      },\n      \"targetWeightPct\": {\n        \"type\": [\n          \"number\",\n          \"null\"\n        ]\n      },\n      \"targetQty\": {\n        \"type\": [\n          \"number\",\n          \"null\"\n        ]\n      },\n      \"rationale\": {\n        \"type\": \"string\"\n      },\n      \"entryPlan\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"required\": [\n          \"orderType\",\n          \"limitPrice\",\n          \"timeInForce\"\n        ],\n        \"properties\": {\n          \"orderType\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ]\n          },\n          \"limitPrice\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"timeInForce\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ]\n          }\n        }\n      },\n      \"riskPlan\": {\n        \"type\": \"object\",\n        \"additionalProperties\": false,\n        \"required\": [\n          \"stopLossPct\",\n          \"takeProfitPct\",\n          \"maxLossEUR\"\n        ],\n        \"properties\": {\n          \"stopLossPct\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"takeProfitPct\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          },\n          \"maxLossEUR\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        }\n      },\n      \"dependencies\": {\n        \"oneOf\": [\n          {\n            \"type\": \"object\",\n            \"additionalProperties\": false,\n            \"required\": [\n              \"needPrice\",\n              \"needNote\",\n              \"needNews\",\n              \"needTechnical\",\n              \"needConsensus\"\n            ],\n            \"properties\": {\n              \"needPrice\": {\n                \"type\": \"boolean\"\n              },\n              \"needNote\": {\n                \"type\": \"boolean\"\n              },\n              \"needNews\": {\n                \"type\": \"boolean\"\n              },\n              \"needTechnical\": {\n                \"type\": \"boolean\"\n              },\n              \"needConsensus\": {\n                \"type\": \"boolean\"\n              }\n            }\n          },\n          {\n            \"type\": \"array\",\n            \"items\": {\n              \"type\": \"string\"\n            }\n          }\n        ]\n      },\n      \"execution_required\": {\n        \"type\": [\n          \"boolean\",\n          \"null\"\n        ]\n      },\n      \"needs_risk_approval\": {\n        \"type\": [\n          \"boolean\",\n          \"null\"\n        ]\n      },\n      \"proposed_position\": {\n        \"type\": [\n          \"object\",\n          \"null\"\n        ],\n        \"additionalProperties\": false,\n        \"properties\": {\n          \"direction\": {\n            \"type\": [\n              \"string\",\n              \"null\"\n            ],\n            \"enum\": [\n              \"LONG\",\n              \"SHORT\",\n              \"NEUTRAL\",\n              null\n            ]\n          },\n          \"conviction\": {\n            \"type\": [\n              \"number\",\n              \"null\"\n            ]\n          }\n        }\n      },\n      \"nextReviewDays\": {\n        \"type\": \"integer\"\n      }\n    }\n  }\n}",
-        "options": {}
-      },
-      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
-      "typeVersion": 1.2,
-      "position": [
-        45968,
-        18848
-      ],
-      "id": "dfa82252-3956-413a-ba26-55a1f6b97c90",
-      "name": "Information Extractor"
-    },
-    {
-      "parameters": {
         "model": {
           "__rl": true,
           "value": "gpt-5.2-2025-12-11",
@@ -511,34 +495,6 @@
       ],
       "id": "df70f524-cc8f-4295-88d5-e1dfe9d1c43e",
       "name": "OpenAI Chat Model - GPT5.2",
-      "credentials": {
-        "openAiApi": {
-          "id": "rILpYjTayqc4jXXZ",
-          "name": "OpenAi account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "model": {
-          "__rl": true,
-          "value": "gpt-5-mini-2025-08-07",
-          "mode": "list",
-          "cachedResultName": "gpt-5-mini-2025-08-07"
-        },
-        "builtInTools": {},
-        "options": {
-          "timeout": 300000
-        }
-      },
-      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
-      "typeVersion": 1.3,
-      "position": [
-        45968,
-        19040
-      ],
-      "id": "c4c6b89f-fb02-4afd-9309-5df11e4f90d8",
-      "name": "OpenAI Chat Model3",
       "credentials": {
         "openAiApi": {
           "id": "rILpYjTayqc4jXXZ",
@@ -794,6 +750,19 @@
       ],
       "id": "c56de79b-321f-4e72-bcc5-7bfcff4af620",
       "name": "FX.00 - Prepare FX Brief Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse & Normalize Actions (AG1-V3 GPT5.2)\n// Input: $json.output (string/object/array)\n// Output: $json.actions (array) + $json.agentDecision\n\nfunction isFxSymbol(sym) {\n  const s = String(sym || '').trim().toUpperCase();\n  return s.startsWith('FX:') || s.endsWith('=X');\n}\n\nfunction stripFences(raw) {\n  let t = String(raw || '').trim();\n  t = t.replace(/^\\s*```(?:json)?\\s*/i, '');\n  t = t.replace(/\\s*```\\s*$/i, '');\n  return t.trim();\n}\n\nfunction extractJsonBlock(text) {\n  const t = String(text || '');\n  const iArr = t.indexOf('[');\n  const jArr = t.lastIndexOf(']');\n  if (iArr !== -1 && jArr !== -1 && jArr > iArr) return t.slice(iArr, jArr + 1);\n\n  const iObj = t.indexOf('{');\n  const jObj = t.lastIndexOf('}');\n  if (iObj !== -1 && jObj !== -1 && jObj > iObj) return t.slice(iObj, jObj + 1);\n\n  return '';\n}\n\nfunction toIntOrNull(v) {\n  if (v === null || v === undefined || v === '') return null;\n  const n = Number(v);\n  if (Number.isFinite(n)) return Math.trunc(n);\n  return null;\n}\n\nfunction toNumOrNull(v) {\n  if (v === null || v === undefined || v === '') return null;\n  const n = Number(v);\n  return Number.isFinite(n) ? n : null;\n}\n\nfunction normalizeDependencies(dep) {\n  const base = {\n    needPrice: false,\n    needNote: false,\n    needNews: false,\n    needTechnical: false,\n    needConsensus: false,\n  };\n\n  if (Array.isArray(dep)) {\n    const aliases = {\n      needprice: 'needPrice',\n      price: 'needPrice',\n      neednote: 'needNote',\n      note: 'needNote',\n      neednews: 'needNews',\n      news: 'needNews',\n      needtechnical: 'needTechnical',\n      technical: 'needTechnical',\n      needconsensus: 'needConsensus',\n      consensus: 'needConsensus',\n    };\n    for (const s of dep) {\n      const key = String(s || '').trim();\n      const norm = aliases[key.toLowerCase()] || key;\n      if (norm in base) base[norm] = true;\n    }\n    return base;\n  }\n\n  if (dep && typeof dep === 'object') {\n    return {\n      needPrice: Boolean(dep.needPrice ?? false),\n      needNote: Boolean(dep.needNote ?? false),\n      needNews: Boolean(dep.needNews ?? false),\n      needTechnical: Boolean(dep.needTechnical ?? false),\n      needConsensus: Boolean(dep.needConsensus ?? false),\n    };\n  }\n\n  return base;\n}\n\nfunction normalizeAssetClass(assetClass, symbol) {\n  const ac = (assetClass ?? '').toString().trim().toUpperCase();\n  if (ac === 'FOREX' || ac === 'CURRENCY') return 'FX';\n  if (ac === 'FX' || ac === 'EQUITY' || ac === 'CRYPTO') return ac;\n  return isFxSymbol(symbol) ? 'FX' : 'EQUITY';\n}\n\nfunction ensureEntryPlan(ep) {\n  const o = (ep && typeof ep === 'object') ? ep : {};\n  return {\n    orderType: o.orderType ?? null,\n    limitPrice: toNumOrNull(o.limitPrice),\n    timeInForce: o.timeInForce ?? null,\n  };\n}\n\nfunction ensureRiskPlan(rp) {\n  const o = (rp && typeof rp === 'object') ? rp : {};\n  return {\n    stopLossPct: toNumOrNull(o.stopLossPct),\n    takeProfitPct: toNumOrNull(o.takeProfitPct),\n    maxLossEUR: toNumOrNull(o.maxLossEUR),\n  };\n}\n\nfunction normalizeAction(a, idx, warnings) {\n  const inObj = (a && typeof a === 'object') ? a : {};\n  const sym = String(inObj.symbol ?? inObj.symbol_internal ?? inObj.symbol_yahoo ?? '').trim().toUpperCase();\n  if (!sym) {\n    warnings.push(`action[${idx}] skipped: missing symbol`);\n    return null;\n  }\n\n  let act = String(inObj.action ?? inObj.signal ?? '').trim().toUpperCase();\n  if (act === 'BUY') act = 'OPEN';\n  if (act === 'SELL') act = 'CLOSE';\n\n  const allowed = new Set(['OPEN','INCREASE','DECREASE','CLOSE','HOLD','WATCH','PROPOSE_OPEN','PROPOSE_CLOSE']);\n  if (!allowed.has(act)) {\n    warnings.push(`action[${idx}] invalid action '${act}' -> WATCH`);\n    act = 'WATCH';\n  }\n\n  return {\n    symbol: sym,\n    assetClass: normalizeAssetClass(inObj.assetClass, sym),\n    symbol_internal: inObj.symbol_internal ?? null,\n    symbol_yahoo: inObj.symbol_yahoo ?? null,\n    action: act,\n    priority: Number.isFinite(Number(inObj.priority)) ? Math.trunc(Number(inObj.priority)) : 3,\n    confidence: (inObj.confidence === null || inObj.confidence === undefined) ? null : toIntOrNull(inObj.confidence),\n    horizonDays: (inObj.horizonDays === null || inObj.horizonDays === undefined) ? null : toIntOrNull(inObj.horizonDays),\n    targetWeightPct: toNumOrNull(inObj.targetWeightPct),\n    targetQty: toNumOrNull(inObj.targetQty),\n    rationale: String(inObj.rationale ?? '').trim(),\n    entryPlan: ensureEntryPlan(inObj.entryPlan),\n    riskPlan: ensureRiskPlan(inObj.riskPlan),\n    dependencies: normalizeDependencies(inObj.dependencies),\n    execution_required: (inObj.execution_required === null || inObj.execution_required === undefined) ? null : Boolean(inObj.execution_required),\n    needs_risk_approval: (inObj.needs_risk_approval === null || inObj.needs_risk_approval === undefined) ? null : Boolean(inObj.needs_risk_approval),\n    proposed_position: (inObj.proposed_position && typeof inObj.proposed_position === 'object')\n      ? {\n          direction: inObj.proposed_position.direction ?? null,\n          conviction: toNumOrNull(inObj.proposed_position.conviction),\n        }\n      : null,\n    nextReviewDays: Number.isFinite(Number(inObj.nextReviewDays)) ? Math.trunc(Number(inObj.nextReviewDays)) : 3,\n  };\n}\n\nfunction parsePayload(jsonInput) {\n  const warnings = [];\n  const rawCandidates = [\n    jsonInput?.output,\n    jsonInput?.text,\n    jsonInput?.response,\n    jsonInput?.answer,\n    jsonInput?.output?.text,\n    (Array.isArray(jsonInput?.output) ? jsonInput.output?.[0]?.content?.[0]?.text : null),\n  ];\n\n  let parsedRoot = null;\n  let parseStatus = 'MISSING_INPUT';\n  let outputRawSanitized = null;\n  let outputJsonBlock = null;\n\n  const outputVal = jsonInput?.output;\n  if (Array.isArray(outputVal)) {\n    parsedRoot = outputVal;\n    parseStatus = 'OK_OUTPUT_ARRAY';\n  } else if (outputVal && typeof outputVal === 'object') {\n    parsedRoot = outputVal;\n    parseStatus = 'OK_OUTPUT_OBJECT';\n  }\n\n  if (parsedRoot === null) {\n    const raw = rawCandidates.find((x) => typeof x === 'string' && String(x).trim().length > 0) || '';\n    if (raw) {\n      outputRawSanitized = stripFences(raw);\n      outputJsonBlock = extractJsonBlock(outputRawSanitized);\n      if (outputJsonBlock) {\n        try {\n          parsedRoot = JSON.parse(outputJsonBlock);\n          parseStatus = 'OK_PARSED_TEXT';\n        } catch (e) {\n          parseStatus = 'PARSE_ERROR';\n          warnings.push(`JSON.parse failed: ${String(e?.message || e)}`);\n        }\n      } else {\n        parseStatus = 'NO_JSON_BLOCK';\n        warnings.push('No JSON delimiters found in output text');\n      }\n    }\n  }\n\n  let sourceActions = [];\n  let baseObj = {};\n\n  if (Array.isArray(parsedRoot)) {\n    sourceActions = parsedRoot;\n  } else if (parsedRoot && typeof parsedRoot === 'object') {\n    baseObj = parsedRoot;\n    if (Array.isArray(parsedRoot.actions)) {\n      sourceActions = parsedRoot.actions;\n    } else {\n      sourceActions = [parsedRoot];\n      warnings.push('Parsed object has no actions[]; treated as single action object');\n    }\n  }\n\n  const normalized = [];\n  for (let i = 0; i < sourceActions.length; i += 1) {\n    const n = normalizeAction(sourceActions[i], i, warnings);\n    if (n) normalized.push(n);\n  }\n\n  const agentDecision = {\n    ...(baseObj && typeof baseObj === 'object' && !Array.isArray(baseObj) ? baseObj : {}),\n    actions: normalized,\n    dataCaveats: Array.isArray(baseObj?.dataCaveats) ? baseObj.dataCaveats : [],\n    backfillRequests: Array.isArray(baseObj?.backfillRequests) ? baseObj.backfillRequests : [],\n    _parseStatus: parseStatus,\n    _parseWarnings: warnings,\n  };\n\n  return {\n    outputRawSanitized,\n    outputJsonBlock,\n    actions: normalized,\n    agentDecision,\n  };\n}\n\nconst parsed = parsePayload($json || {});\n\nreturn [{\n  json: {\n    ...($json || {}),\n    output_raw_sanitized: parsed.outputRawSanitized,\n    output_json_block: parsed.outputJsonBlock,\n    actions: parsed.actions,\n    agentDecision: parsed.agentDecision,\n    output: parsed.agentDecision,\n  }\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        45968,
+        18848
+      ],
+      "id": "cf141a88-7cb6-4a0f-8105-5f1500416d5f",
+      "name": "Parse & Normalize Actions"
     }
   ],
   "pinData": {},
@@ -1043,17 +1012,6 @@
         ]
       ]
     },
-    "OpenAI Chat Model3": {
-      "ai_languageModel": [
-        [
-          {
-            "node": "Information Extractor",
-            "type": "ai_languageModel",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Embeddings OpenAI2": {
       "ai_embedding": [
         [
@@ -1168,20 +1126,9 @@
       "main": [
         [
           {
-            "node": "Information Extractor",
+            "node": "Parse & Normalize Actions",
             "type": "main",
             "index": 0
-          }
-        ]
-      ]
-    },
-    "Information Extractor": {
-      "main": [
-        [
-          {
-            "node": "merge",
-            "type": "main",
-            "index": 1
           }
         ]
       ]
@@ -1198,6 +1145,17 @@
             "node": "Merge7",
             "type": "main",
             "index": 4
+          }
+        ]
+      ]
+    },
+    "Parse & Normalize Actions": {
+      "main": [
+        [
+          {
+            "node": "merge",
+            "type": "main",
+            "index": 1
           }
         ]
       ]

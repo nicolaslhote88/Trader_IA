@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -994,6 +995,10 @@ DUCKDB_CACHE_TTL_SEC = _env_int("DASHBOARD_DUCKDB_CACHE_TTL_SEC", 1800, 60)
 RUN_LOG_LIMIT = _env_int("RUN_LOG_LIMIT", 200, 20)
 HISTORY_DAYS_DEFAULT = _env_int("HISTORY_DAYS_DEFAULT", 30, 1)
 HISTORY_LIMIT_DEFAULT = _env_int("HISTORY_LIMIT_DEFAULT", 20000, 1000)
+FX_MACRO_NEWS_MAX_ROWS = _env_int("FX_MACRO_NEWS_MAX_ROWS", 2500, 200)
+FX_SYMBOL_NEWS_MAX_ROWS = _env_int("FX_SYMBOL_NEWS_MAX_ROWS", 5000, 200)
+FX_HISTORY_LOOKBACK_DAYS = _env_int("FX_HISTORY_LOOKBACK_DAYS", 320, 120)
+FX_HISTORY_MAX_WORKERS = _env_int("FX_HISTORY_MAX_WORKERS", 6, 1)
 
 
 def duckdb_file_signature(path: str) -> tuple[str, float, int]:
@@ -2303,9 +2308,8 @@ def _ag2_style_display_table(df_display: pd.DataFrame, df_source: pd.DataFrame, 
 # ============================================================
 
 
-@st.cache_data(ttl=120)
-def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int = 90) -> pd.DataFrame:
-    """Récupère l'historique OHLCV depuis yfinance-api. Retourne un DataFrame vide si indisponible."""
+def _fetch_yfinance_history_raw(symbol: str, interval: str = "1d", lookback_days: int = 90) -> pd.DataFrame:
+    """Récupère l'historique OHLCV depuis yfinance-api (sans cache Streamlit)."""
     try:
         resp = requests.get(
             f"{YFINANCE_API_URL}/history",
@@ -2325,6 +2329,12 @@ def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int
         return df
     except Exception:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=120)
+def fetch_yfinance_history(symbol: str, interval: str = "1d", lookback_days: int = 90) -> pd.DataFrame:
+    """Récupère l'historique OHLCV depuis yfinance-api. Retourne un DataFrame vide si indisponible."""
+    return _fetch_yfinance_history_raw(symbol=symbol, interval=interval, lookback_days=lookback_days)
 
 
 def _benchmark_lookback_days(period_key: str, min_start_ts: object = None) -> int:
@@ -2816,6 +2826,55 @@ def _fx_compute_history_metrics(df_hist: pd.DataFrame) -> dict[str, float]:
     return out
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _fetch_fx_history_metrics_batch(
+    pairs: tuple[str, ...],
+    lookback_days: int = FX_HISTORY_LOOKBACK_DAYS,
+) -> dict[str, dict[str, float]]:
+    clean_pairs: list[str] = []
+    seen: set[str] = set()
+    for raw in pairs or ():
+        s = str(raw or "").strip().upper()
+        s = s.replace("FX:", "").replace(FX_SUFFIX, "")
+        s = re.sub(r"[^A-Z]", "", s)[:6]
+        if len(s) != 6 or s in seen:
+            continue
+        seen.add(s)
+        clean_pairs.append(s)
+
+    if not clean_pairs:
+        return {}
+
+    fallback = _fx_compute_history_metrics(pd.DataFrame())
+    out: dict[str, dict[str, float]] = {}
+
+    def _load_one(pair: str) -> dict[str, float]:
+        hist = _fetch_yfinance_history_raw(f"{pair}=X", interval="1d", lookback_days=int(lookback_days))
+        return _fx_compute_history_metrics(hist)
+
+    max_workers = max(1, min(int(FX_HISTORY_MAX_WORKERS), len(clean_pairs)))
+    if max_workers == 1:
+        for pair in clean_pairs:
+            try:
+                out[pair] = _load_one(pair)
+            except Exception:
+                out[pair] = dict(fallback)
+        return out
+
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        fut_map = {pool.submit(_load_one, pair): pair for pair in clean_pairs}
+        for fut in as_completed(fut_map):
+            pair = fut_map[fut]
+            try:
+                out[pair] = fut.result()
+            except Exception:
+                out[pair] = dict(fallback)
+
+    for pair in clean_pairs:
+        out.setdefault(pair, dict(fallback))
+    return out
+
+
 def _fx_extract_currencies_from_text(text: object) -> set[str]:
     raw = str(text or "").upper()
     if not raw:
@@ -2868,7 +2927,7 @@ def _fx_currency_strength_df(df_pairs: pd.DataFrame, lookback_label: str = "5D")
     return out.sort_values("strength_score", ascending=False).reset_index(drop=True)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=300, show_spinner=False)
 def load_fx_dataset(
     df_view_source: pd.DataFrame,
     df_tech_latest: pd.DataFrame,
@@ -2915,6 +2974,22 @@ def load_fx_dataset(
     if not pairs:
         return out
 
+    valid_pairs = sorted(
+        {
+            str(pair).strip().upper()
+            for pair in pairs
+            if str(pair).strip()
+            and len(str(pair).strip()) == 6
+            and str(pair).strip()[:3] in FX_CURRENCY_CODES
+            and str(pair).strip()[3:6] in FX_CURRENCY_CODES
+        }
+    )
+    if not valid_pairs:
+        return out
+
+    relevant_ccys = {pair[:3] for pair in valid_pairs} | {pair[3:6] for pair in valid_pairs}
+    hist_metrics_map = _fetch_fx_history_metrics_batch(tuple(valid_pairs), lookback_days=FX_HISTORY_LOOKBACK_DAYS)
+
     now_utc = pd.Timestamp.now(tz="UTC")
     cut_7d = now_utc - pd.Timedelta(days=7)
     event_risk_map: dict[str, float] = {}
@@ -2923,6 +2998,8 @@ def load_fx_dataset(
     macro_news = _normalize_macro_news_df(df_macro_news)
     if not macro_news.empty:
         macro_news = macro_news[macro_news.get("publishedat", pd.Series(pd.NaT, index=macro_news.index)) >= cut_7d].copy()
+        if len(macro_news) > FX_MACRO_NEWS_MAX_ROWS:
+            macro_news = macro_news.head(FX_MACRO_NEWS_MAX_ROWS).copy()
         for _, nrow in macro_news.iterrows():
             impact = safe_float(nrow.get("impactscore", 0.0))
             txt = " ".join(
@@ -2937,6 +3014,8 @@ def load_fx_dataset(
                 ]
             )
             ccys = _fx_extract_currencies_from_text(txt)
+            if relevant_ccys:
+                ccys = ccys.intersection(relevant_ccys)
             for ccy in ccys:
                 event_risk_map[ccy] = event_risk_map.get(ccy, 0.0) + abs(impact)
                 macro_bias_map[ccy] = macro_bias_map.get(ccy, 0.0) + impact
@@ -2944,6 +3023,8 @@ def load_fx_dataset(
     symbol_news = _normalize_symbol_news_df(df_symbol_news)
     if not symbol_news.empty:
         symbol_news = symbol_news[symbol_news.get("publishedat", pd.Series(pd.NaT, index=symbol_news.index)) >= cut_7d].copy()
+        if len(symbol_news) > FX_SYMBOL_NEWS_MAX_ROWS:
+            symbol_news = symbol_news.head(FX_SYMBOL_NEWS_MAX_ROWS).copy()
         for _, nrow in symbol_news.iterrows():
             impact = safe_float(nrow.get("impactscore", 0.0))
             urg = _news_urgency_to_score(nrow.get("urgency")) or 50.0
@@ -2952,10 +3033,12 @@ def load_fx_dataset(
             symbol_txt = str(nrow.get("symbol", "")).strip().upper()
             base, quote, pair_norm = parse_fx_pair(symbol_txt)
             if base and quote:
-                event_risk_map[base] = event_risk_map.get(base, 0.0) + abs(impact) * weight
-                event_risk_map[quote] = event_risk_map.get(quote, 0.0) + abs(impact) * weight
-                macro_bias_map[base] = macro_bias_map.get(base, 0.0) + impact * (conf / 100.0)
-                macro_bias_map[quote] = macro_bias_map.get(quote, 0.0) - impact * (conf / 100.0)
+                if base in relevant_ccys:
+                    event_risk_map[base] = event_risk_map.get(base, 0.0) + abs(impact) * weight
+                    macro_bias_map[base] = macro_bias_map.get(base, 0.0) + impact * (conf / 100.0)
+                if quote in relevant_ccys:
+                    event_risk_map[quote] = event_risk_map.get(quote, 0.0) + abs(impact) * weight
+                    macro_bias_map[quote] = macro_bias_map.get(quote, 0.0) - impact * (conf / 100.0)
             else:
                 txt = " ".join(
                     [
@@ -2966,6 +3049,8 @@ def load_fx_dataset(
                     ]
                 )
                 ccys = _fx_extract_currencies_from_text(txt)
+                if relevant_ccys:
+                    ccys = ccys.intersection(relevant_ccys)
                 for ccy in ccys:
                     event_risk_map[ccy] = event_risk_map.get(ccy, 0.0) + abs(impact) * weight
                     macro_bias_map[ccy] = macro_bias_map.get(ccy, 0.0) + impact * (conf / 100.0)
@@ -2981,7 +3066,7 @@ def load_fx_dataset(
         sig_by_pair = {str(r["_fx_pair"]): r for _, r in sig_fx.iterrows()}
 
     pair_rows = []
-    for pair in sorted(pairs):
+    for pair in valid_pairs:
         if not pair or len(pair) != 6:
             continue
         base, quote = pair[:3], pair[3:6]
@@ -3036,8 +3121,7 @@ def load_fx_dataset(
         hist_metrics = {}
         needs_hist = any(pd.isna(x) for x in [ret_1d, ret_5d, ret_20d, atr_pct, close, sma50, sma200])
         if needs_hist:
-            hist = fetch_yfinance_history(pair + "=X", interval="1d", lookback_days=320)
-            hist_metrics = _fx_compute_history_metrics(hist)
+            hist_metrics = hist_metrics_map.get(pair, {})
             if pd.isna(ret_1d):
                 ret_1d = hist_metrics.get("ret_1d", float("nan"))
             if pd.isna(ret_5d):
