@@ -5687,6 +5687,22 @@ def _ag1_fetchdf(conn, sql: str, params: list | None = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _ag1_norm_run_id(value: object) -> str:
+    txt = str(value or "").strip()
+    if not txt:
+        return ""
+    if txt.lower() in {"nan", "none", "nat", "null"}:
+        return ""
+    return txt.upper()
+
+
+def _ag1_norm_run_id_series(series: pd.Series) -> pd.Series:
+    s = series.astype(str).str.strip()
+    invalid = s.str.lower().isin({"", "nan", "none", "nat", "null"})
+    s = s.mask(invalid, pd.NA)
+    return s.str.upper()
+
+
 def _ag1_expected_model_tokens(key: str, cfg: dict[str, str]) -> list[str]:
     token_map = {
         "chatgpt52": ["chatgpt", "gpt", "openai", "o3", "o4"],
@@ -6232,18 +6248,15 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             mtm_ts_latest = pd.NaT
             mtm_run_id_latest = ""
             mtm_source_run_id_latest = ""
-            source_series_non_empty = False
+            if "run_id" in mtm_scan.columns:
+                mtm_scan["__run_id_norm"] = _ag1_norm_run_id_series(mtm_scan["run_id"])
             if "ag1_source_run_id" in mtm_scan.columns:
-                source_series = (
-                    mtm_scan["ag1_source_run_id"]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .replace("", pd.NA)
-                    .dropna()
-                )
-                source_series_non_empty = not source_series.empty
+                mtm_scan["__ag1_source_run_id_norm"] = _ag1_norm_run_id_series(mtm_scan["ag1_source_run_id"])
+            source_series_non_empty = "__ag1_source_run_id_norm" in mtm_scan.columns and bool(
+                mtm_scan["__ag1_source_run_id_norm"].notna().any()
+            )
             mtm_match_col = "ag1_source_run_id" if source_series_non_empty else "run_id"
+            mtm_match_norm_col = "__ag1_source_run_id_norm" if source_series_non_empty else "__run_id_norm"
             diagnostics["mtm_match_col"] = mtm_match_col
             if "updated_at" in mtm_scan.columns:
                 mtm_ts = pd.to_datetime(mtm_scan["updated_at"], errors="coerce", utc=True)
@@ -6255,60 +6268,50 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                         tmp = mtm_scan.copy()
                         tmp["__updated_at_utc"] = mtm_ts
                         tmp = tmp.sort_values("__updated_at_utc", ascending=False, na_position="last")
-                        mtm_run_series = (
-                            tmp["run_id"]
-                            .dropna()
-                            .astype(str)
-                            .str.strip()
-                            .replace("", pd.NA)
-                            .dropna()
-                        )
+                        mtm_run_series = tmp.get("__run_id_norm", pd.Series([], dtype="object")).dropna()
                         if not mtm_run_series.empty:
                             mtm_run_id_latest = str(mtm_run_series.iloc[0])
-                        if mtm_match_col in tmp.columns:
-                            mtm_source_run_series = (
-                                tmp[mtm_match_col]
-                                .dropna()
-                                .astype(str)
-                                .str.strip()
-                                .replace("", pd.NA)
-                                .dropna()
-                            )
+                        if "__ag1_source_run_id_norm" in tmp.columns:
+                            mtm_source_run_series = tmp["__ag1_source_run_id_norm"].dropna()
                             if not mtm_source_run_series.empty:
                                 mtm_source_run_id_latest = str(mtm_source_run_series.iloc[0])
-            if "run_id" in mtm_scan.columns:
-                mtm_run_ids = (
-                    mtm_scan["run_id"]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .replace("", pd.NA)
-                    .dropna()
-                )
+            if "__run_id_norm" in mtm_scan.columns:
+                mtm_run_ids = mtm_scan["__run_id_norm"].dropna()
                 if not mtm_run_ids.empty:
                     diagnostics["mtm_run_id"] = mtm_run_id_latest or str(mtm_run_ids.iloc[0])
-            if mtm_match_col in mtm_scan.columns:
-                mtm_source_ids = (
-                    mtm_scan[mtm_match_col]
-                    .dropna()
-                    .astype(str)
-                    .str.strip()
-                    .replace("", pd.NA)
-                    .dropna()
-                )
+            if "__ag1_source_run_id_norm" in mtm_scan.columns:
+                mtm_source_ids = mtm_scan["__ag1_source_run_id_norm"].dropna()
                 if not mtm_source_ids.empty:
                     diagnostics["mtm_source_run_id"] = mtm_source_run_id_latest or str(mtm_source_ids.iloc[0])
-                ledger_run_id = str(diagnostics.get("ledger_run_id") or "").strip()
-                if ledger_run_id:
-                    mtm_same_run = mtm_scan[mtm_scan[mtm_match_col].astype(str).str.strip() == ledger_run_id]
+            ledger_run_id = _ag1_norm_run_id(diagnostics.get("ledger_run_id"))
+            if ledger_run_id:
+                match_candidates: list[tuple[str, str]] = []
+                if "__ag1_source_run_id_norm" in mtm_scan.columns:
+                    match_candidates.append(("ag1_source_run_id", "__ag1_source_run_id_norm"))
+                if "__run_id_norm" in mtm_scan.columns:
+                    match_candidates.append(("run_id", "__run_id_norm"))
+
+                selected_match: tuple[str, str] | None = None
+                for raw_col, norm_col in match_candidates:
+                    has_match = bool(mtm_scan[norm_col].eq(ledger_run_id).fillna(False).any())
+                    if has_match:
+                        selected_match = (raw_col, norm_col)
+                        break
+
+                if selected_match is not None:
+                    mtm_match_col, mtm_match_norm_col = selected_match
+                    diagnostics["mtm_match_col"] = mtm_match_col
+                    mtm_same_run = mtm_scan[mtm_scan[mtm_match_norm_col].eq(ledger_run_id)]
                     if mtm_same_run.empty:
                         compare_mtm_with_ledger = False
                         diagnostics["mtm_is_stale"] = True
                         diagnostics["mtm_reason"] = "run_id_mismatch"
                     else:
                         mtm_scan = mtm_same_run
-                        if not diagnostics.get("mtm_source_run_id"):
-                            diagnostics["mtm_source_run_id"] = ledger_run_id
+                elif match_candidates:
+                    compare_mtm_with_ledger = False
+                    diagnostics["mtm_is_stale"] = True
+                    diagnostics["mtm_reason"] = "run_id_mismatch"
 
             if "symbol" in mtm_scan.columns:
                 ser = mtm_scan["symbol"].astype(str).str.strip().str.upper()
