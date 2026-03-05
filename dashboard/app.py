@@ -4639,9 +4639,28 @@ def render_macro_overview(df_macro: pd.DataFrame, df_macro_runs: pd.DataFrame, d
                 )
                 agg["dir"] = agg.apply(lambda r: "Bullish" if r["bull"] > r["bear"] else ("Bearish" if r["bear"] > r["bull"] else "Neutral"), axis=1)
                 agg = agg.sort_values("theme_score", ascending=False).head(8).sort_values("theme_score", ascending=True)
+                show_legend = agg["dir"].nunique() > 1
                 fig_th = px.bar(agg, x="theme_score", y="theme", orientation="h", color="dir", color_discrete_map={"Bullish": "#22c55e", "Bearish": "#ef4444", "Neutral": "#9ca3af"}, text="theme_score")
-                fig_th.update_traces(texttemplate="%{text:.0f}", textposition="outside")
-                fig_th.update_layout(height=260, margin=dict(l=10, r=10, t=10, b=10), paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", xaxis=dict(gridcolor="rgba(128,128,128,0.15)"), yaxis=dict(title=None), legend=dict(orientation="h", y=1.08, x=0))
+                fig_th.update_traces(texttemplate="%{text:.0f}", textposition="outside", cliponaxis=False)
+                fig_th.update_layout(
+                    height=260,
+                    margin=dict(l=10, r=10, t=64, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
+                    yaxis=dict(title=None, automargin=True),
+                    showlegend=show_legend,
+                    legend=dict(
+                        title=None,
+                        orientation="h",
+                        yanchor="bottom",
+                        y=1.12,
+                        xanchor="left",
+                        x=0.0,
+                        bgcolor="rgba(0,0,0,0)",
+                    ),
+                )
+                fig_th.update_layout(legend_title_text=None)
                 st.plotly_chart(fig_th, use_container_width=True, config={"displayModeBar": False})
     with c3:
         with st.container(border=True):
