@@ -2602,6 +2602,551 @@ def fetch_yfinance_calendar_snapshot(symbol: str) -> dict:
         return out
 
 
+FX_SUFFIX = "=X"
+FX_CURRENCY_CODES = {
+    "USD",
+    "EUR",
+    "JPY",
+    "GBP",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+    "SEK",
+    "NOK",
+    "DKK",
+    "CNH",
+    "CNY",
+    "HKD",
+    "SGD",
+    "MXN",
+    "ZAR",
+    "TRY",
+    "PLN",
+    "CZK",
+    "HUF",
+    "ILS",
+    "RUB",
+    "BRL",
+    "INR",
+    "KRW",
+}
+FX_CURRENCY_NAME_MAP = {
+    "DOLLAR": "USD",
+    "GREENBACK": "USD",
+    "EURO": "EUR",
+    "YEN": "JPY",
+    "STERLING": "GBP",
+    "POUND": "GBP",
+    "FRANC": "CHF",
+    "LOONIE": "CAD",
+    "AUSSIE": "AUD",
+    "KIWI": "NZD",
+}
+
+
+def is_fx_symbol(symbol: str, asset_class: str | None = None) -> bool:
+    s = str(symbol or "").strip().upper()
+    ac = str(asset_class or "").strip().upper()
+    if ac in {"CURRENCY", "FX", "FOREX"}:
+        return True
+    if s.startswith("FX:"):
+        return True
+    if s.endswith(FX_SUFFIX):
+        return True
+
+    _, _, norm = parse_fx_pair(s)
+    if len(norm) == 6:
+        base, quote = norm[:3], norm[3:6]
+        if base in FX_CURRENCY_CODES and quote in FX_CURRENCY_CODES:
+            return True
+    return False
+
+
+def parse_fx_pair(symbol: str) -> tuple[str | None, str | None, str]:
+    s = str(symbol or "").strip().upper()
+    if s.startswith("FX:"):
+        s = s[3:]
+    if s.endswith(FX_SUFFIX):
+        s = s[:-2]
+    s = re.sub(r"[^A-Z]", "", s)
+
+    if len(s) >= 6:
+        pair = s[:6]
+        base, quote = pair[:3], pair[3:6]
+        if base in FX_CURRENCY_CODES and quote in FX_CURRENCY_CODES:
+            return base, quote, pair
+        return None, None, pair
+    return None, None, s
+
+
+def _fx_mask(df: pd.DataFrame, symbol_col: str = "symbol", asset_col: str | None = None) -> pd.Series:
+    if df is None:
+        return pd.Series([], dtype=bool)
+    if df.empty:
+        return pd.Series(False, index=df.index)
+    if symbol_col not in df.columns:
+        return pd.Series(False, index=df.index)
+
+    sym = df[symbol_col].fillna("").astype(str).str.strip().str.upper()
+    if asset_col is None or asset_col not in df.columns:
+        asset_col = _first_existing_column(df, ["assetclass", "asset_class", "asset"])
+    if asset_col and asset_col in df.columns:
+        ac = df[asset_col].fillna("").astype(str).str.strip().str.upper()
+    else:
+        ac = pd.Series("", index=df.index, dtype=object)
+
+    cond_asset = ac.isin({"CURRENCY", "FX", "FOREX"})
+    cond_prefix = sym.str.startswith("FX:")
+    cond_suffix = sym.str.endswith(FX_SUFFIX)
+
+    stripped = (
+        sym.str.replace(r"^FX:", "", regex=True)
+        .str.replace(r"=X$", "", regex=True)
+        .str.replace(r"[^A-Z]", "", regex=True)
+    )
+    base = stripped.str.slice(0, 3)
+    quote = stripped.str.slice(3, 6)
+    cond_pair = stripped.str.len().eq(6) & base.isin(FX_CURRENCY_CODES) & quote.isin(FX_CURRENCY_CODES)
+
+    return (cond_asset | cond_prefix | cond_suffix | cond_pair).fillna(False)
+
+
+def _fx_prepare_symbol_frame(
+    df: pd.DataFrame,
+    symbol_col: str = "symbol",
+    asset_col: str | None = None,
+) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    wk = normalize_cols(df.copy())
+    if symbol_col not in wk.columns:
+        return pd.DataFrame()
+    if asset_col is None or asset_col not in wk.columns:
+        asset_col = _first_existing_column(wk, ["assetclass", "asset_class", "asset"])
+    if asset_col is None:
+        wk["assetclass"] = ""
+        asset_col = "assetclass"
+
+    wk[symbol_col] = wk[symbol_col].fillna("").astype(str).str.strip().str.upper()
+    wk[asset_col] = wk[asset_col].fillna("").astype(str).str.strip().str.upper()
+    wk = wk[wk[symbol_col] != ""].copy()
+    if wk.empty:
+        return pd.DataFrame()
+
+    mask = _fx_mask(wk, symbol_col=symbol_col, asset_col=asset_col)
+    wk = wk[mask].copy()
+    if wk.empty:
+        return pd.DataFrame()
+
+    wk["_fx_symbol_raw"] = wk[symbol_col].astype(str).str.strip().str.upper()
+    wk["_fx_pair"] = (
+        wk["_fx_symbol_raw"]
+        .str.replace(r"^FX:", "", regex=True)
+        .str.replace(r"=X$", "", regex=True)
+        .str.replace(r"[^A-Z]", "", regex=True)
+        .str.slice(0, 6)
+    )
+    wk["_fx_base"] = wk["_fx_pair"].str.slice(0, 3)
+    wk["_fx_quote"] = wk["_fx_pair"].str.slice(3, 6)
+    wk = wk[wk["_fx_pair"].str.len().eq(6)].copy()
+    wk = wk[wk["_fx_base"].isin(FX_CURRENCY_CODES) & wk["_fx_quote"].isin(FX_CURRENCY_CODES)].copy()
+    return wk
+
+
+def _fx_compute_history_metrics(df_hist: pd.DataFrame) -> dict[str, float]:
+    out = {
+        "close": float("nan"),
+        "ret_1d": float("nan"),
+        "ret_5d": float("nan"),
+        "ret_20d": float("nan"),
+        "atr_pct": float("nan"),
+        "sma50": float("nan"),
+        "sma200": float("nan"),
+        "sma50_slope_5d_pct": float("nan"),
+    }
+    if df_hist is None or df_hist.empty:
+        return out
+    if "close" not in df_hist.columns:
+        return out
+
+    wk = df_hist.copy()
+    wk["close"] = pd.to_numeric(wk["close"], errors="coerce")
+    for c in ["high", "low"]:
+        if c in wk.columns:
+            wk[c] = pd.to_numeric(wk[c], errors="coerce")
+    wk = wk.dropna(subset=["close"])
+    if "time" in wk.columns:
+        wk = wk.sort_values("time")
+    if wk.empty:
+        return out
+
+    close = wk["close"]
+    out["close"] = float(close.iloc[-1])
+    for n, key in [(1, "ret_1d"), (5, "ret_5d"), (20, "ret_20d")]:
+        if len(close) > n and float(close.iloc[-1 - n]) != 0:
+            out[key] = ((float(close.iloc[-1]) / float(close.iloc[-1 - n])) - 1.0) * 100.0
+
+    sma50 = close.rolling(50).mean()
+    sma200 = close.rolling(200).mean()
+    if pd.notna(sma50.iloc[-1]):
+        out["sma50"] = float(sma50.iloc[-1])
+    if pd.notna(sma200.iloc[-1]):
+        out["sma200"] = float(sma200.iloc[-1])
+    if len(sma50.dropna()) > 6:
+        prev = float(sma50.dropna().iloc[-6])
+        cur = float(sma50.dropna().iloc[-1])
+        if prev != 0:
+            out["sma50_slope_5d_pct"] = ((cur / prev) - 1.0) * 100.0
+
+    if "high" in wk.columns and "low" in wk.columns:
+        prev_close = close.shift(1)
+        tr = pd.concat(
+            [
+                (wk["high"] - wk["low"]).abs(),
+                (wk["high"] - prev_close).abs(),
+                (wk["low"] - prev_close).abs(),
+            ],
+            axis=1,
+        ).max(axis=1)
+        atr14 = tr.rolling(14).mean()
+        if pd.notna(atr14.iloc[-1]) and float(close.iloc[-1]) != 0:
+            out["atr_pct"] = float(atr14.iloc[-1] / close.iloc[-1] * 100.0)
+
+    return out
+
+
+def _fx_extract_currencies_from_text(text: object) -> set[str]:
+    raw = str(text or "").upper()
+    if not raw:
+        return set()
+    found: set[str] = set()
+    for ccy in FX_CURRENCY_CODES:
+        if re.search(rf"\\b{re.escape(ccy)}\\b", raw):
+            found.add(ccy)
+    for token, ccy in FX_CURRENCY_NAME_MAP.items():
+        if re.search(rf"\\b{re.escape(token)}\\b", raw):
+            found.add(ccy)
+    return found
+
+
+def _fx_macro_bias_label(score: float) -> str:
+    s = safe_float(score)
+    if s >= 2.0:
+        return "Bullish"
+    if s <= -2.0:
+        return "Bearish"
+    return "Neutral"
+
+
+def _fx_currency_strength_df(df_pairs: pd.DataFrame, lookback_label: str = "5D") -> pd.DataFrame:
+    if df_pairs is None or df_pairs.empty:
+        return pd.DataFrame(columns=["currency", "strength_score", "pair_count"])
+    col_map = {"1D": "ret_1d", "5D": "ret_5d", "20D": "ret_20d"}
+    ret_col = col_map.get(str(lookback_label).upper(), "ret_5d")
+    if ret_col not in df_pairs.columns:
+        return pd.DataFrame(columns=["currency", "strength_score", "pair_count"])
+
+    agg: dict[str, list[float]] = {}
+    for _, row in df_pairs.iterrows():
+        base = str(row.get("base", "")).strip().upper()
+        quote = str(row.get("quote", "")).strip().upper()
+        ret = pd.to_numeric(pd.Series([row.get(ret_col, pd.NA)]), errors="coerce").iloc[0]
+        if base not in FX_CURRENCY_CODES or quote not in FX_CURRENCY_CODES or pd.isna(ret):
+            continue
+        agg.setdefault(base, []).append(float(ret))
+        agg.setdefault(quote, []).append(float(-ret))
+
+    rows = []
+    for ccy, vals in agg.items():
+        if not vals:
+            continue
+        rows.append({"currency": ccy, "strength_score": float(sum(vals) / len(vals)), "pair_count": int(len(vals))})
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(columns=["currency", "strength_score", "pair_count"])
+    return out.sort_values("strength_score", ascending=False).reset_index(drop=True)
+
+
+@st.cache_data(ttl=300)
+def load_fx_dataset(
+    df_view_source: pd.DataFrame,
+    df_tech_latest: pd.DataFrame,
+    df_ag1_signals: pd.DataFrame,
+    df_macro_news: pd.DataFrame,
+    df_symbol_news: pd.DataFrame,
+) -> dict[str, object]:
+    out = {
+        "df_pairs": pd.DataFrame(),
+        "df_currency_strength_5d": pd.DataFrame(),
+        "currency_event_risk": {},
+        "currency_macro_bias": {},
+    }
+
+    view_fx = _fx_prepare_symbol_frame(df_view_source, symbol_col="symbol")
+    tech_fx = _fx_prepare_symbol_frame(df_tech_latest, symbol_col="symbol")
+    sig_fx = _fx_prepare_symbol_frame(df_ag1_signals, symbol_col="symbol")
+
+    if sig_fx is not None and not sig_fx.empty:
+        ts_col = _first_existing_column(sig_fx, ["timestamp", "ts", "updated_at", "created_at"])
+        if ts_col:
+            sig_fx["__ts"] = pd.to_datetime(sig_fx[ts_col], errors="coerce", utc=True)
+            sig_fx = sig_fx.sort_values("__ts", ascending=False, na_position="last")
+        sig_fx = sig_fx.drop_duplicates(subset=["_fx_pair"], keep="first")
+
+    if view_fx is not None and not view_fx.empty:
+        v_ts_col = _first_existing_column(view_fx, ["last_tech_date", "updated_at", "workflow_date", "created_at"])
+        if v_ts_col:
+            view_fx["__vts"] = pd.to_datetime(view_fx[v_ts_col], errors="coerce", utc=True)
+            view_fx = view_fx.sort_values("__vts", ascending=False, na_position="last")
+        view_fx = view_fx.drop_duplicates(subset=["_fx_pair"], keep="first")
+
+    if tech_fx is not None and not tech_fx.empty:
+        t_ts_col = _first_existing_column(tech_fx, ["workflow_date", "updated_at", "created_at", "d1_date"])
+        if t_ts_col:
+            tech_fx["__tts"] = pd.to_datetime(tech_fx[t_ts_col], errors="coerce", utc=True)
+            tech_fx = tech_fx.sort_values("__tts", ascending=False, na_position="last")
+        tech_fx = tech_fx.drop_duplicates(subset=["_fx_pair"], keep="first")
+
+    pairs = set()
+    for df in [view_fx, tech_fx, sig_fx]:
+        if df is not None and not df.empty and "_fx_pair" in df.columns:
+            pairs.update(df["_fx_pair"].dropna().astype(str).tolist())
+    if not pairs:
+        return out
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    cut_7d = now_utc - pd.Timedelta(days=7)
+    event_risk_map: dict[str, float] = {}
+    macro_bias_map: dict[str, float] = {}
+
+    macro_news = _normalize_macro_news_df(df_macro_news)
+    if not macro_news.empty:
+        macro_news = macro_news[macro_news.get("publishedat", pd.Series(pd.NaT, index=macro_news.index)) >= cut_7d].copy()
+        for _, nrow in macro_news.iterrows():
+            impact = safe_float(nrow.get("impactscore", 0.0))
+            txt = " ".join(
+                [
+                    str(nrow.get("theme", "")),
+                    str(nrow.get("title", "")),
+                    str(nrow.get("snippet", "")),
+                    str(nrow.get("notes", "")),
+                    str(nrow.get("winners", "")),
+                    str(nrow.get("losers", "")),
+                    str(nrow.get("regime", "")),
+                ]
+            )
+            ccys = _fx_extract_currencies_from_text(txt)
+            for ccy in ccys:
+                event_risk_map[ccy] = event_risk_map.get(ccy, 0.0) + abs(impact)
+                macro_bias_map[ccy] = macro_bias_map.get(ccy, 0.0) + impact
+
+    symbol_news = _normalize_symbol_news_df(df_symbol_news)
+    if not symbol_news.empty:
+        symbol_news = symbol_news[symbol_news.get("publishedat", pd.Series(pd.NaT, index=symbol_news.index)) >= cut_7d].copy()
+        for _, nrow in symbol_news.iterrows():
+            impact = safe_float(nrow.get("impactscore", 0.0))
+            urg = _news_urgency_to_score(nrow.get("urgency")) or 50.0
+            conf = _news_confidence_to_score(nrow.get("confidence")) or 60.0
+            weight = (0.5 + (urg / 100.0)) * (conf / 100.0)
+            symbol_txt = str(nrow.get("symbol", "")).strip().upper()
+            base, quote, pair_norm = parse_fx_pair(symbol_txt)
+            if base and quote:
+                event_risk_map[base] = event_risk_map.get(base, 0.0) + abs(impact) * weight
+                event_risk_map[quote] = event_risk_map.get(quote, 0.0) + abs(impact) * weight
+                macro_bias_map[base] = macro_bias_map.get(base, 0.0) + impact * (conf / 100.0)
+                macro_bias_map[quote] = macro_bias_map.get(quote, 0.0) - impact * (conf / 100.0)
+            else:
+                txt = " ".join(
+                    [
+                        str(nrow.get("title", "")),
+                        str(nrow.get("summary", "")),
+                        str(nrow.get("snippet", "")),
+                        str(nrow.get("companyname", "")),
+                    ]
+                )
+                ccys = _fx_extract_currencies_from_text(txt)
+                for ccy in ccys:
+                    event_risk_map[ccy] = event_risk_map.get(ccy, 0.0) + abs(impact) * weight
+                    macro_bias_map[ccy] = macro_bias_map.get(ccy, 0.0) + impact * (conf / 100.0)
+
+    view_by_pair = {}
+    if view_fx is not None and not view_fx.empty:
+        view_by_pair = {str(r["_fx_pair"]): r for _, r in view_fx.iterrows()}
+    tech_by_pair = {}
+    if tech_fx is not None and not tech_fx.empty:
+        tech_by_pair = {str(r["_fx_pair"]): r for _, r in tech_fx.iterrows()}
+    sig_by_pair = {}
+    if sig_fx is not None and not sig_fx.empty:
+        sig_by_pair = {str(r["_fx_pair"]): r for _, r in sig_fx.iterrows()}
+
+    pair_rows = []
+    for pair in sorted(pairs):
+        if not pair or len(pair) != 6:
+            continue
+        base, quote = pair[:3], pair[3:6]
+        if base not in FX_CURRENCY_CODES or quote not in FX_CURRENCY_CODES:
+            continue
+
+        v = view_by_pair.get(pair)
+        t = tech_by_pair.get(pair)
+        s = sig_by_pair.get(pair)
+
+        symbol_display = pair + "=X"
+        for row in [v, t, s]:
+            if row is not None:
+                candidate = str(row.get("_fx_symbol_raw", "")).strip().upper()
+                if candidate:
+                    symbol_display = candidate
+                    break
+
+        def _pick_num(candidates: list[str], default: float = float("nan")) -> float:
+            for row in [v, t]:
+                if row is None:
+                    continue
+                for col in candidates:
+                    if col in row.index:
+                        n = pd.to_numeric(pd.Series([row.get(col, pd.NA)]), errors="coerce").iloc[0]
+                        if pd.notna(n):
+                            return float(n)
+            return float(default)
+
+        d1_action = ""
+        h1_action = ""
+        for row in [v, t]:
+            if row is None:
+                continue
+            if not d1_action:
+                d1_action = str(row.get("d1_action", row.get("action_d1", row.get("tech_action", ""))) or "").strip().upper()
+            if not h1_action:
+                h1_action = str(row.get("h1_action", row.get("action_h1", "")) or "").strip().upper()
+
+        ret_1d = _pick_num(["ret_1d", "return_1d", "perf_1d", "chg_1d"])
+        ret_5d = _pick_num(["ret_5d", "return_5d", "perf_5d", "chg_5d"])
+        ret_20d = _pick_num(["ret_20d", "return_20d", "perf_20d", "chg_20d"])
+        atr_pct = _pick_num(["d1_atr_pct", "atr_pct_d1", "atr_pct"])
+        adx = _pick_num(["d1_adx", "adx_d1", "adx"])
+        rsi = _pick_num(["d1_rsi14", "d1_rsi", "rsi_d1", "rsi"])
+        close = _pick_num(["regularmarketprice", "last_close", "d1_last_close", "close"])
+        sma50 = _pick_num(["d1_sma50", "sma50_d1", "sma50"])
+        sma200 = _pick_num(["d1_sma200", "sma200_d1", "sma200"])
+        support = _pick_num(["d1_support", "support"])
+        resistance = _pick_num(["d1_resistance", "resistance"])
+
+        hist_metrics = {}
+        needs_hist = any(pd.isna(x) for x in [ret_1d, ret_5d, ret_20d, atr_pct, close, sma50, sma200])
+        if needs_hist:
+            hist = fetch_yfinance_history(pair + "=X", interval="1d", lookback_days=320)
+            hist_metrics = _fx_compute_history_metrics(hist)
+            if pd.isna(ret_1d):
+                ret_1d = hist_metrics.get("ret_1d", float("nan"))
+            if pd.isna(ret_5d):
+                ret_5d = hist_metrics.get("ret_5d", float("nan"))
+            if pd.isna(ret_20d):
+                ret_20d = hist_metrics.get("ret_20d", float("nan"))
+            if pd.isna(atr_pct):
+                atr_pct = hist_metrics.get("atr_pct", float("nan"))
+            if pd.isna(close):
+                close = hist_metrics.get("close", float("nan"))
+            if pd.isna(sma50):
+                sma50 = hist_metrics.get("sma50", float("nan"))
+            if pd.isna(sma200):
+                sma200 = hist_metrics.get("sma200", float("nan"))
+
+        trend_strength = adx
+        if pd.isna(trend_strength):
+            slope = hist_metrics.get("sma50_slope_5d_pct", float("nan"))
+            if pd.notna(pd.to_numeric(pd.Series([slope]), errors="coerce").iloc[0]):
+                trend_strength = max(0.0, min(100.0, abs(float(slope)) * 35.0))
+        if pd.isna(trend_strength):
+            trend_strength = 0.0
+
+        trend_regime = "RANGE"
+        if pd.notna(close) and pd.notna(sma50) and pd.notna(sma200):
+            if close > sma50 > sma200:
+                trend_regime = "TREND_UP"
+            elif close < sma50 < sma200:
+                trend_regime = "TREND_DOWN"
+        elif float(trend_strength) >= 25.0:
+            trend_regime = "TREND"
+
+        macro_bias_score = safe_float(macro_bias_map.get(base, 0.0) - macro_bias_map.get(quote, 0.0))
+        macro_bias_label = _fx_macro_bias_label(macro_bias_score)
+        event_risk = safe_float(event_risk_map.get(base, 0.0) + event_risk_map.get(quote, 0.0))
+
+        action = str(s.get("signal", s.get("action", "WATCH")) if s is not None else "WATCH").strip().upper()
+        confidence = pd.to_numeric(pd.Series([s.get("confidence", pd.NA) if s is not None else pd.NA]), errors="coerce").iloc[0]
+        horizon = str(s.get("horizon", "") if s is not None else "").strip()
+        run_id = str(s.get("run_id", "") if s is not None else "").strip()
+        entry_zone = str(s.get("entry_zone", "") if s is not None else "").strip()
+        stop_loss = pd.to_numeric(pd.Series([s.get("stop_loss", pd.NA) if s is not None else pd.NA]), errors="coerce").iloc[0]
+        take_profit = pd.to_numeric(pd.Series([s.get("take_profit", pd.NA) if s is not None else pd.NA]), errors="coerce").iloc[0]
+        rationale = str(s.get("rationale", "") if s is not None else "").strip()
+
+        risk_budget_pct = _pick_num(["size_reco_pct", "sizing_reco_pct", "sizing_proxy_pct"], default=float("nan"))
+        risk_pct = _pick_num(["risk_pct", "risk_pct_raw"], default=float("nan"))
+        stop_distance_atr = float("nan")
+        if pd.notna(risk_pct) and pd.notna(atr_pct) and float(atr_pct) > 0:
+            stop_distance_atr = float(risk_pct) / float(atr_pct)
+        sizing_proxy = float("nan")
+        if pd.notna(risk_budget_pct) and pd.notna(stop_distance_atr) and stop_distance_atr > 0:
+            sizing_proxy = float(risk_budget_pct) / float(stop_distance_atr)
+
+        pair_rows.append(
+            {
+                "pair": pair,
+                "symbol": symbol_display,
+                "base": base,
+                "quote": quote,
+                "last_decision_action": action or "WATCH",
+                "last_decision_confidence": float(confidence) if pd.notna(confidence) else pd.NA,
+                "last_decision_horizon": horizon or "N/A",
+                "last_decision_run_id": run_id or "",
+                "entry_zone": entry_zone or "N/A",
+                "stop_loss": float(stop_loss) if pd.notna(stop_loss) else pd.NA,
+                "take_profit": float(take_profit) if pd.notna(take_profit) else pd.NA,
+                "rationale": rationale or "",
+                "d1_action": d1_action or "N/A",
+                "h1_action": h1_action or "N/A",
+                "trend_strength": float(trend_strength),
+                "adx": float(trend_strength),
+                "rsi": float(rsi) if pd.notna(rsi) else pd.NA,
+                "atr_pct": float(atr_pct) if pd.notna(atr_pct) else pd.NA,
+                "ret_1d": float(ret_1d) if pd.notna(ret_1d) else pd.NA,
+                "ret_5d": float(ret_5d) if pd.notna(ret_5d) else pd.NA,
+                "ret_20d": float(ret_20d) if pd.notna(ret_20d) else pd.NA,
+                "close": float(close) if pd.notna(close) else pd.NA,
+                "sma50": float(sma50) if pd.notna(sma50) else pd.NA,
+                "sma200": float(sma200) if pd.notna(sma200) else pd.NA,
+                "support": float(support) if pd.notna(support) else pd.NA,
+                "resistance": float(resistance) if pd.notna(resistance) else pd.NA,
+                "trend_regime": trend_regime,
+                "macro_bias_score": macro_bias_score,
+                "macro_bias_label": macro_bias_label,
+                "event_risk_score": event_risk,
+                "sizing_proxy": float(sizing_proxy) if pd.notna(sizing_proxy) else pd.NA,
+                "stop_distance_atr": float(stop_distance_atr) if pd.notna(stop_distance_atr) else pd.NA,
+                "risk_budget_pct": float(risk_budget_pct) if pd.notna(risk_budget_pct) else pd.NA,
+            }
+        )
+
+    df_pairs = pd.DataFrame(pair_rows)
+    if df_pairs.empty:
+        return out
+
+    df_pairs = df_pairs.sort_values(
+        ["event_risk_score", "last_decision_confidence", "pair"],
+        ascending=[False, False, True],
+        na_position="last",
+    ).reset_index(drop=True)
+
+    out["df_pairs"] = df_pairs
+    out["df_currency_strength_5d"] = _fx_currency_strength_df(df_pairs, "5D")
+    out["currency_event_risk"] = event_risk_map
+    out["currency_macro_bias"] = macro_bias_map
+    return out
+
+
 def _portfolio_exposure_maps(df_port: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
     """Return symbol and sector weights (%) from portfolio table."""
     if df_port is None or df_port.empty:
@@ -5351,6 +5896,8 @@ def _prepare_multi_agent_view(
     if "symbol" in u.columns:
         u["symbol"] = u["symbol"].astype(str).str.strip().str.upper()
         u = u[u["symbol"] != ""]
+    if "asset_class" in u.columns and "assetclass" not in u.columns:
+        u["assetclass"] = u["asset_class"]
 
     # Tech latest
     tech = normalize_cols(df_tech_latest.copy()) if df_tech_latest is not None and not df_tech_latest.empty else pd.DataFrame()
@@ -5459,10 +6006,10 @@ def _prepare_multi_agent_view(
         return pd.DataFrame(), macro, sym_news
 
     if not u.empty and "symbol" in u.columns:
-        cols_u = [c for c in ["symbol", "name", "sector", "industry"] if c in u.columns]
+        cols_u = [c for c in ["symbol", "name", "sector", "industry", "assetclass"] if c in u.columns]
         base = base.merge(u[cols_u].drop_duplicates(subset=["symbol"], keep="first"), on="symbol", how="left")
 
-    for c in ["name", "sector", "industry"]:
+    for c in ["name", "sector", "industry", "assetclass"]:
         if c not in base.columns:
             base[c] = ""
         base[c] = base[c].fillna("").astype(str)
@@ -9023,15 +9570,27 @@ elif page == "Vue consolidee Multi-Agents":
         st.warning("Aucune vue consolidee disponible. Verifiez les bases DuckDB AG2/AG3/AG4.")
         st.stop()
 
-    matrix_df = _build_multi_agent_matrix(
+    matrix_df_all = _build_multi_agent_matrix(
         consolidated,
         df_port,
         multi_agent_data.get("df_yf_enrichment_latest", pd.DataFrame()),
     )
-    use_matrix = matrix_df is not None and not matrix_df.empty
-    view_df = matrix_df if use_matrix else consolidated
+    matrix_df = matrix_df_all.copy() if matrix_df_all is not None else pd.DataFrame()
+    matrix_fx_filtered = 0
+    if matrix_df is not None and not matrix_df.empty:
+        fx_mask_matrix = _fx_mask(matrix_df, symbol_col="symbol")
+        matrix_fx_filtered = int(fx_mask_matrix.sum())
+        matrix_df = matrix_df[~fx_mask_matrix].copy()
 
-    tab_global, tab_symbol = st.tabs(["Vue globale", "Vue par valeur"])
+    consolidated_non_fx = consolidated.copy()
+    if consolidated_non_fx is not None and not consolidated_non_fx.empty:
+        consolidated_non_fx = consolidated_non_fx[~_fx_mask(consolidated_non_fx, symbol_col="symbol")].copy()
+
+    use_matrix = matrix_df is not None and not matrix_df.empty
+    view_df = matrix_df if use_matrix else consolidated_non_fx
+    fx_view_source = matrix_df_all if matrix_df_all is not None and not matrix_df_all.empty else consolidated
+
+    tab_global, tab_symbol, tab_fx = st.tabs(["Vue globale", "Vue par valeur", "FX / Forex"])
 
     with tab_global:
         if use_matrix:
@@ -9067,6 +9626,8 @@ elif page == "Vue consolidee Multi-Agents":
 5. Verifiez la section **Methodologie + Fraicheur des donnees** avant toute execution.
 """
             )
+            if matrix_fx_filtered > 0:
+                st.caption(f"{matrix_fx_filtered} instrument(s) FX/CURRENCY retire(s) de cette matrice. Voir l'onglet `FX / Forex`.")
 
             def _render_kpi_block(col, metric_id: str, value: object, delta: object | None = None, overrides: dict[str, str] | None = None) -> None:
                 with col:
@@ -9543,6 +10104,206 @@ elif page == "Vue consolidee Multi-Agents":
                 key_suffix="multi_agents_global",
                 height=460,
             )
+
+    with tab_fx:
+        active_ag1_key = str(st.session_state.get("dashboard_active_portfolio", "") or "").strip()
+        if active_ag1_key not in AG1_MULTI_PORTFOLIO_CONFIG:
+            active_ag1_key = "chatgpt52"
+        ag1_multi = load_ag1_multi_portfolios()
+        active_payload = ag1_multi.get(active_ag1_key, {}) if isinstance(ag1_multi, dict) else {}
+        df_ag1_fx_signals = (
+            active_payload.get("df_ai_signals", pd.DataFrame())
+            if isinstance(active_payload, dict)
+            else pd.DataFrame()
+        )
+
+        fx_dataset = load_fx_dataset(
+            fx_view_source,
+            multi_agent_data.get("df_signals", pd.DataFrame()),
+            df_ag1_fx_signals,
+            multi_agent_data.get("df_news_macro_history", pd.DataFrame()),
+            multi_agent_data.get("df_news_symbol_history", pd.DataFrame()),
+        )
+        df_fx_pairs = fx_dataset.get("df_pairs", pd.DataFrame()) if isinstance(fx_dataset, dict) else pd.DataFrame()
+
+        if df_fx_pairs is None or df_fx_pairs.empty:
+            st.info("Aucun instrument FX/CURRENCY detecte dans les donnees AG1/AG2/AG4.")
+        else:
+            st.caption(
+                f"Source AG1 (focus): {AG1_MULTI_PORTFOLIO_CONFIG.get(active_ag1_key, {}).get('label', active_ag1_key)}"
+            )
+            lookback_label = st.selectbox(
+                "Lookback Strength/Returns",
+                ["1D", "5D", "20D"],
+                index=1,
+                key="fx_tab_lookback",
+            )
+            lookback_col = {"1D": "ret_1d", "5D": "ret_5d", "20D": "ret_20d"}.get(lookback_label, "ret_5d")
+
+            df_strength = _fx_currency_strength_df(df_fx_pairs, lookback_label)
+            trend_count = int(df_fx_pairs.get("trend_regime", pd.Series(dtype=str)).astype(str).isin(["TREND", "TREND_UP", "TREND_DOWN"]).sum())
+            range_count = int(df_fx_pairs.get("trend_regime", pd.Series(dtype=str)).astype(str).eq("RANGE").sum())
+            median_vol = pd.to_numeric(df_fx_pairs.get("atr_pct", pd.Series(dtype=float)), errors="coerce").median()
+            high_event_count = int((pd.to_numeric(df_fx_pairs.get("event_risk_score", pd.Series(dtype=float)), errors="coerce").fillna(0.0) >= 8.0).sum())
+
+            fx_positions_df = (
+                active_payload.get("df_portfolio", pd.DataFrame())
+                if isinstance(active_payload, dict)
+                else pd.DataFrame()
+            )
+            fx_positions_count = 0
+            if fx_positions_df is not None and not fx_positions_df.empty:
+                pos_norm = normalize_cols(fx_positions_df.copy())
+                if "symbol" in pos_norm.columns:
+                    pos_norm = pos_norm[pos_norm["symbol"].astype(str).str.upper().str.strip().isin(["CASH_EUR", "__META__"]) == False]
+                    fx_positions_count = int(_fx_mask(pos_norm, symbol_col="symbol").sum())
+
+            fx_watch_count = int(df_fx_pairs.get("last_decision_action", pd.Series(dtype=str)).astype(str).str.upper().isin(["WATCH", "HOLD"]).sum())
+            fx_instruments_total = int(df_fx_pairs.get("pair", pd.Series(dtype=str)).astype(str).nunique())
+
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("FX instruments", fx_instruments_total, delta=f"Positions: {fx_positions_count}")
+            k2.metric("Regime trend/range", f"{trend_count}/{range_count}")
+            k3.metric("Volatilite mediane (ATR%)", "N/A" if pd.isna(median_vol) else f"{float(median_vol):.2f}%")
+            k4.metric("Event risk eleve (7j)", high_event_count)
+            k5.metric("WATCH/HOLD FX", fx_watch_count)
+
+            st.markdown("#### Currency Strength")
+            if df_strength is None or df_strength.empty:
+                st.info("Currency strength indisponible (retours FX insuffisants).")
+            else:
+                fig_strength = px.bar(
+                    df_strength,
+                    x="currency",
+                    y="strength_score",
+                    color="strength_score",
+                    color_continuous_scale="RdYlGn",
+                    labels={"currency": "Devise", "strength_score": f"Force ({lookback_label}) %"},
+                    title=f"Currency Strength ({lookback_label})",
+                )
+                fig_strength.update_layout(height=360, margin=dict(l=20, r=20, t=60, b=20), coloraxis_showscale=False)
+                st.plotly_chart(fig_strength, use_container_width=True, config={"displayModeBar": False})
+
+            st.markdown("#### FX Regime Map (Trend vs Volatility)")
+            reg_df = df_fx_pairs.copy()
+            reg_df["decision_hover"] = (
+                reg_df.get("last_decision_action", pd.Series("", index=reg_df.index)).astype(str)
+                + " | conf="
+                + pd.to_numeric(reg_df.get("last_decision_confidence", pd.Series(pd.NA, index=reg_df.index)), errors="coerce")
+                .fillna(0.0)
+                .round(0)
+                .astype(int)
+                .astype(str)
+            )
+            reg_df["ret_hover"] = pd.to_numeric(reg_df.get(lookback_col, pd.Series(pd.NA, index=reg_df.index)), errors="coerce")
+            fig_regime = px.scatter(
+                reg_df,
+                x="trend_strength",
+                y="atr_pct",
+                color="macro_bias_label",
+                size=reg_df["ret_hover"].abs().fillna(0.0).clip(lower=0.1, upper=20.0),
+                hover_name="pair",
+                hover_data={
+                    "symbol": True,
+                    "decision_hover": True,
+                    "ret_hover": ":.2f",
+                    "atr_pct": ":.2f",
+                    "adx": ":.2f",
+                    "rsi": ":.1f",
+                    "macro_bias_score": ":.2f",
+                    "event_risk_score": ":.2f",
+                    "trend_strength": ":.2f",
+                },
+                labels={
+                    "trend_strength": "TrendStrength (ADX/slope)",
+                    "atr_pct": "Volatility (ATR%)",
+                    "macro_bias_label": "Macro Bias",
+                },
+                category_orders={"macro_bias_label": ["Bullish", "Neutral", "Bearish"]},
+            )
+            fig_regime.update_layout(height=420, margin=dict(l=20, r=20, t=30, b=20))
+            st.plotly_chart(fig_regime, use_container_width=True, config={"displayModeBar": False})
+
+            st.markdown("#### FX Setups")
+            table_df = pd.DataFrame(
+                {
+                    "Pair": df_fx_pairs.get("pair", pd.Series(dtype=str)),
+                    "Base": df_fx_pairs.get("base", pd.Series(dtype=str)),
+                    "Quote": df_fx_pairs.get("quote", pd.Series(dtype=str)),
+                    "LastDecision": (
+                        df_fx_pairs.get("last_decision_action", pd.Series(dtype=str)).astype(str)
+                        + " | "
+                        + pd.to_numeric(df_fx_pairs.get("last_decision_confidence", pd.Series(pd.NA, index=df_fx_pairs.index)), errors="coerce")
+                        .round(0)
+                        .astype("Int64")
+                        .astype(str)
+                        + "% | "
+                        + df_fx_pairs.get("last_decision_horizon", pd.Series(dtype=str)).astype(str)
+                    ),
+                    "Trend": (
+                        "H1="
+                        + df_fx_pairs.get("h1_action", pd.Series(dtype=str)).astype(str)
+                        + " / D1="
+                        + df_fx_pairs.get("d1_action", pd.Series(dtype=str)).astype(str)
+                    ),
+                    "ADX": pd.to_numeric(df_fx_pairs.get("adx", pd.Series(dtype=float)), errors="coerce").round(1),
+                    "RSI": pd.to_numeric(df_fx_pairs.get("rsi", pd.Series(dtype=float)), errors="coerce").round(1),
+                    "ATR%": pd.to_numeric(df_fx_pairs.get("atr_pct", pd.Series(dtype=float)), errors="coerce").round(2),
+                    f"Return {lookback_label}%": pd.to_numeric(df_fx_pairs.get(lookback_col, pd.Series(dtype=float)), errors="coerce").round(2),
+                    "EventRisk": pd.to_numeric(df_fx_pairs.get("event_risk_score", pd.Series(dtype=float)), errors="coerce").round(2),
+                    "SizingProxy": pd.to_numeric(df_fx_pairs.get("sizing_proxy", pd.Series(dtype=float)), errors="coerce").round(2),
+                }
+            )
+            render_interactive_table(table_df, key_suffix="fx_setups_table", height=360)
+
+            st.markdown("#### Focus Pair")
+            pair_options = df_fx_pairs.get("pair", pd.Series(dtype=str)).astype(str).tolist()
+            selected_pair = st.selectbox("Selectionner une paire FX", pair_options, key="fx_focus_pair")
+            focus = df_fx_pairs[df_fx_pairs["pair"].astype(str) == str(selected_pair)].head(1)
+            if focus.empty:
+                st.info("Pair introuvable.")
+            else:
+                fr = focus.iloc[0]
+                direction = str(fr.get("last_decision_action", "N/A"))
+                regime = str(fr.get("trend_regime", "N/A"))
+                vol_txt = safe_num(fr.get("atr_pct", pd.NA), 2)
+                event_txt = safe_num(fr.get("event_risk_score", pd.NA), 2)
+                st.markdown(
+                    f"Direction: **{direction}** | Regime: **{regime}** | Vol: **{vol_txt}%** | Event risk: **{event_txt}**"
+                )
+
+                hist_fx = fetch_yfinance_history(str(selected_pair) + "=X", interval="1d", lookback_days=320)
+                if hist_fx is None or hist_fx.empty:
+                    st.info("Historique OHLC indisponible pour cette paire.")
+                else:
+                    hdf = hist_fx.copy()
+                    hdf["close"] = pd.to_numeric(hdf.get("close", pd.Series(pd.NA, index=hdf.index)), errors="coerce")
+                    hdf = hdf.dropna(subset=["time", "close"]).sort_values("time")
+                    hdf["sma50"] = hdf["close"].rolling(50).mean()
+                    hdf["sma200"] = hdf["close"].rolling(200).mean()
+
+                    fig_focus = go.Figure()
+                    fig_focus.add_trace(go.Scatter(x=hdf["time"], y=hdf["close"], mode="lines", name="Close"))
+                    fig_focus.add_trace(go.Scatter(x=hdf["time"], y=hdf["sma50"], mode="lines", name="SMA50"))
+                    fig_focus.add_trace(go.Scatter(x=hdf["time"], y=hdf["sma200"], mode="lines", name="SMA200"))
+                    support = pd.to_numeric(pd.Series([fr.get("support", pd.NA)]), errors="coerce").iloc[0]
+                    resistance = pd.to_numeric(pd.Series([fr.get("resistance", pd.NA)]), errors="coerce").iloc[0]
+                    if pd.notna(support):
+                        fig_focus.add_hline(y=float(support), line_dash="dot", line_color="#16a34a")
+                    if pd.notna(resistance):
+                        fig_focus.add_hline(y=float(resistance), line_dash="dot", line_color="#dc2626")
+                    fig_focus.update_layout(height=360, margin=dict(l=20, r=20, t=20, b=20), title=f"{selected_pair} - Close/SMA")
+                    st.plotly_chart(fig_focus, use_container_width=True, config={"displayModeBar": False})
+
+                entry_zone = str(fr.get("entry_zone", "N/A") or "N/A")
+                stop_loss = safe_num(fr.get("stop_loss", pd.NA), 4)
+                take_profit = safe_num(fr.get("take_profit", pd.NA), 4)
+                if entry_zone != "N/A" or stop_loss != "N/A" or take_profit != "N/A":
+                    st.markdown(
+                        f"Trade Plan: EntryZone=`{entry_zone}` | Stop=`{stop_loss}` | TakeProfit=`{take_profit}`"
+                    )
+                else:
+                    st.markdown("Trade Plan: N/A")
 
     with tab_symbol:
         st.markdown(f"### {TEXTS_FR['value_header_title']}")
