@@ -5703,6 +5703,16 @@ def _ag1_norm_run_id_series(series: pd.Series) -> pd.Series:
     return s.str.upper()
 
 
+def _ag1_has_ag1_run_shape(series: pd.Series) -> bool:
+    try:
+        s = series.dropna().astype(str).str.strip().str.upper()
+        if s.empty:
+            return False
+        return bool(s.str.startswith("RUN_").any())
+    except Exception:
+        return False
+
+
 def _ag1_expected_model_tokens(key: str, cfg: dict[str, str]) -> list[str]:
     token_map = {
         "chatgpt52": ["chatgpt", "gpt", "openai", "o3", "o4"],
@@ -5975,6 +5985,10 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         mtm_select_cols = ["symbol", "run_id", "updated_at"]
         if "ag1_source_run_id" in mtm_available_cols:
             mtm_select_cols.append("ag1_source_run_id")
+        if "source_run_id" in mtm_available_cols:
+            mtm_select_cols.append("source_run_id")
+        if "ag1_run_id" in mtm_available_cols:
+            mtm_select_cols.append("ag1_run_id")
         if "ag1_source_snapshot_ts" in mtm_available_cols:
             mtm_select_cols.append("ag1_source_snapshot_ts")
         mtm_sql = (
@@ -6252,6 +6266,10 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 mtm_scan["__run_id_norm"] = _ag1_norm_run_id_series(mtm_scan["run_id"])
             if "ag1_source_run_id" in mtm_scan.columns:
                 mtm_scan["__ag1_source_run_id_norm"] = _ag1_norm_run_id_series(mtm_scan["ag1_source_run_id"])
+            if "source_run_id" in mtm_scan.columns:
+                mtm_scan["__source_run_id_norm"] = _ag1_norm_run_id_series(mtm_scan["source_run_id"])
+            if "ag1_run_id" in mtm_scan.columns:
+                mtm_scan["__ag1_run_id_norm"] = _ag1_norm_run_id_series(mtm_scan["ag1_run_id"])
             source_series_non_empty = "__ag1_source_run_id_norm" in mtm_scan.columns and bool(
                 mtm_scan["__ag1_source_run_id_norm"].notna().any()
             )
@@ -6271,23 +6289,43 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                         mtm_run_series = tmp.get("__run_id_norm", pd.Series([], dtype="object")).dropna()
                         if not mtm_run_series.empty:
                             mtm_run_id_latest = str(mtm_run_series.iloc[0])
-                        if "__ag1_source_run_id_norm" in tmp.columns:
-                            mtm_source_run_series = tmp["__ag1_source_run_id_norm"].dropna()
+                        for source_norm_col in [
+                            "__ag1_source_run_id_norm",
+                            "__source_run_id_norm",
+                            "__ag1_run_id_norm",
+                            "__run_id_norm",
+                        ]:
+                            if source_norm_col not in tmp.columns:
+                                continue
+                            mtm_source_run_series = tmp[source_norm_col].dropna()
                             if not mtm_source_run_series.empty:
                                 mtm_source_run_id_latest = str(mtm_source_run_series.iloc[0])
+                                break
             if "__run_id_norm" in mtm_scan.columns:
                 mtm_run_ids = mtm_scan["__run_id_norm"].dropna()
                 if not mtm_run_ids.empty:
                     diagnostics["mtm_run_id"] = mtm_run_id_latest or str(mtm_run_ids.iloc[0])
-            if "__ag1_source_run_id_norm" in mtm_scan.columns:
-                mtm_source_ids = mtm_scan["__ag1_source_run_id_norm"].dropna()
+            for source_norm_col in [
+                "__ag1_source_run_id_norm",
+                "__source_run_id_norm",
+                "__ag1_run_id_norm",
+                "__run_id_norm",
+            ]:
+                if source_norm_col not in mtm_scan.columns:
+                    continue
+                mtm_source_ids = mtm_scan[source_norm_col].dropna()
                 if not mtm_source_ids.empty:
                     diagnostics["mtm_source_run_id"] = mtm_source_run_id_latest or str(mtm_source_ids.iloc[0])
+                    break
             ledger_run_id = _ag1_norm_run_id(diagnostics.get("ledger_run_id"))
             if ledger_run_id:
                 match_candidates: list[tuple[str, str]] = []
                 if "__ag1_source_run_id_norm" in mtm_scan.columns:
                     match_candidates.append(("ag1_source_run_id", "__ag1_source_run_id_norm"))
+                if "__source_run_id_norm" in mtm_scan.columns:
+                    match_candidates.append(("source_run_id", "__source_run_id_norm"))
+                if "__ag1_run_id_norm" in mtm_scan.columns:
+                    match_candidates.append(("ag1_run_id", "__ag1_run_id_norm"))
                 if "__run_id_norm" in mtm_scan.columns:
                     match_candidates.append(("run_id", "__run_id_norm"))
 
@@ -6309,9 +6347,19 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                     else:
                         mtm_scan = mtm_same_run
                 elif match_candidates:
-                    compare_mtm_with_ledger = False
-                    diagnostics["mtm_is_stale"] = True
-                    diagnostics["mtm_reason"] = "run_id_mismatch"
+                    has_ag1_shape = False
+                    for _, norm_col in match_candidates:
+                        if _ag1_has_ag1_run_shape(mtm_scan[norm_col]):
+                            has_ag1_shape = True
+                            break
+                    if has_ag1_shape:
+                        compare_mtm_with_ledger = False
+                        diagnostics["mtm_is_stale"] = True
+                        diagnostics["mtm_reason"] = "run_id_mismatch"
+                    else:
+                        # Some MTM writers keep pipeline run ids (PFMTM_*) only.
+                        # In this case run-id equivalence cannot be asserted; keep comparison enabled.
+                        diagnostics["mtm_reason"] = "run_id_unavailable"
 
             if "symbol" in mtm_scan.columns:
                 ser = mtm_scan["symbol"].astype(str).str.strip().str.upper()
