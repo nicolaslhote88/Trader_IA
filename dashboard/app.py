@@ -7835,7 +7835,59 @@ def _prepare_compare_card(portfolio_key: str, payload: dict[str, object], period
         has_perf,
     )
 
-    # Curve payload for mini charts / overlay
+    # Curve payload for mini charts / overlay.
+    # Inject a synthetic current-state point so the chart X-axis reaches the most recent
+    # portfolio update (MTM refresh or agent trading run), not just the last ledger snapshot.
+    _mtm_ts_raw_syn = diag.get("mtm_last_updated_at") if isinstance(diag, dict) else None
+    _mtm_current_ts_syn = pd.to_datetime(_mtm_ts_raw_syn, errors="coerce", utc=True) if _mtm_ts_raw_syn else pd.NaT
+    # Fallback: derive timestamp from the max updatedat in the position table (already MTM-overlaid).
+    if pd.isna(_mtm_current_ts_syn) and isinstance(df_port, pd.DataFrame) and not df_port.empty:
+        _p_cols = [str(c).strip().lower() for c in df_port.columns]
+        if "updatedat" in _p_cols:
+            _upd_col = df_port.columns[_p_cols.index("updatedat")]
+            _mtm_current_ts_syn = pd.to_datetime(df_port[_upd_col], errors="coerce", utc=True).max()
+    if pd.notna(_mtm_current_ts_syn):
+        # Compute MTM-updated portfolio value from the position table (non-__META__ rows).
+        _mtm_total_syn = None
+        _mtm_cash_syn = cash_local
+        _mtm_invest_syn = invest_local
+        if isinstance(df_port, pd.DataFrame) and not df_port.empty:
+            _pw = df_port.copy()
+            _pw.columns = [str(c).strip().lower() for c in _pw.columns]
+            if "symbol" in _pw.columns and "marketvalue" in _pw.columns:
+                _mv = pd.to_numeric(
+                    _pw.loc[~_pw["symbol"].astype(str).str.upper().isin(["__META__"]), "marketvalue"],
+                    errors="coerce",
+                ).fillna(0).sum()
+                if _mv > 0:
+                    _mtm_total_syn = float(_mv)
+                _cash_r = _pw[_pw["symbol"].astype(str).str.upper() == "CASH_EUR"]
+                if not _cash_r.empty:
+                    _cmv = pd.to_numeric(_cash_r["marketvalue"], errors="coerce").iloc[0]
+                    if pd.notna(_cmv) and _cmv > 0:
+                        _mtm_cash_syn = float(_cmv)
+                        _mtm_invest_syn = max(0.0, float(_mtm_total_syn or total_val_local) - _mtm_cash_syn)
+        if _mtm_total_syn is None:
+            _mtm_total_syn = total_val_local
+        if _mtm_total_syn > 0:
+            _last_perf_ts = pd.NaT
+            if isinstance(perf_period, pd.DataFrame) and not perf_period.empty and "timestamp" in perf_period.columns:
+                _last_perf_ts = pd.to_datetime(perf_period["timestamp"], errors="coerce", utc=True).max()
+            if pd.isna(_last_perf_ts) or _mtm_current_ts_syn > _last_perf_ts:
+                _syn = pd.DataFrame([{
+                    "timestamp": _mtm_current_ts_syn,
+                    "total_value": _mtm_total_syn,
+                    "cash_value": _mtm_cash_syn,
+                    "equity_value": _mtm_invest_syn,
+                    "invested_value": _mtm_invest_syn,
+                }])
+                if isinstance(perf_period, pd.DataFrame) and not perf_period.empty:
+                    perf_period = pd.concat([perf_period, _syn], ignore_index=True)
+                    perf_period["timestamp"] = pd.to_datetime(perf_period["timestamp"], errors="coerce", utc=True)
+                    perf_period = perf_period.sort_values("timestamp").reset_index(drop=True)
+                else:
+                    perf_period = _syn.copy()
+
     curve_df = pd.DataFrame(columns=["timestamp", "display_value", "drawdown_pct"])
     if isinstance(perf_period, pd.DataFrame) and not perf_period.empty:
         tmp = perf_period.copy()
