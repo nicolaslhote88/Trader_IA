@@ -7,15 +7,15 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "0 15 9 * * 1-5"
+              "expression": "0 35 9 * * 1-5"
             },
             {
               "field": "cronExpression",
-              "expression": "0 30 12 * * 1-5"
+              "expression": "0 35 12 * * 1-5"
             },
             {
               "field": "cronExpression",
-              "expression": "0 45 16 * * 1-5"
+              "expression": "0 10 16 * * 1-5"
             }
           ]
         }
