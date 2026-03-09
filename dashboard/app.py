@@ -6736,32 +6736,95 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         latest = df_latest.iloc[0].to_dict() if df_latest is not None and not df_latest.empty else {}
         latest_run_id = str(latest.get("run_id") or "").strip()
+        _has_mtm_price_cols = False
 
         if latest_run_id:
-            df_pos = _ag1_fetchdf(
-                conn,
-                """
-                SELECT
-                  p.run_id AS run_id,
-                  p.ts AS updatedat,
-                  p.symbol AS symbol,
-                  COALESCE(i.name, p.symbol) AS name,
-                  COALESCE(i.asset_class, 'Equity') AS assetclass,
-                  COALESCE(i.sector, '') AS sector,
-                  COALESCE(i.industry, '') AS industry,
-                  COALESCE(i.isin, '') AS isin,
-                  CAST(p.qty AS DOUBLE) AS quantity,
-                  CAST(p.avg_cost AS DOUBLE) AS avgprice,
-                  CAST(p.last_price AS DOUBLE) AS lastprice,
-                  CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
-                  CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
-                FROM core.positions_snapshot p
-                LEFT JOIN core.instruments i ON i.symbol = p.symbol
-                WHERE p.run_id = ?
-                ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
-                """,
-                [latest_run_id],
+            _has_mtm_price_cols = bool(
+                mtm_available_cols
+                and "last_price" in mtm_available_cols
+                and "market_value" in mtm_available_cols
+                and "unrealized_pnl" in mtm_available_cols
+                and "updated_at" in mtm_available_cols
             )
+            if _has_mtm_price_cols:
+                # Overlay MTM prices when they are fresher than the core snapshot.
+                df_pos = _ag1_fetchdf(
+                    conn,
+                    """
+                    SELECT
+                      p.run_id AS run_id,
+                      CASE
+                        WHEN m.updated_at IS NOT NULL
+                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
+                        THEN CAST(m.updated_at AS TIMESTAMPTZ)
+                        ELSE p.ts
+                      END AS updatedat,
+                      p.symbol AS symbol,
+                      COALESCE(NULLIF(i.name,''), NULLIF(m.name,''), p.symbol) AS name,
+                      COALESCE(NULLIF(i.asset_class,''), NULLIF(m.asset_class,''), 'Equity') AS assetclass,
+                      COALESCE(NULLIF(i.sector,''), NULLIF(m.sector,''), '') AS sector,
+                      COALESCE(NULLIF(i.industry,''), NULLIF(m.industry,''), '') AS industry,
+                      COALESCE(NULLIF(i.isin,''), NULLIF(m.isin,''), '') AS isin,
+                      CAST(p.qty AS DOUBLE) AS quantity,
+                      CAST(p.avg_cost AS DOUBLE) AS avgprice,
+                      CASE
+                        WHEN m.updated_at IS NOT NULL
+                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
+                        THEN CAST(m.last_price AS DOUBLE)
+                        ELSE CAST(p.last_price AS DOUBLE)
+                      END AS lastprice,
+                      CASE
+                        WHEN m.updated_at IS NOT NULL
+                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
+                        THEN CAST(m.market_value AS DOUBLE)
+                        ELSE CAST(p.market_value_eur AS DOUBLE)
+                      END AS marketvalue,
+                      CASE
+                        WHEN m.updated_at IS NOT NULL
+                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
+                        THEN CAST(m.unrealized_pnl AS DOUBLE)
+                        ELSE CAST(p.unrealized_pnl_eur AS DOUBLE)
+                      END AS unrealizedpnl
+                    FROM core.positions_snapshot p
+                    LEFT JOIN portfolio_positions_mtm_latest m ON UPPER(m.symbol) = UPPER(p.symbol)
+                    LEFT JOIN core.instruments i ON i.symbol = p.symbol
+                    WHERE p.run_id = ?
+                    ORDER BY
+                      CASE
+                        WHEN m.updated_at IS NOT NULL
+                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
+                        THEN CAST(m.market_value AS DOUBLE)
+                        ELSE CAST(p.market_value_eur AS DOUBLE)
+                      END DESC NULLS LAST,
+                      p.symbol
+                    """,
+                    [latest_run_id],
+                )
+            else:
+                df_pos = _ag1_fetchdf(
+                    conn,
+                    """
+                    SELECT
+                      p.run_id AS run_id,
+                      p.ts AS updatedat,
+                      p.symbol AS symbol,
+                      COALESCE(i.name, p.symbol) AS name,
+                      COALESCE(i.asset_class, 'Equity') AS assetclass,
+                      COALESCE(i.sector, '') AS sector,
+                      COALESCE(i.industry, '') AS industry,
+                      COALESCE(i.isin, '') AS isin,
+                      CAST(p.qty AS DOUBLE) AS quantity,
+                      CAST(p.avg_cost AS DOUBLE) AS avgprice,
+                      CAST(p.last_price AS DOUBLE) AS lastprice,
+                      CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
+                      CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
+                    FROM core.positions_snapshot p
+                    LEFT JOIN core.instruments i ON i.symbol = p.symbol
+                    WHERE p.run_id = ?
+                    ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
+                    """,
+                    [latest_run_id],
+                )
         latest_run_meta: dict[str, object] = {}
         if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
             last_run_id_guess = str(latest.get("run_id") or "").strip()
@@ -6863,7 +6926,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             alerts_24h = int((ts_alt >= (now_utc - pd.Timedelta(hours=24))).sum())
 
         diagnostics = {
-            "positions_source_table": "core.positions_snapshot",
+            "positions_source_table": "core.positions_snapshot+mtm_overlay" if _has_mtm_price_cols else "core.positions_snapshot",
             "ledger_run_id": str(latest.get("run_id") or ""),
             "ledger_positions_count": 0,
             "mtm_run_id": "",
