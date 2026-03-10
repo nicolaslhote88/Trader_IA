@@ -1066,7 +1066,7 @@ def load_universe_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.Dat
 @st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
 def load_ag1_portfolio_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.DataFrame:
     _ = db_sig
-    return _read_duckdb_df(
+    df = _read_duckdb_df(
         db_path,
         """
         SELECT
@@ -1086,6 +1086,9 @@ def load_ag1_portfolio_latest(db_path: str, db_sig: tuple[str, float, int]) -> p
         ORDER BY market_value DESC NULLS LAST, symbol
         """,
     )
+    if df is not None and not df.empty and "assetclass" in df.columns:
+        df["assetclass"] = _canonicalize_asset_class_series(df["assetclass"])
+    return df
 
 
 @st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
@@ -3956,6 +3959,40 @@ def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | Non
     return None
 
 
+ASSET_CLASS_CANONICAL_MAP = {
+    "equity": "Equity",
+    "fx": "FX",
+    "forex": "FX",
+    "currency": "FX",
+    "cash": "Cash",
+    "meta": "Meta",
+    "etf": "ETF",
+    "fund": "Fund",
+    "bond": "Bond",
+    "option": "Option",
+    "future": "Future",
+    "commodity": "Commodity",
+    "crypto": "Crypto",
+    "index": "Index",
+    "adr": "ADR",
+    "reit": "REIT",
+}
+
+
+def _canonicalize_asset_class_label(value: object) -> str:
+    s = str(value or "").strip()
+    if not s or s.lower() in {"nan", "nat", "none", "null"}:
+        return ""
+    s = re.sub(r"\s+", " ", s).strip()
+    return ASSET_CLASS_CANONICAL_MAP.get(s.casefold(), s)
+
+
+def _canonicalize_asset_class_series(series: pd.Series) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=object)
+    return series.map(_canonicalize_asset_class_label)
+
+
 def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
     if df_perf is None or df_perf.empty:
@@ -6097,6 +6134,8 @@ def _prepare_multi_agent_view(
         if c not in base.columns:
             base[c] = ""
         base[c] = base[c].fillna("").astype(str)
+    if "assetclass" in base.columns:
+        base["assetclass"] = _canonicalize_asset_class_series(base["assetclass"])
 
     if not tech.empty:
         base = base.merge(tech, on="symbol", how="left")
@@ -6913,6 +6952,8 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             ]
         )
         df_portfolio = pd.concat([df_portfolio, cash_row, meta_row], ignore_index=True)
+        if "assetclass" in df_portfolio.columns:
+            df_portfolio["assetclass"] = _canonicalize_asset_class_series(df_portfolio["assetclass"])
 
         # Signals/alerts activity in the last 24h for header.
         now_utc = pd.Timestamp.now(tz="UTC")
@@ -8453,6 +8494,8 @@ if page == "Dashboard Trading":
             for col in ["sector", "industry", "name", "assetclass"]:
                 if col not in df_clean.columns:
                     df_clean[col] = ""
+            if "assetclass" in df_clean.columns:
+                df_clean["assetclass"] = _canonicalize_asset_class_series(df_clean["assetclass"])
 
             df_clean.loc[
                 df_clean["symbol"].astype(str).str.upper() == "CASH_EUR",
