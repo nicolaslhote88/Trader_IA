@@ -144,6 +144,34 @@ function enrichPortfolioBriefWithMemory(pb, decisionMemory, executionMemory, rec
   return outPb;
 }
 
+function getPortfolioUpdatedAt(pb) {
+  if (!isObj(pb)) return null;
+
+  const candidates = [];
+  const direct = String(pb.portfolioUpdatedAt || pb.updatedAt || "").trim();
+  if (direct) candidates.push(direct);
+
+  if (Array.isArray(pb.positions)) {
+    for (const pos of pb.positions) {
+      const ts = String(pos?.updatedAt ?? pos?.UpdatedAt ?? "").trim();
+      if (ts) candidates.push(ts);
+    }
+  }
+
+  if (isObj(pb.summary)) {
+    const ts = String(pb.summary.ts || pb.summary.updatedAt || "").trim();
+    if (ts) candidates.push(ts);
+  }
+
+  if (!candidates.length) {
+    const generatedAt = String(pb.generatedAt || "").trim();
+    return generatedAt || null;
+  }
+
+  candidates.sort((a, b) => (Date.parse(b) || 0) - (Date.parse(a) || 0));
+  return candidates[0] || null;
+}
+
 function isFxSymbol(s) {
   const t = String(s || "").toUpperCase();
   return t.startsWith("FX:") || t.endsWith("=X") || /^[A-Z]{6}$/.test(t);
@@ -536,7 +564,7 @@ const universeScope = Array.isArray(out.run.universe_scope)
   : ["CURRENCY", "EQUITY", "ETF", "MUTUALFUND"];
 
 const inputSnapshot = {
-  portfolioUpdatedAt: out.portfolioBrief?.generatedAt || out.portfolioBrief?.portfolioSummary?.positions?.[0]?.UpdatedAt || null,
+  portfolioUpdatedAt: getPortfolioUpdatedAt(out.portfolioBrief),
   technicalUpdatedAt: out.opportunity_pack?.generatedAt || null,
   researchUpdatedAt: out.opportunity_pack?.generatedAt || null,
   newsGeneratedAt: out.opportunity_pack?.generatedAt || null,
