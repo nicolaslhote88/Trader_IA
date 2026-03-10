@@ -6653,21 +6653,42 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 for c in mtm_schema["name"].dropna().astype(str).tolist()
                 if str(c).strip()
             }
-        mtm_select_cols = ["symbol", "run_id", "updated_at"]
-        if "ag1_source_run_id" in mtm_available_cols:
-            mtm_select_cols.append("ag1_source_run_id")
-        if "source_run_id" in mtm_available_cols:
-            mtm_select_cols.append("source_run_id")
-        if "ag1_run_id" in mtm_available_cols:
-            mtm_select_cols.append("ag1_run_id")
-        if "ag1_source_snapshot_ts" in mtm_available_cols:
-            mtm_select_cols.append("ag1_source_snapshot_ts")
-        mtm_sql = (
-            "SELECT "
-            + ", ".join(mtm_select_cols)
-            + "\nFROM portfolio_positions_mtm_latest\nWHERE symbol IS NOT NULL"
-        )
-        df_mtm_latest = _ag1_fetchdf(conn, mtm_sql)
+        mtm_col_candidates = {
+            "symbol": ["symbol"],
+            "run_id": ["run_id"],
+            "updated_at": ["updated_at"],
+            "ag1_source_run_id": ["ag1_source_run_id"],
+            "source_run_id": ["source_run_id"],
+            "ag1_run_id": ["ag1_run_id"],
+            "ag1_source_snapshot_ts": ["ag1_source_snapshot_ts"],
+            "name": ["name"],
+            "asset_class": ["asset_class", "assetclass"],
+            "sector": ["sector"],
+            "industry": ["industry"],
+            "isin": ["isin"],
+            "quantity": ["quantity", "qty"],
+            "avg_price": ["avg_price", "avgprice"],
+            "last_price": ["last_price", "lastprice"],
+            "market_value": ["market_value", "marketvalue"],
+            "unrealized_pnl": ["unrealized_pnl", "unrealizedpnl"],
+        }
+        mtm_selected_cols: dict[str, str] = {}
+        for alias, candidates in mtm_col_candidates.items():
+            selected_col = next((c for c in candidates if c in mtm_available_cols), "")
+            if selected_col:
+                mtm_selected_cols[alias] = selected_col
+        mtm_select_cols = [
+            f"{src_col} AS {alias}"
+            for alias, src_col in mtm_selected_cols.items()
+        ]
+        df_mtm_latest = pd.DataFrame()
+        if mtm_select_cols and "symbol" in mtm_selected_cols:
+            mtm_sql = (
+                "SELECT "
+                + ", ".join(mtm_select_cols)
+                + "\nFROM portfolio_positions_mtm_latest\nWHERE symbol IS NOT NULL"
+            )
+            df_mtm_latest = _ag1_fetchdf(conn, mtm_sql)
 
         df_transactions = _ag1_fetchdf(
             conn,
@@ -6812,95 +6833,255 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         latest = df_latest.iloc[0].to_dict() if df_latest is not None and not df_latest.empty else {}
         latest_run_id = str(latest.get("run_id") or "").strip()
-        _has_mtm_price_cols = False
+        _has_mtm_price_cols = bool(
+            mtm_selected_cols
+            and "last_price" in mtm_selected_cols
+            and "market_value" in mtm_selected_cols
+            and "unrealized_pnl" in mtm_selected_cols
+            and "updated_at" in mtm_selected_cols
+        )
+        _mtm_overlay_applied = False
 
         if latest_run_id:
-            _has_mtm_price_cols = bool(
-                mtm_available_cols
-                and "last_price" in mtm_available_cols
-                and "market_value" in mtm_available_cols
-                and "unrealized_pnl" in mtm_available_cols
-                and "updated_at" in mtm_available_cols
+            df_pos = _ag1_fetchdf(
+                conn,
+                """
+                SELECT
+                  p.run_id AS run_id,
+                  p.ts AS updatedat,
+                  p.symbol AS symbol,
+                  COALESCE(i.name, p.symbol) AS name,
+                  COALESCE(i.asset_class, 'Equity') AS assetclass,
+                  COALESCE(i.sector, '') AS sector,
+                  COALESCE(i.industry, '') AS industry,
+                  COALESCE(i.isin, '') AS isin,
+                  CAST(p.qty AS DOUBLE) AS quantity,
+                  CAST(p.avg_cost AS DOUBLE) AS avgprice,
+                  CAST(p.last_price AS DOUBLE) AS lastprice,
+                  CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
+                  CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
+                FROM core.positions_snapshot p
+                LEFT JOIN core.instruments i ON i.symbol = p.symbol
+                WHERE p.run_id = ?
+                ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
+                """,
+                [latest_run_id],
             )
-            if _has_mtm_price_cols:
-                # Overlay MTM prices when they are fresher than the core snapshot.
-                df_pos = _ag1_fetchdf(
-                    conn,
-                    """
-                    SELECT
-                      p.run_id AS run_id,
-                      CASE
-                        WHEN m.updated_at IS NOT NULL
-                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
-                        THEN CAST(m.updated_at AS TIMESTAMPTZ)
-                        ELSE p.ts
-                      END AS updatedat,
-                      p.symbol AS symbol,
-                      COALESCE(NULLIF(i.name,''), NULLIF(m.name,''), p.symbol) AS name,
-                      COALESCE(NULLIF(i.asset_class,''), NULLIF(m.asset_class,''), 'Equity') AS assetclass,
-                      COALESCE(NULLIF(i.sector,''), NULLIF(m.sector,''), '') AS sector,
-                      COALESCE(NULLIF(i.industry,''), NULLIF(m.industry,''), '') AS industry,
-                      COALESCE(NULLIF(i.isin,''), NULLIF(m.isin,''), '') AS isin,
-                      CAST(p.qty AS DOUBLE) AS quantity,
-                      CAST(p.avg_cost AS DOUBLE) AS avgprice,
-                      CASE
-                        WHEN m.updated_at IS NOT NULL
-                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
-                        THEN CAST(m.last_price AS DOUBLE)
-                        ELSE CAST(p.last_price AS DOUBLE)
-                      END AS lastprice,
-                      CASE
-                        WHEN m.updated_at IS NOT NULL
-                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
-                        THEN CAST(m.market_value AS DOUBLE)
-                        ELSE CAST(p.market_value_eur AS DOUBLE)
-                      END AS marketvalue,
-                      CASE
-                        WHEN m.updated_at IS NOT NULL
-                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
-                        THEN CAST(m.unrealized_pnl AS DOUBLE)
-                        ELSE CAST(p.unrealized_pnl_eur AS DOUBLE)
-                      END AS unrealizedpnl
-                    FROM core.positions_snapshot p
-                    LEFT JOIN portfolio_positions_mtm_latest m ON UPPER(m.symbol) = UPPER(p.symbol)
-                    LEFT JOIN core.instruments i ON i.symbol = p.symbol
-                    WHERE p.run_id = ?
-                    ORDER BY
-                      CASE
-                        WHEN m.updated_at IS NOT NULL
-                             AND CAST(m.updated_at AS TIMESTAMPTZ) > p.ts
-                        THEN CAST(m.market_value AS DOUBLE)
-                        ELSE CAST(p.market_value_eur AS DOUBLE)
-                      END DESC NULLS LAST,
-                      p.symbol
-                    """,
-                    [latest_run_id],
-                )
-            else:
-                df_pos = _ag1_fetchdf(
-                    conn,
-                    """
-                    SELECT
-                      p.run_id AS run_id,
-                      p.ts AS updatedat,
-                      p.symbol AS symbol,
-                      COALESCE(i.name, p.symbol) AS name,
-                      COALESCE(i.asset_class, 'Equity') AS assetclass,
-                      COALESCE(i.sector, '') AS sector,
-                      COALESCE(i.industry, '') AS industry,
-                      COALESCE(i.isin, '') AS isin,
-                      CAST(p.qty AS DOUBLE) AS quantity,
-                      CAST(p.avg_cost AS DOUBLE) AS avgprice,
-                      CAST(p.last_price AS DOUBLE) AS lastprice,
-                      CAST(p.market_value_eur AS DOUBLE) AS marketvalue,
-                      CAST(p.unrealized_pnl_eur AS DOUBLE) AS unrealizedpnl
-                    FROM core.positions_snapshot p
-                    LEFT JOIN core.instruments i ON i.symbol = p.symbol
-                    WHERE p.run_id = ?
-                    ORDER BY p.market_value_eur DESC NULLS LAST, p.symbol
-                    """,
-                    [latest_run_id],
-                )
+            if _has_mtm_price_cols and df_mtm_latest is not None and not df_mtm_latest.empty and not df_pos.empty:
+                mtm_overlay = df_mtm_latest.copy()
+                mtm_overlay.columns = [str(c).strip().lower() for c in mtm_overlay.columns]
+                if "symbol" in mtm_overlay.columns:
+                    mtm_overlay["symbol_norm"] = mtm_overlay["symbol"].astype(str).str.strip().str.upper()
+                    mtm_overlay = mtm_overlay[
+                        mtm_overlay["symbol_norm"].ne("")
+                        & ~mtm_overlay["symbol_norm"].isin(["CASH_EUR", "__META__"])
+                    ].copy()
+                if not mtm_overlay.empty:
+                    latest_run_id_norm = _ag1_norm_run_id(latest_run_id)
+                    if "run_id" in mtm_overlay.columns:
+                        mtm_overlay["__run_id_norm"] = _ag1_norm_run_id_series(mtm_overlay["run_id"])
+                    if "ag1_source_run_id" in mtm_overlay.columns:
+                        mtm_overlay["__ag1_source_run_id_norm"] = _ag1_norm_run_id_series(mtm_overlay["ag1_source_run_id"])
+                    if "source_run_id" in mtm_overlay.columns:
+                        mtm_overlay["__source_run_id_norm"] = _ag1_norm_run_id_series(mtm_overlay["source_run_id"])
+                    if "ag1_run_id" in mtm_overlay.columns:
+                        mtm_overlay["__ag1_run_id_norm"] = _ag1_norm_run_id_series(mtm_overlay["ag1_run_id"])
+
+                    mtm_match_candidates: list[tuple[str, str]] = []
+                    for raw_col, norm_col in [
+                        ("ag1_source_run_id", "__ag1_source_run_id_norm"),
+                        ("source_run_id", "__source_run_id_norm"),
+                        ("ag1_run_id", "__ag1_run_id_norm"),
+                        ("run_id", "__run_id_norm"),
+                    ]:
+                        if norm_col in mtm_overlay.columns:
+                            mtm_match_candidates.append((raw_col, norm_col))
+
+                    selected_match: tuple[str, str] | None = None
+                    for raw_col, norm_col in mtm_match_candidates:
+                        if bool(mtm_overlay[norm_col].eq(latest_run_id_norm).fillna(False).any()):
+                            selected_match = (raw_col, norm_col)
+                            break
+
+                    if selected_match is not None:
+                        _, match_norm_col = selected_match
+                        mtm_overlay = mtm_overlay[mtm_overlay[match_norm_col].eq(latest_run_id_norm)].copy()
+                    elif any(_ag1_has_ag1_run_shape(mtm_overlay[norm_col]) for _, norm_col in mtm_match_candidates):
+                        mtm_overlay = mtm_overlay.iloc[0:0].copy()
+
+                if not mtm_overlay.empty:
+                    mtm_overlay["updated_at"] = pd.to_datetime(mtm_overlay.get("updated_at"), errors="coerce", utc=True)
+                    for numeric_col in [
+                        "quantity",
+                        "avg_price",
+                        "last_price",
+                        "market_value",
+                        "unrealized_pnl",
+                    ]:
+                        if numeric_col in mtm_overlay.columns:
+                            mtm_overlay[numeric_col] = pd.to_numeric(mtm_overlay[numeric_col], errors="coerce")
+                    mtm_overlay = mtm_overlay.sort_values(
+                        ["updated_at", "symbol_norm"],
+                        ascending=[False, True],
+                        na_position="last",
+                    )
+                    mtm_overlay = mtm_overlay.drop_duplicates("symbol_norm", keep="first")
+
+                    df_pos_overlay = df_pos.copy()
+                    df_pos_overlay["updatedat"] = pd.to_datetime(df_pos_overlay["updatedat"], errors="coerce", utc=True)
+                    df_pos_overlay["symbol_norm"] = df_pos_overlay["symbol"].astype(str).str.strip().str.upper()
+                    mtm_overlay = mtm_overlay.rename(columns={"updated_at": "updatedat_mtm"})
+                    df_pos_overlay = df_pos_overlay.merge(
+                        mtm_overlay,
+                        on="symbol_norm",
+                        how="left",
+                        suffixes=("", "_mtm"),
+                    )
+
+                    fresher_mask = df_pos_overlay["updatedat_mtm"].notna() & (
+                        df_pos_overlay["updatedat"].isna() | (df_pos_overlay["updatedat_mtm"] > df_pos_overlay["updatedat"])
+                    )
+
+                    overlay_map = {
+                        "name": "name_mtm",
+                        "assetclass": "asset_class",
+                        "sector": "sector_mtm",
+                        "industry": "industry_mtm",
+                        "isin": "isin_mtm",
+                        "quantity": "quantity_mtm",
+                        "avgprice": "avg_price",
+                        "lastprice": "last_price",
+                        "marketvalue": "market_value",
+                        "unrealizedpnl": "unrealized_pnl",
+                    }
+                    for target_col, source_col in overlay_map.items():
+                        if source_col not in df_pos_overlay.columns:
+                            continue
+                        replace_mask = fresher_mask & df_pos_overlay[source_col].notna()
+                        if bool(replace_mask.any()):
+                            df_pos_overlay.loc[replace_mask, target_col] = df_pos_overlay.loc[replace_mask, source_col]
+                            _mtm_overlay_applied = True
+                    if bool(fresher_mask.any()):
+                        df_pos_overlay.loc[fresher_mask, "updatedat"] = df_pos_overlay.loc[fresher_mask, "updatedat_mtm"]
+
+                    mtm_only = mtm_overlay[~mtm_overlay["symbol_norm"].isin(df_pos_overlay["symbol_norm"])].copy()
+                    if not mtm_only.empty:
+                        mtm_only_index = mtm_only.index
+                        mtm_only_rows = pd.DataFrame(
+                            {
+                                "run_id": pd.Series(latest_run_id, index=mtm_only_index),
+                                "updatedat": mtm_only["updatedat_mtm"],
+                                "symbol": mtm_only["symbol"],
+                                "name": (
+                                    mtm_only["name"]
+                                    if "name" in mtm_only.columns
+                                    else mtm_only["symbol"]
+                                ),
+                                "assetclass": (
+                                    mtm_only["asset_class"]
+                                    if "asset_class" in mtm_only.columns
+                                    else pd.Series("Equity", index=mtm_only_index)
+                                ),
+                                "sector": (
+                                    mtm_only["sector"]
+                                    if "sector" in mtm_only.columns
+                                    else pd.Series("", index=mtm_only_index)
+                                ),
+                                "industry": (
+                                    mtm_only["industry"]
+                                    if "industry" in mtm_only.columns
+                                    else pd.Series("", index=mtm_only_index)
+                                ),
+                                "isin": (
+                                    mtm_only["isin"]
+                                    if "isin" in mtm_only.columns
+                                    else pd.Series("", index=mtm_only_index)
+                                ),
+                                "quantity": (
+                                    mtm_only["quantity"]
+                                    if "quantity" in mtm_only.columns
+                                    else pd.Series(0.0, index=mtm_only_index)
+                                ),
+                                "avgprice": (
+                                    mtm_only["avg_price"]
+                                    if "avg_price" in mtm_only.columns
+                                    else (
+                                        mtm_only["last_price"]
+                                        if "last_price" in mtm_only.columns
+                                        else pd.Series(0.0, index=mtm_only_index)
+                                    )
+                                ),
+                                "lastprice": (
+                                    mtm_only["last_price"]
+                                    if "last_price" in mtm_only.columns
+                                    else pd.Series(0.0, index=mtm_only_index)
+                                ),
+                                "marketvalue": (
+                                    mtm_only["market_value"]
+                                    if "market_value" in mtm_only.columns
+                                    else pd.Series(0.0, index=mtm_only_index)
+                                ),
+                                "unrealizedpnl": (
+                                    mtm_only["unrealized_pnl"]
+                                    if "unrealized_pnl" in mtm_only.columns
+                                    else pd.Series(0.0, index=mtm_only_index)
+                                ),
+                            },
+                            index=mtm_only_index,
+                        )
+                        df_pos_overlay = pd.concat(
+                            [
+                                df_pos_overlay[
+                                    [
+                                        "run_id",
+                                        "updatedat",
+                                        "symbol",
+                                        "name",
+                                        "assetclass",
+                                        "sector",
+                                        "industry",
+                                        "isin",
+                                        "quantity",
+                                        "avgprice",
+                                        "lastprice",
+                                        "marketvalue",
+                                        "unrealizedpnl",
+                                        "symbol_norm",
+                                    ]
+                                ],
+                                mtm_only_rows.assign(
+                                    symbol_norm=mtm_only_rows["symbol"].astype(str).str.strip().str.upper()
+                                ),
+                            ],
+                            ignore_index=True,
+                        )
+                        _mtm_overlay_applied = True
+                    else:
+                        df_pos_overlay = df_pos_overlay[
+                            [
+                                "run_id",
+                                "updatedat",
+                                "symbol",
+                                "name",
+                                "assetclass",
+                                "sector",
+                                "industry",
+                                "isin",
+                                "quantity",
+                                "avgprice",
+                                "lastprice",
+                                "marketvalue",
+                                "unrealizedpnl",
+                                "symbol_norm",
+                            ]
+                        ]
+
+                    df_pos = df_pos_overlay.drop(columns=["symbol_norm"], errors="ignore")
+                    df_pos = df_pos.sort_values(
+                        ["marketvalue", "symbol"],
+                        ascending=[False, True],
+                        na_position="last",
+                    ).reset_index(drop=True)
         latest_run_meta: dict[str, object] = {}
         if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
             last_run_id_guess = str(latest.get("run_id") or "").strip()
@@ -7015,7 +7196,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             alerts_24h = int((ts_alt >= (now_utc - pd.Timedelta(hours=24))).sum())
 
         diagnostics = {
-            "positions_source_table": "core.positions_snapshot+mtm_overlay" if _has_mtm_price_cols else "core.positions_snapshot",
+            "positions_source_table": "core.positions_snapshot+mtm_overlay" if _mtm_overlay_applied else "core.positions_snapshot",
             "ledger_run_id": str(latest.get("run_id") or ""),
             "ledger_positions_count": 0,
             "mtm_run_id": "",
@@ -8707,15 +8888,15 @@ if page == "Dashboard Trading":
 
         with v_pnl:
             m1, m2, m3, m4 = st.columns(4)
-            m1.metric("P&L realise", f"{realized_pnl:,.2f} EUR")
-            m2.metric("Realise partiel", f"{realized_partial_pnl:,.2f} EUR")
+            m1.metric("P&L realise clos", f"{realized_closed_pnl:,.2f} EUR")
+            m2.metric("P&L realise partiel", f"{realized_partial_pnl:,.2f} EUR")
             m3.metric("P&L latent", f"{latent_pnl:,.2f} EUR")
             m4.metric("Gain total", f"{total_gain:,.2f} EUR")
 
-            if abs(realized_partial_pnl) >= 0.005:
+            if abs(realized_pnl) >= 0.005:
                 st.caption(
-                    f"Le P&L realise inclut {realized_partial_pnl:,.2f} EUR de realise partiel "
-                    "encore stocke dans des lots ouverts."
+                    f"P&L realise total: {realized_pnl:,.2f} EUR "
+                    f"({realized_closed_pnl:,.2f} clos + {realized_partial_pnl:,.2f} partiel)."
                 )
             if abs(residual_other) >= 0.005:
                 st.caption(
@@ -8783,6 +8964,29 @@ if page == "Dashboard Trading":
                         )
 
             curve = _build_realized_vs_total_curve(perf_ts, tx_norm, init_cap)
+            if curve is not None and not curve.empty:
+                curve = curve.copy()
+                curve["timestamp"] = pd.to_datetime(curve["timestamp"], errors="coerce", utc=True)
+                current_curve_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+                if pd.isna(current_curve_ts):
+                    current_curve_ts = pd.Timestamp.now(tz="UTC")
+                curve = pd.concat(
+                    [
+                        curve,
+                        pd.DataFrame(
+                            [
+                                {
+                                    "timestamp": current_curve_ts,
+                                    "realized_equity": init_cap + realized_pnl,
+                                    "total_equity": total_val,
+                                }
+                            ]
+                        ),
+                    ],
+                    ignore_index=True,
+                )
+                curve = curve.dropna(subset=["timestamp"])
+                curve = curve.sort_values("timestamp").groupby("timestamp", as_index=False).last()
             if curve.empty:
                 st.info("Donnees insuffisantes pour la courbe Realise vs Totale.")
             else:
