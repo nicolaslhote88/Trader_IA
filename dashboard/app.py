@@ -6955,6 +6955,17 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         if "assetclass" in df_portfolio.columns:
             df_portfolio["assetclass"] = _canonicalize_asset_class_series(df_portfolio["assetclass"])
 
+        total_val_cur, cash_cur, invest_cur = _compute_portfolio_totals_from_positions(
+            df_portfolio,
+            fallback_cash=float(cash),
+        )
+        if total_val_cur > 0:
+            total_val = float(total_val_cur)
+            cash = float(cash_cur)
+            invest = float(invest_cur)
+            roi = ((total_val / init_cap) - 1.0) if init_cap else 0.0
+            cash_pct = (cash / total_val * 100.0) if total_val > 0 else 0.0
+
         # Signals/alerts activity in the last 24h for header.
         now_utc = pd.Timestamp.now(tz="UTC")
         signals_24h = 0
@@ -7147,7 +7158,15 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 else None
             ),
             "last_decision_summary": str(latest_run_meta.get("decision_summary") or ""),
-            "last_update": pd.to_datetime(latest.get("snapshot_ts"), errors="coerce", utc=True),
+            "last_update": max(
+                [
+                    ts for ts in [
+                        pd.to_datetime(latest.get("snapshot_ts"), errors="coerce", utc=True),
+                        pd.to_datetime(df_portfolio.get("updatedat"), errors="coerce", utc=True).max() if "updatedat" in df_portfolio.columns else pd.NaT,
+                    ] if pd.notna(ts)
+                ],
+                default=pd.NaT,
+            ),
         }
 
         payload.update(
@@ -7458,6 +7477,38 @@ def _compute_position_pnl_lists(df_port: pd.DataFrame) -> tuple[list[dict[str, o
         return rows
 
     return _rows(top), _rows(worst)
+
+
+def _compute_portfolio_totals_from_positions(
+    df_port: pd.DataFrame,
+    *,
+    fallback_cash: float = 0.0,
+) -> tuple[float, float, float]:
+    cash_val = float(safe_float(fallback_cash))
+    if df_port is None or df_port.empty or "symbol" not in df_port.columns:
+        return cash_val, cash_val, 0.0
+
+    df = df_port.copy()
+    df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+    if "marketvalue" not in df.columns:
+        df["marketvalue"] = 0.0
+    df["marketvalue"] = safe_float_series(df["marketvalue"])
+    df = df[~df["symbol"].isin(["__META__"])].copy()
+    if df.empty:
+        return cash_val, cash_val, 0.0
+
+    cash_rows = df[df["symbol"] == "CASH_EUR"]
+    if not cash_rows.empty:
+        cash_val = float(cash_rows["marketvalue"].sum())
+
+    equity_df = df[df["symbol"] != "CASH_EUR"].copy()
+    invest_val = float(equity_df["marketvalue"].sum()) if not equity_df.empty else 0.0
+    total_val = float(df["marketvalue"].sum())
+    if total_val <= 0 and (cash_val > 0 or invest_val > 0):
+        total_val = cash_val + invest_val
+    if invest_val <= 0 and total_val > cash_val:
+        invest_val = max(0.0, total_val - cash_val)
+    return total_val, cash_val, invest_val
 
 
 def _compute_concentration_and_sectors(df_port: pd.DataFrame) -> dict[str, object]:
