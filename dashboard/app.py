@@ -6490,6 +6490,7 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
         "df_portfolio": pd.DataFrame(),
         "df_performance": pd.DataFrame(),
         "df_transactions": pd.DataFrame(),
+        "df_realized_open_lots": pd.DataFrame(),
         "df_ai_signals": pd.DataFrame(),
         "df_alerts": pd.DataFrame(),
         "df_runs": pd.DataFrame(),
@@ -6698,6 +6699,42 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             LEFT JOIN lot_realized lr ON lr.fill_id = f.fill_id
             LEFT JOIN core.runs r ON r.run_id = f.run_id
             ORDER BY f.ts_fill
+            """,
+        )
+
+        df_realized_open_lots = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              symbol AS symbol,
+              open_fill_id AS open_fill_id,
+              open_ts AS open_ts,
+              CAST(open_qty AS DOUBLE) AS open_qty,
+              CAST(remaining_qty AS DOUBLE) AS remaining_qty,
+              CAST(open_price AS DOUBLE) AS open_price,
+              CAST(
+                COALESCE(
+                  TRY_CAST(json_extract(meta_json, '$.realized_pnl_partial') AS DOUBLE),
+                  0
+                ) AS DOUBLE
+              ) AS realized_partial_pnl
+            FROM core.position_lots
+            WHERE UPPER(COALESCE(status, '')) = 'OPEN'
+              AND CAST(COALESCE(remaining_qty, 0) AS DOUBLE) > 0
+              AND ABS(
+                COALESCE(
+                  TRY_CAST(json_extract(meta_json, '$.realized_pnl_partial') AS DOUBLE),
+                  0
+                )
+              ) > 0.005
+            ORDER BY
+              ABS(
+                COALESCE(
+                  TRY_CAST(json_extract(meta_json, '$.realized_pnl_partial') AS DOUBLE),
+                  0
+                )
+              ) DESC,
+              symbol
             """,
         )
 
@@ -7176,6 +7213,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 "df_portfolio": normalize_cols(df_portfolio),
                 "df_performance": normalize_cols(df_perf) if df_perf is not None else pd.DataFrame(),
                 "df_transactions": normalize_cols(df_transactions) if df_transactions is not None else pd.DataFrame(),
+                "df_realized_open_lots": normalize_cols(df_realized_open_lots) if df_realized_open_lots is not None else pd.DataFrame(),
                 "df_ai_signals": normalize_cols(df_ai_signals) if df_ai_signals is not None else pd.DataFrame(),
                 "df_alerts": normalize_cols(df_alerts) if df_alerts is not None else pd.DataFrame(),
                 "df_runs": normalize_cols(df_runs) if df_runs is not None else pd.DataFrame(),
@@ -8424,11 +8462,13 @@ if page == "Dashboard Trading":
             df_port = active_portfolio.get("df_portfolio", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
             df_perf = active_portfolio.get("df_performance", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
             df_trans = active_portfolio.get("df_transactions", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+            df_realized_open = active_portfolio.get("df_realized_open_lots", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
             df_sig_dashboard = active_portfolio.get("df_ai_signals", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
             df_alt_dashboard = active_portfolio.get("df_alerts", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
 
             df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
             df_trans = enrich_df_with_name(df_trans, df_univ) if df_trans is not None else pd.DataFrame()
+            df_realized_open = enrich_df_with_name(df_realized_open, df_univ) if df_realized_open is not None else pd.DataFrame()
 
             init_cap = safe_float(selected_summary.get("init_cap", 50000.0)) or 50000.0
             total_val = safe_float(selected_summary.get("total_val", 0.0))
@@ -8643,8 +8683,18 @@ if page == "Dashboard Trading":
             sym = df_port.get("symbol", pd.Series("", index=df_port.index)).astype(str).str.upper().str.strip()
             latent_pnl = float(safe_float_series(df_port[~sym.isin(["CASH_EUR", "__META__"])]["unrealizedpnl"]).sum())
 
-        realized_pnl = float(tx_norm["realized_pnl"].sum()) if not tx_norm.empty else 0.0
+        realized_closed_pnl = float(tx_norm["realized_pnl"].sum()) if not tx_norm.empty else 0.0
+        realized_partial_pnl = 0.0
+        if df_realized_open is not None and not df_realized_open.empty:
+            partial_col = _first_existing_column(df_realized_open, ["realized_partial_pnl", "realizedpartialpnl"])
+            if partial_col:
+                realized_partial_pnl = float(safe_float_series(df_realized_open[partial_col]).sum())
+
+        realized_pnl = realized_closed_pnl + realized_partial_pnl
         total_gain = total_val - init_cap
+        residual_other = total_gain - realized_pnl - latent_pnl
+        if abs(residual_other) < 0.005:
+            residual_other = 0.0
 
         v_pnl, v_eff, v_quality, v_risk = st.tabs(
             [
@@ -8656,17 +8706,47 @@ if page == "Dashboard Trading":
         )
 
         with v_pnl:
-            m1, m2, m3 = st.columns(3)
+            m1, m2, m3, m4 = st.columns(4)
             m1.metric("P&L realise", f"{realized_pnl:,.2f} EUR")
-            m2.metric("P&L latent", f"{latent_pnl:,.2f} EUR")
-            m3.metric("Gain total", f"{total_gain:,.2f} EUR")
+            m2.metric("Realise partiel", f"{realized_partial_pnl:,.2f} EUR")
+            m3.metric("P&L latent", f"{latent_pnl:,.2f} EUR")
+            m4.metric("Gain total", f"{total_gain:,.2f} EUR")
+
+            if abs(realized_partial_pnl) >= 0.005:
+                st.caption(
+                    f"Le P&L realise inclut {realized_partial_pnl:,.2f} EUR de realise partiel "
+                    "encore stocke dans des lots ouverts."
+                )
+            if abs(residual_other) >= 0.005:
+                st.caption(
+                    f"Ecart residuel de {residual_other:,.2f} EUR entre realise+latent et gain total. "
+                    "Cela correspond a des flux hors P&L de position (couts IA, dividendes, ajustements cash, etc.)."
+                )
+
+            wf_x = ["Capital initial", "P&L realise clos"]
+            wf_y = [init_cap, realized_closed_pnl]
+            wf_measure = ["absolute", "relative"]
+            if abs(realized_partial_pnl) >= 0.005:
+                wf_x.append("P&L realise partiel")
+                wf_y.append(realized_partial_pnl)
+                wf_measure.append("relative")
+            wf_x.append("P&L latent")
+            wf_y.append(latent_pnl)
+            wf_measure.append("relative")
+            if abs(residual_other) >= 0.005:
+                wf_x.append("Autres flux")
+                wf_y.append(residual_other)
+                wf_measure.append("relative")
+            wf_x.append("Total equity")
+            wf_y.append(0)
+            wf_measure.append("total")
 
             fig_wf = go.Figure(
                 go.Waterfall(
                     orientation="v",
-                    measure=["absolute", "relative", "relative", "total"],
-                    x=["Capital initial", "P&L realise", "P&L latent", "Total equity"],
-                    y=[init_cap, realized_pnl, latent_pnl, 0],
+                    measure=wf_measure,
+                    x=wf_x,
+                    y=wf_y,
                     increasing={"marker": {"color": "#28a745"}},
                     decreasing={"marker": {"color": "#dc3545"}},
                     totals={"marker": {"color": "#0d6efd"}},
@@ -8675,6 +8755,32 @@ if page == "Dashboard Trading":
             )
             fig_wf.update_layout(title="Cascade de valeur", height=360, margin=dict(t=50, b=20, l=20, r=20))
             st.plotly_chart(fig_wf, use_container_width=True)
+
+            if df_realized_open is not None and not df_realized_open.empty:
+                with st.expander("Detail du realise partiel sur lots ouverts", expanded=False):
+                    detail_cols = [
+                        c
+                        for c in ["symbol", "name", "open_ts", "open_qty", "remaining_qty", "open_price", "realized_partial_pnl"]
+                        if c in df_realized_open.columns
+                    ]
+                    if detail_cols:
+                        df_realized_open_view = df_realized_open[detail_cols].copy()
+                        df_realized_open_view = df_realized_open_view.rename(
+                            columns={
+                                "symbol": "Symbole",
+                                "name": "Nom",
+                                "open_ts": "Ouverture lot",
+                                "open_qty": "Qte ouverte",
+                                "remaining_qty": "Qte restante",
+                                "open_price": "Prix ouverture",
+                                "realized_partial_pnl": "Realise partiel",
+                            }
+                        )
+                        render_interactive_table(
+                            df_realized_open_view,
+                            key_suffix=f"realized_open_{selected_portfolio_key or 'active'}",
+                            hide_index=True,
+                        )
 
             curve = _build_realized_vs_total_curve(perf_ts, tx_norm, init_cap)
             if curve.empty:
