@@ -106,6 +106,66 @@ def _safe_str(v, max_len: int = 4000) -> str:
     return s[:max_len]
 
 
+FX_SUFFIX = "=X"
+FX_CURRENCY_CODES = {
+    "USD",
+    "EUR",
+    "JPY",
+    "GBP",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+    "SEK",
+    "NOK",
+    "DKK",
+    "CNH",
+    "CNY",
+    "HKD",
+    "SGD",
+    "MXN",
+    "ZAR",
+    "TRY",
+    "PLN",
+    "CZK",
+    "HUF",
+    "ILS",
+    "RUB",
+    "BRL",
+    "INR",
+    "KRW",
+}
+
+
+def _normalize_symbol_alias(symbol: str, max_len: int = 32) -> str:
+    raw = _safe_str(symbol, max_len=max_len).upper()
+    if not raw:
+        return ""
+    if raw.endswith(FX_SUFFIX):
+        return raw
+
+    candidate = raw[3:] if raw.startswith("FX:") else raw
+    candidate = "".join(ch for ch in candidate if "A" <= ch <= "Z")
+    if len(candidate) >= 6:
+        pair = candidate[:6]
+        base, quote = pair[:3], pair[3:6]
+        if base in FX_CURRENCY_CODES and quote in FX_CURRENCY_CODES:
+            return f"{pair}{FX_SUFFIX}"
+    return raw
+
+
+def _symbol_request_context(symbol: str, max_len: int = 32) -> Tuple[str, str]:
+    requested = _safe_str(symbol, max_len=max_len).upper()
+    resolved = _normalize_symbol_alias(requested, max_len=max_len) or requested
+    return requested, resolved
+
+
+def _symbol_log_label(requested_symbol: str, resolved_symbol: str) -> str:
+    if requested_symbol == resolved_symbol:
+        return requested_symbol
+    return f"{requested_symbol}[{resolved_symbol}]"
+
+
 def _pick_num(*vals) -> Optional[float]:
     for v in vals:
         n = _safe_num(v)
@@ -877,12 +937,14 @@ def health():
 def cache_status(symbol: str = Query(...), interval: str = Query("1d")):
     """Check the status of cache for a given symbol/interval without fetching."""
     _safe_mkdir(CACHE_DIR)
-    cached_df, cached_meta = _read_cache(symbol, interval)
-    sym_state = _load_symbol_state(symbol, interval)
+    requested_symbol, resolved_symbol = _symbol_request_context(symbol)
+    cached_df, cached_meta = _read_cache(resolved_symbol, interval)
+    sym_state = _load_symbol_state(resolved_symbol, interval)
     cached_ok = cached_df is not None and not cached_df.empty
 
     result = {
-        "symbol": symbol,
+        "symbol": requested_symbol,
+        "resolvedSymbol": resolved_symbol,
         "interval": interval,
         "cached": cached_ok,
         "stale": _is_cache_stale(cached_df, interval) if cached_ok else None,
@@ -909,13 +971,15 @@ def reset_cooldown(symbol: str = Query(None), interval: str = Query(None)):
     """Reset cooldown for a symbol/interval or all if not specified."""
     _safe_mkdir(STATE_DIR)
     if symbol and interval:
-        st = _load_symbol_state(symbol, interval)
-        _clear_cooldown(st, symbol, interval)
-        return {"ok": True, "reset": f"{symbol}/{interval}"}
+        requested_symbol, resolved_symbol = _symbol_request_context(symbol)
+        st = _load_symbol_state(resolved_symbol, interval)
+        _clear_cooldown(st, resolved_symbol, interval)
+        return {"ok": True, "reset": f"{requested_symbol}/{interval}", "resolvedSymbol": resolved_symbol}
     elif symbol:
         # Reset all intervals for this symbol
         import glob
-        safe = symbol.replace("/", "_").replace(":", "_")
+        requested_symbol, resolved_symbol = _symbol_request_context(symbol)
+        safe = resolved_symbol.replace("/", "_").replace(":", "_")
         pattern = os.path.join(STATE_DIR, f"{safe}__*.state.json")
         files = glob.glob(pattern)
         for f in files:
@@ -923,7 +987,12 @@ def reset_cooldown(symbol: str = Query(None), interval: str = Query(None)):
                 os.remove(f)
             except Exception:
                 pass
-        return {"ok": True, "reset": f"{symbol}/*", "files_cleared": len(files)}
+        return {
+            "ok": True,
+            "reset": f"{requested_symbol}/*",
+            "resolvedSymbol": resolved_symbol,
+            "files_cleared": len(files),
+        }
     else:
         # Reset all
         import glob
@@ -950,8 +1019,10 @@ def history(
     _safe_mkdir(CACHE_DIR)
     _safe_mkdir(STATE_DIR)
 
+    requested_symbol, resolved_symbol = _symbol_request_context(symbol)
+    symbol_log = _symbol_log_label(requested_symbol, resolved_symbol)
     fetched_at = _utcnow().isoformat()
-    sym_state = _load_symbol_state(symbol, interval)
+    sym_state = _load_symbol_state(resolved_symbol, interval)
 
     # Clamp lookback by interval capability
     cap = INTERVAL_MAX_LOOKBACK.get(interval, lookback_days)
@@ -960,7 +1031,7 @@ def history(
     end_dt = _utcnow()
     start_dt = end_dt - timedelta(days=effective_lookback)
 
-    cached_df, cached_meta = _read_cache(symbol, interval)
+    cached_df, cached_meta = _read_cache(resolved_symbol, interval)
     cached_ok = cached_df is not None and not cached_df.empty
     cache_stale = _is_cache_stale(cached_df, interval) if cached_ok else True
 
@@ -978,7 +1049,8 @@ def history(
         return {
             "ok": True,
             "stale": bool(stale_flag),
-            "symbol": symbol,
+            "symbol": requested_symbol,
+            "resolvedSymbol": resolved_symbol,
             "interval": interval,
             "lookback_days": effective_lookback,
             "source": source_override,
@@ -995,14 +1067,14 @@ def history(
 
     # If cache is fresh and we don't force refresh, return cache immediately
     if not need_fetch:
-        print(f"[CACHE HIT] {symbol}/{interval}: fresh cache, serving directly", flush=True)
+        print(f"[CACHE HIT] {symbol_log}/{interval}: fresh cache, serving directly", flush=True)
         return _respond_from_df(cached_df, False, None, "cache")
 
     # We need fresh data. Check per-symbol cooldown.
     if _is_in_cooldown(sym_state):
         until_ts = int(sym_state.get("cooldown_until_ts", 0) or 0)
         remaining = until_ts - int(time.time())
-        print(f"[COOLDOWN] {symbol}/{interval}: in cooldown for {remaining}s more", flush=True)
+        print(f"[COOLDOWN] {symbol_log}/{interval}: in cooldown for {remaining}s more", flush=True)
 
         if cached_ok:
             return _respond_from_df(
@@ -1013,7 +1085,8 @@ def history(
         return {
             "ok": False,
             "stale": None,
-            "symbol": symbol,
+            "symbol": requested_symbol,
+            "resolvedSymbol": resolved_symbol,
             "interval": interval,
             "lookback_days": effective_lookback,
             "source": "cooldown",
@@ -1040,7 +1113,7 @@ def history(
         else:
             start_fetch = start_dt
 
-        df_new = _download_incremental(symbol, interval, start_fetch, end_dt)
+        df_new = _download_incremental(resolved_symbol, interval, start_fetch, end_dt)
 
         # Merge with cache
         if cached_ok and df_new is not None and not df_new.empty:
@@ -1054,10 +1127,10 @@ def history(
             # Update cache metadata to avoid re-fetching too soon
             meta = cached_meta or {}
             meta["lastCheckAt"] = _utcnow().isoformat()
-            _, meta_path = _cache_paths(symbol, interval)
+            _, meta_path = _cache_paths(resolved_symbol, interval)
             _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False))
             # Mark success (empty is not an error outside market hours)
-            _clear_cooldown(sym_state, symbol, interval)
+            _clear_cooldown(sym_state, resolved_symbol, interval)
             return _respond_from_df(cached_df, True, "UPSTREAM_EMPTY_CACHE_OK", "cache_checked")
         else:
             raise RuntimeError("UPSTREAM_EMPTY_NO_CACHE")
@@ -1091,7 +1164,8 @@ def history(
         # Write updated cache
         last_ts = df_all["Datetime"].max()
         meta = {
-            "symbol": symbol,
+            "symbol": requested_symbol,
+            "resolvedSymbol": resolved_symbol,
             "interval": interval,
             "updatedAt": _utcnow().isoformat(),
             "lookbackDaysStored": int(keep_days + 5),
@@ -1099,7 +1173,7 @@ def history(
             "lastTs": (last_ts.isoformat().replace("+00:00", "Z") if pd.notna(last_ts) else None),
             "source": "yahoo_finance_yfinance",
         }
-        _write_cache(symbol, interval, df_all, meta)
+        _write_cache(resolved_symbol, interval, df_all, meta)
 
         # Build response
         resp = _respond_from_df(df_all, False, None, "yahoo_finance_yfinance")
@@ -1113,7 +1187,7 @@ def history(
                     "cache"
                 )
             return {
-                "ok": False, "stale": None, "symbol": symbol, "interval": interval,
+                "ok": False, "stale": None, "symbol": requested_symbol, "resolvedSymbol": resolved_symbol, "interval": interval,
                 "lookback_days": effective_lookback, "source": "yahoo_finance_yfinance",
                 "fetchedAt": fetched_at,
                 "error": f"NOT_ENOUGH_BARS count={resp['count']} min={min_bars}",
@@ -1122,27 +1196,27 @@ def history(
             }
 
         # Success: clear cooldown
-        _clear_cooldown(sym_state, symbol, interval)
-        print(f"[SUCCESS] {symbol}/{interval}: {resp['count']} bars, last={resp['dataAsOf']}", flush=True)
+        _clear_cooldown(sym_state, resolved_symbol, interval)
+        print(f"[SUCCESS] {symbol_log}/{interval}: {resp['count']} bars, last={resp['dataAsOf']}", flush=True)
         return resp
 
     except Exception as e:
         msg = str(e)
-        print(f"[ERROR] {symbol}/{interval}: {msg}", flush=True)
+        print(f"[ERROR] {symbol_log}/{interval}: {msg}", flush=True)
 
         error_type = _classify_error(msg)
 
         if error_type == "ratelimit":
-            _set_cooldown(sym_state, symbol, interval, f"RATE_LIMIT: {msg}", is_ratelimit=True)
+            _set_cooldown(sym_state, resolved_symbol, interval, f"RATE_LIMIT: {msg}", is_ratelimit=True)
         elif error_type == "network":
-            _set_cooldown(sym_state, symbol, interval, f"NETWORK: {msg}", is_ratelimit=False)
+            _set_cooldown(sym_state, resolved_symbol, interval, f"NETWORK: {msg}", is_ratelimit=False)
         elif error_type == "empty":
             # Empty data is not really an error - don't punish hard
             if not cached_ok:
-                _set_cooldown(sym_state, symbol, interval, f"EMPTY_NO_CACHE: {msg}", is_ratelimit=False)
+                _set_cooldown(sym_state, resolved_symbol, interval, f"EMPTY_NO_CACHE: {msg}", is_ratelimit=False)
             # If we have cache, just return it without setting cooldown
         else:
-            _set_cooldown(sym_state, symbol, interval, f"ERROR: {msg}", is_ratelimit=False)
+            _set_cooldown(sym_state, resolved_symbol, interval, f"ERROR: {msg}", is_ratelimit=False)
 
         if cached_ok:
             return _respond_from_df(
@@ -1152,7 +1226,7 @@ def history(
             )
 
         return {
-            "ok": False, "stale": None, "symbol": symbol, "interval": interval,
+            "ok": False, "stale": None, "symbol": requested_symbol, "resolvedSymbol": resolved_symbol, "interval": interval,
             "lookback_days": effective_lookback, "source": "yahoo_finance_yfinance",
             "fetchedAt": fetched_at, "error": f"{error_type.upper()}: {msg}",
             "count": 0, "dataAsOf": None, "last": None, "bars": [],
@@ -1250,13 +1324,16 @@ def get_quote(
     if side_u not in ("BUY", "SELL"):
         side_u = "BUY"
 
-    for sym in symbol_list:
-        cache_path = _json_cache_path("quote", sym)
+    for requested_symbol in symbol_list:
+        resolved_symbol = _normalize_symbol_alias(requested_symbol) or requested_symbol
+        cache_path = _json_cache_path("quote", resolved_symbol)
         if not force_refresh:
             cached = _read_json_cache(cache_path, max_age_seconds=max_age_seconds)
             if cached is not None:
                 row = dict(cached)
                 row["source"] = "cache"
+                row["symbol"] = requested_symbol
+                row["resolvedSymbol"] = resolved_symbol
                 results.append(row)
                 if row.get("ok"):
                     success += 1
@@ -1264,12 +1341,13 @@ def get_quote(
 
         try:
             _global_rate_limit_sleep()
-            tick = with_retries(lambda: yf.Ticker(sym), max_retries=3, backoff_factor=1.5)
+            tick = with_retries(lambda: yf.Ticker(resolved_symbol), max_retries=3, backoff_factor=1.5)
             info_raw = with_retries(lambda: tick.info, max_retries=3, backoff_factor=1.5)
             info = info_raw if isinstance(info_raw, dict) else {}
             fast_raw = with_retries(lambda: tick.fast_info, max_retries=3, backoff_factor=1.5)
             fast = dict(fast_raw or {})
-            row = _extract_quote_snapshot(sym, info, fast, qty=qty, side=side_u)
+            row = _extract_quote_snapshot(requested_symbol, info, fast, qty=qty, side=side_u)
+            row["resolvedSymbol"] = resolved_symbol
             row["fetchedAt"] = _utcnow().isoformat()
             row["source"] = "yahoo_finance_yfinance"
             _write_json_cache(cache_path, row)
@@ -1277,7 +1355,7 @@ def get_quote(
             success += 1
         except Exception as e:
             err = str(e)
-            print(f"[ERROR QUOTE] {sym}: {err}", flush=True)
+            print(f"[ERROR QUOTE] {_symbol_log_label(requested_symbol, resolved_symbol)}: {err}", flush=True)
 
             stale = _read_json_cache(cache_path, max_age_seconds=86400)
             if stale is not None:
@@ -1285,6 +1363,8 @@ def get_quote(
                 row["source"] = "cache_stale"
                 row["stale"] = True
                 row["error"] = err
+                row["symbol"] = requested_symbol
+                row["resolvedSymbol"] = resolved_symbol
                 results.append(row)
                 if row.get("ok"):
                     success += 1
@@ -1293,7 +1373,8 @@ def get_quote(
             results.append(
                 {
                     "ok": False,
-                    "symbol": sym,
+                    "symbol": requested_symbol,
+                    "resolvedSymbol": resolved_symbol,
                     "error": err,
                     "source": "yahoo_finance_yfinance",
                 }

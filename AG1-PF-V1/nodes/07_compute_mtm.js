@@ -96,6 +96,7 @@ return $input.all().map((it) => {
   let mtm_reason = null;
 
   const price = chosen?.ok ? chosen.price : null;
+  const usedFallbackInput = chosen?.picked === "fallback";
 
   if (qty == null || avgPrice == null) {
     mtm_ok = false;
@@ -105,6 +106,9 @@ return $input.all().map((it) => {
     mtm_ok = false;
     mtm_status = "NO_PRICE";
     mtm_reason = `No usable price from yf_1h/yf_1d (1h=${last1h?.reason || "n/a"}, 1d=${last1d?.reason || "n/a"})`;
+  } else if (usedFallbackInput) {
+    mtm_status = "FALLBACK_INPUT";
+    mtm_reason = `No usable price from yf_1h/yf_1d; reused portfolio input (1h=${last1h?.reason || "n/a"}, 1d=${last1d?.reason || "n/a"})`;
   }
 
   const MarketValue = (mtm_ok ? qty * price : safeNum(j.MarketValue) ?? 0);
