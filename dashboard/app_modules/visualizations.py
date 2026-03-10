@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import re
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -10,11 +11,59 @@ import streamlit as st
 from app_modules.core import safe_float, safe_float_series
 
 
+FX_SUFFIX = "=X"
+FX_CURRENCY_CODES = {
+    "USD",
+    "EUR",
+    "JPY",
+    "GBP",
+    "CHF",
+    "CAD",
+    "AUD",
+    "NZD",
+    "SEK",
+    "NOK",
+    "DKK",
+    "CNH",
+    "CNY",
+    "HKD",
+    "SGD",
+    "MXN",
+    "ZAR",
+    "TRY",
+    "PLN",
+    "CZK",
+    "HUF",
+    "ILS",
+    "RUB",
+    "BRL",
+    "INR",
+    "KRW",
+}
+
+
 def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for col in candidates:
         if col in df.columns:
             return col
     return None
+
+
+def _normalize_history_symbol(symbol: str) -> str:
+    raw = str(symbol or "").strip().upper()
+    if not raw:
+        return ""
+    if raw.endswith(FX_SUFFIX):
+        return raw
+
+    fx_candidate = raw[3:] if raw.startswith("FX:") else raw
+    fx_candidate = re.sub(r"[^A-Z]", "", fx_candidate)
+    if len(fx_candidate) >= 6:
+        pair = fx_candidate[:6]
+        base, quote = pair[:3], pair[3:6]
+        if base in FX_CURRENCY_CODES and quote in FX_CURRENCY_CODES:
+            return f"{pair}{FX_SUFFIX}"
+    return raw
 
 
 def _normalize_portfolio_positions(df_portfolio: pd.DataFrame) -> pd.DataFrame:
@@ -92,11 +141,14 @@ def _fetch_one_symbol_history(
     interval: str,
     lookback_days: int,
 ) -> pd.DataFrame:
+    request_symbol = _normalize_history_symbol(symbol)
+    if not request_symbol:
+        return pd.DataFrame()
     try:
         resp = requests.get(
             f"{yfinance_api_url}/history",
             params={
-                "symbol": symbol,
+                "symbol": request_symbol,
                 "interval": interval,
                 "lookback_days": int(lookback_days),
                 "allow_stale": "true",
