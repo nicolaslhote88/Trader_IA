@@ -44,6 +44,7 @@ const ordersIn = Array.isArray(input.orders) ? input.orders : [];
 const warnings = Array.isArray(input.warnings) ? input.warnings : [];
 const ts_end = new Date().toISOString();
 const run_id = runCtx.runId || `RUN_${Date.now()}`;
+const db_path = normalizeDbPath(input.db_path || runCtx.db_path || "");
 
 // IMPORTANT: portfolio is in ctx (from node 7)
 const portfolioSummary = input.portfolioSummary || ctx.portfolioSummary || { positions: [] };
@@ -135,6 +136,7 @@ const bundle = {
     ts_end,
     tz: "Europe/Paris",
     model: runCtx.model || "UNKNOWN",
+    db_path: db_path || null,
     decision_summary: input.decision || "NO_TRADE",
     agent_output_json: agentDecision,
     warnings_json: warnings,
@@ -172,7 +174,7 @@ const bundle = {
 return [{
   json: {
     run_id,
-    db_path: normalizeDbPath(input.db_path || "/files/duckdb/ag1_v3.duckdb"),
+    db_path,
     bundle,
     summary: {
       decision: input.decision,

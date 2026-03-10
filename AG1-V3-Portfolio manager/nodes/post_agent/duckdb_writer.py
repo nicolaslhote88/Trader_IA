@@ -1038,6 +1038,28 @@ def _upsert_risk_metrics_row(
     )
     return 1
 
+
+def _summary_from_bundle_snapshots(
+    run_id: str,
+    ts: str,
+    positions_rows_written: int,
+    portfolio_row: Mapping[str, Any],
+    risk_row: Mapping[str, Any],
+) -> Dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "ts": _parse_ts((portfolio_row or {}).get("ts") or (risk_row or {}).get("ts"), ts),
+        "cash_eur": round(_to_float((portfolio_row or {}).get("cash_eur"), 0.0) or 0.0, 2),
+        "equity_eur": round(_to_float((portfolio_row or {}).get("equity_eur"), 0.0) or 0.0, 2),
+        "total_value_eur": round(_to_float((portfolio_row or {}).get("total_value_eur"), 0.0) or 0.0, 2),
+        "positions_count": int(
+            _to_int((risk_row or {}).get("positions_count"), positions_rows_written) or positions_rows_written or 0
+        ),
+        "positions_rows_written": positions_rows_written,
+        "trades_this_run": int(_to_int((portfolio_row or {}).get("trades_this_run"), 0) or 0),
+        "risk_status": _clean_text((risk_row or {}).get("risk_status"), 32) or "BALANCED",
+    }
+
 def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> Dict[str, Any]:
     run_row = con.execute(
         """
@@ -1511,14 +1533,27 @@ def upsert_run_bundle(db_path: str, bundle_json: Any) -> Dict[str, Any]:
             rows["backfill_queue"] = _upsert_backfill(con, bundle.get("backfill_queue") or [], run_id, default_ts)
 
             snapshots = bundle.get("snapshots") or {}
+            snapshot_positions = snapshots.get("positions") or []
+            snapshot_portfolio = snapshots.get("portfolio") or {}
+            snapshot_risk = snapshots.get("risk") or {}
+            positions_rows_written = 0
             if snapshots.get("positions"):
-                _upsert_positions_snapshot_rows(con, run_id, default_ts, snapshots.get("positions") or [])
+                positions_rows_written = _upsert_positions_snapshot_rows(con, run_id, default_ts, snapshot_positions)
             if snapshots.get("portfolio"):
-                _upsert_portfolio_snapshot_row(con, run_id, default_ts, snapshots.get("portfolio") or {})
+                _upsert_portfolio_snapshot_row(con, run_id, default_ts, snapshot_portfolio)
             if snapshots.get("risk"):
-                _upsert_risk_metrics_row(con, run_id, default_ts, snapshots.get("risk") or {})
+                _upsert_risk_metrics_row(con, run_id, default_ts, snapshot_risk)
 
-            snapshot_summary = _compute_snapshots_with_con(con, run_id)
+            if snapshot_positions or snapshot_portfolio or snapshot_risk:
+                snapshot_summary = _summary_from_bundle_snapshots(
+                    run_id,
+                    default_ts,
+                    positions_rows_written,
+                    snapshot_portfolio,
+                    snapshot_risk,
+                )
+            else:
+                snapshot_summary = _compute_snapshots_with_con(con, run_id)
 
             con.execute("COMMIT")
         except Exception:

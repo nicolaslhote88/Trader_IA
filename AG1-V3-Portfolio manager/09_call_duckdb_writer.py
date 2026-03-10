@@ -4,15 +4,28 @@ import sys
 import traceback
 from pathlib import Path
 
-DEFAULT_DB_PATH_FALLBACK = "/files/duckdb/ag1_v3.duckdb"
+LEGACY_DB_FILENAME = "ag1_v3.duckdb"
+DEFAULT_DB_PATH_FALLBACK = f"/files/duckdb/{LEGACY_DB_FILENAME}"
 GENERIC_DB_ENV_CANDIDATES = (
     "AG1_DB_PATH",
     "AG1_DUCKDB_PATH",
 )
 MODEL_DB_ENV_MAP = (
-    (("gpt-5", "chatgpt"), "AG1_CHATGPT52_DUCKDB_PATH"),
-    (("grok", "grok-4", "grok41"), "AG1_GROK41_REASONING_DUCKDB_PATH"),
-    (("gemini", "gemini-3"), "AG1_GEMINI30_PRO_DUCKDB_PATH"),
+    (
+        ("gpt-5", "chatgpt"),
+        "AG1_CHATGPT52_DUCKDB_PATH",
+        "/files/duckdb/ag1_v3_chatgpt52.duckdb",
+    ),
+    (
+        ("grok", "grok-4", "grok41"),
+        "AG1_GROK41_REASONING_DUCKDB_PATH",
+        "/files/duckdb/ag1_v3_grok41_reasoning.duckdb",
+    ),
+    (
+        ("gemini", "gemini-3"),
+        "AG1_GEMINI30_PRO_DUCKDB_PATH",
+        "/files/duckdb/ag1_v3_gemini30_pro.duckdb",
+    ),
 )
 DEFAULT_WRITER_PATH = os.getenv(
     "AG1_DUCKDB_WRITER_PATH",
@@ -58,11 +71,13 @@ def _clean_path_text(value):
 def _resolve_default_db_path(bundle=None):
     run = bundle.get("run") if isinstance(bundle, dict) else None
     model_text = str((run or {}).get("model") or "").strip().lower()
-    for tokens, env_key in MODEL_DB_ENV_MAP:
+    for tokens, env_key, static_path in MODEL_DB_ENV_MAP:
         if any(token in model_text for token in tokens):
             value = _clean_path_text(os.getenv(env_key, ""))
             if value:
                 return value
+            if static_path:
+                return static_path
     for key in GENERIC_DB_ENV_CANDIDATES:
         value = _clean_path_text(os.getenv(key, ""))
         if value:
@@ -72,7 +87,7 @@ def _resolve_default_db_path(bundle=None):
 
 def _is_legacy_ag1_db_path(path_text):
     p = str(path_text or "").strip().lower().replace("\\", "/")
-    return p.endswith("/ag1_v3.duckdb")
+    return p.endswith(f"/{LEGACY_DB_FILENAME}")
 
 
 def _pick_db_path(payload, bundle):
@@ -344,7 +359,7 @@ try:
             raise ValueError("Missing db_path and AG1_*_DUCKDB_PATH env vars are empty.")
         if _is_legacy_ag1_db_path(db_path):
             raise ValueError(
-                "Refusing legacy AG1 DB path '/files/duckdb/ag1_v3.duckdb'. "
+                f"Refusing legacy AG1 DB path '/files/duckdb/{LEGACY_DB_FILENAME}'. "
                 "Each variant must write to its dedicated DuckDB."
             )
 
@@ -357,7 +372,19 @@ try:
         if not run_id and isinstance(bundle, dict):
             run_id = str((bundle.get("run") or {}).get("run_id") or "").strip()
 
-        snap_res = writer.compute_snapshots(db_path, run_id) if run_id else {}
+        bundle_snapshots = bundle.get("snapshots") if isinstance(bundle, dict) else {}
+        if (
+            run_id
+            and isinstance(bundle_snapshots, dict)
+            and (
+                bundle_snapshots.get("positions")
+                or bundle_snapshots.get("portfolio")
+                or bundle_snapshots.get("risk")
+            )
+        ):
+            snap_res = dict(upsert_res.get("snapshots") or {}) if isinstance(upsert_res, dict) else {}
+        else:
+            snap_res = writer.compute_snapshots(db_path, run_id) if run_id else {}
 
         out.append(
             {
