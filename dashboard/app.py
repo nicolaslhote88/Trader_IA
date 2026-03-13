@@ -4003,7 +4003,8 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     if not ts_col:
         return pd.DataFrame(columns=cols)
 
-    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce")
+    # Normalize all performance timestamps to UTC so merges with trades/events stay type-compatible.
+    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce", utc=True)
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
     if df.empty:
         return pd.DataFrame(columns=cols)
@@ -4057,7 +4058,7 @@ def _append_current_efficiency_point(
     invested_value: float,
 ) -> pd.DataFrame:
     cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
-    now_ts = pd.Timestamp.now()
+    now_ts = pd.Timestamp.now(tz="UTC")
     cur = pd.DataFrame(
         [
             {
@@ -4079,7 +4080,7 @@ def _append_current_efficiency_point(
             base[c] = pd.NA
 
     out = pd.concat([base[cols], cur[cols]], ignore_index=True)
-    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce")
+    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce", utc=True)
     out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
     out = out.drop_duplicates(subset=["timestamp"], keep="last")
     return out.reset_index(drop=True)
@@ -4112,7 +4113,8 @@ def _prepare_transactions(df_trans: pd.DataFrame) -> pd.DataFrame:
     )
     rationale_col = _first_existing_column(df, ["rationale", "commentary", "notes"])
 
-    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce") if ts_col else pd.NaT
+    # Force a single timezone baseline for trade merges and time-window filters.
+    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
     df["symbol"] = df[symbol_col].astype(str).str.strip().str.upper() if symbol_col else ""
     df["side"] = df[side_col].astype(str).str.strip().str.upper() if side_col else ""
     df["quantity"] = safe_float_series(df[qty_col]) if qty_col else 0.0
@@ -4147,13 +4149,17 @@ def _build_realized_vs_total_curve(df_perf_ts: pd.DataFrame, df_tx: pd.DataFrame
             "timestamp": df_perf_ts["timestamp"],
             "total_equity": df_perf_ts["total_value"],
         }
-    ).sort_values("timestamp")
+    )
+    curve["timestamp"] = pd.to_datetime(curve["timestamp"], errors="coerce", utc=True)
+    curve = curve.dropna(subset=["timestamp"]).sort_values("timestamp")
 
     if df_tx is None or df_tx.empty:
         curve["realized_equity"] = init_cap
         return curve
 
     realized = df_tx[(df_tx["realized_pnl"] != 0) & (df_tx["timestamp"].notna())][["timestamp", "realized_pnl"]].copy()
+    realized["timestamp"] = pd.to_datetime(realized["timestamp"], errors="coerce", utc=True)
+    realized = realized.dropna(subset=["timestamp"])
     realized = realized.sort_values("timestamp")
 
     if realized.empty:
