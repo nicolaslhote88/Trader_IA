@@ -4008,6 +4008,43 @@ def _normalize_utc_timestamp_series(values: object) -> pd.Series:
     return pd.Series(dtype="datetime64[ns, UTC]")
 
 
+def _filter_aberrant_total_value_points(df_ts: pd.DataFrame) -> pd.DataFrame:
+    if df_ts is None or df_ts.empty or "timestamp" not in df_ts.columns or "total_value" not in df_ts.columns:
+        return df_ts
+
+    wk = df_ts.copy()
+    wk["timestamp"] = _normalize_utc_timestamp_series(wk["timestamp"])
+    wk["total_value"] = pd.to_numeric(wk["total_value"], errors="coerce")
+    wk = wk.dropna(subset=["timestamp", "total_value"]).sort_values("timestamp").reset_index(drop=True)
+    if len(wk) < 3:
+        return wk
+
+    values = wk["total_value"]
+    prev_values = values.shift(1)
+    next_values = values.shift(-1)
+    neighbor_baseline = pd.concat([prev_values, next_values], axis=1).median(axis=1, skipna=True)
+    neighbor_max = pd.concat([prev_values.abs(), next_values.abs()], axis=1).max(axis=1).clip(lower=1.0)
+    neighbor_spread = (prev_values - next_values).abs() / neighbor_max
+    current_ratio = values / neighbor_baseline.clip(lower=1.0)
+
+    # Hide isolated valuation glitches from the dashboard view without touching source data.
+    drop_mask = (
+        prev_values.notna()
+        & next_values.notna()
+        & prev_values.gt(0)
+        & next_values.gt(0)
+        & neighbor_spread.le(0.12)
+        & (
+            values.le(0)
+            | current_ratio.le(0.40)
+        )
+    )
+
+    if bool(drop_mask.any()):
+        wk = wk.loc[~drop_mask].copy()
+    return wk.reset_index(drop=True)
+
+
 def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
     if df_perf is None or df_perf.empty:
@@ -4062,6 +4099,7 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     out["invested_value"] = out["equity_value"]
     if (out["invested_value"].abs().sum() == 0) and ("cash_value" in out.columns):
         out["invested_value"] = out["total_value"] - out["cash_value"]
+    out = _filter_aberrant_total_value_points(out)
     return out
 
 
