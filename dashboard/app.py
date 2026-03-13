@@ -4011,12 +4011,14 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     total_col = _first_existing_column(df, ["totalvalue", "totalvalueeur", "total_value", "portfolio_value"])
     cash_col = _first_existing_column(df, ["cash", "casheur", "cash_eur"])
     equity_col = _first_existing_column(df, ["equity", "equityeur", "equity_value", "invested"])
+    priority_col = _first_existing_column(df, ["perf_source_priority", "source_priority", "snapshot_priority"])
     if not any([total_col, cash_col, equity_col]):
         return pd.DataFrame(columns=cols)
 
     total_value = safe_float_series(df[total_col]) if total_col else pd.Series(0.0, index=df.index)
     cash_value = safe_float_series(df[cash_col]) if cash_col else pd.Series(0.0, index=df.index)
     equity_value = safe_float_series(df[equity_col]) if equity_col else pd.Series(0.0, index=df.index)
+    source_priority = safe_float_series(df[priority_col]) if priority_col else pd.Series(0.0, index=df.index)
 
     if not total_col and (cash_col or equity_col):
         total_value = cash_value + equity_value
@@ -4034,10 +4036,13 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
             "total_value": total_value,
             "cash_value": cash_value,
             "equity_value": equity_value,
+            "__source_priority": source_priority,
         }
     )
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["total_value"])
+    out = out.sort_values(["timestamp", "__source_priority"], kind="stable")
     out = out.groupby("timestamp", as_index=False).last().sort_values("timestamp")
+    out = out.drop(columns=["__source_priority"], errors="ignore")
     out["invested_value"] = out["equity_value"]
     if (out["invested_value"].abs().sum() == 0) and ("cash_value" in out.columns):
         out["invested_value"] = out["total_value"] - out["cash_value"]
@@ -6357,6 +6362,126 @@ def _ag1_fetchdf(conn, sql: str, params: list | None = None) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+def _ag1_table_columns(conn, table_name: str) -> set[str]:
+    schema_df = _ag1_fetchdf(conn, f"PRAGMA table_info('{table_name}')")
+    if schema_df is None or schema_df.empty or "name" not in schema_df.columns:
+        return set()
+    return {
+        str(col).strip().lower()
+        for col in schema_df["name"].dropna().astype(str).tolist()
+        if str(col).strip()
+    }
+
+
+def _ag1_pick_table_column(available_cols: set[str], candidates: list[str]) -> str:
+    for candidate in candidates:
+        if candidate in available_cols:
+            return candidate
+    return ""
+
+
+def _ag1_load_mtm_performance_history(conn) -> pd.DataFrame:
+    history_cols = _ag1_table_columns(conn, "portfolio_positions_mtm_history")
+    if not history_cols:
+        return pd.DataFrame()
+
+    hist_run_col = _ag1_pick_table_column(history_cols, ["run_id"])
+    hist_symbol_col = _ag1_pick_table_column(history_cols, ["symbol"])
+    hist_market_value_col = _ag1_pick_table_column(history_cols, ["market_value", "marketvalue"])
+    hist_updated_at_col = _ag1_pick_table_column(history_cols, ["updated_at", "updatedat"])
+    if not hist_run_col or not hist_symbol_col or not hist_market_value_col:
+        return pd.DataFrame()
+
+    fallback_ts_expr = f"MAX(h.{hist_updated_at_col})" if hist_updated_at_col else "NULL"
+    timestamp_expr = fallback_ts_expr
+    join_clause = ""
+    where_clauses: list[str] = []
+    group_by_parts = [f"h.{hist_run_col}"]
+
+    run_log_cols = _ag1_table_columns(conn, "portfolio_positions_mtm_run_log")
+    if run_log_cols:
+        run_log_run_col = _ag1_pick_table_column(run_log_cols, ["run_id"])
+        if run_log_run_col:
+            join_clause = f"LEFT JOIN portfolio_positions_mtm_run_log rl ON rl.{run_log_run_col} = h.{hist_run_col}"
+
+            ts_candidates: list[str] = []
+            if "finished_at" in run_log_cols:
+                ts_candidates.append("rl.finished_at")
+                group_by_parts.append("rl.finished_at")
+            if "started_at" in run_log_cols:
+                ts_candidates.append("rl.started_at")
+                group_by_parts.append("rl.started_at")
+            if ts_candidates:
+                if fallback_ts_expr != "NULL":
+                    ts_candidates.append(fallback_ts_expr)
+                timestamp_expr = f"COALESCE({', '.join(ts_candidates)})"
+
+            if "status" in run_log_cols:
+                where_clauses.append(
+                    "(rl.run_id IS NULL OR UPPER(COALESCE(rl.status, '')) IN ('', 'SUCCESS', 'PARTIAL'))"
+                )
+
+    where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+    group_by_sql = ", ".join(group_by_parts)
+
+    return _ag1_fetchdf(
+        conn,
+        f"""
+        WITH mtm_runs AS (
+          SELECT
+            {timestamp_expr} AS timestamp,
+            h.{hist_run_col} AS run_id,
+            CAST(
+              SUM(
+                CASE
+                  WHEN UPPER(COALESCE(h.{hist_symbol_col}, '')) <> '__META__' THEN COALESCE(h.{hist_market_value_col}, 0)
+                  ELSE 0
+                END
+              ) AS DOUBLE
+            ) AS totalvalueeur,
+            CAST(
+              SUM(
+                CASE
+                  WHEN UPPER(COALESCE(h.{hist_symbol_col}, '')) = 'CASH_EUR' THEN COALESCE(h.{hist_market_value_col}, 0)
+                  ELSE 0
+                END
+              ) AS DOUBLE
+            ) AS casheur,
+            CAST(
+              SUM(
+                CASE
+                  WHEN UPPER(COALESCE(h.{hist_symbol_col}, '')) NOT IN ('CASH_EUR', '__META__') THEN COALESCE(h.{hist_market_value_col}, 0)
+                  ELSE 0
+                END
+              ) AS DOUBLE
+            ) AS equityeur
+          FROM portfolio_positions_mtm_history h
+          {join_clause}
+          {where_sql}
+          GROUP BY {group_by_sql}
+        )
+        SELECT
+          timestamp,
+          run_id,
+          CAST(NULL AS VARCHAR) AS model,
+          totalvalueeur,
+          casheur,
+          equityeur,
+          CAST(NULL AS DOUBLE) AS cum_fees_eur,
+          CAST(NULL AS DOUBLE) AS cum_ai_cost_eur,
+          CAST(NULL AS BIGINT) AS trades_this_run,
+          CAST(NULL AS DOUBLE) AS roi,
+          CAST(NULL AS DOUBLE) AS drawdown_pct,
+          10 AS perf_source_priority,
+          'pf_mtm_history' AS perf_source
+        FROM mtm_runs
+        WHERE timestamp IS NOT NULL
+          AND totalvalueeur IS NOT NULL
+        ORDER BY timestamp
+        """,
+    )
+
+
 def _ag1_norm_run_id(value: object) -> str:
     txt = str(value or "").strip()
     if not txt:
@@ -6599,12 +6724,23 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
               CAST(ps.cum_ai_cost_eur AS DOUBLE) AS cum_ai_cost_eur,
               ps.trades_this_run AS trades_this_run,
               CAST(ps.roi AS DOUBLE) AS roi,
-              CAST(ps.drawdown_pct AS DOUBLE) AS drawdown_pct
+              CAST(ps.drawdown_pct AS DOUBLE) AS drawdown_pct,
+              0 AS perf_source_priority,
+              'core_snapshot' AS perf_source
             FROM selected ps
             LEFT JOIN core.runs r ON r.run_id = ps.run_id
             ORDER BY ps.ts
             """,
         )
+        df_mtm_perf = _ag1_load_mtm_performance_history(conn)
+        if df_mtm_perf is not None and not df_mtm_perf.empty:
+            df_perf = pd.concat([df_perf, df_mtm_perf], ignore_index=True, sort=False)
+            if "timestamp" in df_perf.columns:
+                df_perf["timestamp"] = pd.to_datetime(df_perf["timestamp"], errors="coerce", utc=True)
+                df_perf = df_perf.dropna(subset=["timestamp"])
+            sort_cols = [c for c in ["timestamp", "perf_source_priority"] if c in df_perf.columns]
+            if sort_cols:
+                df_perf = df_perf.sort_values(sort_cols, kind="stable").reset_index(drop=True)
 
         df_latest = _ag1_fetchdf(
             conn,
