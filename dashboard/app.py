@@ -3993,6 +3993,21 @@ def _canonicalize_asset_class_series(series: pd.Series) -> pd.Series:
     return series.map(_canonicalize_asset_class_label)
 
 
+def _normalize_utc_timestamp_series(values: object) -> pd.Series:
+    ts = pd.to_datetime(values, errors="coerce", utc=True)
+    if isinstance(ts, pd.Series):
+        if ts.empty:
+            return ts
+        try:
+            return ts.dt.as_unit("ns")
+        except Exception:
+            ints = ts.astype("int64", copy=False)
+            out = pd.to_datetime(ints, errors="coerce", utc=True)
+            out.index = ts.index
+            return out
+    return pd.Series(dtype="datetime64[ns, UTC]")
+
+
 def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
     if df_perf is None or df_perf.empty:
@@ -4003,8 +4018,8 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     if not ts_col:
         return pd.DataFrame(columns=cols)
 
-    # Normalize all performance timestamps to UTC so merges with trades/events stay type-compatible.
-    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce", utc=True)
+    # Normalize all performance timestamps to UTC nanoseconds so merges stay dtype-compatible.
+    df["timestamp"] = _normalize_utc_timestamp_series(df[ts_col])
     df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
     if df.empty:
         return pd.DataFrame(columns=cols)
@@ -4080,7 +4095,7 @@ def _append_current_efficiency_point(
             base[c] = pd.NA
 
     out = pd.concat([base[cols], cur[cols]], ignore_index=True)
-    out["timestamp"] = pd.to_datetime(out["timestamp"], errors="coerce", utc=True)
+    out["timestamp"] = _normalize_utc_timestamp_series(out["timestamp"])
     out = out.dropna(subset=["timestamp"]).sort_values("timestamp")
     out = out.drop_duplicates(subset=["timestamp"], keep="last")
     return out.reset_index(drop=True)
@@ -4113,8 +4128,8 @@ def _prepare_transactions(df_trans: pd.DataFrame) -> pd.DataFrame:
     )
     rationale_col = _first_existing_column(df, ["rationale", "commentary", "notes"])
 
-    # Force a single timezone baseline for trade merges and time-window filters.
-    df["timestamp"] = pd.to_datetime(df[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
+    # Force a single timezone baseline and resolution for trade merges and time-window filters.
+    df["timestamp"] = _normalize_utc_timestamp_series(df[ts_col]) if ts_col else pd.Series(pd.NaT, index=df.index)
     df["symbol"] = df[symbol_col].astype(str).str.strip().str.upper() if symbol_col else ""
     df["side"] = df[side_col].astype(str).str.strip().str.upper() if side_col else ""
     df["quantity"] = safe_float_series(df[qty_col]) if qty_col else 0.0
@@ -4150,7 +4165,7 @@ def _build_realized_vs_total_curve(df_perf_ts: pd.DataFrame, df_tx: pd.DataFrame
             "total_equity": df_perf_ts["total_value"],
         }
     )
-    curve["timestamp"] = pd.to_datetime(curve["timestamp"], errors="coerce", utc=True)
+    curve["timestamp"] = _normalize_utc_timestamp_series(curve["timestamp"])
     curve = curve.dropna(subset=["timestamp"]).sort_values("timestamp")
 
     if df_tx is None or df_tx.empty:
@@ -4158,7 +4173,7 @@ def _build_realized_vs_total_curve(df_perf_ts: pd.DataFrame, df_tx: pd.DataFrame
         return curve
 
     realized = df_tx[(df_tx["realized_pnl"] != 0) & (df_tx["timestamp"].notna())][["timestamp", "realized_pnl"]].copy()
-    realized["timestamp"] = pd.to_datetime(realized["timestamp"], errors="coerce", utc=True)
+    realized["timestamp"] = _normalize_utc_timestamp_series(realized["timestamp"])
     realized = realized.dropna(subset=["timestamp"])
     realized = realized.sort_values("timestamp")
 
