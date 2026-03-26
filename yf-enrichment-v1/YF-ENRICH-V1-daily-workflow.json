@@ -1,0 +1,111 @@
+{
+  "name": "YF-ENRICH-V1 - Daily DuckDB Refresh",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 6 * * *"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -520,
+        -80
+      ],
+      "id": "8d6beff0-c3e8-41d0-87b8-2db9ff312001",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        80
+      ],
+      "id": "9c7cf1f4-b03d-41b2-a2e1-8c3cfab8b002",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://yf-enrichment:8081/run",
+        "options": {
+          "timeout": 1800000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -200,
+        0
+      ],
+      "id": "fd2d5da6-568d-4b9a-93e0-cc2e0cc26003",
+      "name": "Run Daily Enrichment (HTTP)",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 20000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json || {};\nreturn [{\n  json: {\n    at: r.at || new Date().toISOString(),\n    status: r.status || 'UNKNOWN',\n    exitCode: r.exitCode,\n    run_id: r.run_id,\n    service_version: r.service_version,\n    command: r.command,\n    stderr: r.stderr || '',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ],
+      "id": "30961d4e-7f85-4c43-bf10-648ff5e95117",
+      "name": "Build Run Summary"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Daily Enrichment (HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Run Daily Enrichment (HTTP)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run Daily Enrichment (HTTP)": {
+      "main": [
+        [
+          {
+            "node": "Build Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true
+  }
+}

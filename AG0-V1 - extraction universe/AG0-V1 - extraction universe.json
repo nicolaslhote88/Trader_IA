@@ -1,0 +1,101 @@
+{
+  "name": "Boursorama Compartiments A-B-C -> Drive (CSV+XLSX)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "b2f9c8d4-0d25-4f8e-9e8c-0a2c3d6c4d01",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [-780, 120]
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "const BASE = 'https://www.boursorama.com';\nconst MARKETS = [\n  { id: 2201, label: 'A' },\n  { id: 2202, label: 'B' },\n  { id: 2203, label: 'C' },\n];\n\nconst headers = {\n  'User-Agent': 'Mozilla/5.0 (n8n; +https://n8n.io) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36',\n  'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',\n};\n\nconst sleep = (ms) => new Promise((r) => setTimeout(r, ms));\n\nasync function httpGet(url) {\n  const maxTry = 4;\n  for (let i = 1; i <= maxTry; i++) {\n    try {\n      return await this.helpers.httpRequest({\n        method: 'GET',\n        url,\n        headers,\n        timeout: 30000,\n        followRedirect: true,\n      });\n    } catch (e) {\n      if (i === maxTry) throw e;\n      await sleep(400 * i);\n    }\n  }\n}\n\nfunction decodeHtml(s) {\n  if (!s) return '';\n  return s\n    .replace(/&nbsp;/g, ' ')\n    .replace(/&amp;/g, '&')\n    .replace(/&quot;/g, '\"')\n    .replace(/&#39;/g, \"'\")\n    .replace(/&lt;/g, '<')\n    .replace(/&gt;/g, '>')\n    .replace(/&#(\\d+);/g, (_, n) => {\n      const code = parseInt(n, 10);\n      if (!Number.isFinite(code)) return _;\n      try { return String.fromCharCode(code); } catch { return _; }\n    });\n}\n\nfunction stripTags(s) {\n  return (s || '').replace(/<[^>]*>/g, '');\n}\n\nfunction getMaxPage(html) {\n  const re = /\\/bourse\\/actions\\/cotations\\/page-(\\d+)/g;\n  let max = 1;\n  let m;\n  while ((m = re.exec(html)) !== null) {\n    const p = parseInt(m[1], 10);\n    if (Number.isFinite(p)) max = Math.max(max, p);\n  }\n  return max;\n}\n\nfunction extractRows(html) {\n  // On capte les liens /cours/1rPXXXX/\n  const re = /<a[^>]+href=\"\\/cours\\/1rP([A-Za-z0-9]+)\\/?\"[^>]*>([\\s\\S]*?)<\\/a>/g;\n  const rows = [];\n  let m;\n  while ((m = re.exec(html)) !== null) {\n    const ticker = (m[1] || '').toUpperCase().trim();\n    if (!/^[A-Z0-9]{1,12}$/.test(ticker)) continue;\n\n    const rawName = m[2] || '';\n    const name = decodeHtml(stripTags(rawName)).replace(/\\s+/g, ' ').trim();\n    if (!name) continue;\n\n    // Yahoo Finance Euronext Paris suffix\n    const symbol = `${ticker}.PA`;\n    rows.push({ Symbol: symbol, Name: name });\n  }\n  return rows;\n}\n\nconst seen = new Map();\n\nfor (const mk of MARKETS) {\n  const page1 = `${BASE}/bourse/actions/cotations/?quotation_az_filter%5Bmarket%5D=${mk.id}`;\n  const html1 = await httpGet.call(this, page1);\n  const maxPage = getMaxPage(html1);\n\n  for (const r of extractRows(html1)) {\n    if (!seen.has(r.Symbol)) seen.set(r.Symbol, r.Name);\n  }\n\n  for (let p = 2; p <= maxPage; p++) {\n    const url = `${BASE}/bourse/actions/cotations/page-${p}?quotation_az_filter%5Bmarket%5D=${mk.id}`;\n    const html = await httpGet.call(this, url);\n    for (const r of extractRows(html)) {\n      if (!seen.has(r.Symbol)) seen.set(r.Symbol, r.Name);\n    }\n    await sleep(250);\n  }\n\n  await sleep(400);\n}\n\nconst out = Array.from(seen.entries())\n  .map(([Symbol, Name]) => ({ Symbol, Name }))\n  .sort((a, b) => a.Symbol.localeCompare(b.Symbol));\n\nreturn out;"
+      },
+      "id": "9a2d3e0a-5e14-4f7b-9b4d-2a7d1a3c9e55",
+      "name": "Scrape Boursorama A/B/C",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-520, 120]
+    },
+    {
+      "parameters": {
+        "operation": "toCsv",
+        "mode": "all",
+        "options": {
+          "fileName": "={{ 'boursorama_compartiments_ABC_' + $now.toISO().replace(/[:.]/g,'-') + '.csv' }}"
+        }
+      },
+      "id": "3c9f7a1e-1cbb-41d5-bf1b-1d9b1c8c7a12",
+      "name": "Convert to CSV",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [-240, 40]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "name": "={{$binary.data.fileName}}",
+        "parents": "1t-4ypfdmOs4pJtcr4xFbqgry27vxY8po"
+      },
+      "id": "b6f4a1d1-2f5c-4f2f-9d7c-9e5e8c9c2c01",
+      "name": "Google Drive Upload CSV",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [40, 40]
+    },
+    {
+      "parameters": {
+        "operation": "toXlsx",
+        "mode": "all",
+        "options": {
+          "fileName": "={{ 'boursorama_compartiments_ABC_' + $now.toISO().replace(/[:.]/g,'-') + '.xlsx' }}"
+        }
+      },
+      "id": "b5e7c2c6-6c7a-49a2-ae57-3b7c5a3f2e91",
+      "name": "Convert to XLSX",
+      "type": "n8n-nodes-base.convertToFile",
+      "typeVersion": 1,
+      "position": [-240, 200]
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "upload",
+        "binaryData": true,
+        "binaryPropertyName": "data",
+        "name": "={{$binary.data.fileName}}",
+        "parents": "1t-4ypfdmOs4pJtcr4xFbqgry27vxY8po"
+      },
+      "id": "3d4b7b3a-6f11-4b4d-9b2a-1a2b3c4d5e6f",
+      "name": "Google Drive Upload XLSX",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 2,
+      "position": [40, 200]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "Scrape Boursorama A/B/C", "type": "main", "index": 0 }]]
+    },
+    "Scrape Boursorama A/B/C": {
+      "main": [[
+        { "node": "Convert to CSV", "type": "main", "index": 0 },
+        { "node": "Convert to XLSX", "type": "main", "index": 0 }
+      ]]
+    },
+    "Convert to CSV": {
+      "main": [[{ "node": "Google Drive Upload CSV", "type": "main", "index": 0 }]]
+    },
+    "Convert to XLSX": {
+      "main": [[{ "node": "Google Drive Upload XLSX", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" }
+}
