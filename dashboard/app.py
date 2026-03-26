@@ -10078,8 +10078,10 @@ elif page == "System Health (Monitoring)":
     health_df["funda_age_days"] = _age_days(health_df.get("last_funda_date", pd.Series(pd.NaT, index=health_df.index)))
     health_df["news_age_days"] = _age_days(health_df.get("last_news_date", pd.Series(pd.NaT, index=health_df.index)))
 
-    def _status_fr(age_series: pd.Series, date_series: pd.Series, ok_days: int, warn_days: int) -> pd.Series:
+    def _status_fr(age_series: pd.Series, date_series, ok_days: int, warn_days: int) -> pd.Series:
         out = pd.Series("Manquant", index=age_series.index, dtype=object)
+        if date_series is None or not isinstance(date_series, pd.Series):
+            date_series = pd.Series(pd.NaT, index=age_series.index)
         valid = pd.to_datetime(date_series, errors="coerce", utc=True).notna()
         out.loc[valid & (age_series <= ok_days)] = "A jour"
         out.loc[valid & (age_series > ok_days) & (age_series <= warn_days)] = "A surveiller"

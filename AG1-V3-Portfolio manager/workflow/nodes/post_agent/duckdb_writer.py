@@ -810,7 +810,7 @@ def _rebuild_position_lots_from_fills(con: duckdb.DuckDBPyConnection) -> int:
         SELECT
           f.fill_id,
           f.order_id,
-          f.ts_fill,
+          CAST(f.ts_fill AS VARCHAR) AS ts_fill,
           CAST(f.qty AS DOUBLE) AS qty,
           CAST(f.price AS DOUBLE) AS price,
           CAST(COALESCE(f.fees_eur, 0) AS DOUBLE) AS fees_eur,
@@ -1063,7 +1063,11 @@ def _summary_from_bundle_snapshots(
 def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> Dict[str, Any]:
     run_row = con.execute(
         """
-        SELECT run_id, ts_end, ts_start, COALESCE(config_version, ?)
+        SELECT
+          run_id,
+          CAST(ts_end AS VARCHAR) AS ts_end,
+          CAST(ts_start AS VARCHAR) AS ts_start,
+          COALESCE(config_version, ?)
         FROM core.runs
         WHERE run_id = ?
         """,
@@ -1230,7 +1234,7 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
     fx_fill_rows = con.execute(
         """
         SELECT
-          f.ts_fill,
+          CAST(f.ts_fill AS VARCHAR) AS ts_fill,
           UPPER(COALESCE(o.symbol, '')) AS symbol,
           UPPER(COALESCE(o.side, '')) AS side,
           CAST(f.qty AS DOUBLE) AS qty,
