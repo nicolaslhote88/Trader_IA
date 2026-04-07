@@ -1,6 +1,7 @@
 import gc
 import json
 import os
+import threading
 import duckdb
 import time
 from contextlib import contextmanager
@@ -54,6 +55,27 @@ def _candidate_db_paths(path):
     return out
 
 
+def _duckdb_connect_timeout(path, read_only=False, timeout=30):
+    """Wrap duckdb.connect() with a timeout to avoid indefinite blocking on file locks."""
+    result = [None]
+    exc = [None]
+
+    def _connect():
+        try:
+            result[0] = duckdb.connect(path, read_only=read_only)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise Exception(f"duckdb lock timeout: {path} verrouille depuis >{timeout}s")
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
     con = None
@@ -62,13 +84,13 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
     for candidate in _candidate_db_paths(path):
         for attempt in range(retries):
             try:
-                con = duckdb.connect(candidate)
+                con = _duckdb_connect_timeout(candidate, timeout=30)
                 selected = candidate
                 break
             except Exception as e:
                 last_exc = e
                 msg = str(e).lower()
-                if "lock" in msg and attempt < retries - 1:
+                if ("lock" in msg or "timeout" in msg) and attempt < retries - 1:
                     time.sleep(delay * (2 ** attempt))
                     continue
                 # If legacy DB/WAL is broken, transparently fallback to V3 DB.

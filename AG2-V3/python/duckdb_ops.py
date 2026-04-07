@@ -8,9 +8,51 @@ Path: /files/duckdb/ag2_v3.duckdb (mounted in task-runners)
 
 import duckdb
 import json
+import threading
+import time
 from datetime import datetime, timezone
 
 DB_PATH = "/files/duckdb/ag2_v3.duckdb"
+_CONNECT_TIMEOUT = 30
+_CONNECT_RETRIES = 5
+_CONNECT_DELAY = 0.3
+
+
+def _duckdb_connect_timeout(path, read_only=False, timeout=_CONNECT_TIMEOUT):
+    """Wrap duckdb.connect() with a timeout to avoid indefinite blocking on file locks."""
+    result = [None]
+    exc = [None]
+
+    def _connect():
+        try:
+            result[0] = duckdb.connect(path, read_only=read_only)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise Exception(f"duckdb lock timeout: {path} verrouille depuis >{timeout}s")
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
+def _connect_with_retry(path=DB_PATH, read_only=False):
+    """Connect to DuckDB with timeout + exponential backoff retry on lock."""
+    last_exc = None
+    for attempt in range(_CONNECT_RETRIES):
+        try:
+            return _duckdb_connect_timeout(path, read_only=read_only)
+        except Exception as e:
+            last_exc = e
+            msg = str(e).lower()
+            if ("lock" in msg or "timeout" in msg) and attempt < _CONNECT_RETRIES - 1:
+                time.sleep(_CONNECT_DELAY * (2 ** attempt))
+            else:
+                raise
+    raise last_exc
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS universe (
@@ -75,7 +117,7 @@ CREATE INDEX IF NOT EXISTS idx_ts_vector ON technical_signals(vector_status);
 
 def init_schema():
     """Create all tables if they don't exist."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     for stmt in SCHEMA_SQL.split(";"):
         stmt = stmt.strip()
         if stmt:
@@ -85,7 +127,7 @@ def init_schema():
 
 def create_run(run_id: str, batch_start: int, batch_size: int, total_pool: int):
     """Insert a new run log entry."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     con.execute("""
         INSERT OR REPLACE INTO run_log (run_id, started_at, batch_start, batch_size, total_pool)
         VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?)
@@ -95,7 +137,7 @@ def create_run(run_id: str, batch_start: int, batch_size: int, total_pool: int):
 
 def get_dedup_cache(symbol: str) -> dict:
     """Get cached dedup entry for a symbol."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     result = con.execute(
         "SELECT * FROM ai_dedup_cache WHERE symbol = ? AND interval_key = 'combined'",
         [symbol]
@@ -111,7 +153,7 @@ def get_dedup_cache(symbol: str) -> dict:
 
 def write_signal(data: dict):
     """Upsert a technical signal row."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     cols = list(data.keys())
     placeholders = ", ".join(["?"] * len(cols))
     col_names = ", ".join(cols)
@@ -123,7 +165,7 @@ def write_signal(data: dict):
 def write_dedup_cache(symbol: str, sig_hash: str, sig_json: str,
                       run_id: str, reason: str, output_ref: str, ttl: int):
     """Upsert dedup cache entry."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     con.execute("""
         INSERT OR REPLACE INTO ai_dedup_cache
         (symbol, interval_key, sig_hash, sig_json, last_ai_at, last_ai_run_id,
@@ -135,7 +177,7 @@ def write_dedup_cache(symbol: str, sig_hash: str, sig_json: str,
 
 def update_ai_result(signal_id: str, ai_data: dict):
     """Update AI fields on an existing signal row."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     sets = ", ".join(f"{k} = ?" for k in ai_data.keys())
     sql = f"UPDATE technical_signals SET {sets}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
     vals = list(ai_data.values()) + [signal_id]
@@ -145,7 +187,7 @@ def update_ai_result(signal_id: str, ai_data: dict):
 
 def mark_vectorized(signal_id: str, vector_id: str):
     """Mark a signal as vectorized in DuckDB."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     con.execute("""
         UPDATE technical_signals
         SET vector_status = 'DONE', vector_id = ?, vectorized_at = CURRENT_TIMESTAMP,
@@ -161,7 +203,7 @@ def finalize_run(run_id: str, symbols_ok: int, symbols_error: int,
     status = "SUCCESS" if symbols_error == 0 else "PARTIAL"
     if symbols_ok == 0:
         status = "FAILED"
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     con.execute("""
         UPDATE run_log
         SET finished_at = CURRENT_TIMESTAMP, status = ?,
@@ -175,7 +217,7 @@ def finalize_run(run_id: str, symbols_ok: int, symbols_error: int,
 
 def sync_universe(rows: list):
     """Sync universe table from Google Sheets data."""
-    con = duckdb.connect(DB_PATH)
+    con = _connect_with_retry(DB_PATH)
     for r in rows:
         con.execute("""
             INSERT OR REPLACE INTO universe (symbol, name, asset_class, exchange, currency,

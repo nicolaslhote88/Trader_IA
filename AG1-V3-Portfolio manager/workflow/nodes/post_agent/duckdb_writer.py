@@ -14,6 +14,7 @@ import argparse
 import gc
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -218,18 +219,39 @@ def _split_sql_statements(sql_text: str) -> List[str]:
     return statements
 
 
+def _duckdb_connect_timeout(path: str, read_only: bool = False, timeout: int = 30):
+    """Wrap duckdb.connect() with a timeout to avoid indefinite blocking on file locks."""
+    result = [None]
+    exc = [None]
+
+    def _connect():
+        try:
+            result[0] = duckdb.connect(path, read_only=read_only)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise Exception(f"duckdb lock timeout: {path} verrouille depuis >{timeout}s")
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 @contextmanager
 def _db_con(db_path: str, retries: int = 6, base_delay: float = 0.2):
     con = None
     err = None
     for attempt in range(retries):
         try:
-            con = duckdb.connect(db_path)
+            con = _duckdb_connect_timeout(db_path, timeout=30)
             break
         except Exception as exc:
             err = exc
             msg = str(exc).lower()
-            if ("lock" in msg or "busy" in msg) and attempt < retries - 1:
+            if ("lock" in msg or "busy" in msg or "timeout" in msg) and attempt < retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
                 continue
             break

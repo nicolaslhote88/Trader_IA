@@ -2,6 +2,7 @@ import gc
 import json
 import os
 import re
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -17,16 +18,37 @@ DEFAULT_UNIVERSE_DB_PATH = "/local-files/duckdb/ag2_v3.duckdb"
 DEFAULT_UNIVERSE_TABLE = "universe"
 
 
+def _duckdb_connect_timeout(path, read_only=False, timeout=30):
+    """Wrap duckdb.connect() with a timeout to avoid indefinite blocking on file locks."""
+    result = [None]
+    exc = [None]
+
+    def _connect():
+        try:
+            result[0] = duckdb.connect(path, read_only=read_only)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise Exception(f"duckdb lock timeout: {path} verrouille depuis >{timeout}s")
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 @contextmanager
 def db_con(path, retries=6, base_delay=0.25):
     con = None
     for attempt in range(retries):
         try:
-            con = duckdb.connect(path, read_only=True)
+            con = _duckdb_connect_timeout(path, read_only=True, timeout=30)
             break
         except Exception as exc:
             msg = str(exc).lower()
-            if ("lock" in msg or "busy" in msg) and attempt < retries - 1:
+            if ("lock" in msg or "busy" in msg or "timeout" in msg) and attempt < retries - 1:
                 time.sleep(base_delay * (2 ** attempt))
                 continue
             con = None
