@@ -1,19 +1,41 @@
-import duckdb, time, gc
+import duckdb, time, gc, threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DB_PATH = "/files/duckdb/ag4_v3.duckdb"
 WORKFLOW_VERSION = "3.0.0"
 
+
+def _duckdb_connect_timeout(path, read_only=False, timeout=30):
+    """Wrap duckdb.connect() with a timeout to avoid indefinite blocking on file locks."""
+    result = [None]
+    exc = [None]
+
+    def _connect():
+        try:
+            result[0] = duckdb.connect(path, read_only=read_only)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise Exception(f"duckdb lock timeout: {path} verrouille depuis >{timeout}s")
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 @contextmanager
 def db_con(path=DB_PATH, retries=5, delay=0.3):
     con = None
     for attempt in range(retries):
         try:
-            con = duckdb.connect(path)
+            con = _duckdb_connect_timeout(path, timeout=30)
             break
         except Exception as e:
-            if "lock" in str(e).lower() and attempt < retries - 1:
+            if ("lock" in str(e).lower() or "timeout" in str(e).lower()) and attempt < retries - 1:
                 time.sleep(delay * (2 ** attempt))
             else:
                 raise

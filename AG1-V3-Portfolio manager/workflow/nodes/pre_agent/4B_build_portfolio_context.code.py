@@ -2,6 +2,7 @@ import gc
 import json
 import os
 import re
+import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -660,15 +661,36 @@ def is_meta_row(row):
     return sym == "__META__" or name == "__META__"
 
 
+def _duckdb_connect_timeout(path, read_only=False, timeout=30):
+    """Wrap duckdb.connect() with a timeout to avoid indefinite blocking on file locks."""
+    result = [None]
+    exc = [None]
+
+    def _connect():
+        try:
+            result[0] = duckdb.connect(path, read_only=read_only)
+        except Exception as e:
+            exc[0] = e
+
+    t = threading.Thread(target=_connect, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if t.is_alive():
+        raise Exception(f"duckdb lock timeout: {path} verrouille depuis >{timeout}s")
+    if exc[0] is not None:
+        raise exc[0]
+    return result[0]
+
+
 @contextmanager
 def db_con(path, retries=6, delay=0.2):
     con = None
     for i in range(retries):
         try:
-            con = duckdb.connect(path, read_only=True)
+            con = _duckdb_connect_timeout(path, read_only=True, timeout=30)
             break
         except Exception as exc:
-            if ("lock" in str(exc).lower() or "busy" in str(exc).lower()) and i < retries - 1:
+            if ("lock" in str(exc).lower() or "busy" in str(exc).lower() or "timeout" in str(exc).lower()) and i < retries - 1:
                 time.sleep(delay * (2**i))
             else:
                 con = None
