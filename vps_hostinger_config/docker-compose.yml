@@ -4,6 +4,8 @@ services:
     command:
       - --api=true
       - --api.insecure=true
+      - --accesslog=true
+      - --accesslog.filepath=/var/log/traefik/access.log
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
@@ -24,8 +26,10 @@ services:
       - traefik_data:/letsencrypt
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - /opt/traefik/secrets:/secrets:ro
+      - /opt/traefik_logs:/var/log/traefik
     networks:
       - web
+      - traefik_proxy
 
   yfinance-api:
     build:
@@ -51,9 +55,7 @@ services:
       - web
 
   n8n:
-    #image: docker.n8n.io/n8nio/n8n:2.1.4
     build: .
-    #container_name: root-n8n-1
     labels:
       - traefik.enable=true
       - traefik.http.routers.n8n.rule=Host(`${SUBDOMAIN}.${DOMAIN_NAME}`)
@@ -73,6 +75,7 @@ services:
       - N8N_HOST=${SUBDOMAIN}.${DOMAIN_NAME}
       - N8N_PORT=5678
       - N8N_PROTOCOL=https
+      - N8N_PROXY_HOPS=1
       - NODE_ENV=production
       - WEBHOOK_URL=https://${SUBDOMAIN}.${DOMAIN_NAME}/
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Paris}
@@ -80,7 +83,6 @@ services:
       - N8N_RUNNERS_MODE=external
       - N8N_RUNNERS_BROKER_LISTEN_ADDRESS=0.0.0.0
       - N8N_RUNNERS_BROKER_PORT=5679
-      # On force ici une valeur simple pour tester si le 403 disparait
       - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN}
       - N8N_NATIVE_PYTHON_RUNNER=true
       - N8N_RUNNERS_TASK_REQUEST_TIMEOUT=1200
@@ -94,7 +96,10 @@ services:
       - AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql
       - EXECUTIONS_DATA_MAX_AGE=72
-      - DB_SQLITE_VACUUM_ON_STARTUP=false
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
+      - EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000
+      - DB_SQLITE_VACUUM_ON_STARTUP=true
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -111,23 +116,16 @@ services:
       - web
 
   task-runners:
-    build:
-      context: .
-      dockerfile: Dockerfile.runners
-    pull_policy: never
-    image: root-task-runners:2.3.5-duckdb
-    #container_name: task-runners
+    image: root-task-runners:2.3.5-clean
     deploy:
-      replicas: 3 # Va créer 3 conteneurs Task Runners qui écouteront n8n en parallèle
+      replicas: 3
     environment:
-      # L'adresse interne du service n8n sur le réseau Docker "web"
       - N8N_RUNNERS_TASK_BROKER_URI=http://n8n:5679
-      # DOIT être identique à la valeur dans le service n8n ci-dessus
       - N8N_RUNNERS_AUTH_TOKEN=${N8N_RUNNERS_AUTH_TOKEN}
       - N8N_RUNNERS_MAX_CONCURRENCY=4
+      - N8N_RUNNERS_LAUNCHER_LOG_LEVEL=debug
       - GENERIC_TIMEZONE=${GENERIC_TIMEZONE:-Europe/Paris}
       - TRANSCRIPT_API_BASE=${TRANSCRIPT_API_BASE}
-      - N8N_RUNNERS_PYTHON_ALLOW_LIST=duckdb,pandas,numpy,datetime,math,json
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
       - AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql
@@ -136,15 +134,15 @@ services:
       - 8.8.8.8
     restart: unless-stopped
     volumes:
-      - /opt/trader-ia/n8n-task-runners.json:/etc/n8n-task-runners.json:ro
+      - /opt/trader-ia/n8n-task-runners.clean.json:/etc/n8n-task-runners.json:ro
       - /opt/trader-ia/duckdb_home:/home/runner/.duckdb:rw
       - /local-files:/files:rw
       - /opt/yf-enrichment-v1:/opt/yf-enrichment-v1:ro
+      - n8n_data:/home/node/.n8n:rw
     depends_on:
       - n8n
     networks:
       - web
-
 
   yf-enrichment:
     build:
@@ -153,7 +151,6 @@ services:
     container_name: yf-enrichment
     environment:
       - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
-      # Script monté depuis /opt/yf-enrichment-v1 (déjà présent sur ton VPS)
       - YF_ENRICH_SCRIPT=/opt/yf-enrichment-v1/daily_enrichment.py
     restart: unless-stopped
     volumes:
@@ -163,7 +160,7 @@ services:
       - yfinance-api
     networks:
       - web
-      
+
   trading-dashboard:
     image: python:3.12-slim
     working_dir: /app
@@ -196,7 +193,7 @@ services:
     volumes:
       - /opt/trading-dashboard/app:/app:ro
       - /opt/trading-dashboard/secrets:/secrets:ro
-      - /local-files/duckdb:/files/duckdb:ro  # <--- AJOUTEZ CETTE LIGNE ICI
+      - /local-files/duckdb:/files/duckdb:ro
     networks:
       - web
 
@@ -207,21 +204,9 @@ services:
     networks:
       - web
 
-  qdrant:
-    image: qdrant/qdrant:v1.16.3
-    restart: unless-stopped
-    environment:
-      - QDRANT__SERVICE__API_KEY=${QDRANT_API_KEY}
-    volumes:
-      - qdrant_data:/qdrant/storage
-    # Optionnel mais recommandé pour debug local (non exposé Internet)
-    ports:
-      - 127.0.0.1:6333:6333
-      - 127.0.0.1:6334:6334
-    networks:
-      - web
-
 networks:
+  traefik_proxy:
+    external: true
   web:
     external: true
 
@@ -230,10 +215,9 @@ volumes:
     external: true
   n8n_data:
     external: true
-  qdrant_data:
-    external: true
-    name: qdrant_data
   duckdb_home:
-    
   yfinance_data:
     external: true
+  runner_pydeps:
+    external: true
+    name: runner_pydeps
