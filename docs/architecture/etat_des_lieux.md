@@ -1,7 +1,7 @@
 # État des lieux fonctionnel — Trader_IA
 
 **Dernière analyse exhaustive : 2026-03-02**
-**Périmètre** : repository `Trader_IA` + configuration VPS `vps_hostinger_config/docker-compose.yml`.
+**Périmètre** : repository `Trader_IA` + configuration VPS `infra/vps_hostinger_config/docker-compose.yml`.
 **Objectif** : fournir une base d'entrée claire et opérationnelle pour un mode projet LLM.
 
 > ℹ️ Pour les **issues/écarts connus** (avec statut résolu / en cours / à faire), voir le document séparé [`historique_issues.md`](historique_issues.md).
@@ -27,7 +27,7 @@ Points structurants observés :
 
 ## 2. Services déployés sur le VPS
 
-Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docker-compose.qdrant.yml`.
+Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_config/docker-compose.qdrant.yml`.
 
 ### 2.1 Catalogue des services
 
@@ -77,7 +77,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.2 AG1-PF-V1 — Portfolio MTM (DuckDB-only, multi AG1-V2)
 
-- Fichier : `AG1-PF-V1/AG1-PF-V1-workflow.json`
+- Fichier : `agents/AG1-PF-V1/AG1-PF-V1-workflow.json`
 - Trigger :
   - schedule `0 0 9-17 * * 1-5`
   - manuel.
@@ -97,7 +97,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 ### 3.3 AG1-V3 — Portfolio Manager (3 variants modèles)
 
 - Fichiers :
-  - template : `AG1-V3-Portfolio manager/workflow/AG1_workflow_template_v3.json`
+  - template : `agents/AG1-V3-Portfolio manager/workflow/AG1_workflow_template_v3.json`
   - variants : `.../variants/AG1_workflow_v3__chatgpt52.json`, `...grok41_reasoning.json`, `...gemini30_pro.json`.
 - Trigger (variant ChatGPT 5.2) : `0 15 9 * * 1-5`, `0 30 12 * * 1-5`, `0 45 16 * * 1-5`.
 - Rôle métier :
@@ -115,7 +115,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.4 AG2-V3 — Analyse technique
 
-- Fichiers : `AG2-V3/AG2-V3 - Analyse technique (FX only).json` + `AG2-V3/AG2-V3 - Analyse technique (non-FX).json`
+- Fichiers : `agents/AG2-V3/AG2-V3 - Analyse technique (FX only).json` + `agents/AG2-V3/AG2-V3 - Analyse technique (non-FX).json`
   - ces deux variants sont les sources de vérité (l'ancien canonique `AG2-V3 - Analyse technique.json` a été retiré du repo en avril 2026).
 - Trigger :
   - cron `10 9-17 * * 1-5`
@@ -140,7 +140,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.5 AG3-V2 — Analyse fondamentale
 
-- Fichier : `AG3-V2/AG3-V2-workflow.json`
+- Fichier : `agents/AG3-V2/AG3-V2-workflow.json`
 - Trigger :
   - schedule `0 7 * * 1-5`
   - manuel.
@@ -159,7 +159,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.6 AG4-V3 — Macro & News
 
-- Fichier : `AG4-V3/AG4-V3-workflow.json`
+- Fichier : `agents/AG4-V3/AG4-V3-workflow.json`
 - Trigger :
   - schedule `*/30 7-20 * * 1-5`
   - manuel.
@@ -178,8 +178,8 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.7 AG4-SPE-V2 — News spécifiques par valeur
 
-- Fichier : `AG4-SPE-V2/AG4-SPE-V2-workflow.json` (régénéré depuis `build_workflow.py` — ≈ 112 KB).
-- Source de vérité : `AG4-SPE-V2/build_workflow.py` + `AG4-SPE-V2/nodes/*`.
+- Fichier : `agents/AG4-SPE-V2/AG4-SPE-V2-workflow.json` (régénéré depuis `build_workflow.py` — ≈ 112 KB).
+- Source de vérité : `agents/AG4-SPE-V2/build_workflow.py` + `agents/AG4-SPE-V2/nodes/*`.
 - Trigger (dans `build_workflow.py`) :
   - `0 5 9,12,15 * * 1-5` + manuel.
 - Sources :
@@ -198,7 +198,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.8 YF-ENRICH-V1 — Enrichissement quotidien marché
 
-- Workflow : `yf-enrichment-v1/YF-ENRICH-V1-daily-workflow.json`
+- Workflow : `agents/yf-enrichment-v1/YF-ENRICH-V1-daily-workflow.json`
 - Trigger :
   - schedule `15 6 * * *`
   - manuel.
@@ -239,7 +239,7 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ## 5. Bases de données générées et schémas
 
-### 5.1 DuckDB AG1-PF (MTM) — `AG1-PF-V1/sql/schema.sql`
+### 5.1 DuckDB AG1-PF (MTM) — `agents/AG1-PF-V1/sql/schema.sql`
 
 Tables :
 - `portfolio_positions_mtm_run_log`
@@ -251,7 +251,7 @@ Colonnes clés :
 - run lifecycle : `run_id`, `started_at`, `finished_at`, `status`, compteurs.
 - positions latest/history : `symbol`, `quantity`, `avg_price`, `last_price`, `market_value`, `unrealized_pnl`, `updated_at`, `run_id`.
 
-### 5.2 DuckDB AG1-V3 ledger — `AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql`
+### 5.2 DuckDB AG1-V3 ledger — `agents/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql`
 
 Schemas :
 - `core`
@@ -269,7 +269,7 @@ Tables `cfg` :
 Rôle :
 - modèle ledger complet exécution + audit + risque + snapshots portefeuille.
 
-### 5.3 DuckDB AG2-V3 — `AG2-V3/sql/schema.sql`
+### 5.3 DuckDB AG2-V3 — `agents/AG2-V3/sql/schema.sql`
 
 Tables :
 - `universe`
@@ -292,7 +292,7 @@ Schema notable `technical_signals` :
 - AI validation (`ai_decision`, `ai_quality`, `ai_alignment`, `ai_stop_loss`, `ai_rr_theoretical`, etc.)
 - vector tracking (`vector_status`, `vector_id`, `vectorized_at`).
 
-### 5.4 DuckDB AG3-V2 — `AG3-V2/nodes/06_duckdb_init.py`
+### 5.4 DuckDB AG3-V2 — `agents/AG3-V2/nodes/06_duckdb_init.py`
 
 Tables :
 - `run_log`
@@ -311,7 +311,7 @@ Colonnes métier :
 - consensus : targets mean/high/low + analyst count + dispersion/risk proxy.
 - metrics : données atomiques section/metric/value/unit.
 
-### 5.5 DuckDB AG4-V3 — `AG4-V3/nodes/12_duckdb_init.py`
+### 5.5 DuckDB AG4-V3 — `agents/AG4-V3/nodes/12_duckdb_init.py`
 
 Tables :
 - `news_history`
@@ -327,7 +327,7 @@ Colonnes notables `news_history` :
 - tagging macro : `sectors_bullish`, `sectors_bearish`, `currencies_bullish`, `currencies_bearish`
 - trace run : `run_id`, `analyzed_at`, `first_seen_at`, `last_seen_at`.
 
-### 5.6 DuckDB AG4-SPE-V2 — `AG4-SPE-V2/nodes/00_duckdb_prepare.py`
+### 5.6 DuckDB AG4-SPE-V2 — `agents/AG4-SPE-V2/nodes/00_duckdb_prepare.py`
 
 Tables :
 - `universe_symbols`
@@ -343,7 +343,7 @@ Colonnes notables `news_history` :
 - vector : `vector_status`, `vector_id`, `vectorized_at`, `chunk_total`
 - lifecycle : `first_seen_at`, `last_seen_at`, `analyzed_at`, `fetched_at`.
 
-### 5.7 DuckDB YF enrichment — `yf-enrichment-v1/daily_enrichment.py`
+### 5.7 DuckDB YF enrichment — `agents/yf-enrichment-v1/daily_enrichment.py`
 
 Tables :
 - `run_log`
@@ -373,10 +373,10 @@ Convention metadata (`VectorDoc_v2`) :
 ## 6. Dashboard — fonctionnement détaillé
 
 Fichiers :
-- `dashboard/app.py`
-- `dashboard/app_modules/core.py`
-- `dashboard/app_modules/tables.py`
-- `dashboard/app_modules/visualizations.py`
+- `services/dashboard/app.py`
+- `services/dashboard/app_modules/core.py`
+- `services/dashboard/app_modules/tables.py`
+- `services/dashboard/app_modules/visualizations.py`
 
 ### 6.1 Sources et connecteurs du dashboard
 
@@ -512,11 +512,11 @@ Fonctions :
 
 ## 7. Inventaire des fonctions dashboard
 
-> Pour le détail exhaustif des noms de fonctions (snapshot 2026-03-02), consulter l'historique Git de ce fichier ou relancer un pass de découverte sur `dashboard/app.py`.
+> Pour le détail exhaustif des noms de fonctions (snapshot 2026-03-02), consulter l'historique Git de ce fichier ou relancer un pass de découverte sur `services/dashboard/app.py`.
 
 Les modules sont structurés comme suit :
 
-- **`dashboard/app.py`** : point d'entrée Streamlit, contient les loaders (Google Sheets + DuckDB), les rendus de chaque page, et les helpers UI (badges, KPI, charts).
-- **`dashboard/app_modules/core.py`** : normalisation, fresheness check, valorisations, sentiment sectoriel, momentum symbole.
-- **`dashboard/app_modules/tables.py`** : helpers de tri / recherche / filtres sur DataFrames.
-- **`dashboard/app_modules/visualizations.py`** : sparklines portefeuille, extraction events de trade, prefetch concurrent historiques.
+- **`services/dashboard/app.py`** : point d'entrée Streamlit, contient les loaders (Google Sheets + DuckDB), les rendus de chaque page, et les helpers UI (badges, KPI, charts).
+- **`services/dashboard/app_modules/core.py`** : normalisation, fresheness check, valorisations, sentiment sectoriel, momentum symbole.
+- **`services/dashboard/app_modules/tables.py`** : helpers de tri / recherche / filtres sur DataFrames.
+- **`services/dashboard/app_modules/visualizations.py`** : sparklines portefeuille, extraction events de trade, prefetch concurrent historiques.

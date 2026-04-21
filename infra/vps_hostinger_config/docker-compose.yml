@@ -33,7 +33,7 @@ services:
 
   yfinance-api:
     build:
-      context: ./yfinance-api
+      context: ../../services/yfinance-api
       dockerfile: Dockerfile
     container_name: yfinance-api
     environment:
@@ -146,7 +146,7 @@ services:
 
   yf-enrichment:
     build:
-      context: ./yf-enrichment-service
+      context: ../../services/yf-enrichment-service
       dockerfile: Dockerfile
     container_name: yf-enrichment
     environment:

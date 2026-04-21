@@ -1,11 +1,11 @@
 # Reconstruire le pack AG1 (`rebuild_pack.py`)
 
-Depuis avril 2026, le pack `AG1-V3-Portfolio manager/` est **entièrement centralisé dans `workflow/`**. Le parent ne contient plus que ce script, un README pointeur et `export_to_github.ps1`.
+Depuis avril 2026, le pack `agents/AG1-V3-Portfolio manager/` est **entièrement centralisé dans `workflow/`**. Le parent ne contient plus que ce script, un README pointeur et `export_to_github.ps1`.
 
 ## Arborescence cible
 
 ```
-AG1-V3-Portfolio manager/
+agents/AG1-V3-Portfolio manager/
 ├── README.md                    # pointeur vers workflow/
 ├── rebuild_pack.py              # ce script
 ├── export_to_github.ps1         # helper commit/push
@@ -46,7 +46,7 @@ AG1-V3-Portfolio manager/
 ## Usage
 
 ```bash
-cd "AG1-V3-Portfolio manager"
+cd "agents/AG1-V3-Portfolio manager"
 python3 rebuild_pack.py
 ```
 
@@ -64,7 +64,7 @@ Les variants par modèle (`workflow/variants/AG1_workflow_v3__*.json`) sont rég
 
 ## Helpers
 
-- `export_to_github.ps1` : commit + push ciblé uniquement sur `AG1-V3-Portfolio manager/`.
+- `export_to_github.ps1` : commit + push ciblé uniquement sur `agents/AG1-V3-Portfolio manager/`.
 
 ## Notes
 

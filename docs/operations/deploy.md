@@ -2,8 +2,10 @@
 
 Déploiement de référence sur un VPS Hostinger Linux. Deux stacks Docker Compose cohabitent :
 
-- **Stack principale** : `docker-compose.yml` — `traefik`, `n8n`, `task-runners` ×3, `yfinance-api`, `yf-enrichment`, `trading-dashboard`, `toolbox`.
-- **Stack Qdrant** : `docker-compose.qdrant.yml` — `qdrant` isolé, rejoint le réseau `web` via alias.
+- **Stack principale** : `infra/vps_hostinger_config/docker-compose.yml` — `traefik`, `n8n`, `task-runners` ×3, `yfinance-api`, `yf-enrichment`, `trading-dashboard`, `toolbox`.
+- **Stack Qdrant** : `infra/vps_hostinger_config/docker-compose.qdrant.yml` — `qdrant` isolé, rejoint le réseau `web` via alias.
+
+> ⚠️ **Arborescence GitHub ≠ arborescence VPS.** Ce dossier `infra/vps_hostinger_config/` est la *source* du compose côté repo. Sur le VPS, le compose est copié sous `/opt/trader-ia/` et les builds pointent vers `../../services/yfinance-api` et `../../services/yf-enrichment-service` — autrement dit, sur le VPS il faut soit cloner ce repo dans `/opt/trader-ia/` et lancer `docker compose` depuis `/opt/trader-ia/infra/vps_hostinger_config/`, soit copier à la main le compose **et** les dossiers `services/yfinance-api/` + `services/yf-enrichment-service/` à côté (voir §3).
 
 ## 1. Prérequis VPS
 
@@ -59,27 +61,51 @@ docker volume create runner_pydeps
 
 ## 3. Première installation
 
-```bash
-cd /opt/trader-ia
+Deux options selon la façon dont le repo vit sur le VPS.
 
-# Copier la stack et configurer
-cp /chemin/vers/repo/vps_hostinger_config/docker-compose.yml .
-cp /chemin/vers/repo/vps_hostinger_config/docker-compose.qdrant.yml .
-cp /chemin/vers/repo/vps_hostinger_config/.env.example .env
+### 3.a Clone direct (recommandé depuis la restructure)
+
+```bash
+# Cloner le repo directement sous /opt/trader-ia
+sudo git clone https://github.com/nicolaslhote88/Trader_IA.git /opt/trader-ia
+cd /opt/trader-ia/infra/vps_hostinger_config
+
+# Configurer l'env
+cp .env.example .env
 vim .env   # compléter toutes les valeurs
 
-# Préparer les fichiers connexes
-cp /chemin/vers/repo/vps_hostinger_config/n8n-task-runners.json n8n-task-runners.clean.json
+# Préparer le fichier runners (hors repo par historique)
+cp n8n-task-runners.json /opt/trader-ia/n8n-task-runners.clean.json
 # (adapter le chemin si le nom exact diffère)
 
-# Build + up stack principale
+# Build + up stack principale (les contextes ../../services/... résolvent dans le repo)
 docker compose build
 docker compose up -d
 
 # Up Qdrant
 docker compose -f docker-compose.qdrant.yml up -d
+```
 
-# Vérifier
+### 3.b Copie manuelle (legacy)
+
+```bash
+cd /opt/trader-ia
+
+# Copier la stack, les services Dockerfile et configurer
+cp /chemin/vers/repo/infra/vps_hostinger_config/docker-compose.yml .
+cp /chemin/vers/repo/infra/vps_hostinger_config/docker-compose.qdrant.yml .
+cp /chemin/vers/repo/infra/vps_hostinger_config/.env.example .env
+cp -r /chemin/vers/repo/services/yfinance-api .     # requis par le build yfinance-api
+cp -r /chemin/vers/repo/services/yf-enrichment-service .  # requis par le build yf-enrichment
+vim .env
+
+# Dans ce cas, il faut corriger les contextes du compose pour qu'ils pointent
+# en relatif à /opt/trader-ia/ (par ex. context: ./yfinance-api).
+```
+
+### 3.c Vérification
+
+```bash
 docker compose ps
 curl -I https://${SUBDOMAIN}.${DOMAIN_NAME}/
 curl http://localhost:8080/health          # yfinance-api (via le réseau web)

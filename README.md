@@ -53,20 +53,25 @@ docker compose -f docker-compose.qdrant.yml up -d
 
 ```
 Trader_IA/
-├── AG1-V3-Portfolio manager/        # Agent 2 (Portfolio Manager) + Risk + Execution
-├── AG1-PF-V1/                       # Pipeline paper fusion (archivé)
-├── AG2-V3/                          # Agent 3 (Analyste Technique)
-├── AG3-V2/                          # Agent 4 (Analyste Fondamental)
-├── AG4-V3/                          # Agent 5 (News - news réguliers)
-├── AG4-SPE-V2/                      # Agent 5 (News - transcripts/earnings)
-├── dashboard/                       # Streamlit (trading-dashboard)
+├── agents/                          # Workflows n8n des agents (importables dans n8n)
+│   ├── AG1-PF-V1/                   # Pipeline paper fusion (archivé)
+│   ├── AG1-V3-Portfolio manager/    # Agent 2 (Portfolio Manager) + Risk + Execution
+│   ├── AG2-V3/                      # Agent 3 (Analyste Technique)
+│   ├── AG3-V2/                      # Agent 4 (Analyste Fondamental)
+│   ├── AG4-SPE-V2/                  # Agent 5 (News - transcripts/earnings)
+│   ├── AG4-V3/                      # Agent 5 (News - news réguliers)
+│   └── yf-enrichment-v1/            # Workflow enrichment quotidien + script déployé
+├── services/                        # Services Docker (buildés depuis ce repo)
+│   ├── dashboard/                   # Streamlit (trading-dashboard)
+│   ├── yf-enrichment-service/       # Scheduler Dockerfile pour yf-enrichment-v1
+│   └── yfinance-api/                # Service Yahoo Finance
+├── infra/                           # Infra-as-code
+│   └── vps_hostinger_config/        # Docker Compose + .env.example
 ├── docs/                            # Documentation consolidée (voir §6)
-├── outils/                          # Workflows n8n inactifs / utilitaires ponctuels (AG0 univers)
-├── vps_hostinger_config/            # Docker Compose + env
-├── yfinance-api/                    # Service Yahoo Finance
-├── yf-enrichment-v1/                # Enrichment quotidien (script déployé)
-└── yf-enrichment-service/           # Dockerfile scheduler pour enrichment
+└── outils/                          # Workflows n8n inactifs / utilitaires ponctuels (AG0 univers)
 ```
+
+> **Rappel** : cette arborescence GitHub peut différer de celle déployée sur le VPS. Sur le VPS, `/opt/trader-ia/` a sa propre layout — les chemins de volumes et les `STATIC_WRITER_PATHS` dans le nœud 9 d'AG1-V3 sont pensés pour cette réalité.
 
 ## 5. Flux de données (vue haute)
 

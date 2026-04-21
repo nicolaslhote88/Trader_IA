@@ -1,6 +1,6 @@
 # Variables d'environnement
 
-Cette page décrit les variables attendues côté VPS. Le fichier template est `vps_hostinger_config/.env.example`.
+Cette page décrit les variables attendues côté VPS. Le fichier template est `infra/vps_hostinger_config/.env.example`.
 
 ## Traefik / TLS
 
