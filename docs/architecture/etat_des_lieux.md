@@ -251,7 +251,7 @@ Colonnes clés :
 - run lifecycle : `run_id`, `started_at`, `finished_at`, `status`, compteurs.
 - positions latest/history : `symbol`, `quantity`, `avg_price`, `last_price`, `market_value`, `unrealized_pnl`, `updated_at`, `run_id`.
 
-### 5.2 DuckDB AG1-V3 ledger — `AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql`
+### 5.2 DuckDB AG1-V3 ledger — `AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql`
 
 Schemas :
 - `core`

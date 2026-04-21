@@ -367,7 +367,6 @@ def load_position_overrides(db_path):
                     "updatedAt": to_iso(r.get("ts_ms"), None),
                 }
             source = "core.positions_snapshot"
-            return out, source
 
         if table_exists(con, "portfolio_positions_mtm_latest"):
             rows = query_rows(
@@ -714,10 +713,16 @@ positions.sort(key=lambda p: to_num(p.get("marketValue"), 0.0), reverse=True)
 
 cash_value = to_num((portfolio_summary_in or {}).get("cashEUR"), 0.0) if isinstance(portfolio_summary_in, dict) else 0.0
 market_value = sum(to_num(p.get("marketValue"), 0.0) for p in positions)
-total_value = to_num((portfolio_summary_in or {}).get("totalPortfolioValueEUR"), None) if isinstance(portfolio_summary_in, dict) else None
-if total_value is None or total_value <= 0:
-    total_value = cash_value + market_value
+computed_total_value = cash_value + market_value
+upstream_total_value = to_num((portfolio_summary_in or {}).get("totalPortfolioValueEUR"), None) if isinstance(portfolio_summary_in, dict) else None
+if upstream_total_value is None or upstream_total_value <= 0:
+    total_value = computed_total_value
+elif abs(upstream_total_value - computed_total_value) > 0.01:
+    total_value = computed_total_value
+else:
+    total_value = upstream_total_value
 exposure_pct = (market_value / total_value) * 100 if total_value > 0 else 0.0
+portfolio_updated_at = max((p.get("updatedAt") for p in positions), key=parse_ts_key) if positions else None
 
 recent_ideas = []
 if isinstance(recent_ideas_in, list):
@@ -765,6 +770,7 @@ return [
         "json": {
             "portfolioBrief": {
                 "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "portfolioUpdatedAt": portfolio_updated_at,
                 "summary": summary,
                 "cash": summary["cash"],
                 "totalValue": summary["totalValue"],

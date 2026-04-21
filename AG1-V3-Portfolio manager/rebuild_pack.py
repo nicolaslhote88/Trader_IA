@@ -1,4 +1,25 @@
 #!/usr/bin/env python3
+"""
+Rebuild the AG1 V3 Portfolio Manager pack — **workflow/-only** layout.
+
+Starting April 2026 the canonical pack lives entirely under
+`AG1-V3-Portfolio manager/workflow/`. The parent folder no longer
+holds a mirror copy of `nodes/`, `sql/`, or `docs/`. Only this
+script, the parent README (a pointer), and `workflow/` remain.
+
+Source of truth: `workflow/AG1_workflow_template_v3.json`.
+
+Generated artifacts:
+- `workflow/variants/AG1_workflow_v3__*.json` (via generate_model_variants.py)
+- `workflow/nodes/<category>/*` (selected critical nodes + extracted code)
+- `workflow/nodes/NODE_SUMMARY.tsv`
+- `workflow/sql/portfolio_ledger_schema_v2.sql` (copy from workflow/sql — source)
+- `workflow/docs/POST_AGENT_DUCKDB_LEDGER.md` (placeholder if missing)
+
+The script preserves `workflow/nodes/post_agent/duckdb_writer.py` if it
+has been edited manually (external runtime dep, not extracted from the
+template).
+"""
 from __future__ import annotations
 
 import json
@@ -40,6 +61,7 @@ EXPORT_SPECS: tuple[ExportSpec, ...] = (
     ExportSpec("pre_agent", "20J_final_build_market_news_pack", ("20j final build marketnewspack final",)),
     ExportSpec("pre_agent", "R8_data_prep_matrix", ("r8 data prep for matrix fusion filter",)),
     ExportSpec("pre_agent", "calcul_matrice_briefing", ("calcul matrice briefing",)),
+    ExportSpec("pre_agent", "fx_00_prepare_brief_context", ("fx 00 prepare brief context", "fx 00 prepare fx brief context")),
     ExportSpec("pre_agent", "merge7", ("merge7",)),
     ExportSpec("agent_input", "ag1_00_assemble_input_packs", ("ag1 00 assemble input packs",)),
     ExportSpec("agent_input", "agent_1_portfolio_manager", ("agent 1 portfolio manager",)),
@@ -63,7 +85,7 @@ def load_workflow() -> tuple[Path, dict]:
     return src, wf
 
 
-def find_node(nodes: list[dict], aliases: Iterable[str]) -> dict:
+def find_node(nodes: list[dict], aliases: Iterable[str]) -> dict | None:
     alias_norms = [norm_text(a) for a in aliases]
     # Prefer exact normalized match.
     for alias in alias_norms:
@@ -75,7 +97,7 @@ def find_node(nodes: list[dict], aliases: Iterable[str]) -> dict:
         for n in nodes:
             if alias in norm_text(n.get("name", "")):
                 return n
-    raise KeyError(f"Node not found for aliases={tuple(aliases)}")
+    return None
 
 
 def write_json(path: Path, payload: object) -> None:
@@ -90,13 +112,24 @@ def write_text(path: Path, content: str) -> None:
 
 def export_selected_nodes(nodes: list[dict], out_nodes_dir: Path) -> list[dict]:
     summary_rows: list[dict] = []
+    # Preserve the external duckdb_writer.py if present (not extracted from template).
+    writer_path = out_nodes_dir / "post_agent" / "duckdb_writer.py"
+    writer_backup = writer_path.read_bytes() if writer_path.is_file() else None
     # Reset only managed folders/files.
     for sub in ("pre_agent", "agent_input", "post_agent"):
         shutil.rmtree(out_nodes_dir / sub, ignore_errors=True)
     (out_nodes_dir).mkdir(parents=True, exist_ok=True)
+    # Restore writer before exporting nodes (so it's back in place regardless of spec list).
+    if writer_backup is not None:
+        writer_path.parent.mkdir(parents=True, exist_ok=True)
+        writer_path.write_bytes(writer_backup)
 
+    missing: list[ExportSpec] = []
     for spec in EXPORT_SPECS:
         node = find_node(nodes, spec.aliases)
+        if node is None:
+            missing.append(spec)
+            continue
         node_path = out_nodes_dir / spec.category / f"{spec.key}.node.json"
         write_json(node_path, node)
 
@@ -121,7 +154,10 @@ def export_selected_nodes(nodes: list[dict], out_nodes_dir: Path) -> list[dict]:
             }
         )
 
-    # NODE_SUMMARY.tsv
+    if missing:
+        missing_keys = ", ".join(m.key for m in missing)
+        print(f"[warn] nodes not found in template (skipped): {missing_keys}")
+
     lines = ["key\tid\tname\ttype\tcode_len"]
     for row in summary_rows:
         lines.append(
@@ -139,90 +175,49 @@ def export_selected_nodes(nodes: list[dict], out_nodes_dir: Path) -> list[dict]:
     return summary_rows
 
 
-def ensure_sql_mirror() -> None:
-    root_sql = ROOT / "sql" / "portfolio_ledger_schema_v2.sql"
-    if not root_sql.is_file():
-        raise FileNotFoundError(f"Missing SQL schema: {root_sql}")
-    wf_sql_dir = WORKFLOW_DIR / "sql"
-    wf_sql_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(root_sql, wf_sql_dir / "portfolio_ledger_schema_v2.sql")
-    # Keep a tiny README in both locations for consistency.
-    readme_text = "AG1 portfolio ledger schema v2 (DuckDB) used by post-agent writer.\n"
-    write_text(ROOT / "sql" / "README.md", readme_text)
-    write_text(WORKFLOW_DIR / "sql" / "README.md", readme_text)
+def ensure_sql_in_workflow() -> None:
+    wf_sql = WORKFLOW_DIR / "sql" / "portfolio_ledger_schema_v2.sql"
+    if not wf_sql.is_file():
+        raise FileNotFoundError(
+            f"Missing SQL schema at {wf_sql}. The workflow/sql folder is now the source."
+        )
+    write_text(
+        WORKFLOW_DIR / "sql" / "README.md",
+        "AG1 portfolio ledger schema v2 (DuckDB) used by post-agent writer.\n",
+    )
 
 
-def ensure_workflow_normalized_copy(src_workflow_path: Path, workflow_obj: dict) -> None:
-    write_json(WORKFLOW_TEMPLATE, workflow_obj)
-
-    # Root readme for the pack.
+def ensure_workflow_pointer_readme() -> None:
+    """Parent README is a pointer — the real content lives in workflow/."""
     root_readme = """# AG1 V3 Portfolio Manager Pack
 
-This folder is the canonical AG1 workflow pack rebuilt from the maintained V3 template.
+The whole canonical pack now lives in [`workflow/`](workflow/).
 
-## Source of truth
+- Source of truth : `workflow/AG1_workflow_template_v3.json`
+- Nodes extraits : `workflow/nodes/`
+- Schema DuckDB : `workflow/sql/portfolio_ledger_schema_v2.sql`
+- Variants par modèle : `workflow/variants/`
 
-- `workflow/AG1_workflow_template_v3.json` (canonical V3 template)
+Utilitaires au niveau parent :
 
-## Generated export artifacts
+- `rebuild_pack.py` — régénère les fichiers `workflow/nodes/*` et les variants depuis le template.
+- `export_to_github.ps1` — helper PowerShell pour commit + push ciblé sur ce dossier.
 
-- `workflow/variants/AG1_workflow_v3__*.json` (model-specific workflows)
-- `workflow/nodes/*` (selected critical nodes and code)
-- `workflow/sql/portfolio_ledger_schema_v2.sql`
-- `workflow/docs/POST_AGENT_DUCKDB_LEDGER.md`
-- `nodes/*` (mirror for direct mounting/reference)
-- `sql/portfolio_ledger_schema_v2.sql`
-- `docs/POST_AGENT_DUCKDB_LEDGER.md`
-
-## Notes
-
-- Code nodes are extracted from the workflow JSON.
-- `duckdb_writer.py` is an external runtime dependency for node `9 - Upsert Run Bundle (DuckDB)`.
+Voir [`docs/dev/rebuild_pack.md`](../docs/dev/rebuild_pack.md) pour la procédure.
 """
     write_text(ROOT / "README.md", root_readme)
 
-    # Root export helper (commit/push current folder only).
-    export_ps1 = """param(
-    [string]$CommitMessage = \"AG1: rebuild portfolio manager pack from workflow\",
-    [switch]$Push
-)
 
-$ErrorActionPreference = \"Stop\"
+def ensure_post_agent_doc_placeholder() -> None:
+    """Write a placeholder only if workflow/docs/POST_AGENT_DUCKDB_LEDGER.md is absent.
 
-$branch = (git rev-parse --abbrev-ref HEAD).Trim()
-if (-not $branch -or $branch -eq \"HEAD\") {
-    throw \"Unable to detect current branch.\"
-}
-
-$folder = \"AG1-V3-Portfolio manager\"
-git add -- $folder
-
-$staged = git diff --cached --name-only
-if (-not $staged) {
-    throw \"No staged changes.\"
-}
-
-git commit -m $CommitMessage
-
-if ($Push) {
-    git push origin $branch
-    Write-Host \"Pushed to origin/$branch\"
-} else {
-    Write-Host \"Commit created on branch '$branch'.\"
-    Write-Host \"Run: git push origin $branch\"
-}
-"""
-    write_text(ROOT / "export_to_github.ps1", export_ps1)
-
-    # Keep/update workflow README if missing.
-    if not (WORKFLOW_DIR / "README.md").exists():
-        write_text(
-            WORKFLOW_DIR / "README.md",
-            "# AG1 workflow subfolder\n\nImport one workflow from `variants/AG1_workflow_v3__*.json` in n8n.\n",
-        )
-
-
-def ensure_post_agent_doc_placeholders() -> None:
+    The authoritative content lives at `docs/history/` or `docs/architecture/`
+    in the repo root. We only drop a minimal pointer here so a deployment
+    mount has the file available if downstream tools expect it.
+    """
+    wf_doc = WORKFLOW_DIR / "docs" / "POST_AGENT_DUCKDB_LEDGER.md"
+    if wf_doc.exists():
+        return
     doc = """# AG1 Post-Agent DuckDB Ledger Notes
 
 This file documents the post-agent branch:
@@ -237,40 +232,11 @@ This file documents the post-agent branch:
 - `AG1_DUCKDB_PATH`
 - `AG1_DUCKDB_WRITER_PATH`
 - `AG1_LEDGER_SCHEMA_PATH` (optional override)
+
+See `docs/architecture/etat_des_lieux.md` in the repo root for the canonical
+description of this branch.
 """
-    root_doc = ROOT / "docs" / "POST_AGENT_DUCKDB_LEDGER.md"
-    wf_doc = WORKFLOW_DIR / "docs" / "POST_AGENT_DUCKDB_LEDGER.md"
-    if not root_doc.exists():
-        write_text(root_doc, doc)
-    if not wf_doc.exists():
-        write_text(wf_doc, doc)
-
-
-def mirror_external_writer_if_present() -> None:
-    root_writer = ROOT / "nodes" / "post_agent" / "duckdb_writer.py"
-    wf_writer = WORKFLOW_DIR / "nodes" / "post_agent" / "duckdb_writer.py"
-    if root_writer.is_file():
-        wf_writer.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(root_writer, wf_writer)
-
-
-def mirror_workflow_nodes_to_root() -> None:
-    src = WORKFLOW_DIR / "nodes"
-    dst = ROOT / "nodes"
-    root_writer = dst / "post_agent" / "duckdb_writer.py"
-    writer_backup = root_writer.read_bytes() if root_writer.is_file() else None
-    # Clean managed tree then mirror.
-    for sub in ("pre_agent", "agent_input", "post_agent"):
-        shutil.rmtree(dst / sub, ignore_errors=True)
-    dst.mkdir(parents=True, exist_ok=True)
-    if (dst / "NODE_SUMMARY.tsv").exists():
-        (dst / "NODE_SUMMARY.tsv").unlink()
-    shutil.copy2(src / "NODE_SUMMARY.tsv", dst / "NODE_SUMMARY.tsv")
-    for sub in ("pre_agent", "agent_input", "post_agent"):
-        shutil.copytree(src / sub, dst / sub, dirs_exist_ok=True)
-    if writer_backup is not None:
-        root_writer.parent.mkdir(parents=True, exist_ok=True)
-        root_writer.write_bytes(writer_backup)
+    write_text(wf_doc, doc)
 
 
 def main() -> None:
@@ -279,12 +245,12 @@ def main() -> None:
     if not nodes:
         raise RuntimeError("Workflow contains no nodes.")
 
-    ensure_workflow_normalized_copy(src_workflow_path, workflow_obj)
-    ensure_sql_mirror()
-    ensure_post_agent_doc_placeholders()
+    # Keep the template JSON normalized (idempotent).
+    write_json(WORKFLOW_TEMPLATE, workflow_obj)
+    ensure_sql_in_workflow()
+    ensure_post_agent_doc_placeholder()
     summary_rows = export_selected_nodes(nodes, WORKFLOW_DIR / "nodes")
-    mirror_workflow_nodes_to_root()
-    mirror_external_writer_if_present()
+    ensure_workflow_pointer_readme()
 
     print(f"Source workflow: {src_workflow_path.name}")
     print(f"Workflow name: {workflow_obj.get('name')}")
@@ -292,7 +258,6 @@ def main() -> None:
     print(f"Exported nodes: {len(summary_rows)}")
     print(f"Wrote: {WORKFLOW_TEMPLATE}")
     print(f"Wrote: {WORKFLOW_DIR / 'nodes' / 'NODE_SUMMARY.tsv'}")
-    print(f"Wrote: {ROOT / 'nodes' / 'NODE_SUMMARY.tsv'}")
 
 
 if __name__ == "__main__":

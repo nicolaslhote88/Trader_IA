@@ -715,6 +715,32 @@ def load_latest_positions_core(con):
     if not run_id:
         return None
 
+    mtm_rows = query_rows(
+        con,
+        """
+        SELECT
+          symbol,
+          name,
+          asset_class,
+          sector,
+          industry,
+          isin,
+          CAST(quantity AS DOUBLE) AS quantity,
+          CAST(avg_price AS DOUBLE) AS avg_price,
+          CAST(last_price AS DOUBLE) AS last_price,
+          CAST(market_value AS DOUBLE) AS market_value,
+          CAST(unrealized_pnl AS DOUBLE) AS unrealized_pnl,
+          CAST(updated_at AS VARCHAR) AS updated_at
+        FROM portfolio_positions_mtm_latest
+        """,
+    ) if table_exists(con, "portfolio_positions_mtm_latest") else []
+    mtm_by_symbol = {}
+    for r in mtm_rows:
+        sym = norm_symbol(r.get("symbol"), r.get("asset_class"))
+        if not sym or sym in {"CASH_EUR", "__META__"}:
+            continue
+        mtm_by_symbol[sym] = dict(r)
+
     rows = query_rows(
         con,
         """
@@ -740,32 +766,72 @@ def load_latest_positions_core(con):
     )
 
     out_rows = []
+    seen_symbols = set()
+    used_mtm_overlay = False
     for idx, r in enumerate(rows, start=1):
         sym = norm_symbol(r.get("symbol"), r.get("asset_class"))
         if not sym:
             continue
-        asset_class = normalize_asset_class(r.get("asset_class"), sym) or "EQUITY"
+        seen_symbols.add(sym)
+        mtm = mtm_by_symbol.get(sym) or {}
+        if mtm:
+            used_mtm_overlay = True
+        asset_class = (
+            normalize_asset_class(mtm.get("asset_class"), sym)
+            or normalize_asset_class(r.get("asset_class"), sym)
+            or "EQUITY"
+        )
         out_rows.append(
             {
                 "row_number": idx,
                 "Symbol": sym,
-                "Name": str(r.get("name") or sym).strip(),
+                "Name": str(mtm.get("name") or r.get("name") or sym).strip(),
                 "AssetClass": asset_class,
-                "Sector": str(r.get("sector") or "Unknown").strip() or "Unknown",
-                "Industry": str(r.get("industry") or "Unknown").strip() or "Unknown",
-                "ISIN": str(r.get("isin") or "").strip(),
-                "Quantity": to_num(r.get("quantity"), 0.0),
-                "AvgPrice": to_num(r.get("avg_price"), None),
-                "LastPrice": to_num(r.get("last_price"), None),
-                "MarketValue": to_num(r.get("market_value"), None),
-                "UnrealizedPnL": to_num(r.get("unrealized_pnl"), None),
-                "UpdatedAt": to_iso(r.get("updated_at_ms") if r.get("updated_at_ms") is not None else r.get("updated_at")),
+                "Sector": str(mtm.get("sector") or r.get("sector") or "Unknown").strip() or "Unknown",
+                "Industry": str(mtm.get("industry") or r.get("industry") or "Unknown").strip() or "Unknown",
+                "ISIN": str(mtm.get("isin") or r.get("isin") or "").strip(),
+                "Quantity": to_num(mtm.get("quantity"), to_num(r.get("quantity"), 0.0)),
+                "AvgPrice": to_num(mtm.get("avg_price"), to_num(r.get("avg_price"), None)),
+                "LastPrice": to_num(mtm.get("last_price"), to_num(r.get("last_price"), None)),
+                "MarketValue": to_num(mtm.get("market_value"), to_num(r.get("market_value"), None)),
+                "UnrealizedPnL": to_num(mtm.get("unrealized_pnl"), to_num(r.get("unrealized_pnl"), None)),
+                "UpdatedAt": to_iso(mtm.get("updated_at"), None)
+                or to_iso(r.get("updated_at_ms") if r.get("updated_at_ms") is not None else r.get("updated_at")),
                 "NextReviewDate": None,
             }
         )
 
+    for sym, mtm in mtm_by_symbol.items():
+        if sym in seen_symbols:
+            continue
+        used_mtm_overlay = True
+        asset_class = normalize_asset_class(mtm.get("asset_class"), sym) or "EQUITY"
+        out_rows.append(
+            {
+                "row_number": len(out_rows) + 1,
+                "Symbol": sym,
+                "Name": str(mtm.get("name") or sym).strip(),
+                "AssetClass": asset_class,
+                "Sector": str(mtm.get("sector") or "Unknown").strip() or "Unknown",
+                "Industry": str(mtm.get("industry") or "Unknown").strip() or "Unknown",
+                "ISIN": str(mtm.get("isin") or "").strip(),
+                "Quantity": to_num(mtm.get("quantity"), None),
+                "AvgPrice": to_num(mtm.get("avg_price"), None),
+                "LastPrice": to_num(mtm.get("last_price"), None),
+                "MarketValue": to_num(mtm.get("market_value"), None),
+                "UnrealizedPnL": to_num(mtm.get("unrealized_pnl"), None),
+                "UpdatedAt": to_iso(mtm.get("updated_at"), None),
+                "NextReviewDate": None,
+            }
+        )
+
+    out_rows.sort(key=lambda row: to_num(row.get("MarketValue"), 0.0) or 0.0, reverse=True)
+    for idx, row in enumerate(out_rows, start=1):
+        row["row_number"] = idx
+
     return {
         "rows": out_rows,
+        "positionsSource": "core_snapshots+mtm_overlay" if used_mtm_overlay else "core_snapshots",
         "summary": {
             "runId": run_id,
             "ts": to_iso(s.get("ts_ms") if s.get("ts_ms") is not None else s.get("ts")),
@@ -1321,7 +1387,7 @@ with db_con(db_path) as con:
         if core_payload:
             rows = core_payload.get("rows", []) or []
             core_summary = core_payload.get("summary", {}) or {}
-            portfolio_source = "core_snapshots"
+            portfolio_source = str(core_payload.get("positionsSource") or "core_snapshots")
         else:
             rows = load_latest_positions_fallback(con)
             portfolio_source = "portfolio_positions_mtm_latest" if rows else "duckdb_empty"

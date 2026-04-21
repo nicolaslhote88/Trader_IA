@@ -14,7 +14,7 @@ Le système combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-4.
 | 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
 | 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
 | 5 | **Analyste Sentiment / News** | Sentiment de marché, news, transcripts | `AG4-V3/`, `AG4-SPE-V2/` |
-| 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exécution | `AG1-V3-Portfolio manager/nodes/post_agent/` (nodes 7→10) |
+| 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exécution | `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` (nodes 7→10) |
 
 > État actuel : l'Execution Trader est en **sandbox interne** (fills fabriqués au prix théorique). Le branchement broker réel est la prochaine étape — voir `ANALYSE_SYSTEME_AVANT_AGENT6.md`.
 

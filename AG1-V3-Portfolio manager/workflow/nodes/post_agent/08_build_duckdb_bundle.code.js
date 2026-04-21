@@ -36,9 +36,181 @@ function extractSymbolFromText(text) {
   return m ? m[0] : "GLOBAL";
 }
 
+function roundTo(v, digits = 2) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  const factor = 10 ** digits;
+  return Math.round(n * factor) / factor;
+}
+
+function normalizeSymbol(v) {
+  return String(v ?? "").trim();
+}
+
+function inferRiskStatus(cashPct, cashEUR) {
+  if (Number.isFinite(cashEUR) && cashEUR < -0.01) return "RISK_OFF";
+  if (Number.isFinite(cashPct) && cashPct >= 0.8) return "DEFENSIVE";
+  if (Number.isFinite(cashPct) && cashPct <= 0.1) return "RISK_ON";
+  return "BALANCED";
+}
+
+function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, meta) {
+  const positionsIn = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];
+  const positionsValueInput = positionsIn.reduce((sum, row) => {
+    const marketValue = toNum(row?.MarketValue, null);
+    if (marketValue !== null) return sum + marketValue;
+    return sum + (toNum(row?.Quantity, 0) * toNum(row?.LastPrice, 0));
+  }, 0);
+  const summaryCash = toNum(portfolioSummary?.cashEUR, null);
+  const summaryTotal = toNum(portfolioSummary?.totalPortfolioValueEUR, null);
+  let startCash = summaryCash;
+  if (
+    summaryTotal !== null
+    && Number.isFinite(positionsValueInput)
+    && Math.abs(((summaryCash ?? 0) + positionsValueInput) - summaryTotal) > 0.01
+  ) {
+    const reconciledCash = summaryTotal - positionsValueInput;
+    if (Number.isFinite(reconciledCash)) startCash = reconciledCash;
+  }
+  if (!Number.isFinite(startCash)) startCash = 0;
+  const posMap = new Map();
+
+  for (const row of positionsIn) {
+    const symbol = normalizeSymbol(row?.Symbol);
+    const qty = toNum(row?.Quantity, 0);
+    if (!symbol || qty <= 0) continue;
+    posMap.set(symbol, {
+      symbol,
+      qty,
+      avgCost: toNum(row?.AvgPrice, toNum(row?.LastPrice, 0) || 0),
+      lastPrice: toNum(row?.LastPrice, toNum(row?.AvgPrice, 0) || 0),
+      assetClass: String(row?.AssetClass || "EQUITY").trim().toUpperCase() || "EQUITY",
+      sector: clampText(row?.Sector || "UNKNOWN", 128) || "UNKNOWN",
+    });
+  }
+
+  let cashEUR = startCash;
+  for (const order of orders || []) {
+    const symbol = normalizeSymbol(order?.symbol);
+    const side = String(order?.side || "").trim().toUpperCase();
+    const qty = toNum(order?.quantity, 0);
+    const orderType = normalizeOrderType(order?.orderType);
+    const price =
+      (orderType === "LIMIT" ? toNum(order?.limitPrice, null) : null) ??
+      toNum(priceMap[symbol], null);
+
+    if (!symbol || qty <= 0 || !Number.isFinite(price) || price <= 0) continue;
+
+    if (side === "BUY") {
+      const current = posMap.get(symbol) || {
+        symbol,
+        qty: 0,
+        avgCost: price,
+        lastPrice: price,
+        assetClass: String(order?.assetClass || "EQUITY").trim().toUpperCase() || "EQUITY",
+        sector: "UNKNOWN",
+      };
+      const newQty = current.qty + qty;
+      current.avgCost = newQty > 0 ? (((current.qty * current.avgCost) + (qty * price)) / newQty) : price;
+      current.qty = newQty;
+      current.lastPrice = toNum(priceMap[symbol], price);
+      posMap.set(symbol, current);
+      cashEUR -= qty * price;
+      continue;
+    }
+
+    if (side === "SELL") {
+      const current = posMap.get(symbol);
+      if (!current) continue;
+      const execQty = Math.min(qty, current.qty);
+      if (execQty <= 0) continue;
+      current.qty -= execQty;
+      current.lastPrice = toNum(priceMap[symbol], price);
+      cashEUR += execQty * price;
+      if (current.qty <= 1e-9) posMap.delete(symbol);
+      else posMap.set(symbol, current);
+    }
+  }
+
+  const positions = [];
+  const sectorTotals = {};
+  let equityEUR = 0;
+
+  for (const current of posMap.values()) {
+    const lastPrice = toNum(priceMap[current.symbol], current.lastPrice ?? current.avgCost ?? 0);
+    const marketValue = current.qty * lastPrice;
+    const unrealizedPnL = (lastPrice - current.avgCost) * current.qty;
+    equityEUR += marketValue;
+    const sector = current.sector || "UNKNOWN";
+    sectorTotals[sector] = (sectorTotals[sector] || 0) + marketValue;
+    positions.push({
+      symbol: current.symbol,
+      ts,
+      qty: current.qty,
+      avg_cost: roundTo(current.avgCost, 8),
+      last_price: roundTo(lastPrice, 8),
+      market_value_eur: roundTo(marketValue, 2),
+      unrealized_pnl_eur: roundTo(unrealizedPnL, 2),
+      weight_pct: 0,
+    });
+  }
+
+  const totalValueEUR = cashEUR + equityEUR;
+  for (const position of positions) {
+    position.weight_pct = totalValueEUR > 0 ? position.market_value_eur / totalValueEUR : 0;
+  }
+
+  const initialCapitalEUR = toNum(meta?.initialCapitalEUR, 50000);
+  const cumFeesEUR = toNum(meta?.cumFeesEUR, 0);
+  const cumAiCostEUR = toNum(meta?.cumAiCostEUR, 0);
+  const totalPnLEUR = totalValueEUR - initialCapitalEUR;
+  const roi = initialCapitalEUR > 0 ? (totalPnLEUR / initialCapitalEUR) : 0;
+  const cashPct = totalValueEUR > 0 ? (cashEUR / totalValueEUR) : 0;
+  const top1PosPct = positions.length
+    ? Math.max(...positions.map((p) => Number(p.market_value_eur) || 0)) / (totalValueEUR || 1)
+    : 0;
+  const top1SectorPct = Object.keys(sectorTotals).length
+    ? Math.max(...Object.values(sectorTotals)) / (totalValueEUR || 1)
+    : 0;
+  const riskStatus = inferRiskStatus(cashPct, cashEUR);
+
+  return {
+    positions,
+    portfolio: {
+      ts,
+      cash_eur: roundTo(cashEUR, 2),
+      equity_eur: roundTo(equityEUR, 2),
+      total_value_eur: roundTo(totalValueEUR, 2),
+      cum_fees_eur: roundTo(cumFeesEUR, 2),
+      cum_ai_cost_eur: roundTo(cumAiCostEUR, 2),
+      trades_this_run: orders.length,
+      total_pnl_eur: roundTo(totalPnLEUR, 2),
+      roi,
+      drawdown_pct: 0,
+      meta_json: {
+        source: "node8_portfolio_summary",
+        start_cash_eur: roundTo(startCash, 2),
+      },
+    },
+    risk: {
+      ts,
+      cash_pct: cashPct,
+      top1_pos_pct: top1PosPct,
+      top1_sector_pct: top1SectorPct,
+      var95_est_eur: roundTo(equityEUR * 0.015 * 1.65, 2),
+      positions_count: positions.length,
+      risk_status: riskStatus,
+      limits_json: {
+        source: "node8_portfolio_summary",
+      },
+    },
+  };
+}
+
 const input = $json || {};
 const ctx = input.ctx || {};
 const runCtx = ctx.run || {};
+const meta = input.meta || ctx.meta || {};
 const agentDecision = input.agentDecision || {};
 const ordersIn = Array.isArray(input.orders) ? input.orders : [];
 const warnings = Array.isArray(input.warnings) ? input.warnings : [];
@@ -129,6 +301,8 @@ if (String(input.decision || "").toUpperCase() === "NO_TRADE" && warnings.length
   });
 }
 
+const snapshots = buildSnapshotsFromPortfolio(portfolioSummary, ordersIn, priceMap, ts_end, meta);
+
 const bundle = {
   run: {
     run_id,
@@ -162,13 +336,14 @@ const bundle = {
       symbol: sym,
       side: o.side,
       qty: o.quantity,
-      price: (Number.isFinite(px) && px > 0) ? px : 1.0, // dernier fallback
+      price: (Number.isFinite(px) && px > 0) ? px : 1.0,
     };
   }),
   cash_ledger: [],
   market_prices: Object.entries(priceMap).map(([sym, px]) => ({ symbol: sym, close: px })),
   ai_signals,
   alerts,
+  snapshots,
 };
 
 return [{

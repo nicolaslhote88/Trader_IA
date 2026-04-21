@@ -1,22 +1,15 @@
 # AG1 V3 Portfolio Manager Pack
 
-This folder is the canonical AG1 workflow pack rebuilt from the maintained V3 template.
+The whole canonical pack now lives in [`workflow/`](workflow/).
 
-## Source of truth
+- Source of truth : `workflow/AG1_workflow_template_v3.json`
+- Nodes extraits : `workflow/nodes/`
+- Schema DuckDB : `workflow/sql/portfolio_ledger_schema_v2.sql`
+- Variants par modèle : `workflow/variants/`
 
-- `workflow/AG1_workflow_template_v3.json` (canonical V3 template)
+Utilitaires au niveau parent :
 
-## Generated export artifacts
+- `rebuild_pack.py` — régénère les fichiers `workflow/nodes/*` et les variants depuis le template.
+- `export_to_github.ps1` — helper PowerShell pour commit + push ciblé sur ce dossier.
 
-- `workflow/variants/AG1_workflow_v3__*.json` (model-specific workflows)
-- `workflow/nodes/*` (selected critical nodes and code)
-- `workflow/sql/portfolio_ledger_schema_v2.sql`
-- `workflow/docs/POST_AGENT_DUCKDB_LEDGER.md`
-- `nodes/*` (mirror for direct mounting/reference)
-- `sql/portfolio_ledger_schema_v2.sql`
-- `docs/POST_AGENT_DUCKDB_LEDGER.md`
-
-## Notes
-
-- Code nodes are extracted from the workflow JSON.
-- `duckdb_writer.py` is an external runtime dependency for node `9 - Upsert Run Bundle (DuckDB)`.
+Voir [`docs/dev/rebuild_pack.md`](../docs/dev/rebuild_pack.md) pour la procédure.

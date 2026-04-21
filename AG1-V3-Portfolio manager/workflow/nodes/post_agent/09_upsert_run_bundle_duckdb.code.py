@@ -372,7 +372,19 @@ try:
         if not run_id and isinstance(bundle, dict):
             run_id = str((bundle.get("run") or {}).get("run_id") or "").strip()
 
-        snap_res = writer.compute_snapshots(db_path, run_id) if run_id else {}
+        bundle_snapshots = bundle.get("snapshots") if isinstance(bundle, dict) else {}
+        if (
+            run_id
+            and isinstance(bundle_snapshots, dict)
+            and (
+                bundle_snapshots.get("positions")
+                or bundle_snapshots.get("portfolio")
+                or bundle_snapshots.get("risk")
+            )
+        ):
+            snap_res = dict(upsert_res.get("snapshots") or {}) if isinstance(upsert_res, dict) else {}
+        else:
+            snap_res = writer.compute_snapshots(db_path, run_id) if run_id else {}
 
         out.append(
             {
