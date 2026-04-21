@@ -9,7 +9,7 @@ Le système combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-4.
 
 | # | Agent | Rôle | Implémenté dans |
 |---|---|---|---|
-| 1 | **Univers** | Extraction et maintenance de l'univers d'investissement (tickers, métadonnées, secteurs) | `AG0-V1 - extraction universe/` |
+| 1 | **Univers** | Extraction et maintenance de l'univers d'investissement (tickers, métadonnées, secteurs) | `outils/AG0-V1 - extraction universe/` (workflow n8n inactif, utilitaire ponctuel) |
 | 2 | **Portfolio Manager** | Allocation, cibles de position, ordres théoriques — **ensemble de 3 LLM en parallèle** | `AG1-V3-Portfolio manager/` (+ variantes GPT-5.2 / Grok-4.1 / Gemini-3) |
 | 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
 | 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
@@ -53,7 +53,6 @@ docker compose -f docker-compose.qdrant.yml up -d
 
 ```
 Trader_IA/
-├── AG0-V1 - extraction universe/   # Agent 1 (Univers)
 ├── AG1-V3-Portfolio manager/        # Agent 2 (Portfolio Manager) + Risk + Execution
 ├── AG1-PF-V1/                       # Pipeline paper fusion (archivé)
 ├── AG2-V3/                          # Agent 3 (Analyste Technique)
@@ -62,6 +61,7 @@ Trader_IA/
 ├── AG4-SPE-V2/                      # Agent 5 (News - transcripts/earnings)
 ├── dashboard/                       # Streamlit (trading-dashboard)
 ├── docs/                            # Documentation consolidée (voir §6)
+├── outils/                          # Workflows n8n inactifs / utilitaires ponctuels (AG0 univers)
 ├── vps_hostinger_config/            # Docker Compose + env
 ├── yfinance-api/                    # Service Yahoo Finance
 ├── yf-enrichment-v1/                # Enrichment quotidien (script déployé)

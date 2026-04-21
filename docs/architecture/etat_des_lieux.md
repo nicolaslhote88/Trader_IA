@@ -65,15 +65,15 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ## 3. Workflows et rôle métier
 
-### 3.1 AG0 — Extraction universe
+### 3.1 AG0 — Extraction universe (utilitaire ponctuel)
 
-- Fichier : `AG0-V1 - extraction universe/AG0-V1 - extraction universe.json`
-- Trigger : manuel.
+- Fichier : `outils/AG0-V1 - extraction universe/AG0-V1 - extraction universe.json`
+- Trigger : manuel (workflow inactif en production, conservé dans `outils/` comme utilitaire).
 - Rôle :
   - scrape Boursorama compartiments A/B/C,
   - normalise `Symbol` (`<ticker>.PA`) + `Name`,
   - export CSV + XLSX vers Google Drive.
-- Usage : alimentation universe (amont manuel).
+- Usage : alimentation universe (amont manuel, aujourd'hui piloté directement via la Google Sheets d'univers).
 
 ### 3.2 AG1-PF-V1 — Portfolio MTM (DuckDB-only, multi AG1-V2)
 
