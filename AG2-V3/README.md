@@ -1,54 +1,35 @@
-# AG2-V3 - Workflow Final
+# AG2-V3 — Analyse technique (double agent)
 
-## Version unique
+## Versions actives en n8n
 
-Le workflow officiel est:
+Les deux workflows officiels importés dans n8n sont :
 
-- `AG2-V3/AG2-V3 - Analyse technique.json`
+- `AG2-V3/AG2-V3 - Analyse technique (FX only).json` — univers FOREX.
+- `AG2-V3/AG2-V3 - Analyse technique (non-FX).json` — univers EQUITY / ETF / CRYPTO.
 
-Il n'y a plus de versions miroir.
-
-## Scripts nodes synchronises
-
-Les fichiers `AG2-V3/nodes/*` sont sync depuis le workflow final via `build_workflow.py`.
+Ces deux JSON sont désormais les **sources de vérité** : édités directement (via n8n puis exportés) ou manuellement, sans étape de build intermédiaire. L'ancien workflow canonique (`AG2-V3/AG2-V3 - Analyse technique.json`) ainsi que les scripts `build_workflow.py` / `build_split_workflows.py` ont été retirés du repo dans la phase de nettoyage d'avril 2026.
 
 ## Double agent technique (ACTIONS/ETF + FOREX)
 
-Le workflow AG2-V3 inclut maintenant un routage LLM dedie:
+Chaque workflow route vers un agent LLM dédié :
 
-- `Route AI Agent (FX?)`:
-  - `true` si `asset_class == "FX"` -> nœud `AI Validation GPT - FOREX`
-  - `false` sinon (EQUITY/ETF/CRYPTO) -> nœud `AI Validation GPT - ACTIONS/ETF`
-- Les deux branches convergent vers `Merge AI + Context`, puis `Extract AI + Write`.
+- `AG2-V3 - Analyse technique (non-FX).json` : gate long-only (SELL → REJECT) pour EQUITY / ETF / CRYPTO.
+- `AG2-V3 - Analyse technique (FX only).json` : gate bidirectionnel (BUY / SELL) avec filtres SMA200 + Bollinger + RSI.
 
-Points importants:
+Points importants :
 
 - Prompt USER identique sur les 2 agents (injecte `ai_context` brut).
-- Prompt SYSTEM specifique par univers:
-  - ACTIONS/ETF: gate long-only (SELL => REJECT)
-  - FOREX: gate bidirectionnel (BUY/SELL) avec filtres SMA200 + Bollinger + RSI.
+- Prompt SYSTEM spécifique par univers.
 
-## Champs Forex AI ajoutes (V3)
+## Champs Forex AI (V3)
 
-Le validator FOREX renvoie et persiste aussi:
+Le validator FOREX renvoie et persiste :
 
-- `bb_status` -> `ai_bb_status`
-- `rsi_status` -> `ai_rsi_status`
+- `bb_status` → `ai_bb_status`
+- `rsi_status` → `ai_rsi_status`
 
-Ces champs sont disponibles dans DuckDB (`technical_signals`), la vue `v_ag2_fx_output`,
-les payloads vectoriels, et la sortie Google Sheets (si le node de sync est utilise).
+Ces champs sont disponibles dans DuckDB (`technical_signals`), la vue `v_ag2_fx_output`, les payloads vectoriels, et la sortie Google Sheets (si le nœud de sync est utilisé).
 
-## Commandes utiles
+## Scripts nœuds
 
-Depuis `AG2-V3/`:
-
-```bash
-# Afficher/exporter le workflow canonique
-python build_workflow.py > "AG2-V3 - Analyse technique.json"
-
-# Resynchroniser les scripts nodes/* depuis le workflow canonique
-python build_workflow.py --sync-nodes
-
-# Alias pour resynchroniser les scripts
-python build_workflow.py --write-files
-```
+Les fichiers dans `AG2-V3/nodes/` reflètent le code embarqué dans les deux workflows. Pour resynchroniser manuellement le contenu d'un nœud code : copier depuis n8n → coller dans le fichier correspondant, puis committer.

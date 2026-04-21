@@ -115,7 +115,8 @@ Source : `vps_hostinger_config/docker-compose.yml` + `vps_hostinger_config/docke
 
 ### 3.4 AG2-V3 — Analyse technique
 
-- Fichier : `AG2-V3/AG2-V3 - Analyse technique.json`
+- Fichiers : `AG2-V3/AG2-V3 - Analyse technique (FX only).json` + `AG2-V3/AG2-V3 - Analyse technique (non-FX).json`
+  - ces deux variants sont les sources de vérité (l'ancien canonique `AG2-V3 - Analyse technique.json` a été retiré du repo en avril 2026).
 - Trigger :
   - cron `10 9-17 * * 1-5`
   - manuel.
