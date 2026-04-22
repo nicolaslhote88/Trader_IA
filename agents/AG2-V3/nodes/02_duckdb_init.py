@@ -87,6 +87,13 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
         yield con
     finally:
         if con is not None:
+            # CHECKPOINT avant close pour libérer les pages orphelines laissées
+            # par les INSERT OR REPLACE / UPDATE. Sans ça, ag2_v3.duckdb a
+            # fragmenté jusqu'à 3.6 GB pour ~6 MB de données utiles.
+            try:
+                con.execute("CHECKPOINT")
+            except Exception:
+                pass
             try:
                 con.close()
             except Exception:

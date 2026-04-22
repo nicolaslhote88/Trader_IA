@@ -25,6 +25,12 @@ def db_con(path=DEFAULT_DB_PATH, retries=6, base_delay=0.25):
         yield con
     finally:
         if con is not None:
+            # CHECKPOINT avant close pour libérer les pages orphelines laissées
+            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
+            try:
+                con.execute("CHECKPOINT")
+            except Exception:
+                pass
             try:
                 con.close()
             except Exception:

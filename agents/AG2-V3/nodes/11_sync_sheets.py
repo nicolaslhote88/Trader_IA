@@ -25,6 +25,11 @@ def db_con(path=DB_PATH, retries=5, base_delay=0.3):
         yield con
     finally:
         if con:
+            # CHECKPOINT no-op sur read-only (cf. infra/maintenance/defrag_duckdb.py).
+            try:
+                con.execute("CHECKPOINT")
+            except Exception:
+                pass
             try:
                 con.close()
             except Exception:
