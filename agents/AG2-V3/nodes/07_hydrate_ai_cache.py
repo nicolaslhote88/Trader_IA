@@ -10,6 +10,11 @@ def db_con(path=DB_PATH):
     try:
         yield con
     finally:
+        # CHECKPOINT avant close (cf. infra/maintenance/defrag_duckdb.py).
+        try:
+            con.execute("CHECKPOINT")
+        except Exception:
+            pass
         try:
             con.close()
         except Exception:

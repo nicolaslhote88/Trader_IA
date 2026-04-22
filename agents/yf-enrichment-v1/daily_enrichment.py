@@ -89,6 +89,11 @@ def db_con(path: str, read_only: bool = False, retries: int = 5, delay: float = 
         yield con
     finally:
         if con is not None:
+            # CHECKPOINT avant close (cf. infra/maintenance/defrag_duckdb.py).
+            try:
+                con.execute("CHECKPOINT")
+            except Exception:
+                pass
             try:
                 con.close()
             except Exception:

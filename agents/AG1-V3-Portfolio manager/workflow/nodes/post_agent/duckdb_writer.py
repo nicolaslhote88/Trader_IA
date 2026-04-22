@@ -238,6 +238,13 @@ def _db_con(db_path: str, retries: int = 6, base_delay: float = 0.2):
     try:
         yield con
     finally:
+        # CHECKPOINT avant close pour libérer les pages orphelines laissées
+        # par les INSERT ... ON CONFLICT DO UPDATE. Sans ça, les fichiers
+        # .duckdb fragmentent de plusieurs GB en quelques semaines.
+        try:
+            con.execute("CHECKPOINT")
+        except Exception:
+            pass
         try:
             con.close()
         except Exception:
