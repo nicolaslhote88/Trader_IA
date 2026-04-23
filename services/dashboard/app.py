@@ -8684,6 +8684,7 @@ if page == "Dashboard Trading":
                         _build_mini_equity_curve(c, mode=compare_curve_mode, y_range=curve_y_range, show_drawdown_overlay=False),
                         use_container_width=True,
                         config={"displayModeBar": False},
+                        key=f"compare_mini_eq_{key}",
                     )
 
                     # Risque & exposition
