@@ -54,5 +54,4 @@ locks concurrents, puis relancer.
 
 ## À faire en parallèle (task #31)
 Patcher le script de compaction (`infra/maintenance/compact_duckdbs.py` ou équivalent)
-pour préserver les PRIMARY KEY lors du rebuild des tables — sinon la régression
-reviendra au prochain run.
+pour préserver les PRIMARY KEY lors du rebuild des tab

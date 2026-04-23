@@ -320,14 +320,4 @@ def main() -> int:
     if args.apply:
         print("\nSwap fait. Les anciennes DB sont conservées en .duckdb.old.")
         print("Redémarre n8n :")
-        print("  docker compose -f /opt/trader-ia/docker-compose.yml start n8n task-runners")
-        print("\nAprès 24-48h de runs OK, supprime les .old :")
-        print(f"  rm {db_dir}/*.duckdb.old")
-    else:
-        print("\n(dry-run — aucune modification faite. Relance avec --apply pour committer.)")
-
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        print("  docker compose -f /opt/trader-ia/doc

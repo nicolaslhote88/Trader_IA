@@ -2,12 +2,13 @@
 -- Restauration PRIMARY KEY perdues lors de la compaction 2026-04-22
 -- Généré automatiquement depuis les snapshots originaux.
 -- Pré-check: zéro doublon, zéro null sur les colonnes clés (validé).
--- Usage:  duckdb <db.duckdb> < fix_pk_<db>.sql
+-- Usage recommandé:
+--   python3 apply_fix.py --db-dir /local-files/duckdb
+-- Usage alternatif (si CLI duckdb installé):
+--   duckdb <db.duckdb> < fix_pk_<db>.sql
 -- ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 -- DB: ag1_v3_gemini30_pro.duckdb
 -- 17 PRIMARY KEY à restaurer
-
-BEGIN TRANSACTION;
 
 ALTER TABLE "cfg"."portfolio_config" ADD PRIMARY KEY ("config_version");  -- 1 rows
 ALTER TABLE "core"."ai_signals" ADD PRIMARY KEY ("signal_id");  -- 405 rows
@@ -27,5 +28,4 @@ ALTER TABLE "main"."portfolio_positions_mtm_history" ADD PRIMARY KEY ("id");  --
 ALTER TABLE "main"."portfolio_positions_mtm_latest" ADD PRIMARY KEY ("symbol");  -- 25 rows
 ALTER TABLE "main"."portfolio_positions_mtm_run_log" ADD PRIMARY KEY ("run_id");  -- 335 rows
 
-COMMIT;
 CHECKPOINT;
