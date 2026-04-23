@@ -124,6 +124,20 @@ def defrag_one(src: Path, tmp_dir: Path, dry_run: bool) -> tuple[int, int, float
             if sch != "main":
                 con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
 
+        # Récupère les contraintes PK/UNIQUE de la source pour les rejouer
+        # après insertion (CTAS ne préserve PAS les contraintes — régression
+        # identifiée le 2026-04-23, cf infra/maintenance/fix_pk_20260423/).
+        constraints = con.execute(
+            """
+            SELECT schema_name, table_name, constraint_type, constraint_column_names
+            FROM duckdb_constraints()
+            WHERE database_name='src'
+              AND constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+              AND table_name NOT LIKE 'backup_%'
+            ORDER BY schema_name, table_name, constraint_type
+            """
+        ).fetchall()
+
         # CTAS chunkée par table avec CHECKPOINT intermédiaire.
         for sch, t in rows:
             con.execute(
@@ -142,6 +156,21 @@ def defrag_one(src: Path, tmp_dir: Path, dry_run: bool) -> tuple[int, int, float
                     f'LIMIT {CHUNK_ROWS} OFFSET {offset}'
                 )
             con.execute("CHECKPOINT")
+
+        # Rejoue PRIMARY KEY et UNIQUE après insertion (les données sont propres
+        # si la source l'était ; échoue bruyamment si doublon/null).
+        for sch, t, ctype, cols in constraints:
+            col_list = ", ".join([f'"{c}"' for c in cols])
+            try:
+                con.execute(
+                    f'ALTER TABLE "{sch}"."{t}" ADD {ctype} ({col_list})'
+                )
+            except Exception as e:
+                raise RuntimeError(
+                    f"Échec restauration contrainte {ctype} sur "
+                    f'"{sch}"."{t}" ({col_list}) : {e}. '
+                    f"Vérifier doublons/nulls dans la source."
+                ) from e
 
         con.execute("DETACH src")
         con.execute("CHECKPOINT")
