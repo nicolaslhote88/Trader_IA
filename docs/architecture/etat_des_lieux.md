@@ -1,6 +1,7 @@
 # État des lieux fonctionnel — Trader_IA
 
 **Dernière analyse exhaustive : 2026-03-02**
+**Dernière mise à jour partielle : 2026-04-24** (AG4 geo-tagging + workflow AG4-Forex + base `ag4_forex_v1` — cf §3.6 / §3.6bis / §5.5 / §5.5bis)
 **Périmètre** : repository `Trader_IA` + configuration VPS `infra/vps_hostinger_config/docker-compose.yml`.
 **Objectif** : fournir une base d'entrée claire et opérationnelle pour un mode projet LLM.
 
@@ -157,7 +158,7 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   6. finalize run,
   7. vector docs + delete/upsert + mark vectorized.
 
-### 3.6 AG4-V3 — Macro & News
+### 3.6 AG4-V3 — Macro & News (+ geo-tagging depuis 2026-04-24)
 
 - Fichier : `agents/AG4-V3/AG4-V3-workflow.json`
 - Trigger :
@@ -171,10 +172,31 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   2. init schema DuckDB + run log,
   3. lecture index historique,
   4. normalisation RSS, tagging symboles, dedupe clustering,
-  5. pré-score + routage new/seen + analyse IA news,
-  6. écriture `news_history` / `news_errors`,
-  7. finalize run et génération vues FX macro (`ag4_fx_macro`, `ag4_fx_pairs`).
-- Rôle : fournir régime macro, thèmes, secteurs/currencies bullish-bearish.
+  5. pré-score + routage new/seen + analyse IA news (le prompt LLM produit désormais 4 champs additionnels : `impact_region`, `impact_asset_class`, `impact_magnitude`, `impact_fx_pairs`),
+  6. sanitize des 4 champs avec taxonomie fixe + dérivation automatique de `impact_fx_pairs` à partir de `currencies_bullish/bearish` si manquant,
+  7. écriture `news_history` / `news_errors` avec `tagger_version='geo_v1'`,
+  8. **dual-write conditionnel** vers `ag4_forex_v1.fx_news_history` (`origin='global_base'`) si `impact_asset_class ∈ {FX, Mixed}`,
+  9. finalize run et génération vues FX macro (`ag4_fx_macro`, `ag4_fx_pairs`).
+- Rôle : fournir régime macro, thèmes, secteurs/currencies bullish-bearish, ET zone géographique + classe d'actif + magnitude + paires FX impactées pour permettre au PM de router les décisions par segment de marché.
+- Source du prompt et des guardrails : node `20H1 - Analyze with OpenAI` + `nodes/10_parse_llm_output.js` + `nodes/14_write_fx_news_duckdb.py`.
+
+### 3.6bis AG4-Forex — Canaux FX dédiés (ajouté 2026-04-24)
+
+- Fichier : `agents/AG4-Forex/AG4-Forex-workflow.json`
+- Source de vérité : `agents/AG4-Forex/build_workflow.py` + `agents/AG4-Forex/nodes/*`.
+- Trigger :
+  - cadence à fixer par Nicolas (proposé : toutes les 30 min).
+- Sources :
+  - `infra/config/sources/fx_sources.yaml` — liste dans l'ordre : ForexLive (actif par défaut), DailyFX, FXStreet, Investing economic calendar, BIS, Fed, ECB, BoJ. Les sources sont activées progressivement via le flag `enabled` par Nicolas.
+- Pipeline :
+  1. `00_load_fx_sources.py` — chargement YAML + filtre `enabled=true`, init schema, ouverture run log,
+  2. `01_normalize_fx_rss_items.js` — normalisation RSS → schéma commun,
+  3. `02_add_keys.js` — calcul `dedupe_key` / `event_key` alignés sur AG4-V3,
+  4. `03_prepare_llm_input.js` — prompt harmonisé avec AG4-V3 (réutilisation du même LLM),
+  5. `04_parse_llm_output.js` — parsing + sanitize identique,
+  6. `05_write_fx_news_duckdb.py` — écriture dans `ag4_forex_v1.fx_news_history` avec `origin='fx_channel'`,
+  7. `06_finalize_fx_run.py` — clôture `run_log`.
+- Rôle : alimenter une base FX isolée pour que le futur PM Forex dédié (AG1_Forex, hors scope pour l'instant) puisse produire un brief pondéré sans mélange avec les signaux actions.
 
 ### 3.7 AG4-SPE-V2 — News spécifiques par valeur
 
@@ -221,7 +243,8 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
 | Boursorama cotations | Universe actions FR | AG0 |
 | Boursorama actualités par valeur | News symboles | AG4-SPE-V2 |
 | Flux RSS (liste en Sheet `Source_RSS`) | News macro | AG4-V3 |
-| OpenAI API | LLM analyse news/agent + embeddings | AG1-V3, AG4-SPE-V2, vectorisation |
+| Flux FX dédiés (ForexLive, DailyFX, FXStreet, BIS, Fed, ECB, BoJ — `infra/config/sources/fx_sources.yaml`) | News forex | AG4-Forex |
+| OpenAI API | LLM analyse news/agent + embeddings (tagging geo/asset-class inclus) | AG1-V3, AG4-V3, AG4-Forex, AG4-SPE-V2, vectorisation |
 | Google Sheets | Configuration/source universe/rss | AG0, AG2, AG3, AG4, AG4-SPE, dashboard fallback |
 
 ### 4.2 Sources internes (data products)
@@ -230,7 +253,8 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
 |---|---|---|
 | `ag2_v3.duckdb` | AG2 | AG1-V3, dashboard, YF enrichment (universe) |
 | `ag3_v2.duckdb` | AG3 | AG1-V3, dashboard |
-| `ag4_v3.duckdb` | AG4 macro | AG1-V3, dashboard |
+| `ag4_v3.duckdb` | AG4 macro (avec tags geo/asset-class depuis 2026-04-24) | AG1-V3, dashboard |
+| `ag4_forex_v1.duckdb` | AG4-V3 (dual-write) + AG4-Forex (canaux dédiés) | futur AG1_Forex ; requêtable par AG1-V3 via `ATTACH` read-only |
 | `ag4_spe_v2.duckdb` | AG4-SPE | AG1-V3, dashboard |
 | `yf_enrichment_v1.duckdb` | YF enrichment | AG1-V3, dashboard |
 | `ag1_v3*.duckdb` (×3 modèles) | AG1-V3 | dashboard, AG1-PF (selon config) |
@@ -311,7 +335,7 @@ Colonnes métier :
 - consensus : targets mean/high/low + analyst count + dispersion/risk proxy.
 - metrics : données atomiques section/metric/value/unit.
 
-### 5.5 DuckDB AG4-V3 — `agents/AG4-V3/nodes/12_duckdb_init.py`
+### 5.5 DuckDB AG4-V3 — `agents/AG4-V3/nodes/12_duckdb_init.py` + migration `infra/migrations/ag4_v3/20260425_add_geo_tagging.sql`
 
 Tables :
 - `news_history`
@@ -325,7 +349,29 @@ Colonnes notables `news_history` :
 - contenu : `title`, `snippet`, `theme`, `regime`, `notes`
 - impacts : `impact_score`, `confidence`, `urgency`, `action`
 - tagging macro : `sectors_bullish`, `sectors_bearish`, `currencies_bullish`, `currencies_bearish`
+- **tagging geo / asset class (ajout 2026-04-24)** : `impact_region`, `impact_asset_class`, `impact_magnitude`, `impact_fx_pairs`, `tagger_version`
 - trace run : `run_id`, `analyzed_at`, `first_seen_at`, `last_seen_at`.
+
+Taxonomies fixées (cf `docs/specs/ag4_geo_tagging_and_forex_base_v1.md`) :
+- `impact_region ∈ {Global, US, EU, France, UK, APAC, Emerging, Other}`
+- `impact_asset_class ∈ {Equity, FX, Commodity, Bond, Crypto, Mixed, None}`
+- `impact_magnitude ∈ {Low, Medium, High}`
+- `impact_fx_pairs` : CSV de paires format `XXXYYY` (sans slash), liste fermée de 27 paires majeures.
+
+### 5.5bis DuckDB AG4-Forex — `infra/migrations/ag4_forex_v1/20260425_init.sql`
+
+Base dédiée `ag4_forex_v1.duckdb`, créée le 2026-04-24.
+
+Tables :
+- `fx_news_history` — news FX avec `origin ∈ {global_base, fx_channel}` pour distinguer les news remontées depuis `ag4_v3` (filtrage `FX|Mixed`) de celles ingérées via les canaux spécifiques. `dedupe_key` partagé avec `ag4_v3.news_history` pour jointure.
+- `fx_macro` — snapshot régime FX global (biais par devise USD/EUR/JPY/GBP/CHF/AUD/CAD/NZD + `market_regime`). Même schéma que `ag4_v3.ag4_fx_macro`.
+- `fx_pairs` — snapshot par paire avec `directional_bias`, `rationale`, `urgent_event_window`.
+- `run_log` — runs AG4-Forex avec décompte `news_from_global` vs `news_from_fx_channels`.
+- `news_errors` — erreurs d'ingestion par source FX.
+
+Alimentation :
+- écriture **primaire** par AG4-V3 (dual-write conditionnel depuis `nodes/14_write_fx_news_duckdb.py` quand `impact_asset_class ∈ {FX, Mixed}`) — `origin='global_base'`,
+- écriture **secondaire** par AG4-Forex (sources FX dédiées) — `origin='fx_channel'`.
 
 ### 5.6 DuckDB AG4-SPE-V2 — `agents/AG4-SPE-V2/nodes/00_duckdb_prepare.py`
 
@@ -388,6 +434,7 @@ Variables/env lues :
 - `AG1_GEMINI30_PRO_DUCKDB_PATH`,
 - `AG3_DUCKDB_PATH`,
 - `AG4_DUCKDB_PATH`,
+- `AG4_FOREX_DB_PATH` (ajouté 2026-04-24, pointant vers `ag4_forex_v1.duckdb`),
 - `AG4_SPE_DUCKDB_PATH`,
 - `YF_ENRICH_DUCKDB_PATH`,
 - `YFINANCE_API_URL`,

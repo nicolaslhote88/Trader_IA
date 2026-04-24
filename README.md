@@ -13,7 +13,7 @@ Le système combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-4.
 | 2 | **Portfolio Manager** | Allocation, cibles de position, ordres théoriques — **ensemble de 3 LLM en parallèle** | `AG1-V3-Portfolio manager/` (+ variantes GPT-5.2 / Grok-4.1 / Gemini-3) |
 | 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
 | 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
-| 5 | **Analyste Sentiment / News** | Sentiment de marché, news, transcripts | `AG4-V3/`, `AG4-SPE-V2/` |
+| 5 | **Analyste Sentiment / News** | Sentiment de marché, news, transcripts | `AG4-V3/` (macro + geo-tagging), `AG4-SPE-V2/` (par valeur), `AG4-Forex/` (canaux FX dédiés) |
 | 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exécution | `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` (nodes 7→10) |
 
 > État actuel : l'Execution Trader est en **sandbox interne** (fills fabriqués au prix théorique). Le branchement broker réel est la prochaine étape — voir `ANALYSE_SYSTEME_AVANT_AGENT6.md`.
@@ -58,8 +58,9 @@ Trader_IA/
 │   ├── AG1-V3-Portfolio manager/    # Agent 2 (Portfolio Manager) + Risk + Execution
 │   ├── AG2-V3/                      # Agent 3 (Analyste Technique)
 │   ├── AG3-V2/                      # Agent 4 (Analyste Fondamental)
+│   ├── AG4-Forex/                   # Agent 5 (News - canaux FX dédiés → ag4_forex_v1)
 │   ├── AG4-SPE-V2/                  # Agent 5 (News - transcripts/earnings)
-│   ├── AG4-V3/                      # Agent 5 (News - news réguliers)
+│   ├── AG4-V3/                      # Agent 5 (News - macro global + geo-tagging + dual-write FX)
 │   └── yf-enrichment-v1/            # Workflow enrichment quotidien + script déployé
 ├── services/                        # Services Docker (buildés depuis ce repo)
 │   ├── dashboard/                   # Streamlit (trading-dashboard)
@@ -94,6 +95,8 @@ AG0 (univers) ──► AG2/AG3/AG4/AG4-SPE (analystes parallèles) ──► AG
 | Historique des issues et décisions | `docs/architecture/historique_issues.md` |
 | Analyse système avant branchement broker | `ANALYSE_SYSTEME_AVANT_AGENT6.md` (racine) |
 | Comparatif brokers 2026 | `Etude_Comparative_Brokers_Trader_IA.docx` (racine) |
+| Audits (valorisation, segments marché) | `docs/audits/20260423_audit_valorisation/` |
+| Spec AG4 geo-tagging + AG4_Forex | `docs/specs/ag4_geo_tagging_and_forex_base_v1.md` |
 | Variables d'environnement | `docs/operations/env_vars.md` |
 | Déploiement VPS | `docs/operations/deploy.md` |
 | Reconstruction du pack AG1 | `docs/dev/rebuild_pack.md` |
