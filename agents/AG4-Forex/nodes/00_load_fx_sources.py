@@ -1,10 +1,50 @@
 import os
 import re
+import io
 import duckdb
 from datetime import datetime, timezone
 
 CONFIG_PATH = os.getenv("AG4_FX_SOURCES_PATH", "/files/Trader_IA/infra/config/sources/fx_sources.yaml")
 DB_PATH = os.getenv("AG4_FOREX_DB_PATH", "/files/duckdb/ag4_forex_v1.duckdb")
+
+DEFAULT_CONFIG = """
+sources:
+  - id: forexlive_main
+    type: rss
+    url: https://www.forexlive.com/feed/news
+    tier: A
+    enabled: true
+
+  - id: dailyfx_analysis
+    type: rss
+    url: https://www.dailyfx.com/feeds/market-news
+    tier: A
+    enabled: false
+
+  - id: fxstreet_news
+    type: rss
+    url: https://www.fxstreet.com/rss/news
+    tier: A
+    enabled: false
+
+  - id: fed_statements
+    type: rss
+    url: https://www.federalreserve.gov/feeds/press_monetary.xml
+    tier: S
+    enabled: false
+
+  - id: ecb_press
+    type: rss
+    url: https://www.ecb.europa.eu/rss/press.html
+    tier: S
+    enabled: false
+
+  - id: boj_statements
+    type: rss
+    url: https://www.boj.or.jp/en/rss/whatsnew.xml
+    tier: S
+    enabled: false
+"""
 
 
 def parse_bool(v):
@@ -12,7 +52,10 @@ def parse_bool(v):
 
 
 def load_sources(path):
-    text = open(path, "r", encoding="utf-8").read()
+    try:
+        text = io.open(path, "r", encoding="utf-8").read()
+    except Exception:
+        text = DEFAULT_CONFIG
     sources = []
     current = None
     for line in text.splitlines():
@@ -94,4 +137,3 @@ return [
     }
     for s in sources
 ]
-
