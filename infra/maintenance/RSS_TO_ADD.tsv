@@ -1,0 +1,16 @@
+enabled	family	source	feedName	url	interest	sourceTier	language
+true	Banque Centrale	Bank of England	News	https://www.bankofengland.co.uk/rss/news	5	1	en
+true	Banque Centrale	Bank of England	Publications	https://www.bankofengland.co.uk/rss/publications	3	1	en
+true	Banque Centrale	Bank of Japan	What's New	https://www.boj.or.jp/en/rss/whatsnew.xml	4	1	en
+true	Presse Fin.	Capital	Entreprises & Marchés	https://feed.prismamediadigital.com/v1/cap/rss?sources=capital,polemik,xerfi,capital-avec-agence-france-presse,capital-avec-aof,capital-avec-reuters&categories=entreprises-marches	4	2	fr
+true	Presse Fin.	Le Monde	Économie	https://www.lemonde.fr/economie/rss_full.xml	4	2	fr
+true	Presse Fin.	Le Monde	Économie Mondiale	https://www.lemonde.fr/economie-mondiale/rss_full.xml	3	2	fr
+true	Site Bourse	FXStreet	News	https://www.fxstreet.com/rss/news	4	2	en
+true	Site Bourse	FXStreet	Analysis	https://www.fxstreet.com/rss/analysis	3	2	en
+true	Secteur Tech	Journal du Net	Index général	https://www.journaldunet.com/rss/index.xml	3	2	fr
+true	Secteur Tech	Numerama	Articles	https://www.numerama.com/feed/	2	2	fr
+true	Secteur Tech	Clubic	News	https://www.clubic.com/feed/news.rss	2	2	fr
+true	Banque Centrale	Federal Reserve	Press All	https://www.federalreserve.gov/feeds/press_all.xml	5	1	en
+true	Banque Centrale	Federal Reserve	Press Monetary Policy	https://www.federalreserve.gov/feeds/press_monetary.xml	5	1	en
+true	Banque Centrale	Federal Reserve	Speeches	https://www.federalreserve.gov/feeds/speeches.xml	4	1	en
+true	Banque Centrale	Swiss National Bank	News	https://www.snb.ch/public/en/rss/news	3	1	en

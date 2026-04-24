@@ -88,6 +88,18 @@ function normalizeSectorList(raw, allowed) {
 }
 
 const ALLOWED_CURRENCIES = new Set(['USD', 'EUR', 'JPY', 'GBP', 'AUD', 'CAD', 'CHF', 'NZD']);
+const ALLOWED_REGIONS = new Set(['Global', 'US', 'EU', 'France', 'UK', 'APAC', 'Emerging', 'Other']);
+const ALLOWED_CLASSES = new Set(['Equity', 'FX', 'Commodity', 'Bond', 'Crypto', 'Mixed', 'None']);
+const ALLOWED_MAG = new Set(['Low', 'Medium', 'High']);
+const ALLOWED_PAIRS = new Set([
+  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'NZDUSD', 'USDCAD',
+  'EURGBP', 'EURJPY', 'EURCHF', 'EURAUD', 'EURCAD', 'EURNZD',
+  'GBPJPY', 'GBPCHF', 'GBPAUD', 'GBPCAD',
+  'AUDJPY', 'AUDNZD', 'AUDCAD',
+  'NZDJPY', 'NZDCAD',
+  'CADJPY', 'CHFJPY', 'CADCHF',
+  'CHFCAD', 'JPYNZD',
+]);
 
 function normalizeCurrencyList(raw) {
   const out = [];
@@ -104,6 +116,68 @@ function normalizeCurrencyList(raw) {
   return out;
 }
 
+function sanitizeCsv(raw, allowed, fallback, violations, fieldName) {
+  const parts = toArray(raw).map((x) => String(x || '').trim()).filter(Boolean);
+  if (parts.length === 0) return fallback;
+
+  const kept = [];
+  const seen = new Set();
+  for (const part of parts) {
+    if (!allowed.has(part)) {
+      violations.push(`${fieldName}:${part}`);
+      continue;
+    }
+    if (seen.has(part)) continue;
+    seen.add(part);
+    kept.push(part);
+  }
+  if (kept.length === 0) return fallback;
+  return kept.join(', ');
+}
+
+function sanitizeMagnitude(raw, violations) {
+  const mag = String(raw || '').trim();
+  if (ALLOWED_MAG.has(mag)) return mag;
+  if (mag) violations.push(`impact_magnitude:${mag}`);
+  return 'Low';
+}
+
+function ensureFxPairs(assetClass, rawPairs, ccyBullish, ccyBearish, violations) {
+  const classes = toArray(assetClass);
+  const needsFxPairs = classes.includes('FX') || classes.includes('Mixed');
+  const pairs = sanitizeCsv(rawPairs, ALLOWED_PAIRS, '', violations, 'impact_fx_pairs');
+  if (!needsFxPairs) {
+    if (pairs) violations.push('impact_fx_pairs:present_without_fx_or_mixed');
+    return '';
+  }
+  if (pairs) return pairs;
+
+  const currencies = [...new Set([...(ccyBullish || []), ...(ccyBearish || [])])];
+  const derived = [];
+  const add = (p) => {
+    if (ALLOWED_PAIRS.has(p) && !derived.includes(p)) derived.push(p);
+  };
+  for (const ccy of currencies) {
+    if (ccy === 'USD') { add('EURUSD'); add('USDJPY'); add('USDCHF'); }
+    if (ccy === 'EUR') { add('EURUSD'); add('EURGBP'); add('EURJPY'); }
+    if (ccy === 'GBP') { add('GBPUSD'); add('EURGBP'); add('GBPJPY'); }
+    if (ccy === 'JPY') { add('USDJPY'); add('EURJPY'); add('GBPJPY'); }
+    if (ccy === 'CHF') { add('USDCHF'); add('EURCHF'); add('CHFJPY'); }
+    if (ccy === 'AUD') { add('AUDUSD'); add('AUDJPY'); add('EURAUD'); }
+    if (ccy === 'CAD') { add('USDCAD'); add('CADJPY'); add('EURCAD'); }
+    if (ccy === 'NZD') { add('NZDUSD'); add('NZDJPY'); add('EURNZD'); }
+  }
+  if (derived.length === 0) add('EURUSD');
+  violations.push('impact_fx_pairs:missing_derived');
+  return derived.slice(0, 5).join(', ');
+}
+
+function normalizeUrgencyForMagnitude(urgency, magnitude) {
+  const u = String(urgency || 'low').trim() || 'low';
+  if (magnitude !== 'High') return u;
+  return ['immediate', 'today'].includes(u) ? u : 'today';
+}
+
 const j = $json || {};
 const llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';
 const ai = safeJsonParse(llmRaw);
@@ -118,12 +192,18 @@ const currenciesBullish = normalizeCurrencyList(ai.currencies_bullish);
 const currenciesBearish = normalizeCurrencyList(ai.currencies_bearish);
 const currenciesBullishText = currenciesBullish.join(', ');
 const currenciesBearishText = currenciesBearish.join(', ');
+const taxonomyViolations = [];
+const impactRegion = sanitizeCsv(ai.impact_region, ALLOWED_REGIONS, 'Other', taxonomyViolations, 'impact_region');
+const impactAssetClass = sanitizeCsv(ai.impact_asset_class, ALLOWED_CLASSES, 'None', taxonomyViolations, 'impact_asset_class');
+const impactMagnitude = sanitizeMagnitude(ai.impact_magnitude, taxonomyViolations);
+const impactFxPairs = ensureFxPairs(impactAssetClass, ai.impact_fx_pairs, currenciesBullish, currenciesBearish, taxonomyViolations);
 
 const modelActionable = toBool(ai.isActionable, true);
 const hasSectorImpact = winners.length > 0 || losers.length > 0;
 const hasCurrencyImpact = currenciesBullish.length > 0 || currenciesBearish.length > 0;
 const isActionable = modelActionable && (hasSectorImpact || hasCurrencyImpact);
 const notes = isActionable ? (ai.notes || '') : 'Noise';
+const urgency = normalizeUrgencyForMagnitude(isActionable ? (ai.urgency || j.preUrgency || 'low') : 'low', impactMagnitude);
 
 return [{
   json: {
@@ -143,7 +223,7 @@ return [{
     isActionable,
     ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,
     confidence: clamp01(ai.confidence, 0.5),
-    urgency: isActionable ? (ai.urgency || j.preUrgency || 'low') : 'low',
+    urgency,
     Snippet: j.snippet || '',
     firstSeenAt: j.seenNowAt || now,
     Strategy: ai.strategic_summary || '',
@@ -155,6 +235,12 @@ return [{
     Winners: isActionable ? winnersText : '',
     Theme: isActionable ? (ai.macro_theme || 'Resultats/Micro') : 'Resultats/Micro',
     Regime: isActionable ? (ai.market_regime || 'Neutral') : 'Neutral',
+    impact_region: impactRegion,
+    impact_asset_class: impactAssetClass,
+    impact_magnitude: impactMagnitude,
+    impact_fx_pairs: impactFxPairs,
+    tagger_version: 'geo_v1',
+    _taxonomyViolations: taxonomyViolations,
     analyzedAt: now,
     _action: 'analyze',
     _reason: j._reason || '',

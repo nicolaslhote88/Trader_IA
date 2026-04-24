@@ -1,3 +1,4 @@
+import json
 import duckdb, time, gc
 from contextlib import contextmanager
 from datetime import datetime, timezone, date
@@ -131,9 +132,20 @@ with db_con(db_path) as con:
         source_tier = safe_int(j.get("sourceTier"), 2)
         action = str(j.get("_action", "") or "skip")
         reason = str(j.get("_reason", "") or "")
+        impact_region = str(j.get("impact_region", "") or "")
+        impact_asset_class = str(j.get("impact_asset_class", "") or "")
+        impact_magnitude = str(j.get("impact_magnitude", "") or "")
+        impact_fx_pairs = str(j.get("impact_fx_pairs", "") or "")
+        tagger_version = str(j.get("tagger_version", "") or "")
+        taxonomy_violations = j.get("_taxonomyViolations", []) or []
 
         existing = con.execute(
-            "SELECT first_seen_at FROM news_history WHERE dedupe_key = ?",
+            """
+            SELECT first_seen_at, impact_region, impact_asset_class, impact_magnitude,
+                   impact_fx_pairs, tagger_version
+            FROM news_history
+            WHERE dedupe_key = ?
+            """,
             [dedupe_key],
         ).fetchone()
         existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None
@@ -141,6 +153,18 @@ with db_con(db_path) as con:
             first_seen_at = existing_first_seen
         else:
             first_seen_at = new_first_seen
+
+        if existing:
+            if not impact_region:
+                impact_region = str(existing[1] or "")
+            if not impact_asset_class:
+                impact_asset_class = str(existing[2] or "")
+            if not impact_magnitude:
+                impact_magnitude = str(existing[3] or "")
+            if not impact_fx_pairs:
+                impact_fx_pairs = str(existing[4] or "")
+            if not tagger_version:
+                tagger_version = str(existing[5] or "")
 
         con.execute(
             """
@@ -150,8 +174,10 @@ with db_con(db_path) as con:
               strategy, losers, winners, sectors_bullish, sectors_bearish,
               currencies_bullish, currencies_bearish,
               theme, regime, analyzed_at, last_seen_at,
-              source_tier, action, reason, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+              source_tier, action, reason,
+              impact_region, impact_asset_class, impact_magnitude, impact_fx_pairs, tagger_version,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [
                 dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,
@@ -160,7 +186,26 @@ with db_con(db_path) as con:
                 currencies_bullish, currencies_bearish,
                 theme, regime, analyzed_at, last_seen_at,
                 source_tier, action, reason,
+                impact_region, impact_asset_class, impact_magnitude, impact_fx_pairs, tagger_version,
             ],
         )
+
+        if taxonomy_violations:
+            con.execute(
+                """
+                INSERT OR REPLACE INTO news_errors (
+                  dedupe_key, run_id, feed_url, http_code, error_message, raw_error, occurred_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                [
+                    f"{dedupe_key}:taxonomy",
+                    run_id,
+                    feed_url,
+                    None,
+                    "taxonomy_violation",
+                    json.dumps(taxonomy_violations, ensure_ascii=False),
+                    now_utc,
+                ],
+            )
 
 return items

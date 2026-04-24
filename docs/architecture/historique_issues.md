@@ -70,6 +70,38 @@ Ces points sont issus de `ANALYSE_SYSTEME_AVANT_AGENT6.md` (racine) et bloquent 
 
 ---
 
+## Issues ouvertes depuis l'audit valorisation (2026-04-23)
+
+Ces points sont issus des rapports `docs/audits/20260423_audit_valorisation/report.md` et `report_segments.md`.
+
+### ✅ 11. AG4 ne tagait pas l'impact géographique ni la classe d'actif
+
+**Constat 2026-04-23** : `news_history` (12 026 lignes) contenait déjà un tagging macro riche (currencies_bullish/bearish, sectors_bullish/bearish, theme, regime) mais aucune étiquette explicite de zone géographique ni de classe d'actif. Conséquence : le Portfolio Manager mélangeait les signaux US/EU et les signaux Equity/FX, d'où une perf incohérente sur les actions US (cf `report_segments.md`) et aucun edge identifiable sur le forex.
+**Correction 2026-04-24** (commits `53b4dd3`, `147f912`, `08cd363`) : ajout de 5 colonnes additives dans `news_history` (`impact_region`, `impact_asset_class`, `impact_magnitude`, `impact_fx_pairs`, `tagger_version`), taxonomie fermée dans le prompt LLM, sanitize côté n8n, backfill idempotent disponible sous `infra/maintenance/ag4_geo_backfill/backfill_geo_tags.py`. Spec complète dans `docs/specs/ag4_geo_tagging_and_forex_base_v1.md`. **Suivi** : lancer la validation 48 h (requêtes §9 du spec) avant tout passage à AG1_Forex.
+
+### ✅ 12. Pas de base de news FX isolée pour un PM Forex dédié
+
+**Constat 2026-04-23** : le Forex partageait la base news des actions, ce qui empêchait de construire un brief FX synthétique (mélange de signaux et de cadences incompatibles).
+**Correction 2026-04-24** (commit `53b4dd3`) : nouvelle base `ag4_forex_v1.duckdb` avec `fx_news_history`, `fx_macro`, `fx_pairs`, `run_log`, `news_errors`. Alimentation double : (a) dual-write depuis AG4-V3 quand `impact_asset_class ∈ {FX, Mixed}` (origin `global_base`) ; (b) workflow `AG4-Forex` dédié ingérant `infra/config/sources/fx_sources.yaml` (origin `fx_channel`). **Suivi** : activer progressivement les sources FX dans le YAML (`enabled: true`) après validation qualité par Nicolas.
+
+### ❌ 13. Divergence `core.position_lots.realized_pnl_eur` vs balance cash
+
+**Constat 2026-04-23** : écart math entre `50000 − cost_basis − cash` et `Σ position_lots.realized_pnl_eur` (ChatGPT −1 109 €, Gemini −2 344 €, Grok +1 350 €). Drift de direction différente selon l'IA → pas un bug systématique mais un bug de séquence d'événements.
+**Statut 2026-04-24** : non corrigé. À reprendre après stabilisation AG4 geo. Cf `docs/audits/20260423_audit_valorisation/report.md` §5.
+
+### ❌ 14. `core.fills.fees_eur = 0`, `drawdown_pct = 0 %`, `cash_ledger` vide depuis 02/03
+
+**Constat 2026-04-23** : trois bugs dashboard/instrumentation indépendants mais cumulatifs.
+**Impact** : affichage dashboard faussé (notamment drawdown et coûts), impossibilité de reconstituer le cash historique.
+**Statut 2026-04-24** : non corrigé. Chantier séparé à ouvrir après audit AG1 cross-LLM (tâche #27).
+
+### ❌ 15. `source="unknown"` sur 8 681 lignes de `news_history`
+
+**Constat 2026-04-24** : l'extraction du champ `source` à l'ingestion RSS échoue fréquemment. N'a pas d'impact sur le tagging LLM mais empêche le routage/filtrage par tier de source.
+**Statut 2026-04-24** : non corrigé. À inclure dans un chantier de qualité d'ingestion AG4.
+
+---
+
 ## Notes de méthode
 
 - Les issues résolues restent visibles ici pour garder la traçabilité — ne pas les supprimer, seulement changer leur statut en ✅ et citer la PR / le commit / la version.
