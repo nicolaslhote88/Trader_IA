@@ -320,7 +320,25 @@ def build() -> dict:
                             'content': (
                                 'Tu es le Chief Market Strategist. Tu analyses une news pour decision de portefeuille (Actions et Forex). '
                                 'Objectif: extraire le regime de marche, le theme macro, les secteurs ET les devises gagnants/perdants, et fournir un resume actionnable. '
-                                'Reponds uniquement en JSON valide selon le schema.'
+                                'Reponds uniquement en JSON valide selon le schema.\n\n'
+                                'Tu produis AUSSI, pour chaque news, les champs d impact suivants :\n\n'
+                                '1. impact_region : une valeur ou une liste CSV parmi {Global, US, EU, France, UK, APAC, Emerging, Other}. '
+                                '"Global" si impact transversal mondial (Fed est en premier lieu Global, pas seulement US, sauf si la news concerne une action politique US pure). '
+                                'Sinon, la ou les zones explicitement concernees. "Other" si indeterminable (et abaisser confidence en consequence).\n\n'
+                                '2. impact_asset_class : une valeur ou CSV parmi {Equity, FX, Commodity, Bond, Crypto, Mixed, None}. '
+                                '"Mixed" si 3+ classes sont concurremment impactees. "None" si pas d impact marche notable.\n\n'
+                                '3. impact_magnitude : une SEULE valeur parmi {Low, Medium, High}. '
+                                'Low: mouvement attendu < 0,3 % sur l actif pivot, ou evenement anecdotique. '
+                                'Medium: 0,3 a 1 %, evenement notable non decisif. '
+                                'High: > 1 %, ou event susceptible de changer la tendance (decision centrale, crise majeure, surprise macro > 2 sigma).\n\n'
+                                '4. impact_fx_pairs : CSV de paires FX concernees, format XXXYYY (pas de slash). '
+                                'Vide si impact_asset_class ne contient ni FX ni Mixed. Sinon, lister les paires les plus directement affectees. '
+                                'Paires autorisees : EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, NZDUSD, USDCAD, EURGBP, EURJPY, EURCHF, EURAUD, EURCAD, EURNZD, GBPJPY, GBPCHF, GBPAUD, GBPCAD, AUDJPY, AUDNZD, AUDCAD, NZDJPY, NZDCAD, CADJPY, CHFJPY, CADCHF, CHFCAD, JPYNZD.\n\n'
+                                'Contraintes : Reponds UNIQUEMENT en JSON valide selon le schema impose. '
+                                'Coherence attendue : si impact_magnitude = High, alors urgency doit etre immediate ou today. '
+                                'Coherence attendue : si impact_asset_class contient FX, alors impact_fx_pairs est non vide. '
+                                'Tu dois TOUJOURS renseigner les 4 nouveaux champs meme si impact_asset_class = None '
+                                '(dans ce cas : impact_fx_pairs = "", impact_magnitude = "Low", impact_region = "Other").'
                             ),
                         },
                         {
@@ -356,13 +374,17 @@ def build() -> dict:
                                 '"sectors_bearish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
                                 '"currencies_bullish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
                                 '"currencies_bearish":{"type":"array","maxItems":5,"items":{"type":"string"}},'
+                                '"impact_region":{"type":"string"},'
+                                '"impact_asset_class":{"type":"string"},'
+                                '"impact_magnitude":{"type":"string","enum":["Low","Medium","High"]},'
+                                '"impact_fx_pairs":{"type":"string"},'
                                 '"strategic_summary":{"type":"string"},'
                                 '"impact_score":{"type":"integer","minimum":0,"maximum":10},'
                                 '"confidence":{"type":"number","minimum":0,"maximum":1},'
                                 '"urgency":{"type":"string","enum":["immediate","today","this_week","low"]},'
                                 '"notes":{"type":"string"}'
                                 '},'
-                                '"required":["isActionable","market_regime","macro_theme","sectors_bullish","sectors_bearish","currencies_bullish","currencies_bearish","strategic_summary","impact_score","confidence","urgency","notes"]'
+                                '"required":["isActionable","market_regime","macro_theme","sectors_bullish","sectors_bearish","currencies_bullish","currencies_bearish","impact_region","impact_asset_class","impact_magnitude","impact_fx_pairs","strategic_summary","impact_score","confidence","urgency","notes"]'
                                 '}'
                             ),
                             'strict': True,
@@ -416,6 +438,14 @@ def build() -> dict:
             'position': [2688, 64],
             'id': '879d4bc5-2f7f-48ed-9f68-b9c8c761ef8e',
             'name': '20DBW - Upsert News DuckDB',
+        },
+        {
+            'parameters': {'language': 'pythonNative', 'pythonCode': load_code('14_write_fx_news_duckdb.py')},
+            'type': 'n8n-nodes-base.code',
+            'typeVersion': 2,
+            'position': [2912, 64],
+            'id': '4a38ea3b-79bb-444a-af56-3cb7c1225b5d',
+            'name': '20FXW - FX Conditional Write',
         },
         {
             'parameters': {'language': 'pythonNative', 'pythonCode': load_code('16_finalize_run.py')},
@@ -513,7 +543,8 @@ def build() -> dict:
         '20H2 - Parse AI Output': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 0}]]},
         '20S1 - Build Skip Row': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 1}]]},
         '20Z - Merge analyzed + skipped': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
-        '20DBW - Upsert News DuckDB': {'main': [[{'node': 'SplitInBatches ITEMS', 'type': 'main', 'index': 0}]]},
+        '20DBW - Upsert News DuckDB': {'main': [[{'node': '20FXW - FX Conditional Write', 'type': 'main', 'index': 0}]]},
+        '20FXW - FX Conditional Write': {'main': [[{'node': 'SplitInBatches ITEMS', 'type': 'main', 'index': 0}]]},
     }
 
     return {

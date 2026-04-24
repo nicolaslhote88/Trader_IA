@@ -68,6 +68,11 @@ SCHEMA = [
       source_tier INTEGER,
       action VARCHAR,
       reason VARCHAR,
+      impact_region VARCHAR,
+      impact_asset_class VARCHAR,
+      impact_magnitude VARCHAR,
+      impact_fx_pairs VARCHAR,
+      tagger_version VARCHAR,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
@@ -156,10 +161,23 @@ with db_con() as con:
         con.execute("ALTER TABLE news_history ADD COLUMN currencies_bullish VARCHAR")
     if "currencies_bearish" not in cols:
         con.execute("ALTER TABLE news_history ADD COLUMN currencies_bearish VARCHAR")
+    if "impact_region" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN impact_region VARCHAR")
+    if "impact_asset_class" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN impact_asset_class VARCHAR")
+    if "impact_magnitude" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN impact_magnitude VARCHAR")
+    if "impact_fx_pairs" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN impact_fx_pairs VARCHAR")
+    if "tagger_version" not in cols:
+        con.execute("ALTER TABLE news_history ADD COLUMN tagger_version VARCHAR")
 
     try:
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_run ON news_history(run_id)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_type ON news_history(type)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_impact_asset_class ON news_history(impact_asset_class)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_impact_region ON news_history(impact_region)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_tagger_version ON news_history(tagger_version)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_fx_pairs_run ON ag4_fx_pairs(run_id)")
     except Exception:
         pass

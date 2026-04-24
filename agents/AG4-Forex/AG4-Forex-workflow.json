@@ -1,0 +1,406 @@
+{
+  "name": "AG4-Forex - News Watcher",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/30 7-20 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1120,
+        -120
+      ],
+      "id": "d9f75407-81fc-4545-96f6-ec9746fd4c9f",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1120,
+        80
+      ],
+      "id": "7be73ae9-52dd-45b7-b95e-390b3ce47086",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport re\nimport duckdb\nfrom datetime import datetime, timezone\n\nCONFIG_PATH = os.getenv(\"AG4_FX_SOURCES_PATH\", \"/files/Trader_IA/infra/config/sources/fx_sources.yaml\")\nDB_PATH = os.getenv(\"AG4_FOREX_DB_PATH\", \"/files/duckdb/ag4_forex_v1.duckdb\")\n\n\ndef parse_bool(v):\n    return str(v or \"\").strip().lower() == \"true\"\n\n\ndef load_sources(path):\n    text = open(path, \"r\", encoding=\"utf-8\").read()\n    sources = []\n    current = None\n    for line in text.splitlines():\n        raw = line.rstrip()\n        if not raw.strip() or raw.lstrip().startswith(\"#\"):\n            continue\n        m = re.match(r\"\\s*-\\s+id:\\s*(.+)\\s*$\", raw)\n        if m:\n            if current:\n                sources.append(current)\n            current = {\"id\": m.group(1).strip()}\n            continue\n        if current is None:\n            continue\n        m = re.match(r\"\\s+([a-zA-Z_]+):\\s*(.+?)\\s*$\", raw)\n        if not m:\n            continue\n        key, value = m.group(1), m.group(2).strip()\n        current[key] = value.strip('\"').strip(\"'\")\n    if current:\n        sources.append(current)\n    return sources\n\n\ndef init_schema(con):\n    con.execute(\"CREATE SCHEMA IF NOT EXISTS main\")\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.run_log (\n            run_id VARCHAR PRIMARY KEY,\n            started_at TIMESTAMP,\n            finished_at TIMESTAMP,\n            news_ingested INTEGER,\n            news_from_global INTEGER,\n            news_from_fx_channels INTEGER,\n            pairs_written INTEGER,\n            errors INTEGER,\n            notes VARCHAR\n        )\n        \"\"\"\n    )\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.news_errors (\n            run_id VARCHAR,\n            occurred_at TIMESTAMP,\n            source VARCHAR,\n            feed_url VARCHAR,\n            error_type VARCHAR,\n            error_detail VARCHAR\n        )\n        \"\"\"\n    )\n\n\nrun_id = f\"AG4FX_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\"\nsources = [s for s in load_sources(CONFIG_PATH) if parse_bool(s.get(\"enabled\")) and s.get(\"type\") == \"rss\"]\n\nwith duckdb.connect(DB_PATH) as con:\n    init_schema(con)\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO main.run_log (\n            run_id, started_at, news_ingested, news_from_global, news_from_fx_channels, pairs_written, errors, notes\n        ) VALUES (?, CURRENT_TIMESTAMP, 0, 0, 0, 0, 0, ?)\n        \"\"\",\n        [run_id, f\"sources={len(sources)}\"],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"sourceId\": s.get(\"id\", \"\"),\n            \"sourceTier\": s.get(\"tier\", \"A\"),\n            \"url\": s.get(\"url\", \"\"),\n            \"db_path\": DB_PATH,\n        }\n    }\n    for s in sources\n]\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -896,
+        -16
+      ],
+      "id": "a2dfc09a-0c23-40f2-9ff6-588850d0399a",
+      "name": "20A - Load FX Sources"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -672,
+        -16
+      ],
+      "id": "d835da36-3337-4f89-9d42-f7456526140b",
+      "name": "20D - Split FX Feeds"
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        -448,
+        64
+      ],
+      "id": "43e68189-ae7f-4127-9906-11a8c307c435",
+      "name": "20E - RSS Feed Read",
+      "retryOnFail": true,
+      "maxTries": 2,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "function toIsoDate(v) {\n  if (!v) return 'unknown';\n  const d = new Date(v);\n  return Number.isNaN(d.getTime()) ? 'unknown' : d.toISOString();\n}\n\nfunction stripHtml(s) {\n  if (!s) return '';\n  return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nlet feedCtx = {};\ntry {\n  feedCtx = $('20D - Split FX Feeds').item.json || {};\n} catch {\n  feedCtx = {};\n}\n\nconst fetchedAt = new Date().toISOString();\nreturn $input.all().map((item) => {\n  const r = item.json || {};\n  const canonicalUrl = String(r.link || r.url || r.guid || '').trim() || 'unknown';\n  return {\n    json: {\n      run_id: feedCtx.run_id || '',\n      sourceId: feedCtx.sourceId || '',\n      sourceTier: feedCtx.sourceTier || 'A',\n      feedUrl: feedCtx.url || '',\n      db_path: feedCtx.db_path || '',\n      origin: 'fx_channel',\n      fetchedAt,\n      publishedAt: toIsoDate(r.isoDate || r.pubDate || r.published || r.date || r.updated || fetchedAt),\n      canonicalUrl,\n      url: canonicalUrl,\n      title: stripHtml(r.title || 'unknown'),\n      snippet: stripHtml(r.contentSnippet || r.content || r.summary || ''),\n      source: feedCtx.sourceId || 'fx_channel',\n    },\n  };\n});\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        64
+      ],
+      "id": "0c44f8d5-fe19-40d8-ac47-30662853e8ac",
+      "name": "20F - Normalize FX RSS Items"
+    },
+    {
+      "parameters": {
+        "options": {
+          "reset": false
+        }
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        0,
+        64
+      ],
+      "id": "fc5d8e06-e01b-4b3a-8c6d-54ba5e0e1684",
+      "name": "20G - Split FX Items"
+    },
+    {
+      "parameters": {
+        "jsCode": "const crypto = require('crypto');\n\nfunction hash(s) {\n  return crypto.createHash('sha1').update(String(s)).digest('hex');\n}\n\nfunction normalizeTitle(s) {\n  return String(s || '')\n    .toLowerCase()\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/<[^>]*>/g, ' ')\n    .replace(/[^a-z0-9\\s]/g, ' ')\n    .replace(/\\s+/g, ' ')\n    .trim();\n}\n\nfunction normalizeUrl(u) {\n  if (!u || typeof u !== 'string') return '';\n  try {\n    const url = new URL(u);\n    const remove = [];\n    url.searchParams.forEach((_, k) => {\n      if (k.toLowerCase().startsWith('utm_') || ['fbclid', 'gclid', 'ref', 'src'].includes(k.toLowerCase())) remove.push(k);\n    });\n    remove.forEach((k) => url.searchParams.delete(k));\n    return url.toString().replace(/\\/$/, '');\n  } catch {\n    return String(u).trim();\n  }\n}\n\nreturn $input.all().map((item) => {\n  const j = { ...(item.json || {}) };\n  const cleanUrl = normalizeUrl(j.canonicalUrl || j.url || '');\n  const titleNorm = normalizeTitle(j.title || '');\n  const day = String(j.publishedAt || '').slice(0, 10) || 'unknown-day';\n  j.canonicalUrlNormalized = cleanUrl;\n  j.dedupeKey = hash(cleanUrl || `${titleNorm}|${day}`);\n  j.eventKey = hash(`${titleNorm.slice(0, 180)}|${day}`);\n  return { json: j, pairedItem: item.pairedItem };\n});\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        64
+      ],
+      "id": "4d782a8c-bc9f-4818-8716-97f3b9bcbeea",
+      "name": "20G0 - Add Keys"
+    },
+    {
+      "parameters": {
+        "jsCode": "function stripHtml(s) {\n  if (!s) return '';\n  return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nconst j = $json || {};\nconst payload = {\n  dedupeKey: j.dedupeKey,\n  eventKey: j.eventKey,\n  origin: 'fx_channel',\n  source: j.source || 'fx_channel',\n  sourceTier: j.sourceTier || 'A',\n  title: stripHtml(j.title || 'unknown'),\n  snippet: stripHtml(j.snippet || ''),\n  url: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n  publishedAt: j.publishedAt || 'unknown',\n};\n\nreturn {\n  ...j,\n  llmInput: JSON.stringify(payload),\n};\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        64
+      ],
+      "id": "a66d30b6-108c-493e-a686-e52836876c8f",
+      "name": "20H0 - Prepare LLM Input"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es le Chief FX Market Strategist. Tu analyses une news pour decision Forex. Reponds uniquement en JSON valide selon le schema. Produis les champs existants de regime/theme/devises et les champs geo: impact_region CSV parmi {Global, US, EU, France, UK, APAC, Emerging, Other}; impact_asset_class CSV parmi {Equity, FX, Commodity, Bond, Crypto, Mixed, None}; impact_magnitude parmi {Low, Medium, High}; impact_fx_pairs CSV au format XXXYYY sans slash. Si impact_asset_class contient FX ou Mixed, impact_fx_pairs est non vide. Paires autorisees: EURUSD, GBPUSD, USDJPY, USDCHF, AUDUSD, NZDUSD, USDCAD, EURGBP, EURJPY, EURCHF, EURAUD, EURCAD, EURNZD, GBPJPY, GBPCHF, GBPAUD, GBPCAD, AUDJPY, AUDNZD, AUDCAD, NZDJPY, NZDCAD, CADJPY, CHFJPY, CADCHF, CHFCAD, JPYNZD."
+            },
+            {
+              "content": "=Analyse cette news FX:\n{{ $json.llmInput }}"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "ag4_forex_news_normalizer_v1",
+              "schema": "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"isActionable\":{\"type\":\"boolean\"},\"market_regime\":{\"type\":\"string\",\"enum\":[\"Risk-On\",\"Risk-Off\",\"Neutral\",\"Sector Rotation\"]},\"macro_theme\":{\"type\":\"string\",\"enum\":[\"Inflation/Taux\",\"Banques Centrales\",\"Croissance/Recession\",\"Geopolitique/Energie\",\"Tech/AI\",\"Resultats/Micro\"]},\"currencies_bullish\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"string\"}},\"currencies_bearish\":{\"type\":\"array\",\"maxItems\":5,\"items\":{\"type\":\"string\"}},\"impact_region\":{\"type\":\"string\"},\"impact_asset_class\":{\"type\":\"string\"},\"impact_magnitude\":{\"type\":\"string\",\"enum\":[\"Low\",\"Medium\",\"High\"]},\"impact_fx_pairs\":{\"type\":\"string\"},\"fx_directional_hint\":{\"type\":\"string\"},\"strategic_summary\":{\"type\":\"string\"},\"impact_score\":{\"type\":\"integer\",\"minimum\":0,\"maximum\":10},\"confidence\":{\"type\":\"number\",\"minimum\":0,\"maximum\":1},\"urgency\":{\"type\":\"string\",\"enum\":[\"immediate\",\"today\",\"this_week\",\"low\"]},\"notes\":{\"type\":\"string\"}},\"required\":[\"isActionable\",\"market_regime\",\"macro_theme\",\"currencies_bullish\",\"currencies_bearish\",\"impact_region\",\"impact_asset_class\",\"impact_magnitude\",\"impact_fx_pairs\",\"fx_directional_hint\",\"strategic_summary\",\"impact_score\",\"confidence\",\"urgency\",\"notes\"]}",
+              "strict": true
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        672,
+        64
+      ],
+      "id": "c684af9d-1471-458c-8224-cfc03227d129",
+      "name": "20H1 - Analyze with OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        64
+      ],
+      "id": "151e64e7-a473-4454-b8f2-923e77832577",
+      "name": "20H1B - Merge AI + Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeJsonParse(str) {\n  try {\n    if (typeof str === 'object' && str !== null) return str;\n    return JSON.parse(str);\n  } catch {\n    return {};\n  }\n}\n\nfunction toArray(v) {\n  if (Array.isArray(v)) return v;\n  if (typeof v === 'string') return v.split(',').map((x) => String(x || '').trim()).filter(Boolean);\n  return [];\n}\n\nconst ALLOWED_PAIRS = new Set([\n  'EURUSD', 'GBPUSD', 'USDJPY', 'USDCHF', 'AUDUSD', 'NZDUSD', 'USDCAD',\n  'EURGBP', 'EURJPY', 'EURCHF', 'EURAUD', 'EURCAD', 'EURNZD',\n  'GBPJPY', 'GBPCHF', 'GBPAUD', 'GBPCAD',\n  'AUDJPY', 'AUDNZD', 'AUDCAD', 'NZDJPY', 'NZDCAD', 'CADJPY', 'CHFJPY', 'CADCHF', 'CHFCAD', 'JPYNZD',\n]);\n\nfunction keepPairs(raw) {\n  const out = [];\n  for (const pair of toArray(raw)) {\n    if (ALLOWED_PAIRS.has(pair) && !out.includes(pair)) out.push(pair);\n  }\n  return out.join(', ');\n}\n\nfunction clamp01(v, d = 0.5) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return d;\n  return Math.max(0, Math.min(1, n));\n}\n\nfunction clamp10(v, d = 0) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return d;\n  return Math.max(0, Math.min(10, Math.round(n)));\n}\n\nconst j = $json || {};\nconst ai = safeJsonParse(j.output?.[0]?.content?.[0]?.text || j.content || '{}');\nconst now = new Date().toISOString();\nconst assetClass = String(ai.impact_asset_class || 'FX').trim();\nconst fxPairs = keepPairs(ai.impact_fx_pairs) || 'EURUSD';\n\nreturn [{\n  json: {\n    run_id: j.run_id || '',\n    sourceId: j.sourceId || '',\n    sourceTier: j.sourceTier || 'A',\n    dedupeKey: j.dedupeKey,\n    eventKey: j.eventKey || '',\n    canonicalUrl: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n    publishedAt: j.publishedAt || now,\n    title: j.title || 'unknown',\n    source: j.source || j.sourceId || 'fx_channel',\n    feedUrl: j.feedUrl || '',\n    Snippet: j.snippet || '',\n    impact_region: String(ai.impact_region || 'Global').trim(),\n    impact_asset_class: assetClass,\n    impact_magnitude: String(ai.impact_magnitude || 'Low').trim(),\n    impact_fx_pairs: assetClass.includes('FX') || assetClass.includes('Mixed') ? fxPairs : '',\n    currencies_bullish: toArray(ai.currencies_bullish).join(', '),\n    currencies_bearish: toArray(ai.currencies_bearish).join(', '),\n    Regime: ai.market_regime || 'Neutral',\n    Theme: ai.macro_theme || 'Banques Centrales',\n    urgency: ai.urgency || 'low',\n    confidence: clamp01(ai.confidence, 0.5),\n    ImpactScore: clamp10(ai.impact_score, 0),\n    Strategy: ai.strategic_summary || '',\n    fx_directional_hint: ai.fx_directional_hint || '',\n    tagger_version: 'geo_v1',\n    firstSeenAt: j.fetchedAt || now,\n    seenNowAt: now,\n    analyzedAt: now,\n  },\n}];\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        64
+      ],
+      "id": "09a87adf-ed70-46da-9adf-fd0cc58936f5",
+      "name": "20H2 - Parse AI Output"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nfrom datetime import datetime, timezone\n\nDB_PATH = \"/files/duckdb/ag4_forex_v1.duckdb\"\n\n\ndef urgency_score(v):\n    s = str(v or \"\").strip().lower()\n    return {\"immediate\": 1.0, \"today\": 0.75, \"this_week\": 0.45, \"low\": 0.2}.get(s, 0.2)\n\n\ndef init_schema(con):\n    con.execute(\"CREATE SCHEMA IF NOT EXISTS main\")\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.fx_news_history (\n            dedupe_key VARCHAR PRIMARY KEY,\n            event_key VARCHAR,\n            run_id VARCHAR,\n            origin VARCHAR,\n            canonical_url VARCHAR,\n            published_at TIMESTAMP,\n            title VARCHAR,\n            source VARCHAR,\n            source_tier VARCHAR,\n            snippet VARCHAR,\n            impact_region VARCHAR,\n            impact_magnitude VARCHAR,\n            impact_fx_pairs VARCHAR,\n            currencies_bullish VARCHAR,\n            currencies_bearish VARCHAR,\n            regime VARCHAR,\n            theme VARCHAR,\n            urgency DOUBLE,\n            confidence DOUBLE,\n            impact_score INTEGER,\n            fx_narrative VARCHAR,\n            fx_directional_hint VARCHAR,\n            tagger_version VARCHAR,\n            first_seen_at TIMESTAMP,\n            last_seen_at TIMESTAMP,\n            analyzed_at TIMESTAMP,\n            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n        )\n        \"\"\"\n    )\n    con.execute(\"CREATE INDEX IF NOT EXISTS idx_fxnh_published ON main.fx_news_history(published_at)\")\n    con.execute(\"CREATE INDEX IF NOT EXISTS idx_fxnh_magnitude ON main.fx_news_history(impact_magnitude)\")\n    con.execute(\"CREATE INDEX IF NOT EXISTS idx_fxnh_pairs ON main.fx_news_history(impact_fx_pairs)\")\n    con.execute(\"CREATE INDEX IF NOT EXISTS idx_fxnh_origin ON main.fx_news_history(origin)\")\n\n\ndef ts(v):\n    if not v:\n        return None\n    s = str(v)\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n    try:\n        return datetime.fromisoformat(s)\n    except Exception:\n        return None\n\n\nitems = _items or []\nif not items:\n    return []\n\ndb_path = next((str((it.get(\"json\") or {}).get(\"db_path\")) for it in items if (it.get(\"json\") or {}).get(\"db_path\")), DB_PATH)\n\nwith duckdb.connect(db_path) as con:\n    init_schema(con)\n    for it in items:\n        j = it.get(\"json\", {}) or {}\n        classes = {p.strip() for p in str(j.get(\"impact_asset_class\") or \"\").split(\",\") if p.strip()}\n        if \"FX\" not in classes and \"Mixed\" not in classes:\n            continue\n        now = datetime.now(timezone.utc)\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO main.fx_news_history (\n                dedupe_key, event_key, run_id, origin, canonical_url, published_at,\n                title, source, source_tier, snippet,\n                impact_region, impact_magnitude, impact_fx_pairs,\n                currencies_bullish, currencies_bearish, regime, theme,\n                urgency, confidence, impact_score,\n                fx_narrative, fx_directional_hint, tagger_version,\n                first_seen_at, last_seen_at, analyzed_at, updated_at\n            ) VALUES (?, ?, ?, 'fx_channel', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                j.get(\"dedupeKey\"), j.get(\"eventKey\") or \"\", j.get(\"run_id\") or \"\",\n                j.get(\"canonicalUrl\") or \"\", ts(j.get(\"publishedAt\")),\n                j.get(\"title\") or \"\", j.get(\"source\") or \"\", str(j.get(\"sourceTier\") or \"\"),\n                j.get(\"Snippet\") or \"\", j.get(\"impact_region\") or \"\", j.get(\"impact_magnitude\") or \"\",\n                j.get(\"impact_fx_pairs\") or \"\", j.get(\"currencies_bullish\") or \"\",\n                j.get(\"currencies_bearish\") or \"\", j.get(\"Regime\") or \"\", j.get(\"Theme\") or \"\",\n                urgency_score(j.get(\"urgency\")), float(j.get(\"confidence\") or 0),\n                int(j.get(\"ImpactScore\") or 0), j.get(\"Strategy\") or \"\",\n                j.get(\"fx_directional_hint\") or \"\", j.get(\"tagger_version\") or \"geo_v1\",\n                ts(j.get(\"firstSeenAt\")) or now, ts(j.get(\"seenNowAt\")) or now, ts(j.get(\"analyzedAt\")) or now,\n            ],\n        )\n\nreturn items\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        64
+      ],
+      "id": "a8c43031-7318-4aa6-a10f-b98d12e14ac1",
+      "name": "20DBW - Upsert FX News DuckDB"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nfrom datetime import datetime, timezone, timedelta\n\nDB_PATH = \"/files/duckdb/ag4_forex_v1.duckdb\"\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DB_PATH\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    run_id = run_id or str(j.get(\"run_id\") or \"\")\n    db_path = str(j.get(\"db_path\") or db_path)\n\nwith duckdb.connect(db_path) as con:\n    if not run_id:\n        row = con.execute(\"SELECT run_id FROM main.run_log ORDER BY started_at DESC LIMIT 1\").fetchone()\n        run_id = str(row[0]) if row else \"\"\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\"}}]\n\n    count = con.execute(\n        \"SELECT COUNT(*) FROM main.fx_news_history WHERE run_id = ? AND origin = 'fx_channel'\",\n        [run_id],\n    ).fetchone()[0]\n    errors = con.execute(\n        \"SELECT COUNT(*) FROM main.news_errors WHERE run_id = ?\",\n        [run_id],\n    ).fetchone()[0]\n\n    con.execute(\n        \"\"\"\n        UPDATE main.run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            news_ingested = ?,\n            news_from_fx_channels = ?,\n            errors = ?,\n            notes = ?\n        WHERE run_id = ?\n        \"\"\",\n        [count, count, errors, \"AG4_Forex rss ingestion\", run_id],\n    )\n\nreturn [{\"json\": {\"run_id\": run_id, \"news_from_fx_channels\": count, \"errors\": errors}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        -112
+      ],
+      "id": "5fd1893f-b1c0-4754-b264-18539e91587d",
+      "name": "20R1 - Finalize FX Run"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "20A - Load FX Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "20A - Load FX Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20A - Load FX Sources": {
+      "main": [
+        [
+          {
+            "node": "20D - Split FX Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20D - Split FX Feeds": {
+      "main": [
+        [
+          {
+            "node": "20R1 - Finalize FX Run",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "20E - RSS Feed Read",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20E - RSS Feed Read": {
+      "main": [
+        [
+          {
+            "node": "20F - Normalize FX RSS Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20F - Normalize FX RSS Items": {
+      "main": [
+        [
+          {
+            "node": "20G - Split FX Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20G - Split FX Items": {
+      "main": [
+        [
+          {
+            "node": "20D - Split FX Feeds",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "20G0 - Add Keys",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20G0 - Add Keys": {
+      "main": [
+        [
+          {
+            "node": "20H0 - Prepare LLM Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20H0 - Prepare LLM Input": {
+      "main": [
+        [
+          {
+            "node": "20H1 - Analyze with OpenAI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "20H1B - Merge AI + Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20H1 - Analyze with OpenAI": {
+      "main": [
+        [
+          {
+            "node": "20H1B - Merge AI + Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "20H1B - Merge AI + Context": {
+      "main": [
+        [
+          {
+            "node": "20H2 - Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20H2 - Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "20DBW - Upsert FX News DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20DBW - Upsert FX News DuckDB": {
+      "main": [
+        [
+          {
+            "node": "20G - Split FX Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"
+  }
+}
