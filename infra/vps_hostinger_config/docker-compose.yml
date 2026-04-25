@@ -95,6 +95,13 @@ services:
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
       - AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql
+      - AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb
+      - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
+      - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
+      - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
+      - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
       - EXECUTIONS_DATA_MAX_AGE=72
       - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
       - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
@@ -129,6 +136,13 @@ services:
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
       - AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql
+      - AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb
+      - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
+      - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
+      - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
+      - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -177,6 +191,14 @@ services:
       - AG3_DUCKDB_PATH=/files/duckdb/ag3_v2.duckdb
       - AG4_DUCKDB_PATH=/files/duckdb/ag4_v3.duckdb
       - AG4_SPE_DUCKDB_PATH=/files/duckdb/ag4_spe_v2.duckdb
+      - AG4_FOREX_DUCKDB_PATH=/files/duckdb/ag4_forex_v1.duckdb
+      - AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb
+      - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
+      - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
+      - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
+      - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
       - YF_ENRICH_DUCKDB_PATH=/files/duckdb/yf_enrichment_v1.duckdb
     command: sh -lc "pip install --no-cache-dir -r requirements.txt && streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
     labels:

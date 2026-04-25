@@ -1,0 +1,425 @@
+{
+  "name": "AG1-FX-V1 Portfolio Manager - grok41_reasoning",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "45 9,14 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1100,
+        -120
+      ],
+      "id": "schedule",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1100,
+        80
+      ],
+      "id": "manual",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const model = process.env.AG1_FX_LLM_MODEL || $json.llm_model || 'grok-4-1-fast-reasoning';\nconst variant = process.env.AG1_FX_VARIANT || $json.variant || 'grok41_reasoning';\nconst dbPathByVariant = {\n  chatgpt52: process.env.AG1_FX_V1_CHATGPT52_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_chatgpt52.duckdb',\n  grok41_reasoning: process.env.AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb',\n  gemini30_pro: process.env.AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb',\n};\n\nreturn [{\n  json: {\n    run_id: `AG1FX_${variant}_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`,\n    as_of: new Date().toISOString(),\n    llm_model: model,\n    variant,\n    db_path: '/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb',\n    ag2_fx_path: process.env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',\n    ag4_fx_path: process.env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    schema_path: process.env.AG1_FX_V1_LEDGER_SCHEMA_PATH || '/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql',\n    dry_run: String(process.env.AG1_FX_DRY_RUN || '').toLowerCase() === '1',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -860,
+        -20
+      ],
+      "id": "01-init",
+      "name": "01 Init Run FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag2_fx_path\") or \"/files/duckdb/ag2_fx_v1.duckdb\"\nrows = []\nif os.path.exists(path):\n    with duckdb.connect(path, read_only=True) as con:\n        try:\n            rows = con.execute(\n                \"\"\"\n                SELECT pair, symbol_yf, base_ccy, quote_ccy, pip_size, price_decimals, liquidity_tier\n                FROM main.universe_fx\n                WHERE enabled = TRUE\n                ORDER BY pair\n                \"\"\"\n            ).fetchdf().to_dict(\"records\")\n        except Exception:\n            rows = []\n\nif not rows:\n    fallback = [\n        \"EURUSD\", \"GBPUSD\", \"USDJPY\", \"USDCHF\", \"AUDUSD\", \"NZDUSD\", \"USDCAD\",\n        \"EURGBP\", \"EURJPY\", \"EURCHF\", \"EURAUD\", \"EURCAD\", \"EURNZD\",\n        \"GBPJPY\", \"GBPCHF\", \"GBPAUD\", \"GBPCAD\",\n        \"AUDJPY\", \"AUDNZD\", \"AUDCAD\",\n        \"NZDJPY\", \"NZDCAD\", \"CADJPY\", \"CHFJPY\", \"CADCHF\", \"CHFCAD\", \"JPYNZD\",\n    ]\n    rows = [\n        {\n            \"pair\": p,\n            \"symbol_yf\": f\"{p}=X\",\n            \"base_ccy\": p[:3],\n            \"quote_ccy\": p[3:],\n            \"pip_size\": 0.01 if p.endswith(\"JPY\") else 0.0001,\n            \"price_decimals\": 3 if p.endswith(\"JPY\") else 5,\n            \"liquidity_tier\": \"major\" if p in {\"EURUSD\", \"GBPUSD\", \"USDJPY\", \"USDCHF\", \"AUDUSD\", \"NZDUSD\", \"USDCAD\"} else \"cross\",\n        }\n        for p in fallback\n    ]\n\nreturn [{\"json\": {**ctx, \"universe_fx\": rows}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -620,
+        -20
+      ],
+      "id": "02-load-universe-fx",
+      "name": "02 Load Universe FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\nfrom pathlib import Path\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\"\nschema_path = ctx.get(\"schema_path\") or \"/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql\"\n\ndef split_sql(text):\n    buff, out, sq, dq = [], [], False, False\n    for ch in text:\n        if ch == \"'\" and not dq:\n            sq = not sq\n        elif ch == '\"' and not sq:\n            dq = not dq\n        if ch == \";\" and not sq and not dq:\n            s = \"\".join(buff).strip()\n            if s:\n                out.append(s)\n            buff = []\n        else:\n            buff.append(ch)\n    s = \"\".join(buff).strip()\n    if s:\n        out.append(s)\n    return out\n\nwith duckdb.connect(db_path) as con:\n    if os.path.exists(schema_path):\n        for stmt in split_sql(Path(schema_path).read_text(encoding=\"utf-8\")):\n            con.execute(stmt)\n    cfg = con.execute(\"SELECT * FROM cfg.portfolio_config WHERE config_key='default'\").fetchdf().iloc[0].to_dict()\n    cash = con.execute(\"SELECT COALESCE(SUM(amount_eur), 0) FROM core.cash_ledger\").fetchone()[0] or 0.0\n    lots = con.execute(\n        \"\"\"\n        SELECT lot_id, pair, side, size_lots, open_price, open_at, stop_loss_price, take_profit_price, leverage_used\n        FROM core.position_lots\n        WHERE status = 'open'\n        ORDER BY open_at\n        \"\"\"\n    ).fetchdf().to_dict(\"records\")\n    snap = con.execute(\n        \"\"\"\n        SELECT *\n        FROM core.portfolio_snapshot\n        ORDER BY as_of DESC\n        LIMIT 1\n        \"\"\"\n    ).fetchdf()\n\ninitial = float(cfg.get(\"initial_capital_eur\") or 10000)\nequity = float(snap.iloc[0][\"equity_eur\"]) if not snap.empty else float(cash or initial)\nstate = {\n    \"cash_eur\": float(cash or initial),\n    \"equity_eur\": equity,\n    \"open_lots\": lots,\n    \"leverage_effective\": float(snap.iloc[0][\"leverage_effective\"]) if not snap.empty and snap.iloc[0][\"leverage_effective\"] is not None else 0.0,\n    \"drawdown_day_pct\": float(snap.iloc[0][\"drawdown_day_pct\"]) if not snap.empty and snap.iloc[0][\"drawdown_day_pct\"] is not None else 0.0,\n    \"drawdown_total_pct\": float(snap.iloc[0][\"drawdown_total_pct\"]) if not snap.empty and snap.iloc[0][\"drawdown_total_pct\"] is not None else 0.0,\n}\n\ncfg[\"llm_model\"] = ctx.get(\"llm_model\") or cfg.get(\"llm_model\") or \"unset\"\nwith duckdb.connect(db_path) as con:\n    con.execute(\n        \"UPDATE cfg.portfolio_config SET llm_model = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'default'\",\n        [cfg[\"llm_model\"]],\n    )\n\nreturn [{\"json\": {**ctx, \"config\": cfg, \"portfolio_state\": state}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -380,
+        -20
+      ],
+      "id": "03-load-portfolio-state-fx",
+      "name": "03 Load Portfolio State FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag2_fx_path\") or \"/files/duckdb/ag2_fx_v1.duckdb\"\nrows = []\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            rows = con.execute(\n                \"\"\"\n                SELECT *\n                FROM main.technical_signals_fx\n                WHERE run_id = (SELECT run_id FROM main.run_log ORDER BY finished_at DESC NULLS LAST, started_at DESC LIMIT 1)\n                ORDER BY pair\n                \"\"\"\n            ).fetchdf().to_dict(\"records\")\n    except Exception as exc:\n        ctx[\"technical_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"technical_signals\": rows}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -140,
+        -20
+      ],
+      "id": "04-load-technical-signals-fx",
+      "name": "04 Load Technical Signals FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag4_fx_path\") or \"/files/duckdb/ag4_fx_v1.duckdb\"\npayload = {\"top_news\": [], \"pair_focus\": {}, \"macro_regime\": {}}\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            df = con.execute(\n                \"\"\"\n                SELECT section, payload\n                FROM main.fx_digest\n                WHERE run_id = (SELECT run_id FROM main.run_log ORDER BY finished_at DESC NULLS LAST, started_at DESC LIMIT 1)\n                \"\"\"\n            ).fetchdf()\n            for rec in df.to_dict(\"records\"):\n                section = rec.get(\"section\")\n                obj = json.loads(rec.get(\"payload\") or \"{}\")\n                if section == \"top_news\":\n                    payload[\"top_news\"] = obj.get(\"items\") or []\n                elif section == \"pair_focus\":\n                    payload[\"pair_focus\"] = obj.get(\"pairs\") or {}\n                elif section == \"macro_regime\":\n                    payload[\"macro_regime\"] = obj\n    except Exception as exc:\n        ctx[\"macro_news_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"macro_news\": payload}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        -20
+      ],
+      "id": "05-load-news-macro-fx",
+      "name": "05 Load News Macro FX"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nconst cfg = j.config || {};\nconst brief = {\n  run: {\n    run_id: j.run_id,\n    as_of: j.as_of,\n    llm_model: j.llm_model,\n  },\n  config: {\n    capital_eur: Number(cfg.initial_capital_eur || 10000),\n    leverage_max: Number(cfg.leverage_max || 1),\n    kill_switch_active: Boolean(cfg.kill_switch_active),\n  },\n  portfolio_state: j.portfolio_state || {},\n  universe: {\n    pairs: (j.universe_fx || []).map((x) => x.pair),\n    metadata: j.universe_fx || [],\n  },\n  technical_signals: j.technical_signals || [],\n  macro_news: j.macro_news || { top_news: [], pair_focus: {}, macro_regime: {} },\n  limits: {\n    max_pair_pct: Number(cfg.max_pair_pct || cfg.max_pos_pct || 0.20),\n    max_currency_exposure_pct: Number(cfg.max_currency_exposure_pct || 0.50),\n    max_daily_drawdown_pct: Number(cfg.max_daily_drawdown_pct || 0.05),\n  },\n};\n\nreturn [{\n  json: {\n    ...j,\n    brief,\n    system_prompt_vars: {\n      llm_model: j.llm_model,\n      leverage_max: brief.config.leverage_max,\n    },\n    user_prompt: `Use this AG1-FX-V1 briefing JSON:\\n\\n\\`\\`\\`json\\n${JSON.stringify(brief, null, 2)}\\n\\`\\`\\``,\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        340,
+        -20
+      ],
+      "id": "06-assemble-brief-fx",
+      "name": "06 Assemble Brief FX"
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $json;\nreturn [{json: {...j, decision_json: {as_of: j.as_of, narrative: 'P3 dry-run placeholder; connect LLM node here after manual review', decisions: (j.brief?.universe?.pairs || []).map((pair) => ({pair, decision: 'hold', conviction: 0.1}))}}}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        580,
+        -20
+      ],
+      "id": "llm-placeholder",
+      "name": "LLM Decision Placeholder"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeParse(v) {\n  if (!v) return {};\n  if (typeof v === 'object') return v;\n  try { return JSON.parse(v); } catch { return {}; }\n}\n\nconst j = $json || {};\nlet raw = j.agent_output || j.output || j.text || j.response || j.decision_json;\nif (Array.isArray(raw)) raw = raw[0];\nif (raw && raw.content) raw = raw.content;\nif (raw && raw.text) raw = raw.text;\nlet decision = safeParse(raw);\n\nif (!decision.decisions && j.dry_run) {\n  decision = {\n    as_of: j.as_of,\n    narrative: 'dry-run hold payload',\n    decisions: (j.brief?.universe?.pairs || []).map((pair) => ({ pair, decision: 'hold', conviction: 0.1 })),\n  };\n}\n\nif (!Array.isArray(decision.decisions)) {\n  decision.decisions = [];\n}\n\nconst cleaned = decision.decisions.slice(0, 30).map((d) => ({\n  pair: String(d.pair || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6),\n  decision: String(d.decision || 'hold'),\n  conviction: Math.max(0, Math.min(1, Number(d.conviction || 0))),\n  size_lots: d.size_lots === undefined ? undefined : Number(d.size_lots),\n  size_pct_equity: d.size_pct_equity === undefined ? undefined : Number(d.size_pct_equity),\n  stop_loss_price: d.stop_loss_price === undefined ? undefined : Number(d.stop_loss_price),\n  take_profit_price: d.take_profit_price === undefined ? undefined : Number(d.take_profit_price),\n  horizon: d.horizon || '1d',\n  rationale: String(d.rationale || '').slice(0, 600),\n  lot_id_to_close: d.lot_id_to_close || '',\n}));\n\nreturn [{ json: { ...j, decision_json: { ...decision, decisions: cleaned } } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        820,
+        -20
+      ],
+      "id": "10-parse-decision-fx",
+      "name": "10 Parse Decision FX"
+    },
+    {
+      "parameters": {
+        "jsCode": "function num(v, d = 0) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : d;\n}\n\nfunction pairMeta(brief, pair) {\n  return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };\n}\n\nfunction lastPrice(brief, pair) {\n  const row = (brief.technical_signals || []).find((x) => x.pair === pair);\n  return num(row?.last_close, 0);\n}\n\nfunction quoteToEur(brief, quote) {\n  if (quote === 'EUR') return 1;\n  const direct = lastPrice(brief, `${quote}EUR`);\n  if (direct > 0) return direct;\n  const inv = lastPrice(brief, `EUR${quote}`);\n  if (inv > 0) return 1 / inv;\n  const qUsd = quote === 'USD' ? 1 : lastPrice(brief, `${quote}USD`) || (lastPrice(brief, `USD${quote}`) ? 1 / lastPrice(brief, `USD${quote}`) : 0);\n  const usdEur = lastPrice(brief, 'USDEUR') || (lastPrice(brief, 'EURUSD') ? 1 / lastPrice(brief, 'EURUSD') : 0);\n  return qUsd > 0 && usdEur > 0 ? qUsd * usdEur : 1;\n}\n\nfunction currencyExposures(lots, addOrders, brief) {\n  const ex = {};\n  function add(ccy, v) { ex[ccy] = (ex[ccy] || 0) + v; }\n  for (const lot of lots || []) {\n    const pair = lot.pair;\n    const meta = pairMeta(brief, pair);\n    const px = lastPrice(brief, pair) || num(lot.open_price, 0);\n    const notional = Math.abs(num(lot.size_lots) * 100000 * px * quoteToEur(brief, meta.quote_ccy));\n    const sign = lot.side === 'short' ? -1 : 1;\n    add(meta.base_ccy, sign * notional);\n    add(meta.quote_ccy, -sign * notional);\n  }\n  for (const o of addOrders || []) {\n    const meta = pairMeta(brief, o.pair);\n    const sign = o.side === 'sell_base' ? -1 : 1;\n    add(meta.base_ccy, sign * o.notional_eur);\n    add(meta.quote_ccy, -sign * o.notional_eur);\n  }\n  return ex;\n}\n\nconst j = $json || {};\nconst brief = j.brief || {};\nconst cfg = brief.config || {};\nconst limits = brief.limits || {};\nconst portfolio = brief.portfolio_state || {};\nconst universe = new Set(brief.universe?.pairs || []);\nconst decisions = j.decision_json?.decisions || [];\nconst equity = Math.max(1, num(portfolio.equity_eur, cfg.capital_eur || 10000));\nconst leverageMax = Math.max(0.01, num(cfg.leverage_max, 1));\nconst maxPairPct = num(limits.max_pair_pct, 0.20);\nconst maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);\nconst maxDd = num(limits.max_daily_drawdown_pct, 0.05);\nconst openLots = portfolio.open_lots || [];\nconst projected = [];\nconst orders = [];\nconst alerts = [];\n\nlet killSwitch = Boolean(cfg.kill_switch_active);\nif (num(portfolio.drawdown_day_pct, 0) <= -maxDd) {\n  killSwitch = true;\n  alerts.push({ severity: 'critical', category: 'kill_switch', message: 'Daily drawdown gate breached; opens blocked' });\n}\n\nlet seq = 1;\nfor (const d of decisions) {\n  const pair = d.pair;\n  const action = d.decision;\n  const side = action === 'open_long' ? 'buy_base' : action === 'open_short' ? 'sell_base' : action === 'close' ? 'close_long' : action === 'partial_close' ? 'close_long' : 'hold';\n  const orderId = `ORD_${j.run_id}_${String(seq).padStart(3, '0')}`;\n  const base = {\n    order_id: orderId,\n    client_order_id: `${j.run_id}::${pair || 'UNKNOWN'}::${side}::${seq}`,\n    run_id: j.run_id,\n    pair,\n    side,\n    order_type: 'market',\n    size_lots: 0,\n    notional_quote: 0,\n    notional_eur: 0,\n    leverage_used: leverageMax,\n    limit_price: null,\n    stop_loss_price: d.stop_loss_price ?? null,\n    take_profit_price: d.take_profit_price ?? null,\n    status: 'rejected',\n    rejection_reason: '',\n    risk_check_passed: false,\n    risk_check_notes: d.rationale || '',\n    decision: action,\n    conviction: d.conviction,\n    horizon: d.horizon,\n  };\n  seq += 1;\n\n  if (action === 'hold') continue;\n  if (!universe.has(pair)) {\n    base.rejection_reason = 'PAIR_NOT_IN_UNIVERSE';\n    orders.push(base);\n    continue;\n  }\n  if (killSwitch && action.startsWith('open_')) {\n    base.rejection_reason = 'KILL_SWITCH_ACTIVE';\n    orders.push(base);\n    continue;\n  }\n\n  const px = lastPrice(brief, pair);\n  if (px <= 0) {\n    base.rejection_reason = 'NO_ENTRY_PRICE';\n    orders.push(base);\n    continue;\n  }\n  const meta = pairMeta(brief, pair);\n  let sizeLots = num(d.size_lots, 0);\n  if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {\n    const targetEur = equity * Math.min(maxPairPct, num(d.size_pct_equity));\n    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEur(brief, meta.quote_ccy));\n  }\n  base.size_lots = sizeLots;\n  base.notional_quote = Math.abs(sizeLots * 100000 * px);\n  base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));\n\n  if (action.startsWith('open_')) {\n    if (sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';\n    const pairExisting = openLots.filter((l) => l.pair === pair).reduce((s, l) => s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, pair) || num(l.open_price)) * quoteToEur(brief, meta.quote_ccy)), 0);\n    if (!base.rejection_reason && (pairExisting + base.notional_eur) / equity > maxPairPct) base.rejection_reason = 'MAX_PAIR_EXPOSURE';\n    const totalNotional = openLots.reduce((s, l) => {\n      const m = pairMeta(brief, l.pair);\n      return s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, l.pair) || num(l.open_price)) * quoteToEur(brief, m.quote_ccy));\n    }, 0) + projected.reduce((s, o) => s + o.notional_eur, 0) + base.notional_eur;\n    if (!base.rejection_reason && totalNotional / equity > leverageMax) base.rejection_reason = 'LEVERAGE_MAX';\n    if (!base.rejection_reason && base.notional_eur / leverageMax > num(portfolio.margin_free_eur, equity)) base.rejection_reason = 'INSUFFICIENT_MARGIN';\n    const ex = currencyExposures(openLots, [...projected, base], brief);\n    if (!base.rejection_reason && Object.values(ex).some((v) => Math.abs(v) / equity > maxCurrencyPct)) base.rejection_reason = 'MAX_CURRENCY_EXPOSURE';\n    if (!base.rejection_reason && action === 'open_long' && base.stop_loss_price && base.stop_loss_price >= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_long' && base.take_profit_price && base.take_profit_price <= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_short' && base.stop_loss_price && base.stop_loss_price <= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_short' && base.take_profit_price && base.take_profit_price >= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';\n    if (!base.rejection_reason) {\n      base.status = 'pending';\n      base.risk_check_passed = true;\n      projected.push(base);\n    }\n  } else {\n    base.status = 'pending';\n    base.risk_check_passed = true;\n    base.size_lots = sizeLots > 0 ? sizeLots : 999999;\n  }\n  orders.push(base);\n}\n\nreturn [{ json: { ...j, kill_switch_active_effective: killSwitch, executable_orders: orders, risk_alerts: alerts } }];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1060,
+        -20
+      ],
+      "id": "11-validate-enforce-safety-fx",
+      "name": "11 Validate Enforce Safety FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nfrom datetime import datetime, timezone\n\nFEE_BPS = 0.5\nLOT_UNITS = 100000\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\norders = ctx.get(\"executable_orders\") or []\nbrief = ctx.get(\"brief\") or {}\n\nprices = {r.get(\"pair\"): r.get(\"last_close\") for r in brief.get(\"technical_signals\", []) if r.get(\"pair\")}\nmeta = {r.get(\"pair\"): r for r in (brief.get(\"universe\", {}).get(\"metadata\") or [])}\n\nfills = []\nfor o in orders:\n    if o.get(\"status\") != \"pending\":\n        continue\n    pair = o.get(\"pair\")\n    px = float(prices.get(pair) or 0)\n    if px <= 0:\n        continue\n    pip = float((meta.get(pair) or {}).get(\"pip_size\") or (0.01 if str(pair).endswith(\"JPY\") else 0.0001))\n    fill_price = px + pip if o.get(\"side\") in {\"buy_base\", \"close_short\"} else px - pip\n    notional_eur = abs(float(o.get(\"notional_eur\") or 0))\n    fees_eur = FEE_BPS * notional_eur / 10000.0\n    fills.append({\n        \"fill_id\": f\"FIL_{o['order_id']}\",\n        \"order_id\": o[\"order_id\"],\n        \"pair\": pair,\n        \"side\": o.get(\"side\"),\n        \"fill_price\": fill_price,\n        \"fill_size_lots\": float(o.get(\"size_lots\") or 0),\n        \"fees_eur\": fees_eur,\n        \"swap_eur\": 0.0,\n        \"filled_at\": datetime.now(timezone.utc).isoformat(),\n        \"fill_source\": \"simulated_yfinance\",\n    })\n\nreturn [{\"json\": {**ctx, \"fills\": fills}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1300,
+        -20
+      ],
+      "id": "12-simulate-fills-fx",
+      "name": "12 Simulate Fills FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport duckdb\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\"\norders = ctx.get(\"executable_orders\") or []\nalerts = ctx.get(\"risk_alerts\") or []\n\nwith duckdb.connect(db_path) as con:\n    for o in orders:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO core.orders (\n              order_id, client_order_id, run_id, pair, side, order_type, size_lots,\n              notional_quote, notional_eur, leverage_used, limit_price, stop_loss_price,\n              take_profit_price, requested_at, status, rejection_reason, risk_check_passed, risk_check_notes\n            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)\n            \"\"\",\n            [\n                o.get(\"order_id\"), o.get(\"client_order_id\"), o.get(\"run_id\"), o.get(\"pair\"), o.get(\"side\"),\n                o.get(\"order_type\") or \"market\", float(o.get(\"size_lots\") or 0),\n                float(o.get(\"notional_quote\") or 0), float(o.get(\"notional_eur\") or 0),\n                float(o.get(\"leverage_used\") or 1), o.get(\"limit_price\"), o.get(\"stop_loss_price\"),\n                o.get(\"take_profit_price\"), o.get(\"status\"), o.get(\"rejection_reason\"),\n                bool(o.get(\"risk_check_passed\")), o.get(\"risk_check_notes\"),\n            ],\n        )\n    for idx, a in enumerate(alerts, 1):\n        con.execute(\n            \"INSERT OR REPLACE INTO core.alerts VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?)\",\n            [\n                f\"ALT_{ctx.get('run_id')}_{idx:03d}\", ctx.get(\"run_id\"), a.get(\"severity\", \"warn\"),\n                a.get(\"category\", \"risk\"), a.get(\"message\", \"\"), json.dumps(a, ensure_ascii=False),\n            ],\n        )\n\nreturn [{\"json\": {**ctx, \"orders_written\": len(orders), \"alerts_written\": len(alerts)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        -20
+      ],
+      "id": "13-write-orders-fx",
+      "name": "13 Write Orders FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\"\nfills = ctx.get(\"fills\") or []\norders_by_id = {o.get(\"order_id\"): o for o in (ctx.get(\"executable_orders\") or [])}\n\nopened = 0\nwith duckdb.connect(db_path) as con:\n    for f in fills:\n        con.execute(\n            \"INSERT OR REPLACE INTO core.fills VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\",\n            [\n                f.get(\"fill_id\"), f.get(\"order_id\"), f.get(\"pair\"), f.get(\"side\"),\n                f.get(\"fill_price\"), f.get(\"fill_size_lots\"), f.get(\"fees_eur\"),\n                f.get(\"swap_eur\"), f.get(\"filled_at\"), f.get(\"fill_source\"),\n            ],\n        )\n        con.execute(\"UPDATE core.orders SET status='filled' WHERE order_id=?\", [f.get(\"order_id\")])\n        order = orders_by_id.get(f.get(\"order_id\")) or {}\n        if f.get(\"side\") in {\"buy_base\", \"sell_base\"}:\n            side = \"long\" if f.get(\"side\") == \"buy_base\" else \"short\"\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO core.position_lots (\n                  lot_id, run_id_open, run_id_close, pair, side, size_lots, open_price, open_at,\n                  close_price, close_at, pnl_quote, pnl_eur, fees_eur, swap_eur_total,\n                  leverage_used, stop_loss_price, take_profit_price, status, notes\n                ) VALUES (?, ?, NULL, ?, ?, ?, ?, CAST(? AS TIMESTAMP), NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, 'open', ?)\n                \"\"\",\n                [\n                    f\"LOT_{f.get('fill_id')}\", ctx.get(\"run_id\"), f.get(\"pair\"), side,\n                    f.get(\"fill_size_lots\"), f.get(\"fill_price\"), f.get(\"filled_at\"), f.get(\"fees_eur\"),\n                    order.get(\"leverage_used\") or 1, order.get(\"stop_loss_price\"), order.get(\"take_profit_price\"),\n                    order.get(\"risk_check_notes\") or \"\",\n                ],\n            )\n            opened += 1\n\nreturn [{\"json\": {**ctx, \"fills_written\": len(fills), \"lots_opened\": opened}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1780,
+        -20
+      ],
+      "id": "14-write-lots-fx",
+      "name": "14 Write Lots FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\"\nfills = [f for f in (ctx.get(\"fills\") or []) if str(f.get(\"side\") or \"\").startswith(\"close_\")]\n\nclosed = 0\nwith duckdb.connect(db_path) as con:\n    for f in fills:\n        pair = f.get(\"pair\")\n        lots = con.execute(\n            \"SELECT lot_id, side, size_lots, open_price FROM core.position_lots WHERE pair=? AND status='open' ORDER BY open_at\",\n            [pair],\n        ).fetchall()\n        remaining = float(f.get(\"fill_size_lots\") or 999999)\n        for lot_id, side, size_lots, open_price in lots:\n            if remaining <= 0:\n                break\n            close_size = min(float(size_lots or 0), remaining)\n            if close_size <= 0:\n                continue\n            direction = 1 if side == \"long\" else -1\n            pnl_quote = close_size * 100000 * (float(f.get(\"fill_price\")) - float(open_price)) * direction\n            con.execute(\n                \"\"\"\n                UPDATE core.position_lots\n                SET run_id_close=?, close_price=?, close_at=CAST(? AS TIMESTAMP),\n                    pnl_quote=?, pnl_eur=?, status='closed'\n                WHERE lot_id=?\n                \"\"\",\n                [ctx.get(\"run_id\"), f.get(\"fill_price\"), f.get(\"filled_at\"), pnl_quote, pnl_quote, lot_id],\n            )\n            remaining -= close_size\n            closed += 1\n\nreturn [{\"json\": {**ctx, \"lots_closed\": closed}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2020,
+        -20
+      ],
+      "id": "15-close-lots-fx",
+      "name": "15 Close Lots FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\"\nbrief = ctx.get(\"brief\") or {}\nprices = {r.get(\"pair\"): r.get(\"last_close\") for r in brief.get(\"technical_signals\", []) if r.get(\"pair\")}\n\ndef quote_to_eur(pair):\n    quote = pair[3:]\n    if quote == \"EUR\":\n        return 1.0\n    direct = prices.get(f\"{quote}EUR\")\n    if direct:\n        return float(direct)\n    inv = prices.get(f\"EUR{quote}\")\n    if inv:\n        return 1.0 / float(inv)\n    if quote == \"USD\":\n        eurusd = prices.get(\"EURUSD\")\n        return 1.0 / float(eurusd) if eurusd else 1.0\n    return 1.0\n\nwith duckdb.connect(db_path) as con:\n    cash = float(con.execute(\"SELECT COALESCE(SUM(amount_eur), 0) FROM core.cash_ledger\").fetchone()[0] or 0)\n    lots = con.execute(\"SELECT pair, side, size_lots, open_price FROM core.position_lots WHERE status='open'\").fetchall()\n    floating = 0.0\n    notional = 0.0\n    for pair, side, size_lots, open_price in lots:\n        px = float(prices.get(pair) or open_price or 0)\n        q2e = quote_to_eur(pair)\n        direction = 1 if side == \"long\" else -1\n        floating += float(size_lots) * 100000 * (px - float(open_price)) * direction * q2e\n        notional += abs(float(size_lots) * 100000 * px * q2e)\n    realized = float(con.execute(\"SELECT COALESCE(SUM(pnl_eur), 0) FROM core.position_lots WHERE status='closed'\").fetchone()[0] or 0)\n    fees = float(con.execute(\"SELECT COALESCE(SUM(fees_eur), 0) FROM core.fills\").fetchone()[0] or 0)\n    equity = cash + floating + realized - fees - 10000.0\n    # Cash ledger keeps the initial deposit; equity is account value, not pure PnL.\n    equity = 10000.0 + floating + realized - fees\n    pnl_total = equity - 10000.0\n    row = con.execute(\"SELECT MAX(equity_eur) FROM core.portfolio_snapshot\").fetchone()\n    peak = max(float(row[0] or 10000.0), equity, 10000.0)\n    dd_total = equity / peak - 1.0\n    lev = notional / equity if equity > 0 else 0.0\n    margin_used = notional / max(1.0, float((brief.get(\"config\") or {}).get(\"leverage_max\") or 1))\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO core.portfolio_snapshot VALUES (\n          ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?\n        )\n        \"\"\",\n        [\n            f\"SNP_{ctx.get('run_id')}\", ctx.get(\"run_id\"), cash, equity, margin_used,\n            max(0.0, equity - margin_used), lev, len(lots), floating, pnl_total,\n            min(0.0, pnl_total / 10000.0), dd_total, \"AG1-FX-V1 snapshot\",\n        ],\n    )\n\nreturn [{\"json\": {**ctx, \"snapshot\": {\"equity_eur\": equity, \"pnl_total_eur\": pnl_total, \"open_lots_count\": len(lots), \"leverage_effective\": lev}}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2260,
+        -20
+      ],
+      "id": "16-snapshot-portfolio-fx",
+      "name": "16 Snapshot Portfolio FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\"\norders = ctx.get(\"executable_orders\") or []\nfills = ctx.get(\"fills\") or []\ndecision_json = json.dumps(ctx.get(\"decision_json\") or {}, ensure_ascii=False)\n\nwith duckdb.connect(db_path) as con:\n    if ctx.get(\"kill_switch_active_effective\"):\n        con.execute(\"UPDATE cfg.portfolio_config SET kill_switch_active=TRUE, updated_at=CURRENT_TIMESTAMP WHERE config_key='default'\")\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO core.runs (\n          run_id, llm_model, started_at, finished_at, decision_json, decisions_count,\n          orders_count, fills_count, errors, leverage_max_used, kill_switch_active, notes\n        ) VALUES (?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)\n        \"\"\",\n        [\n            ctx.get(\"run_id\"), ctx.get(\"llm_model\"), decision_json,\n            len((ctx.get(\"decision_json\") or {}).get(\"decisions\") or []),\n            len(orders), len(fills), 0,\n            float(((ctx.get(\"brief\") or {}).get(\"config\") or {}).get(\"leverage_max\") or 1),\n            bool(ctx.get(\"kill_switch_active_effective\")),\n            \"AG1-FX-V1 run completed\",\n        ],\n    )\n\nreturn [{\"json\": {\"run_id\": ctx.get(\"run_id\"), \"orders\": len(orders), \"fills\": len(fills), \"snapshot\": ctx.get(\"snapshot\")}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2500,
+        -20
+      ],
+      "id": "17-log-run-fx",
+      "name": "17 Log Run FX"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01 Init Run FX": {
+      "main": [
+        [
+          {
+            "node": "02 Load Universe FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Load Universe FX": {
+      "main": [
+        [
+          {
+            "node": "03 Load Portfolio State FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Load Portfolio State FX": {
+      "main": [
+        [
+          {
+            "node": "04 Load Technical Signals FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 Load Technical Signals FX": {
+      "main": [
+        [
+          {
+            "node": "05 Load News Macro FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 Load News Macro FX": {
+      "main": [
+        [
+          {
+            "node": "06 Assemble Brief FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 Assemble Brief FX": {
+      "main": [
+        [
+          {
+            "node": "LLM Decision Placeholder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM Decision Placeholder": {
+      "main": [
+        [
+          {
+            "node": "10 Parse Decision FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 Parse Decision FX": {
+      "main": [
+        [
+          {
+            "node": "11 Validate Enforce Safety FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "11 Validate Enforce Safety FX": {
+      "main": [
+        [
+          {
+            "node": "12 Simulate Fills FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "12 Simulate Fills FX": {
+      "main": [
+        [
+          {
+            "node": "13 Write Orders FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "13 Write Orders FX": {
+      "main": [
+        [
+          {
+            "node": "14 Write Lots FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "14 Write Lots FX": {
+      "main": [
+        [
+          {
+            "node": "15 Close Lots FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "15 Close Lots FX": {
+      "main": [
+        [
+          {
+            "node": "16 Snapshot Portfolio FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "16 Snapshot Portfolio FX": {
+      "main": [
+        [
+          {
+            "node": "17 Log Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Europe/Paris"
+  },
+  "meta": {
+    "note": "LLM placeholder is intentional for P3 manual dry-run; replace with provider node after Nicolas review."
+  }
+}

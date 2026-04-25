@@ -52,6 +52,32 @@ Génération du hash :
 htpasswd -nb admin 'motdepasse' | sed -e s/\\$/\\$\\$/g
 ```
 
+## Variables internes au service `trading-dashboard`
+
+Définies dans le docker-compose (pas dans le `.env`). Le volume `/local-files/duckdb:/files/duckdb:ro` les rend toutes lisibles :
+
+- `AG1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_v3_chatgpt52.duckdb`
+- `AG1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_v3_grok41_reasoning.duckdb`
+- `AG1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_v3_gemini30_pro.duckdb`
+- `AG2_DUCKDB_PATH=/files/duckdb/ag2_v3.duckdb`
+- `AG3_DUCKDB_PATH=/files/duckdb/ag3_v2.duckdb`
+- `AG4_DUCKDB_PATH=/files/duckdb/ag4_v3.duckdb`
+- `AG4_SPE_DUCKDB_PATH=/files/duckdb/ag4_spe_v2.duckdb`
+- `AG4_FOREX_DUCKDB_PATH=/files/duckdb/ag4_forex_v1.duckdb` *(alimente la page « Forex P&L (LLM x Paire) » — couverture news taguées FX)*
+- `YF_ENRICH_DUCKDB_PATH=/files/duckdb/yf_enrichment_v1.duckdb`
+
+## Variables internes au système Forex AG1-FX-V1
+
+Définies dans `infra/vps_hostinger_config/docker-compose.yml` pour `n8n`, `task-runners` et `trading-dashboard` :
+
+- `AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb`
+- `AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb`
+- `AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb`
+- `AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb`
+- `AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb`
+- `AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py`
+- `AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql`
+
 ## Variables internes au service n8n
 
 Ces variables sont déjà définies dans le docker-compose — elles ne sont **pas** dans le .env :
