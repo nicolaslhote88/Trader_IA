@@ -1,8 +1,9 @@
+import json
 import math
 import os
 from datetime import datetime, timedelta, timezone
-
-import requests
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 def synthetic_bars(pair, days=260):
@@ -40,19 +41,21 @@ for it in items:
             payload = {"ok": True, "symbol": symbol, "source": "synthetic", "bars": synthetic_bars(pair)}
         else:
             base = str(j.get("yfinance_api_base") or "http://yfinance-api:8080").rstrip("/")
-            resp = requests.get(
-                f"{base}/history",
-                params={
-                    "symbol": symbol,
-                    "interval": j.get("interval") or "1d",
-                    "lookback_days": int(j.get("lookback_days") or 420),
-                    "max_bars": int(j.get("max_bars") or 420),
-                    "allow_stale": "true",
-                },
-                timeout=60,
-            )
-            resp.raise_for_status()
-            payload = resp.json()
+            params = {
+                "symbol": symbol,
+                "interval": j.get("interval") or "1d",
+                "lookback_days": int(j.get("lookback_days") or 420),
+                "max_bars": int(j.get("max_bars") or 420),
+                "allow_stale": "true",
+            }
+            url = f"{base}/history?{urlencode(params)}"
+            req = Request(url, headers={"Accept": "application/json"})
+            with urlopen(req, timeout=60) as resp:
+                status = getattr(resp, "status", 200)
+                body = resp.read()
+            if status >= 400:
+                raise RuntimeError(f"yfinance-api HTTP {status}: {body[:200]!r}")
+            payload = json.loads(body.decode("utf-8"))
         out.append({"json": {**j, "history": payload, "fetch_error": ""}})
     except Exception as exc:
         out.append({"json": {**j, "history": {"ok": False, "bars": []}, "fetch_error": str(exc)}})
