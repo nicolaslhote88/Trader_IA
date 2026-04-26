@@ -45,13 +45,17 @@ with duckdb.connect(db_path) as con:
     margin_used = notional / max(1.0, float((brief.get("config") or {}).get("leverage_max") or 1))
     con.execute(
         """
-        INSERT OR REPLACE INTO core.portfolio_snapshot VALUES (
-          ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-        )
+        INSERT OR REPLACE INTO core.portfolio_snapshot (
+          snapshot_id, run_id, as_of, cash_eur, equity_eur,
+          margin_used_eur, margin_free_eur, leverage_effective, open_lots_count,
+          pnl_day_eur, pnl_total_eur, drawdown_day_pct, drawdown_total_pct, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
-            f"SNP_{ctx.get('run_id')}", ctx.get("run_id"), cash, equity, margin_used,
-            max(0.0, equity - margin_used), lev, len(lots), floating, pnl_total,
+            f"SNP_{ctx.get('run_id')}", ctx.get("run_id"), datetime.now(timezone.utc),
+            cash, equity, margin_used,
+            max(0.0, equity - margin_used), lev, len(lots),
+            floating, pnl_total,
             min(0.0, pnl_total / 10000.0), dd_total, "AG1-FX-V1 snapshot",
         ],
     )
