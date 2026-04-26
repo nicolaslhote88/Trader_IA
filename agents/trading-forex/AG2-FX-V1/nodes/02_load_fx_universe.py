@@ -96,4 +96,5 @@ with duckdb.connect(db_path) as con:
         ],
     )
 
-return [{"json": {**ctx, **r}} for r in rows]
+ctx_clean = {k: v for k, v in ctx.items() if k != "universe"}
+return [{"json": {**ctx_clean, **r}} for r in rows]

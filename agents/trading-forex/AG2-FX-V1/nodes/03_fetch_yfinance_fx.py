@@ -1,6 +1,7 @@
 import json
 import math
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -29,10 +30,7 @@ def synthetic_bars(pair, days=260):
     return bars
 
 
-items = _items or []
-out = []
-for it in items:
-    j = it.get("json", {}) or {}
+def fetch_one(j):
     pair = j.get("pair")
     symbol = j.get("symbol_yf") or f"{pair}=X"
     dry_run = bool(j.get("dry_run")) or os.getenv("AG1_FX_DRY_RUN") == "1"
@@ -50,14 +48,27 @@ for it in items:
             }
             url = f"{base}/history?{urlencode(params)}"
             req = Request(url, headers={"Accept": "application/json"})
-            with urlopen(req, timeout=60) as resp:
+            with urlopen(req, timeout=30) as resp:
                 status = getattr(resp, "status", 200)
                 body = resp.read()
             if status >= 400:
                 raise RuntimeError(f"yfinance-api HTTP {status}: {body[:200]!r}")
             payload = json.loads(body.decode("utf-8"))
-        out.append({"json": {**j, "history": payload, "fetch_error": ""}})
+        return {"json": {**j, "history": payload, "fetch_error": ""}}
     except Exception as exc:
-        out.append({"json": {**j, "history": {"ok": False, "bars": []}, "fetch_error": str(exc)}})
+        return {"json": {**j, "history": {"ok": False, "bars": []}, "fetch_error": str(exc)}}
+
+
+items = _items or []
+out = [None] * len(items)
+if items:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = {
+            pool.submit(fetch_one, it.get("json", {}) or {}): idx
+            for idx, it in enumerate(items)
+        }
+        for fut in as_completed(futures):
+            idx = futures[fut]
+            out[idx] = fut.result()
 
 return out
