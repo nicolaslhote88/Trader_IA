@@ -34,7 +34,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const runId = `AG4FXD_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    lookback_hours: Number(process.env.AG4_FX_LOOKBACK_HOURS || 24),\n    db_path: process.env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    ag4_v3_path: process.env.AG4_DUCKDB_PATH || '/files/duckdb/ag4_v3.duckdb',\n    ag4_forex_path: process.env.AG4_FOREX_DUCKDB_PATH || '/files/duckdb/ag4_forex_v1.duckdb',\n  },\n}];\n"
+        "jsCode": "const runId = `AG4FXD_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    lookback_hours: Number($env.AG4_FX_LOOKBACK_HOURS || 24),\n    db_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    ag4_v3_path: $env.AG4_DUCKDB_PATH || '/files/duckdb/ag4_v3.duckdb',\n    ag4_forex_path: $env.AG4_FOREX_DUCKDB_PATH || '/files/duckdb/ag4_forex_v1.duckdb',\n  },\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

@@ -19,9 +19,9 @@ return [{
   json: {
     run_id: runId,
     as_of: new Date().toISOString(),
-    db_path: process.env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',
-    yfinance_api_base: process.env.YFINANCE_API_URL || 'http://yfinance-api:8080',
-    dry_run: String(process.env.AG1_FX_DRY_RUN || process.env.FX_DRY_RUN || '').toLowerCase() === '1',
+    db_path: $env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',
+    yfinance_api_base: $env.YFINANCE_API_URL || 'http://yfinance-api:8080',
+    dry_run: String($env.AG1_FX_DRY_RUN || $env.FX_DRY_RUN || '').toLowerCase() === '1',
     universe: AG4_V3_ALLOWED_PAIRS,
     interval: '1d',
     lookback_days: 420,

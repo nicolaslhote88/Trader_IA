@@ -26,7 +26,7 @@ services:
 
   yf-enrichment:
     build:
-      context: /opt/trader-ia/services/yf-enrichment-service
+      context: /opt/yf-enrichment-service
       dockerfile: Dockerfile
     container_name: yf-enrichment
     environment:

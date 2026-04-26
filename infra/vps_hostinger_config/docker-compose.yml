@@ -98,7 +98,9 @@ services:
       - web
 
   task-runners:
-    image: root-task-runners:2.3.5-clean
+    build:
+      context: .
+      dockerfile: Dockerfile.runners
     deploy:
       replicas: 3
     environment:
