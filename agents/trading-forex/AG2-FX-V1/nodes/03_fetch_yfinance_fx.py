@@ -48,11 +48,9 @@ def fetch_one(j):
             }
             url = f"{base}/history?{urlencode(params)}"
             req = Request(url, headers={"Accept": "application/json"})
+            # urlopen raises HTTPError automatically on 4xx/5xx (caught by outer except).
             with urlopen(req, timeout=30) as resp:
-                status = getattr(resp, "status", 200)
                 body = resp.read()
-            if status >= 400:
-                raise RuntimeError(f"yfinance-api HTTP {status}: {body[:200]!r}")
             payload = json.loads(body.decode("utf-8"))
         return {"json": {**j, "history": payload, "fetch_error": ""}}
     except Exception as exc:

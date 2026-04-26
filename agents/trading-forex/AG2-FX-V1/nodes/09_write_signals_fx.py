@@ -23,25 +23,27 @@ for it in items:
     row["as_of"] = j.get("as_of_bar") or as_of
     rows.append(tuple(row.get(k) for k in cols))
 
+quoted_cols = [f'"{c}"' for c in cols]
+
 with duckdb.connect(db_path) as con:
     schema_sql = """
     CREATE SCHEMA IF NOT EXISTS main;
     CREATE TABLE IF NOT EXISTS main.technical_signals_fx (
-      run_id VARCHAR NOT NULL, as_of TIMESTAMP NOT NULL, pair VARCHAR NOT NULL,
-      last_close DOUBLE, ret_1d DOUBLE, ret_5d DOUBLE, ret_20d DOUBLE,
-      rsi14 DOUBLE, atr14 DOUBLE, sma20 DOUBLE, sma50 DOUBLE, sma200 DOUBLE,
-      ema12 DOUBLE, ema26 DOUBLE, macd DOUBLE, macd_signal DOUBLE, macd_hist DOUBLE,
-      bb_upper DOUBLE, bb_lower DOUBLE, bb_width DOUBLE,
-      pivot DOUBLE, r1 DOUBLE, r2 DOUBLE, s1 DOUBLE, s2 DOUBLE,
-      regime VARCHAR, signal_score DOUBLE, signal_label VARCHAR,
-      pip_size DOUBLE, base_ccy VARCHAR, quote_ccy VARCHAR,
-      PRIMARY KEY (run_id, pair)
+      "run_id" VARCHAR NOT NULL, "as_of" TIMESTAMP NOT NULL, "pair" VARCHAR NOT NULL,
+      "last_close" DOUBLE, "ret_1d" DOUBLE, "ret_5d" DOUBLE, "ret_20d" DOUBLE,
+      "rsi14" DOUBLE, "atr14" DOUBLE, "sma20" DOUBLE, "sma50" DOUBLE, "sma200" DOUBLE,
+      "ema12" DOUBLE, "ema26" DOUBLE, "macd" DOUBLE, "macd_signal" DOUBLE, "macd_hist" DOUBLE,
+      "bb_upper" DOUBLE, "bb_lower" DOUBLE, "bb_width" DOUBLE,
+      "pivot" DOUBLE, "r1" DOUBLE, "r2" DOUBLE, "s1" DOUBLE, "s2" DOUBLE,
+      "regime" VARCHAR, "signal_score" DOUBLE, "signal_label" VARCHAR,
+      "pip_size" DOUBLE, "base_ccy" VARCHAR, "quote_ccy" VARCHAR,
+      PRIMARY KEY ("run_id", "pair")
     )
     """
     con.execute(schema_sql)
     if rows:
         con.executemany(
-            f"INSERT OR REPLACE INTO main.technical_signals_fx ({', '.join(cols)}) VALUES ({', '.join(['?'] * len(cols))})",
+            f"INSERT OR REPLACE INTO main.technical_signals_fx ({', '.join(quoted_cols)}) VALUES ({', '.join(['?'] * len(cols))})",
             rows,
         )
 

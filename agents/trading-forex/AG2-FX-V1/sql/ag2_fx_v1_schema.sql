@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS main.technical_signals_fx (
     bb_upper            DOUBLE,
     bb_lower            DOUBLE,
     bb_width            DOUBLE,
-    pivot               DOUBLE,
+    "pivot"             DOUBLE,
     r1                  DOUBLE,
     r2                  DOUBLE,
     s1                  DOUBLE,
