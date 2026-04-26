@@ -36,6 +36,7 @@ if pairs != AG4_V3_ALLOWED_PAIRS:
     raise ValueError("AG2-FX universe drift: expected exact AG4-V3 ALLOWED_PAIRS order")
 
 rows = [meta(p) for p in pairs]
+now_ts = datetime.now(timezone.utc)
 with duckdb.connect(db_path) as con:
     con.execute("CREATE SCHEMA IF NOT EXISTS main")
     con.execute(
@@ -68,14 +69,14 @@ with duckdb.connect(db_path) as con:
         """
     )
     con.execute(
-        "INSERT OR REPLACE INTO main.run_log VALUES (?, CURRENT_TIMESTAMP, NULL, 0, 0, 0, ?)",
-        [run_id, "AG2-FX-V1 started"],
+        "INSERT OR REPLACE INTO main.run_log VALUES (?, ?, NULL, 0, 0, 0, ?)",
+        [run_id, now_ts, "AG2-FX-V1 started"],
     )
     con.executemany(
         """
         INSERT INTO main.universe_fx (
           pair, symbol_yf, base_ccy, quote_ccy, pip_size, price_decimals, liquidity_tier, enabled, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (pair) DO UPDATE SET
           symbol_yf = excluded.symbol_yf,
           base_ccy = excluded.base_ccy,
@@ -84,12 +85,12 @@ with duckdb.connect(db_path) as con:
           price_decimals = excluded.price_decimals,
           liquidity_tier = excluded.liquidity_tier,
           enabled = excluded.enabled,
-          updated_at = CURRENT_TIMESTAMP
+          updated_at = excluded.updated_at
         """,
         [
             (
                 r["pair"], r["symbol_yf"], r["base_ccy"], r["quote_ccy"], r["pip_size"],
-                r["price_decimals"], r["liquidity_tier"], r["enabled"],
+                r["price_decimals"], r["liquidity_tier"], r["enabled"], now_ts,
             )
             for r in rows
         ],
