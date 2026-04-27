@@ -34,7 +34,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const model = $env.AG1_FX_LLM_MODEL || $json.llm_model || 'gpt-5.2-2025-12-11';\nconst variant = $env.AG1_FX_VARIANT || $json.variant || 'chatgpt52';\nconst dbPathByVariant = {\n  chatgpt52: $env.AG1_FX_V1_CHATGPT52_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_chatgpt52.duckdb',\n  grok41_reasoning: $env.AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb',\n  gemini30_pro: $env.AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb',\n};\n\nreturn [{\n  json: {\n    run_id: `AG1FX_${variant}_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`,\n    as_of: new Date().toISOString(),\n    llm_model: model,\n    variant,\n    db_path: '/files/duckdb/ag1_fx_v1_chatgpt52.duckdb',\n    ag2_fx_path: $env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',\n    ag4_fx_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    schema_path: $env.AG1_FX_V1_LEDGER_SCHEMA_PATH || '/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql',\n    dry_run: String($env.AG1_FX_DRY_RUN || '').toLowerCase() === '1',\n  },\n}];\n"
+        "jsCode": "const model = $env.AG1_FX_LLM_MODEL || $json.llm_model || 'gpt-5.5';\nconst variant = $env.AG1_FX_VARIANT || $json.variant || 'chatgpt52';\nconst dbPathByVariant = {\n  chatgpt52: $env.AG1_FX_V1_CHATGPT52_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_chatgpt52.duckdb',\n  grok41_reasoning: $env.AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb',\n  gemini30_pro: $env.AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb',\n};\n\nreturn [{\n  json: {\n    run_id: `AG1FX_${variant}_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`,\n    as_of: new Date().toISOString(),\n    llm_model: model,\n    variant,\n    db_path: '/files/duckdb/ag1_fx_v1_chatgpt52.duckdb',\n    ag2_fx_path: $env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',\n    ag4_fx_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    schema_path: $env.AG1_FX_V1_LEDGER_SCHEMA_PATH || '/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql',\n    dry_run: String($env.AG1_FX_DRY_RUN || '').toLowerCase() === '1',\n  },\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -116,25 +116,73 @@
     },
     {
       "parameters": {
-        "jsCode": "const j = $json;\nreturn [{json: {...j, decision_json: {as_of: j.as_of, narrative: 'P3 dry-run placeholder; connect LLM node here after manual review', decisions: (j.brief?.universe?.pairs || []).map((pair) => ({pair, decision: 'hold', conviction: 0.1}))}}}];\n"
+        "promptType": "define",
+        "text": "={{ $json.user_prompt }}",
+        "options": {
+          "systemMessage": "=You are the Forex Portfolio Manager for a 10,000 EUR sandbox account managed by {{ $json.llm_model }}.\nYou trade ONLY the 27 FX pairs listed in the universe. No equities, no ETFs, no crypto.\nYour job at each run is to:\n\n1. Read the current portfolio state, the technical signals (AG2-FX) and the FX-specific macro news digest (AG4-FX).\n2. Decide for each open lot: keep, partial close, or full close.\n3. Decide whether to open new positions (max 5 per run), specifying for each: pair, side (long/short), size_lots or size_pct_equity, stop_loss_price, take_profit_price, horizon, conviction (0-1), rationale.\n4. Respect HARD constraints (the Risk Manager will reject violators):\n   - leverage_max = {{ $json.brief.config.leverage_max }} -> sum(notional_eur) / equity_eur must stay <= leverage_max\n   - max_pair_pct = 20% -> notional_eur per pair / equity_eur <= 0.20\n   - max_currency_exposure_pct = 50% -> cumulative directional exposure on any single currency / equity_eur <= 0.50\n   - max_daily_drawdown_pct = 5% -> if breached, kill_switch flips and all opens are blocked\n\n5. Trading style: seek positive expectancy, short to medium term (intraday to 1 week). Do NOT scalp; favor moves of 30+ pips with conviction.\n6. Decision framework:\n   - Start from macro_news.pair_focus and top_news, then confirm with technical_signals.\n   - If macro_regime.market_regime is unknown, do NOT treat that alone as a no-trade condition.\n   - You may open a trade when pair_focus bias/confidence, recent news drivers, and technical signal/regime point in the same direction.\n   - Interpret pair_focus.bias_news relative to the pair: bullish base or bearish quote supports open_long; bearish base or bullish quote supports open_short.\n   - High-conviction setup thresholds: pair_focus.confidence >= 0.65, abs(signal_score) >= 0.70, and signal_label/regime agree with the trade direction.\n   - If macro_regime is clear and conflicts strongly with a pair setup, hold that pair.\n   - If pair_focus is missing, stale, or conflicts with technicals, hold that pair.\n   - Reduce size or hold when urgent_event_within_4h is true and the news is mixed.\n7. Position sizing and exits:\n   - Prefer size_pct_equity over size_lots. Use 0.08 for conviction 0.65-0.74, 0.12 for 0.75-0.84, and 0.16 for conviction >= 0.85. Never exceed 0.20 on any pair.\n   - Use ATR-aware stops and targets when ATR is available: long SL below entry and TP above entry; short SL above entry and TP below entry.\n   - Target at least 1.6R and at least 30 pips. If you cannot place a valid stop and target, hold.\n8. Return exactly one decision for every pair in universe.pairs. Use hold for pairs without a trade. Max 5 open_* decisions per run; choose the best ranked opportunities only.\n\nReturn a single JSON object matching the response schema. Do not output anything else.\n\nResponse schema reminder:\n- Return raw valid JSON only, no markdown fences.\n- Required top-level keys: as_of, decisions.\n- decisions[] items: pair, decision, conviction, optional size_lots, size_pct_equity, stop_loss_price, take_profit_price, horizon, rationale, lot_id_to_close.\n- decision must be one of open_long, open_short, close, partial_close, hold.",
+          "maxIterations": 20
+        }
       },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 3.1,
       "position": [
         580,
-        -20
+        -160
       ],
-      "id": "llm-placeholder",
-      "name": "LLM Decision Placeholder"
+      "id": "e5c4046e-e795-4c38-89b8-32cc6493ebd6",
+      "name": "Agent #1 - Portfolio manager1"
     },
     {
       "parameters": {
-        "jsCode": "function safeParse(v) {\n  if (!v) return {};\n  if (typeof v === 'object') return v;\n  let s = String(v).trim();\n  const fenced = s.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fenced) s = fenced[1].trim();\n  try { return JSON.parse(s); } catch { return {}; }\n}\n\nconst j = $json || {};\nlet raw = j.agent_output || j.output || j.text || j.response || j.decision_json;\nif (Array.isArray(raw)) raw = raw[0];\nif (raw && raw.content) raw = raw.content;\nif (raw && raw.text) raw = raw.text;\nif (raw && raw.output) raw = raw.output;\nlet decision = safeParse(raw);\n\nif (!decision.decisions && j.dry_run) {\n  decision = {\n    as_of: j.as_of,\n    narrative: 'dry-run hold payload',\n    decisions: (j.brief?.universe?.pairs || []).map((pair) => ({ pair, decision: 'hold', conviction: 0.1 })),\n  };\n}\n\nif (!Array.isArray(decision.decisions)) {\n  decision.decisions = [];\n}\n\nconst cleaned = decision.decisions.slice(0, 30).map((d) => ({\n  pair: String(d.pair || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6),\n  decision: String(d.decision || 'hold'),\n  conviction: Math.max(0, Math.min(1, Number(d.conviction || 0))),\n  size_lots: d.size_lots === undefined ? undefined : Number(d.size_lots),\n  size_pct_equity: d.size_pct_equity === undefined ? undefined : Number(d.size_pct_equity),\n  stop_loss_price: d.stop_loss_price === undefined ? undefined : Number(d.stop_loss_price),\n  take_profit_price: d.take_profit_price === undefined ? undefined : Number(d.take_profit_price),\n  horizon: d.horizon || '1d',\n  rationale: String(d.rationale || '').slice(0, 600),\n  lot_id_to_close: d.lot_id_to_close || '',\n}));\n\nreturn [{ json: { ...j, decision_json: { ...decision, decisions: cleaned } } }];\n"
+        "model": {
+          "__rl": true,
+          "value": "gpt-5.5",
+          "mode": "list",
+          "cachedResultName": "gpt-5.5"
+        },
+        "builtInTools": {},
+        "options": {
+          "timeout": 1500000
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        580,
+        80
+      ],
+      "id": "e7787dfd-b1be-4ee9-9c56-d87d1cca005a",
+      "name": "OpenAI Chat Model - GPT5.5",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        820,
+        -20
+      ],
+      "id": "merge-gpt-agent-output",
+      "name": "Merge GPT Output + Brief"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeParse(v) {\n  if (!v) return {};\n  if (typeof v === 'object') return v;\n  let s = String(v).trim();\n  const fenced = s.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fenced) s = fenced[1].trim();\n  try { return JSON.parse(s); } catch { return {}; }\n}\n\nfunction cleanDecision(d) {\n  const allowed = new Set(['open_long', 'open_short', 'close', 'partial_close', 'hold']);\n  const decision = String(d?.decision || 'hold');\n  return {\n    pair: String(d?.pair || '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 6),\n    decision: allowed.has(decision) ? decision : 'hold',\n    conviction: Math.max(0, Math.min(1, Number(d?.conviction || 0))),\n    size_lots: d?.size_lots === undefined ? undefined : Number(d.size_lots),\n    size_pct_equity: d?.size_pct_equity === undefined ? undefined : Number(d.size_pct_equity),\n    stop_loss_price: d?.stop_loss_price === undefined ? undefined : Number(d.stop_loss_price),\n    take_profit_price: d?.take_profit_price === undefined ? undefined : Number(d.take_profit_price),\n    horizon: d?.horizon || '1d',\n    rationale: String(d?.rationale || '').slice(0, 600),\n    lot_id_to_close: d?.lot_id_to_close || '',\n  };\n}\n\nconst j = $json || {};\nlet raw = j.agent_output || j.output || j.text || j.response || j.decision_json;\nif (Array.isArray(raw)) raw = raw[0];\nif (raw && raw.content) raw = raw.content;\nif (raw && raw.text) raw = raw.text;\nif (raw && raw.output) raw = raw.output;\nlet decision = safeParse(raw);\n\nconst universePairs = j.brief?.universe?.pairs || [];\nconst universe = new Set(universePairs);\n\nif (!decision.decisions && j.dry_run) {\n  decision = {\n    as_of: j.as_of,\n    narrative: 'dry-run hold payload',\n    decisions: universePairs.map((pair) => ({ pair, decision: 'hold', conviction: 0.1 })),\n  };\n}\n\nif (!Array.isArray(decision.decisions)) {\n  decision.decisions = [];\n}\n\ndecision.as_of = decision.as_of || j.as_of;\n\nconst byPair = new Map();\nconst extras = [];\nfor (const rawDecision of decision.decisions) {\n  const d = cleanDecision(rawDecision);\n  if (!d.pair) continue;\n  if (!universe.has(d.pair)) {\n    if (d.decision !== 'hold') extras.push(d);\n    continue;\n  }\n  const previous = byPair.get(d.pair);\n  if (!previous || (previous.decision === 'hold' && d.decision !== 'hold') || d.conviction > previous.conviction) {\n    byPair.set(d.pair, d);\n  }\n}\n\nconst completed = universePairs.map((pair) => byPair.get(pair) || {\n  pair,\n  decision: 'hold',\n  conviction: 0,\n  horizon: '1d',\n  rationale: 'No actionable decision returned for this pair.',\n  lot_id_to_close: '',\n});\n\nconst cleaned = [...completed, ...extras].slice(0, 30);\n\nreturn [{ json: { ...j, decision_json: { ...decision, decisions: cleaned } } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        820,
+        1060,
         -20
       ],
       "id": "10-parse-decision-fx",
@@ -142,12 +190,12 @@
     },
     {
       "parameters": {
-        "jsCode": "function num(v, d = 0) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : d;\n}\n\nfunction pairMeta(brief, pair) {\n  return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };\n}\n\nfunction lastPrice(brief, pair) {\n  const row = (brief.technical_signals || []).find((x) => x.pair === pair);\n  return num(row?.last_close, 0);\n}\n\nfunction quoteToEur(brief, quote) {\n  if (quote === 'EUR') return 1;\n  const direct = lastPrice(brief, `${quote}EUR`);\n  if (direct > 0) return direct;\n  const inv = lastPrice(brief, `EUR${quote}`);\n  if (inv > 0) return 1 / inv;\n  const qUsd = quote === 'USD' ? 1 : lastPrice(brief, `${quote}USD`) || (lastPrice(brief, `USD${quote}`) ? 1 / lastPrice(brief, `USD${quote}`) : 0);\n  const usdEur = lastPrice(brief, 'USDEUR') || (lastPrice(brief, 'EURUSD') ? 1 / lastPrice(brief, 'EURUSD') : 0);\n  return qUsd > 0 && usdEur > 0 ? qUsd * usdEur : 1;\n}\n\nfunction currencyExposures(lots, addOrders, brief) {\n  const ex = {};\n  function add(ccy, v) { ex[ccy] = (ex[ccy] || 0) + v; }\n  for (const lot of lots || []) {\n    const pair = lot.pair;\n    const meta = pairMeta(brief, pair);\n    const px = lastPrice(brief, pair) || num(lot.open_price, 0);\n    const notional = Math.abs(num(lot.size_lots) * 100000 * px * quoteToEur(brief, meta.quote_ccy));\n    const sign = lot.side === 'short' ? -1 : 1;\n    add(meta.base_ccy, sign * notional);\n    add(meta.quote_ccy, -sign * notional);\n  }\n  for (const o of addOrders || []) {\n    const meta = pairMeta(brief, o.pair);\n    const sign = o.side === 'sell_base' ? -1 : 1;\n    add(meta.base_ccy, sign * o.notional_eur);\n    add(meta.quote_ccy, -sign * o.notional_eur);\n  }\n  return ex;\n}\n\nconst j = $json || {};\nconst brief = j.brief || {};\nconst cfg = brief.config || {};\nconst limits = brief.limits || {};\nconst portfolio = brief.portfolio_state || {};\nconst universe = new Set(brief.universe?.pairs || []);\nconst decisions = j.decision_json?.decisions || [];\nconst equity = Math.max(1, num(portfolio.equity_eur, cfg.capital_eur || 10000));\nconst leverageMax = Math.max(0.01, num(cfg.leverage_max, 1));\nconst maxPairPct = num(limits.max_pair_pct, 0.20);\nconst maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);\nconst maxDd = num(limits.max_daily_drawdown_pct, 0.05);\nconst openLots = portfolio.open_lots || [];\nconst projected = [];\nconst orders = [];\nconst alerts = [];\n\nlet killSwitch = Boolean(cfg.kill_switch_active);\nif (num(portfolio.drawdown_day_pct, 0) <= -maxDd) {\n  killSwitch = true;\n  alerts.push({ severity: 'critical', category: 'kill_switch', message: 'Daily drawdown gate breached; opens blocked' });\n}\n\nlet seq = 1;\nfor (const d of decisions) {\n  const pair = d.pair;\n  const action = d.decision;\n  const side = action === 'open_long' ? 'buy_base' : action === 'open_short' ? 'sell_base' : action === 'close' ? 'close_long' : action === 'partial_close' ? 'close_long' : 'hold';\n  const orderId = `ORD_${j.run_id}_${String(seq).padStart(3, '0')}`;\n  const base = {\n    order_id: orderId,\n    client_order_id: `${j.run_id}::${pair || 'UNKNOWN'}::${side}::${seq}`,\n    run_id: j.run_id,\n    pair,\n    side,\n    order_type: 'market',\n    size_lots: 0,\n    notional_quote: 0,\n    notional_eur: 0,\n    leverage_used: leverageMax,\n    limit_price: null,\n    stop_loss_price: d.stop_loss_price ?? null,\n    take_profit_price: d.take_profit_price ?? null,\n    status: 'rejected',\n    rejection_reason: '',\n    risk_check_passed: false,\n    risk_check_notes: d.rationale || '',\n    decision: action,\n    conviction: d.conviction,\n    horizon: d.horizon,\n  };\n  seq += 1;\n\n  if (action === 'hold') continue;\n  if (!universe.has(pair)) {\n    base.rejection_reason = 'PAIR_NOT_IN_UNIVERSE';\n    orders.push(base);\n    continue;\n  }\n  if (killSwitch && action.startsWith('open_')) {\n    base.rejection_reason = 'KILL_SWITCH_ACTIVE';\n    orders.push(base);\n    continue;\n  }\n\n  const px = lastPrice(brief, pair);\n  if (px <= 0) {\n    base.rejection_reason = 'NO_ENTRY_PRICE';\n    orders.push(base);\n    continue;\n  }\n  const meta = pairMeta(brief, pair);\n  let sizeLots = num(d.size_lots, 0);\n  if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {\n    const targetEur = equity * Math.min(maxPairPct, num(d.size_pct_equity));\n    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEur(brief, meta.quote_ccy));\n  }\n  base.size_lots = sizeLots;\n  base.notional_quote = Math.abs(sizeLots * 100000 * px);\n  base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));\n\n  if (action.startsWith('open_')) {\n    if (sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';\n    const pairExisting = openLots.filter((l) => l.pair === pair).reduce((s, l) => s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, pair) || num(l.open_price)) * quoteToEur(brief, meta.quote_ccy)), 0);\n    if (!base.rejection_reason && (pairExisting + base.notional_eur) / equity > maxPairPct) base.rejection_reason = 'MAX_PAIR_EXPOSURE';\n    const totalNotional = openLots.reduce((s, l) => {\n      const m = pairMeta(brief, l.pair);\n      return s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, l.pair) || num(l.open_price)) * quoteToEur(brief, m.quote_ccy));\n    }, 0) + projected.reduce((s, o) => s + o.notional_eur, 0) + base.notional_eur;\n    if (!base.rejection_reason && totalNotional / equity > leverageMax) base.rejection_reason = 'LEVERAGE_MAX';\n    if (!base.rejection_reason && base.notional_eur / leverageMax > num(portfolio.margin_free_eur, equity)) base.rejection_reason = 'INSUFFICIENT_MARGIN';\n    const ex = currencyExposures(openLots, [...projected, base], brief);\n    if (!base.rejection_reason && Object.values(ex).some((v) => Math.abs(v) / equity > maxCurrencyPct)) base.rejection_reason = 'MAX_CURRENCY_EXPOSURE';\n    if (!base.rejection_reason && action === 'open_long' && base.stop_loss_price && base.stop_loss_price >= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_long' && base.take_profit_price && base.take_profit_price <= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_short' && base.stop_loss_price && base.stop_loss_price <= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_short' && base.take_profit_price && base.take_profit_price >= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';\n    if (!base.rejection_reason) {\n      base.status = 'pending';\n      base.risk_check_passed = true;\n      projected.push(base);\n    }\n  } else {\n    base.status = 'pending';\n    base.risk_check_passed = true;\n    base.size_lots = sizeLots > 0 ? sizeLots : 999999;\n  }\n  orders.push(base);\n}\n\nreturn [{ json: { ...j, kill_switch_active_effective: killSwitch, executable_orders: orders, risk_alerts: alerts } }];\n"
+        "jsCode": "function num(v, d = 0) {\n  const n = Number(v);\n  return Number.isFinite(n) ? n : d;\n}\n\nfunction pairMeta(brief, pair) {\n  return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };\n}\n\nfunction lastPrice(brief, pair) {\n  const row = (brief.technical_signals || []).find((x) => x.pair === pair);\n  return num(row?.last_close, 0);\n}\n\nfunction quoteToEur(brief, quote) {\n  if (quote === 'EUR') return 1;\n  const direct = lastPrice(brief, `${quote}EUR`);\n  if (direct > 0) return direct;\n  const inv = lastPrice(brief, `EUR${quote}`);\n  if (inv > 0) return 1 / inv;\n  const qUsd = quote === 'USD' ? 1 : lastPrice(brief, `${quote}USD`) || (lastPrice(brief, `USD${quote}`) ? 1 / lastPrice(brief, `USD${quote}`) : 0);\n  const usdEur = lastPrice(brief, 'USDEUR') || (lastPrice(brief, 'EURUSD') ? 1 / lastPrice(brief, 'EURUSD') : 0);\n  return qUsd > 0 && usdEur > 0 ? qUsd * usdEur : 1;\n}\n\nfunction currencyExposures(lots, addOrders, brief) {\n  const ex = {};\n  function add(ccy, v) { ex[ccy] = (ex[ccy] || 0) + v; }\n  for (const lot of lots || []) {\n    const pair = lot.pair;\n    const meta = pairMeta(brief, pair);\n    const px = lastPrice(brief, pair) || num(lot.open_price, 0);\n    const notional = Math.abs(num(lot.size_lots) * 100000 * px * quoteToEur(brief, meta.quote_ccy));\n    const sign = lot.side === 'short' ? -1 : 1;\n    add(meta.base_ccy, sign * notional);\n    add(meta.quote_ccy, -sign * notional);\n  }\n  for (const o of addOrders || []) {\n    const meta = pairMeta(brief, o.pair);\n    const sign = o.side === 'sell_base' ? -1 : 1;\n    add(meta.base_ccy, sign * o.notional_eur);\n    add(meta.quote_ccy, -sign * o.notional_eur);\n  }\n  return ex;\n}\n\nfunction closeSideForDecision(decision, openLots) {\n  const target = (openLots || []).find((l) => decision.lot_id_to_close && l.lot_id === decision.lot_id_to_close)\n    || (openLots || []).find((l) => l.pair === decision.pair);\n  return target?.side === 'short' ? 'close_short' : 'close_long';\n}\n\nconst j = $json || {};\nconst brief = j.brief || {};\nconst cfg = brief.config || {};\nconst limits = brief.limits || {};\nconst portfolio = brief.portfolio_state || {};\nconst universe = new Set(brief.universe?.pairs || []);\nconst decisions = j.decision_json?.decisions || [];\nconst equity = Math.max(1, num(portfolio.equity_eur, cfg.capital_eur || 10000));\nconst leverageMax = Math.max(0.01, num(cfg.leverage_max, 1));\nconst maxPairPct = num(limits.max_pair_pct, 0.20);\nconst maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);\nconst maxDd = num(limits.max_daily_drawdown_pct, 0.05);\nconst maxOpenOrders = 5;\nconst openLots = portfolio.open_lots || [];\nconst projected = [];\nconst orders = [];\nconst alerts = [];\n\nlet killSwitch = Boolean(cfg.kill_switch_active);\nif (num(portfolio.drawdown_day_pct, 0) <= -maxDd) {\n  killSwitch = true;\n  alerts.push({ severity: 'critical', category: 'kill_switch', message: 'Daily drawdown gate breached; opens blocked' });\n}\n\nlet seq = 1;\nlet acceptedOpenOrders = 0;\nfor (const d of decisions) {\n  const pair = d.pair;\n  const action = d.decision;\n  const side = action === 'open_long' ? 'buy_base' : action === 'open_short' ? 'sell_base' : (action === 'close' || action === 'partial_close') ? closeSideForDecision(d, openLots) : 'hold';\n  const orderId = `ORD_${j.run_id}_${String(seq).padStart(3, '0')}`;\n  const base = {\n    order_id: orderId,\n    client_order_id: `${j.run_id}::${pair || 'UNKNOWN'}::${side}::${seq}`,\n    run_id: j.run_id,\n    pair,\n    side,\n    order_type: 'market',\n    size_lots: 0,\n    notional_quote: 0,\n    notional_eur: 0,\n    leverage_used: leverageMax,\n    limit_price: null,\n    stop_loss_price: d.stop_loss_price ?? null,\n    take_profit_price: d.take_profit_price ?? null,\n    status: 'rejected',\n    rejection_reason: '',\n    risk_check_passed: false,\n    risk_check_notes: d.rationale || '',\n    decision: action,\n    conviction: d.conviction,\n    horizon: d.horizon,\n  };\n  seq += 1;\n\n  if (action === 'hold') continue;\n  if (!universe.has(pair)) {\n    base.rejection_reason = 'PAIR_NOT_IN_UNIVERSE';\n    orders.push(base);\n    continue;\n  }\n  if (killSwitch && action.startsWith('open_')) {\n    base.rejection_reason = 'KILL_SWITCH_ACTIVE';\n    orders.push(base);\n    continue;\n  }\n\n  const px = lastPrice(brief, pair);\n  if (px <= 0) {\n    base.rejection_reason = 'NO_ENTRY_PRICE';\n    orders.push(base);\n    continue;\n  }\n  const meta = pairMeta(brief, pair);\n  let sizeLots = num(d.size_lots, 0);\n  if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {\n    const targetEur = equity * Math.min(maxPairPct, num(d.size_pct_equity));\n    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEur(brief, meta.quote_ccy));\n  }\n  base.size_lots = sizeLots;\n  base.notional_quote = Math.abs(sizeLots * 100000 * px);\n  base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));\n\n  if (action.startsWith('open_')) {\n    if (acceptedOpenOrders >= maxOpenOrders) base.rejection_reason = 'MAX_OPEN_ORDERS_PER_RUN';\n    if (!base.rejection_reason && sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';\n    const pairExisting = openLots.filter((l) => l.pair === pair).reduce((s, l) => s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, pair) || num(l.open_price)) * quoteToEur(brief, meta.quote_ccy)), 0);\n    if (!base.rejection_reason && (pairExisting + base.notional_eur) / equity > maxPairPct) base.rejection_reason = 'MAX_PAIR_EXPOSURE';\n    const totalNotional = openLots.reduce((s, l) => {\n      const m = pairMeta(brief, l.pair);\n      return s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, l.pair) || num(l.open_price)) * quoteToEur(brief, m.quote_ccy));\n    }, 0) + projected.reduce((s, o) => s + o.notional_eur, 0) + base.notional_eur;\n    if (!base.rejection_reason && totalNotional / equity > leverageMax) base.rejection_reason = 'LEVERAGE_MAX';\n    if (!base.rejection_reason && base.notional_eur / leverageMax > num(portfolio.margin_free_eur, equity)) base.rejection_reason = 'INSUFFICIENT_MARGIN';\n    const ex = currencyExposures(openLots, [...projected, base], brief);\n    if (!base.rejection_reason && Object.values(ex).some((v) => Math.abs(v) / equity > maxCurrencyPct)) base.rejection_reason = 'MAX_CURRENCY_EXPOSURE';\n    if (!base.rejection_reason && action === 'open_long' && base.stop_loss_price && base.stop_loss_price >= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_long' && base.take_profit_price && base.take_profit_price <= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_short' && base.stop_loss_price && base.stop_loss_price <= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';\n    if (!base.rejection_reason && action === 'open_short' && base.take_profit_price && base.take_profit_price >= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';\n    if (!base.rejection_reason) {\n      base.status = 'pending';\n      base.risk_check_passed = true;\n      projected.push(base);\n      acceptedOpenOrders += 1;\n    }\n  } else {\n    base.status = 'pending';\n    base.risk_check_passed = true;\n    base.size_lots = sizeLots > 0 ? sizeLots : 999999;\n  }\n  orders.push(base);\n}\n\nreturn [{ json: { ...j, kill_switch_active_effective: killSwitch, executable_orders: orders, risk_alerts: alerts } }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1060,
+        1300,
         -20
       ],
       "id": "11-validate-enforce-safety-fx",
@@ -161,7 +209,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1300,
+        1540,
         -20
       ],
       "id": "12-simulate-fills-fx",
@@ -175,7 +223,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1540,
+        1780,
         -20
       ],
       "id": "13-write-orders-fx",
@@ -189,7 +237,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1780,
+        2020,
         -20
       ],
       "id": "14-write-lots-fx",
@@ -203,7 +251,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2020,
+        2260,
         -20
       ],
       "id": "15-close-lots-fx",
@@ -217,7 +265,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2260,
+        2500,
         -20
       ],
       "id": "16-snapshot-portfolio-fx",
@@ -231,7 +279,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2500,
+        2740,
         -20
       ],
       "id": "17-log-run-fx",
@@ -320,20 +368,25 @@
       "main": [
         [
           {
-            "node": "LLM Decision Placeholder",
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Merge GPT Output + Brief",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "LLM Decision Placeholder": {
+    "Agent #1 - Portfolio manager1": {
       "main": [
         [
           {
-            "node": "10 Parse Decision FX",
+            "node": "Merge GPT Output + Brief",
             "type": "main",
-            "index": 0
+            "index": 1
           }
         ]
       ]
@@ -414,12 +467,36 @@
           }
         ]
       ]
+    },
+    "OpenAI Chat Model - GPT5.5": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge GPT Output + Brief": {
+      "main": [
+        [
+          {
+            "node": "10 Parse Decision FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
     "timezone": "Europe/Paris"
   },
   "meta": {
-    "note": "LLM placeholder is intentional for P3 manual dry-run; replace with provider node after Nicolas review."
+    "templateCredsSetupCompleted": true,
+    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d",
+    "note": "OpenAI Chat Model - GPT5.5 variant uses a LangChain agent and merges agent output back with the AG1-FX brief."
   }
 }
