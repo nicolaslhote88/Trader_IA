@@ -18,7 +18,7 @@ VARIANTS = {
         "db_path": "/files/duckdb/ag1_fx_v1_chatgpt52.duckdb",
     },
     "grok41_reasoning": {
-        "model": "grok-4-1-fast-reasoning",
+        "model": "grok-4.20-0309-reasoning",
         # +15 min vs chatgpt52 pour étaler la charge runner et éviter conflits lecture concurrente DuckDB.
         "cron": "45 9,14 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb",
@@ -41,10 +41,88 @@ def code_node(name: str, rel: str, x: int, y: int, lang: str = "pythonNative") -
     return {"parameters": params, "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [x, y], "id": name.lower().replace(" ", "-"), "name": name}
 
 
+def grok_agent_nodes(cfg: dict) -> list[dict]:
+    system_prompt = read("agent_input/07_system_prompt_fx.md")
+    system_prompt = system_prompt.replace("{{llm_model}}", "{{ $json.llm_model }}")
+    system_prompt = system_prompt.replace("{{leverage_max}}", "{{ $json.brief.config.leverage_max }}")
+    system_prompt += (
+        "\n\nResponse schema reminder:\n"
+        "- Return valid JSON only, no markdown fences.\n"
+        "- Required top-level keys: as_of, decisions.\n"
+        "- decisions[] items: pair, decision, conviction, optional size_lots, size_pct_equity, "
+        "stop_loss_price, take_profit_price, horizon, rationale, lot_id_to_close.\n"
+        "- decision must be one of open_long, open_short, close, partial_close, hold.\n"
+    )
+    return [
+        {
+            "parameters": {
+                "promptType": "define",
+                "text": "={{ $json.user_prompt }}",
+                "options": {
+                    "systemMessage": "=" + system_prompt,
+                    "maxIterations": 20,
+                },
+            },
+            "type": "@n8n/n8n-nodes-langchain.agent",
+            "typeVersion": 3.1,
+            "position": [580, -160],
+            "id": "e5c4046e-e795-4c38-89b8-32cc6493ebd6",
+            "name": "Agent #1 - Portfolio manager1",
+        },
+        {
+            "parameters": {
+                "model": cfg["model"],
+                "options": {},
+            },
+            "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
+            "typeVersion": 1,
+            "position": [580, 80],
+            "id": "2cda413f-27f9-4a0c-9f16-f1d4d5b0b98f",
+            "name": "xAI Grok Chat Model",
+            "credentials": {
+                "xAiApi": {
+                    "id": "8nKnkigAO1POxfzs",
+                    "name": "xAi account",
+                }
+            },
+        },
+        {
+            "parameters": {
+                "mode": "combine",
+                "combineBy": "combineByPosition",
+                "options": {},
+            },
+            "type": "n8n-nodes-base.merge",
+            "typeVersion": 3.2,
+            "position": [820, -20],
+            "id": "merge-grok-agent-output",
+            "name": "Merge Grok Output + Brief",
+        },
+    ]
+
+
+def llm_segment_nodes(variant: str, cfg: dict) -> list[dict]:
+    if variant == "grok41_reasoning":
+        return grok_agent_nodes(cfg)
+    return [
+        {
+            "parameters": {
+                "jsCode": "const j = $json;\nreturn [{json: {...j, decision_json: {as_of: j.as_of, narrative: 'P3 dry-run placeholder; connect LLM node here after manual review', decisions: (j.brief?.universe?.pairs || []).map((pair) => ({pair, decision: 'hold', conviction: 0.1}))}}}];\n"
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [580, -20],
+            "id": "llm-placeholder",
+            "name": "LLM Decision Placeholder",
+        }
+    ]
+
+
 def build_template(variant: str = "chatgpt52") -> dict:
     cfg = VARIANTS[variant]
     init_code = read("pre_agent/01_init_run_fx.js").replace("'gpt-5.2-2025-12-11'", repr(cfg["model"])).replace("'chatgpt52'", repr(variant))
     init_code = init_code.replace("dbPathByVariant[variant] || dbPathByVariant.chatgpt52", repr(cfg["db_path"]))
+    post_x0 = 1060 if variant == "grok41_reasoning" else 820
     nodes = [
         {
             "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": cfg["cron"]}]}},
@@ -61,38 +139,74 @@ def build_template(variant: str = "chatgpt52") -> dict:
         code_node("04 Load Technical Signals FX", "pre_agent/04_load_technical_signals_fx.py", -140, -20),
         code_node("05 Load News Macro FX", "pre_agent/05_load_news_macro_fx.py", 100, -20),
         code_node("06 Assemble Brief FX", "pre_agent/06_assemble_brief_fx.js", 340, -20, "javaScript"),
-        {
-            "parameters": {
-                "jsCode": "const j = $json;\nreturn [{json: {...j, decision_json: {as_of: j.as_of, narrative: 'P3 dry-run placeholder; connect LLM node here after manual review', decisions: (j.brief?.universe?.pairs || []).map((pair) => ({pair, decision: 'hold', conviction: 0.1}))}}}];\n"
-            },
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [580, -20],
-            "id": "llm-placeholder",
-            "name": "LLM Decision Placeholder",
-        },
-        code_node("10 Parse Decision FX", "post_agent/10_parse_decision_fx.js", 820, -20, "javaScript"),
-        code_node("11 Validate Enforce Safety FX", "post_agent/11_validate_enforce_safety_fx.js", 1060, -20, "javaScript"),
-        code_node("12 Simulate Fills FX", "post_agent/12_simulate_fills_fx.py", 1300, -20),
-        code_node("13 Write Orders FX", "post_agent/13_write_orders_fx.py", 1540, -20),
-        code_node("14 Write Lots FX", "post_agent/14_write_lots_fx.py", 1780, -20),
-        code_node("15 Close Lots FX", "post_agent/15_close_lots_fx.py", 2020, -20),
-        code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", 2260, -20),
-        code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", 2500, -20),
+        *llm_segment_nodes(variant, cfg),
+        code_node("10 Parse Decision FX", "post_agent/10_parse_decision_fx.js", post_x0, -20, "javaScript"),
+        code_node("11 Validate Enforce Safety FX", "post_agent/11_validate_enforce_safety_fx.js", post_x0 + 240, -20, "javaScript"),
+        code_node("12 Simulate Fills FX", "post_agent/12_simulate_fills_fx.py", post_x0 + 480, -20),
+        code_node("13 Write Orders FX", "post_agent/13_write_orders_fx.py", post_x0 + 720, -20),
+        code_node("14 Write Lots FX", "post_agent/14_write_lots_fx.py", post_x0 + 960, -20),
+        code_node("15 Close Lots FX", "post_agent/15_close_lots_fx.py", post_x0 + 1200, -20),
+        code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", post_x0 + 1440, -20),
+        code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", post_x0 + 1680, -20),
     ]
     order = [n["name"] for n in nodes[2:]]
     connections = {
         "Schedule Trigger": {"main": [[{"node": order[0], "type": "main", "index": 0}]]},
         "Manual Trigger": {"main": [[{"node": order[0], "type": "main", "index": 0}]]},
     }
-    for a, b in zip(order, order[1:]):
-        connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+    if variant == "grok41_reasoning":
+        main_order = [
+            "01 Init Run FX",
+            "02 Load Universe FX",
+            "03 Load Portfolio State FX",
+            "04 Load Technical Signals FX",
+            "05 Load News Macro FX",
+            "06 Assemble Brief FX",
+        ]
+        for a, b in zip(main_order, main_order[1:]):
+            connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+        connections["06 Assemble Brief FX"] = {
+            "main": [[
+                {"node": "Agent #1 - Portfolio manager1", "type": "main", "index": 0},
+                {"node": "Merge Grok Output + Brief", "type": "main", "index": 0},
+            ]]
+        }
+        connections["xAI Grok Chat Model"] = {
+            "ai_languageModel": [[{"node": "Agent #1 - Portfolio manager1", "type": "ai_languageModel", "index": 0}]]
+        }
+        connections["Agent #1 - Portfolio manager1"] = {
+            "main": [[{"node": "Merge Grok Output + Brief", "type": "main", "index": 1}]]
+        }
+        tail_order = [
+            "Merge Grok Output + Brief",
+            "10 Parse Decision FX",
+            "11 Validate Enforce Safety FX",
+            "12 Simulate Fills FX",
+            "13 Write Orders FX",
+            "14 Write Lots FX",
+            "15 Close Lots FX",
+            "16 Snapshot Portfolio FX",
+            "17 Log Run FX",
+        ]
+        for a, b in zip(tail_order, tail_order[1:]):
+            connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+    else:
+        for a, b in zip(order, order[1:]):
+            connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
+    meta = (
+        {
+            "templateCredsSetupCompleted": True,
+            "note": "Grok variant uses xAI Grok Chat Model and merges agent output back with the AG1-FX brief.",
+        }
+        if variant == "grok41_reasoning"
+        else {"note": "LLM placeholder is intentional for P3 manual dry-run; replace with provider node after Nicolas review."}
+    )
     return {
         "name": f"AG1-FX-V1 Portfolio Manager - {variant}",
         "nodes": nodes,
         "connections": connections,
         "settings": {"timezone": "Europe/Paris"},
-        "meta": {"note": "LLM placeholder is intentional for P3 manual dry-run; replace with provider node after Nicolas review."},
+        "meta": meta,
     }
 
 

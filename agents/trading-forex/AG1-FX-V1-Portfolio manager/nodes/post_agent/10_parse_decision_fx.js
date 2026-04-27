@@ -1,7 +1,10 @@
 function safeParse(v) {
   if (!v) return {};
   if (typeof v === 'object') return v;
-  try { return JSON.parse(v); } catch { return {}; }
+  let s = String(v).trim();
+  const fenced = s.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fenced) s = fenced[1].trim();
+  try { return JSON.parse(s); } catch { return {}; }
 }
 
 const j = $json || {};
@@ -9,6 +12,7 @@ let raw = j.agent_output || j.output || j.text || j.response || j.decision_json;
 if (Array.isArray(raw)) raw = raw[0];
 if (raw && raw.content) raw = raw.content;
 if (raw && raw.text) raw = raw.text;
+if (raw && raw.output) raw = raw.output;
 let decision = safeParse(raw);
 
 if (!decision.decisions && j.dry_run) {
