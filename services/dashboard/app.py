@@ -174,6 +174,48 @@ AG1_FX_MULTI_PORTFOLIO_CONFIG = {
     "gemini30_pro": {**AG1_MULTI_PORTFOLIO_CONFIG["gemini30_pro"], "db_path": AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH},
 }
 
+
+def _blend_rgb(start: tuple[int, int, int], end: tuple[int, int, int], ratio: float) -> tuple[int, int, int]:
+    ratio = max(0.0, min(1.0, float(ratio or 0.0)))
+    return tuple(int(round(s + (e - s) * ratio)) for s, e in zip(start, end))
+
+
+def _signed_pnl_cell_style(value, vmax: float = 1.0) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return ""
+    vmax = max(1.0, float(vmax or 1.0))
+    ratio = min(abs(number) / vmax, 1.0)
+    white = (255, 255, 255)
+    green = (187, 247, 208)
+    red = (254, 202, 202)
+    bg = _blend_rgb(white, green if number > 0 else red, ratio) if number != 0 else white
+    return f"background-color: rgb({bg[0]}, {bg[1]}, {bg[2]}); color: #111827;"
+
+
+def _signed_pnl_styler(df: pd.DataFrame, vmax: float | None = None):
+    if df is None or df.empty:
+        return df.style.format("{:+,.2f}") if df is not None else df
+    values = pd.to_numeric(df.stack(), errors="coerce").abs()
+    if vmax is None:
+        vmax = max(1.0, float(values.max())) if not values.empty and pd.notna(values.max()) else 1.0
+    styler = df.style.format("{:+,.2f}")
+    try:
+        return styler.map(lambda value: _signed_pnl_cell_style(value, vmax))
+    except AttributeError:
+        return styler.applymap(lambda value: _signed_pnl_cell_style(value, vmax))
+
+
+def _classify_ag1_fx_snapshot(row) -> str:
+    run_id = str(row.get("run_id") or "").upper()
+    notes = str(row.get("notes") or "")
+    notes_l = notes.lower()
+    if run_id.startswith("AG1FXMTM_") or "ag1-fx-pf-v1" in notes_l or "hourly valuation" in notes_l:
+        return "Valorisation horaire"
+    return "Run gestion portefeuille"
+
+
 DEFAULT_BENCHMARKS = {
     "CAC 40": {"ticker": "^FCHI"},
     "S&P 500": {"ticker": "^GSPC"},
@@ -13667,10 +13709,7 @@ elif page == "Forex P&L (LLM x Paire)":
             )
             with st.expander("Matrice P&L net (€) — LLM x paire", expanded=True):
                 try:
-                    styled = pivot.style.format("{:+,.2f}").background_gradient(
-                        cmap="RdYlGn", axis=None
-                    )
-                    st.dataframe(styled, use_container_width=True)
+                    st.dataframe(_signed_pnl_styler(pivot), use_container_width=True)
                 except Exception:
                     st.dataframe(pivot.round(2), use_container_width=True)
 
@@ -14044,6 +14083,59 @@ elif page == "Forex Trading (AG1-FX)":
     df_orders = pd.concat(orders, ignore_index=True, sort=False) if orders else pd.DataFrame()
     df_cfg = pd.concat(configs, ignore_index=True, sort=False) if configs else pd.DataFrame()
 
+    if not df_snap.empty:
+        df_snap["as_of"] = pd.to_datetime(df_snap["as_of"], errors="coerce", utc=True)
+        df_snap["snapshot_type"] = df_snap.apply(_classify_ag1_fx_snapshot, axis=1)
+        df_snap["_snapshot_rank"] = df_snap["snapshot_type"].map(
+            {"Run gestion portefeuille": 0, "Valorisation horaire": 1}
+        ).fillna(2)
+        df_snap = df_snap.sort_values(["LLM", "as_of", "_snapshot_rank"]).drop(columns=["_snapshot_rank"])
+
+    st.subheader("Mises a jour portefeuille")
+    if df_snap.empty:
+        st.caption("Aucun snapshot de gestion ou de valorisation AG1-FX sur la periode.")
+    else:
+        counts = df_snap.groupby("snapshot_type").size().to_dict()
+        latest_ts = df_snap["as_of"].max()
+        u1, u2, u3 = st.columns(3)
+        with u1:
+            st.metric("Runs gestion", int(counts.get("Run gestion portefeuille", 0)))
+        with u2:
+            st.metric("Valorisations horaires", int(counts.get("Valorisation horaire", 0)))
+        with u3:
+            st.metric("Derniere mise a jour", str(latest_ts)[:19] if pd.notna(latest_ts) else "-")
+
+        update_cols = [
+            c
+            for c in [
+                "as_of",
+                "LLM",
+                "snapshot_type",
+                "run_id",
+                "equity_eur",
+                "pnl_total_eur",
+                "open_lots_count",
+                "leverage_effective",
+            ]
+            if c in df_snap.columns
+        ]
+        updates_show = (
+            df_snap.sort_values("as_of", ascending=False)[update_cols]
+            .head(60)
+            .rename(
+                columns={
+                    "as_of": "Timestamp",
+                    "snapshot_type": "Type mise a jour",
+                    "run_id": "Run",
+                    "equity_eur": "Equity EUR",
+                    "pnl_total_eur": "P&L total EUR",
+                    "open_lots_count": "Lots ouverts",
+                    "leverage_effective": "Leverage",
+                }
+            )
+        )
+        render_interactive_table(updates_show, key_suffix="ag1_fx_snapshot_updates", height=320)
+
     st.subheader("KPI par LLM")
     cols = st.columns(len(AG1_FX_MULTI_PORTFOLIO_CONFIG))
     for idx, (key, cfg) in enumerate(AG1_FX_MULTI_PORTFOLIO_CONFIG.items()):
@@ -14076,7 +14168,20 @@ elif page == "Forex Trading (AG1-FX)":
         st.info("Aucun snapshot AG1-FX disponible sur la periode.")
     else:
         color_map = {cfg["label"]: cfg["accent"] for cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.values()}
-        fig = px.line(df_snap, x="as_of", y="equity_eur", color="LLM", color_discrete_map=color_map, markers=True)
+        hover_cols = [
+            c
+            for c in ["snapshot_type", "run_id", "pnl_total_eur", "open_lots_count", "leverage_effective"]
+            if c in df_snap.columns
+        ]
+        fig = px.line(
+            df_snap.sort_values("as_of"),
+            x="as_of",
+            y="equity_eur",
+            color="LLM",
+            color_discrete_map=color_map,
+            markers=True,
+            hover_data=hover_cols,
+        )
         fig.add_hline(y=10000, line_dash="dot", line_color="#888")
         fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Equity EUR", xaxis_title="Date")
         st.plotly_chart(fig, use_container_width=True)
@@ -14089,7 +14194,7 @@ elif page == "Forex Trading (AG1-FX)":
         matrix_src["pnl_eur"] = pd.to_numeric(matrix_src.get("pnl_eur"), errors="coerce").fillna(0)
         pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="pnl_eur", aggfunc="sum", fill_value=0)
         vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
-        st.dataframe(pivot.style.format("{:+,.2f}").background_gradient(cmap="RdYlGn", axis=None, vmin=-vmax, vmax=vmax), use_container_width=True)
+        st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
 
     st.subheader("Distribution des trades clos")
     if not df_closed.empty and "pnl_eur" in df_closed.columns:

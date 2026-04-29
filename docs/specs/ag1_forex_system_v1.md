@@ -178,6 +178,7 @@ Les 5 bases vivent dans `/local-files/duckdb/` (volume `/local-files` deja monte
 | **AG1-FX-V1 chatgpt52** | `30 9,14 * * 1-5` | 9h30, 14h30 | 2x/jour | Run apres AG2 (8h) + AG4 (9h15) le matin ; apres AG2 (12h) + AG4 (14h15) l'apres-midi. |
 | **AG1-FX-V1 grok41_reasoning** | `45 9,14 * * 1-5` | 9h45, 14h45 | 2x/jour | +15 min vs chatgpt52 pour etaler la charge runner et eviter conflits lecture concurrente DuckDB. |
 | **AG1-FX-V1 gemini30_pro** | `0 10,15 * * 1-5` | 10h00, 15h00 | 2x/jour | +30 min vs chatgpt52. Reste dans la fenetre d'ouverture bourse FR (9h-17h30). |
+| **AG1-FX-PF-V1 valuation** | `0 0 * * * 1-5` | toutes les heures | 24x/jour lun-ven | Mark-to-market horaire des 3 bases AG1-FX. Met a jour `core.portfolio_snapshot` sans decision LLM. |
 
 ### 4.2 Frise temporelle journee type (lun-ven)
 
@@ -207,6 +208,8 @@ Legende :
 Le fichier `agents/trading-forex/AG1-FX-V1-Portfolio manager/generate_model_variants.py` est la **source de verite** des cron AG1. Il regenere les 3 fichiers `AG1_FX_workflow_*_v1.json` a partir du template. Les cron des 3 fichiers ne doivent jamais etre edites a la main.
 
 Pour AG2-FX-V1 et AG4-FX-V1, le cron est defini directement dans le node `Schedule Trigger` de chaque workflow JSON (un seul fichier par agent).
+
+Pour AG1-FX-PF-V1, le cron horaire est defini dans `agents/trading-forex/AG1-FX-PF-V1/build_workflow.py`, qui genere `AG1-FX-PF-V1-workflow.json`.
 
 ---
 
