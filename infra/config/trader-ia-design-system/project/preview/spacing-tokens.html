@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #0e1117; font-family: system-ui, sans-serif; padding: 16px; display: flex; gap: 32px; flex-wrap: wrap; }
+  .section { display: flex; flex-direction: column; gap: 8px; }
+  .title { color: #555; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+  .token-row { display: flex; align-items: center; gap: 8px; }
+  .demo-space { background: #10b981; height: 12px; border-radius: 2px; }
+  .demo-radius { background: #1e1e2e; border: 1px solid #333; width: 40px; height: 40px; }
+  .label { color: #9aa0a6; font-size: 10px; font-family: monospace; }
+</style>
+</head><body>
+  <div class="section">
+    <div class="title">Spacing</div>
+    <div class="token-row"><div class="demo-space" style="width:2px;"></div><div class="label">--space-1 · 2px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:4px;"></div><div class="label">--space-2 · 4px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:6px;"></div><div class="label">--space-3 · 6px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:8px;"></div><div class="label">--space-4 · 8px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:12px;"></div><div class="label">--space-5 · 12px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:16px;"></div><div class="label">--space-6 · 16px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:24px;"></div><div class="label">--space-7 · 24px</div></div>
+    <div class="token-row"><div class="demo-space" style="width:32px;"></div><div class="label">--space-8 · 32px</div></div>
+  </div>
+  <div class="section">
+    <div class="title">Border Radius</div>
+    <div class="token-row"><div class="demo-radius" style="border-radius:4px;"></div><div class="label">--radius-sm · 4px (badge)</div></div>
+    <div class="token-row"><div class="demo-radius" style="border-radius:5px;"></div><div class="label">--radius-md · 5px (progress)</div></div>
+    <div class="token-row"><div class="demo-radius" style="border-radius:6px;"></div><div class="label">--radius-lg · 6px (button)</div></div>
+    <div class="token-row"><div class="demo-radius" style="border-radius:8px;"></div><div class="label">--radius-xl · 8px (card)</div></div>
+    <div class="token-row"><div class="demo-radius" style="border-radius:999px;width:56px;height:24px;"></div><div class="label">--radius-pill · 999px (severity)</div></div>
+  </div>
+  <div class="section">
+    <div class="title">Borders</div>
+    <div class="token-row"><div style="width:60px;height:1px;background:#333;"></div><div class="label">--border-default · #333 1px</div></div>
+    <div class="token-row"><div style="width:60px;height:2px;background:#444;"></div><div class="label">--border-strong · #444 2px</div></div>
+  </div>
+</body></html>

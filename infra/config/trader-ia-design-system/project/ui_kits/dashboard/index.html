@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Trading Executor — TradingSim AI</title>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: #0e1117; color: #fff; font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; font-size: 14px; height: 100vh; overflow: hidden; }
+::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-track { background: #1e1e2e; } ::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+
+/* ── Tokens ──────────────────────────────────────── */
+const T = {
+  bgApp: '#0e1117', bgSurface: '#1e1e2e', bgTableHdr: '#262730', bgSubtle: '#222',
+  border: '#333', borderStrong: '#444',
+  textPrimary: '#fff', textSecondary: '#ccc', textMuted: '#9aa0a6', textDisabled: '#666',
+  buy: '#28a745', sell: '#dc3545', watch: '#fd7e14', action: '#0d6efd', neutral: '#6c757d',
+  agentGpt: '#10b981', agentGrok: '#f59e0b', agentGemini: '#60a5fa',
+  chartLine: '#4ea1ff',
+};
+
+/* ── Primitives ──────────────────────────────────── */
+function Badge({ type, children, pill }) {
+  const map = {
+    buy:     { bg: '#14532d', color: '#dcfce7' },
+    sell:    { bg: '#7f1d1d', color: '#fee2e2' },
+    neutral: { bg: '#374151', color: '#e5e7eb' },
+    approve: { bg: '#14532d', color: '#dcfce7' },
+    reject:  { bg: '#7c2d12', color: '#ffedd5' },
+    watch:   { bg: '#78350f', color: '#fef3c7' },
+    skip:    { bg: '#1f2937', color: '#d1d5db' },
+    running: { bg: T.action,  color: '#fff' },
+    success: { bg: T.buy,     color: '#fff' },
+    failed:  { bg: T.sell,    color: '#fff' },
+    partial: { bg: T.watch,   color: '#fff' },
+    info:    { bg: T.neutral, color: '#fff' },
+  };
+  const s = map[type] || map.info;
+  return (
+    <span style={{
+      display: 'inline-block', padding: pill ? '4px 10px' : '3px 8px',
+      borderRadius: pill ? 999 : 4, fontSize: '0.78rem', fontWeight: 700,
+      background: s.bg, color: s.color, whiteSpace: 'nowrap',
+    }}>{children}</span>
+  );
+}
+
+function MetricCard({ label, value, sub, delta, deltaType }) {
+  const deltaColor = deltaType === 'pos' ? T.buy : deltaType === 'neg' ? T.sell : T.textMuted;
+  return (
+    <div style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '14px 16px', flex: 1, minWidth: 130 }}>
+      <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: '1.5rem', fontWeight: 700, color: T.textPrimary }}>{value}</div>
+      {delta && <div style={{ color: deltaColor, fontSize: '0.78rem', marginTop: 4, fontWeight: 600 }}>{delta}</div>}
+      {sub && <div style={{ color: T.textDisabled, fontSize: '0.72rem', marginTop: 2 }}>{sub}</div>}
+    </div>
+  );
+}
+
+function IndicatorBar({ label, value, pct, zone, min, max }) {
+  const zoneColors = { overbought: T.sell, trending: T.buy, neutral: T.neutral, elevated: T.watch, oversold: T.buy };
+  const zc = zoneColors[zone] || T.neutral;
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+        <span style={{ color: T.textSecondary, fontSize: '0.83em', fontWeight: 600 }}>{label}</span>
+        <span style={{ color: zc, fontSize: '0.83em', fontWeight: 700 }}>{value} — {zone}</span>
+      </div>
+      <div style={{ position: 'relative', height: 10, background: T.bgSubtle, borderRadius: 5, overflow: 'hidden' }}>
+        <div style={{ position: 'absolute', left: '0%', width: '30%', height: '100%', background: T.buy, opacity: 0.25 }}></div>
+        <div style={{ position: 'absolute', left: '30%', width: '40%', height: '100%', background: T.neutral, opacity: 0.25 }}></div>
+        <div style={{ position: 'absolute', left: '70%', width: '30%', height: '100%', background: T.sell, opacity: 0.25 }}></div>
+        <div style={{ position: 'absolute', left: `${pct}%`, top: 0, width: 3, height: '100%', background: '#fff', borderRadius: 1, transform: 'translateX(-1px)', zIndex: 2 }}></div>
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 1 }}>
+        <span style={{ color: T.textDisabled, fontSize: '0.7em' }}>{min}</span>
+        <span style={{ color: T.textDisabled, fontSize: '0.7em' }}>{max}</span>
+      </div>
+    </div>
+  );
+}
+
+function SparklinePlaceholder({ symbol, pnl, positive }) {
+  const fillColor = positive ? 'rgba(40,167,69,0.18)' : 'rgba(220,53,69,0.16)';
+  // Simple SVG path approximation
+  const pts = positive
+    ? "20,60 60,50 100,45 140,38 180,32 220,28 260,22 300,18"
+    : "20,20 60,28 100,35 140,42 180,50 220,55 260,60 300,65";
+  return (
+    <div style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '10px 12px', minWidth: 200 }}>
+      <div style={{ color: T.textSecondary, fontSize: '0.78rem', fontWeight: 600, marginBottom: 6 }}>
+        {symbol} <span style={{ color: positive ? T.buy : T.sell }}>{pnl}</span>
+      </div>
+      <svg width="100%" height="60" viewBox="0 0 300 80" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id={`fill-${symbol}`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={positive ? T.buy : T.sell} stopOpacity="0.3"/>
+            <stop offset="100%" stopColor={positive ? T.buy : T.sell} stopOpacity="0.0"/>
+          </linearGradient>
+        </defs>
+        <polygon points={`20,80 ${pts} 300,80`} fill={`url(#fill-${symbol})`}/>
+        <polyline points={pts} fill="none" stroke={T.chartLine} strokeWidth="1.8"/>
+      </svg>
+    </div>
+  );
+}
+
+function DataTable({ columns, rows }) {
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88rem' }}>
+        <thead>
+          <tr>
+            {columns.map(c => (
+              <th key={c} style={{ background: T.bgTableHdr, color: T.textPrimary, padding: '10px 12px', textAlign: 'left', borderBottom: `2px solid ${T.borderStrong}`, whiteSpace: 'nowrap' }}>{c}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, i) => (
+            <tr key={i} style={{ background: row._tint || 'transparent' }}>
+              {columns.map(c => (
+                <td key={c} style={{ padding: '10px 12px', borderBottom: `1px solid ${T.border}`, color: T.textSecondary, verticalAlign: 'top', lineHeight: 1.5 }}>
+                  {row[c]}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function SectionDivider() {
+  return <div style={{ borderTop: `1px solid ${T.border}`, margin: '16px 0' }}></div>;
+}
+
+function TabBar({ tabs, active, onSelect }) {
+  return (
+    <div style={{ display: 'flex', gap: 2, borderBottom: `1px solid ${T.border}`, marginBottom: 16 }}>
+      {tabs.map(t => (
+        <button key={t} onClick={() => onSelect(t)} style={{
+          background: 'none', border: 'none', cursor: 'pointer',
+          padding: '8px 14px', fontSize: '0.85rem', fontWeight: active === t ? 600 : 400,
+          color: active === t ? T.textPrimary : T.textMuted,
+          borderBottom: active === t ? `2px solid ${T.action}` : '2px solid transparent',
+          marginBottom: -1,
+        }}>{t}</button>
+      ))}
+    </div>
+  );
+}
+
+/* ── PAGE: Dashboard Trading ────────────────────── */
+function PageDashboard() {
+  const [tab, setTab] = React.useState('Allocation (actif)');
+  const tabs = ['Allocation (actif)', 'Sparklines (90j)', 'Positions', 'Performance', 'Activité'];
+
+  const sparklines = [
+    { symbol: 'AAPL', pnl: '+8.2%', positive: true },
+    { symbol: 'MSFT', pnl: '+3.1%', positive: true },
+    { symbol: 'TTE', pnl: '-1.4%', positive: false },
+    { symbol: 'MC.PA', pnl: '+12.3%', positive: true },
+    { symbol: 'TSLA', pnl: '-6.8%', positive: false },
+    { symbol: 'NVDA', pnl: '+21.4%', positive: true },
+  ];
+
+  const posRows = [
+    { Symbol: 'AAPL', Nom: 'Apple Inc.', Qté: '12', 'PRU': '162.40', 'Dernier': '175.60', 'Val. marché': '2 107', 'PnL': <span style={{color:T.buy}}>+€159</span>, Secteur: 'Technology', _tint: 'rgba(34,197,94,0.06)' },
+    { Symbol: 'MSFT', Nom: 'Microsoft', Qté: '8', 'PRU': '380.10', 'Dernier': '392.30', 'Val. marché': '3 138', 'PnL': <span style={{color:T.buy}}>+€98</span>, Secteur: 'Technology', _tint: 'rgba(34,197,94,0.06)' },
+    { Symbol: 'TTE', Nom: 'TotalEnergies', Qté: '30', 'PRU': '58.20', 'Dernier': '57.40', 'Val. marché': '1 722', 'PnL': <span style={{color:T.sell}}>−€24</span>, Secteur: 'Energy' },
+    { Symbol: 'TSLA', Nom: 'Tesla Inc.', Qté: '5', 'PRU': '242.00', 'Dernier': '225.80', 'Val. marché': '1 129', 'PnL': <span style={{color:T.sell}}>−€81</span>, Secteur: 'Consumer', _tint: 'rgba(239,68,68,0.06)' },
+    { Symbol: 'CASH_EUR', Nom: '—', Qté: '—', 'PRU': '—', 'Dernier': '—', 'Val. marché': '12 800', 'PnL': '—', Secteur: '—' },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 16 }}>
+        <MetricCard label="Total Portefeuille" value="€52 340" delta="+€2 340 (+4.68%)" deltaType="pos" sub="depuis initialisation" />
+        <MetricCard label="Investi" value="€39 540" sub="75.5% du portefeuille" />
+        <MetricCard label="Cash" value="€12 800" delta="24.5%" deltaType="pos" sub="disponible" />
+        <MetricCard label="PnL Latent" value="+€1 152" delta="+2.91%" deltaType="pos" sub="positions ouvertes" />
+        <MetricCard label="Positions" value="14" sub="8 actions · 4 ETF · 2 FX" />
+        <MetricCard label="Dernier run" value="AG1 — il y a 18 min" sub="GPT · Grok · Gemini" />
+      </div>
+
+      <TabBar tabs={tabs} active={tab} onSelect={setTab} />
+
+      {tab === 'Sparklines (90j)' && (
+        <div>
+          <div style={{ color: T.textMuted, fontSize: '0.82rem', marginBottom: 12 }}>Performance 90 jours des positions ouvertes</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
+            {sparklines.map(s => <SparklinePlaceholder key={s.symbol} {...s} />)}
+          </div>
+        </div>
+      )}
+
+      {tab === 'Positions' && (
+        <DataTable
+          columns={['Symbol','Nom','Qté','PRU','Dernier','Val. marché','PnL','Secteur']}
+          rows={posRows}
+        />
+      )}
+
+      {tab === 'Allocation (actif)' && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 8, padding: 16, flex: 1, minWidth: 240 }}>
+            <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 10 }}>Répartition sectorielle</div>
+            {[
+              { sector: 'Technology', pct: 48, color: T.agentGpt },
+              { sector: 'Energy', pct: 18, color: T.agentGrok },
+              { sector: 'Consumer', pct: 12, color: T.agentGemini },
+              { sector: 'Healthcare', pct: 10, color: T.action },
+              { sector: 'Financials', pct: 8, color: T.neutral },
+              { sector: 'Cash', pct: 4, color: T.textDisabled },
+            ].map(({sector, pct, color}) => (
+              <div key={sector} style={{ marginBottom: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                  <span style={{ color: T.textSecondary, fontSize: '0.82rem' }}>{sector}</span>
+                  <span style={{ color: T.textMuted, fontSize: '0.82rem' }}>{pct}%</span>
+                </div>
+                <div style={{ background: T.bgSubtle, borderRadius: 3, height: 6, overflow: 'hidden' }}>
+                  <div style={{ width: `${pct}%`, height: '100%', background: color, borderRadius: 3 }}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 8, padding: 16, flex: 1, minWidth: 240 }}>
+            <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 10 }}>Exposition par modèle</div>
+            {[
+              { model: 'ChatGPT 5.2', weight: 40, color: T.agentGpt },
+              { model: 'Grok 4.1', weight: 35, color: T.agentGrok },
+              { model: 'Gemini 3.0', weight: 25, color: T.agentGemini },
+            ].map(({model, weight, color}) => (
+              <div key={model} style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: color, flexShrink: 0 }}></div>
+                <span style={{ color: T.textSecondary, fontSize: '0.85rem', flex: 1 }}>{model}</span>
+                <span style={{ color, fontSize: '0.85rem', fontWeight: 700 }}>{weight}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {(tab === 'Performance' || tab === 'Activité') && (
+        <div style={{ color: T.textMuted, padding: '32px 0', textAlign: 'center', fontSize: '0.88rem' }}>
+          Données disponibles après connexion DuckDB
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── PAGE: Analyse Technique V2 ─────────────────── */
+function PageAnalyseTech() {
+  const [tab, setTab] = React.useState('Vue d\'ensemble');
+  const tabs = ["Vue d'ensemble", 'Vue par valeur', 'FX / Forex'];
+  const [selected, setSelected] = React.useState(null);
+
+  const signals = [
+    { symbol: 'AAPL', name: 'Apple Inc.', d1: 'buy', h1: 'buy', score: 84.2, grade: 'A', risk: 22, reward: 78, _tint: 'rgba(34,197,94,0.08)' },
+    { symbol: 'NVDA', name: 'NVIDIA Corp.', d1: 'buy', h1: 'neutral', score: 71.0, grade: 'B', risk: 35, reward: 65, _tint: 'rgba(245,158,11,0.08)' },
+    { symbol: 'MSFT', name: 'Microsoft', d1: 'buy', h1: 'buy', score: 78.5, grade: 'A', risk: 18, reward: 72, _tint: 'rgba(34,197,94,0.08)' },
+    { symbol: 'TTE', name: 'TotalEnergies', d1: 'neutral', h1: 'neutral', score: 51.0, grade: 'C', risk: 48, reward: 40 },
+    { symbol: 'TSLA', name: 'Tesla Inc.', d1: 'sell', h1: 'sell', score: 22.8, grade: 'C', risk: 74, reward: 18, _tint: 'rgba(239,68,68,0.08)' },
+    { symbol: 'MC.PA', name: 'LVMH', d1: 'buy', h1: 'buy', score: 81.1, grade: 'A', risk: 24, reward: 68, _tint: 'rgba(34,197,94,0.08)' },
+  ];
+
+  const rows = signals.map(s => ({
+    ...s,
+    Symbol: s.symbol,
+    Nom: s.name,
+    'D1 Signal': <Badge type={s.d1}>{s.d1.toUpperCase()}</Badge>,
+    'H1 Signal': <Badge type={s.h1}>{s.h1.toUpperCase()}</Badge>,
+    'Score IA': s.score.toFixed(1),
+    Grade: <strong style={{ color: s.grade === 'A' ? T.buy : s.grade === 'B' ? T.agentGrok : T.neutral }}>{s.grade}</strong>,
+    'Risk': s.risk,
+    'Reward': s.reward,
+  }));
+
+  return (
+    <div>
+      <TabBar tabs={tabs} active={tab} onSelect={setTab} />
+
+      {tab === "Vue d'ensemble" && (
+        <div>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 14, flexWrap: 'wrap' }}>
+            <MetricCard label="Universe" value="42" sub="valeurs suivies" />
+            <MetricCard label="BUY D1" value="18" delta="43%" deltaType="pos" sub="confluence" />
+            <MetricCard label="SELL D1" value="7" delta="17%" deltaType="neg" sub="confluence" />
+            <MetricCard label="Divergences" value="11" sub="H1 ≠ D1" />
+          </div>
+          <DataTable columns={['Symbol','Nom','D1 Signal','H1 Signal','Score IA','Grade','Risk','Reward']} rows={rows} />
+        </div>
+      )}
+
+      {tab === 'Vue par valeur' && (
+        <div>
+          <div style={{ color: T.textMuted, fontSize: '0.82rem', marginBottom: 12 }}>Sélectionnez un symbole :</div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 16 }}>
+            {signals.map(s => (
+              <button key={s.symbol} onClick={() => setSelected(s.symbol)} style={{
+                background: selected === s.symbol ? T.action : T.bgSurface,
+                border: `1px solid ${selected === s.symbol ? T.action : T.border}`,
+                color: T.textPrimary, borderRadius: 4, padding: '4px 10px',
+                cursor: 'pointer', fontSize: '0.82rem',
+              }}>{s.symbol}</button>
+            ))}
+          </div>
+          {selected && (() => {
+            const s = signals.find(x => x.symbol === selected);
+            return (
+              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 8, padding: 16, flex: '0 0 260px' }}>
+                  <div style={{ color: T.textMuted, fontSize: '0.78rem', marginBottom: 4 }}>{s.symbol} — Indicateurs</div>
+                  <IndicatorBar label="RSI 14" value="62.4" pct={62} zone="neutral" min={0} max={100} />
+                  <IndicatorBar label="MACD Signal" value="+0.32" pct={58} zone="trending" min={-2} max={2} />
+                  <IndicatorBar label="ADX" value="38.2" pct={38} zone="trending" min={0} max={100} />
+                  <IndicatorBar label="ATR (14)" value="4.21" pct={67} zone="elevated" min={0} max={6.3} />
+                </div>
+                <div style={{ flex: 1, minWidth: 220 }}>
+                  <SparklinePlaceholder symbol={s.symbol} pnl={s.d1 === 'buy' ? '+5.2%' : '-3.1%'} positive={s.d1 === 'buy'} />
+                  <div style={{ marginTop: 12, display: 'flex', gap: 8 }}>
+                    <Badge type={s.d1}>{`D1: ${s.d1.toUpperCase()}`}</Badge>
+                    <Badge type={s.h1}>{`H1: ${s.h1.toUpperCase()}`}</Badge>
+                    <Badge type={s.grade === 'A' ? 'success' : s.grade === 'B' ? 'partial' : 'info'} pill>{`Grade ${s.grade}`}</Badge>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {tab === 'FX / Forex' && (
+        <div>
+          <DataTable
+            columns={['Pair','Ret 1D','Ret 5D','Signal','Volatilité']}
+            rows={[
+              { Pair: 'EUR/USD', 'Ret 1D': '+0.12%', 'Ret 5D': '-0.34%', Signal: <Badge type="neutral">NEUTRAL</Badge>, Volatilité: '0.42%' },
+              { Pair: 'GBP/USD', 'Ret 1D': '-0.08%', 'Ret 5D': '+0.61%', Signal: <Badge type="buy">BUY</Badge>, Volatilité: '0.58%', _tint: 'rgba(34,197,94,0.08)' },
+              { Pair: 'USD/JPY', 'Ret 1D': '+0.22%', 'Ret 5D': '+1.12%', Signal: <Badge type="buy">BUY</Badge>, Volatilité: '0.31%', _tint: 'rgba(34,197,94,0.08)' },
+              { Pair: 'EUR/GBP', 'Ret 1D': '-0.15%', 'Ret 5D': '-0.82%', Signal: <Badge type="sell">SELL</Badge>, Volatilité: '0.29%', _tint: 'rgba(239,68,68,0.08)' },
+            ]}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── PAGE: Multi-Agents ─────────────────────────── */
+function PageMultiAgents() {
+  const agents = [
+    { key: 'chatgpt52', label: 'ChatGPT 5.2', short: 'GPT', color: T.agentGpt },
+    { key: 'grok41',    label: 'Grok 4.1 Reasoning', short: 'Grok', color: T.agentGrok },
+    { key: 'gemini30',  label: 'Gemini 3.0 Pro', short: 'Gemini', color: T.agentGemini },
+  ];
+  const [activeAgent, setActiveAgent] = React.useState('chatgpt52');
+  const agent = agents.find(a => a.key === activeAgent);
+
+  const decisions = [
+    { symbol: 'AAPL', gpt: 'buy', grok: 'buy', gem: 'buy', consensus: 'buy', weight: '8.2%' },
+    { symbol: 'MSFT', gpt: 'buy', grok: 'neutral', gem: 'buy', consensus: 'buy', weight: '6.8%' },
+    { symbol: 'NVDA', gpt: 'buy', grok: 'buy', gem: 'watch', consensus: 'buy', weight: '5.1%' },
+    { symbol: 'TTE',  gpt: 'neutral', grok: 'neutral', gem: 'neutral', consensus: 'neutral', weight: '3.4%' },
+    { symbol: 'TSLA', gpt: 'sell', grok: 'sell', gem: 'neutral', consensus: 'sell', weight: '0%' },
+    { symbol: 'MC.PA',gpt: 'buy', grok: 'buy', gem: 'buy', consensus: 'buy', weight: '7.6%' },
+  ];
+
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+        {agents.map(a => (
+          <button key={a.key} onClick={() => setActiveAgent(a.key)} style={{
+            background: activeAgent === a.key ? a.color + '22' : T.bgSurface,
+            border: `1px solid ${activeAgent === a.key ? a.color : T.border}`,
+            borderRadius: 6, padding: '6px 14px', cursor: 'pointer',
+            color: activeAgent === a.key ? a.color : T.textMuted,
+            fontSize: '0.85rem', fontWeight: activeAgent === a.key ? 700 : 400,
+          }}>
+            <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: a.color, marginRight: 6 }}></span>
+            {a.label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{ display: 'flex', gap: 10, marginBottom: 16, flexWrap: 'wrap' }}>
+        <MetricCard label={`${agent.short} — Valeur portefeuille`} value="€17 440" delta="+€840 (+5.1%)" deltaType="pos" />
+        <MetricCard label="Ordres ce run" value="4" sub="2 BUY · 1 SELL · 1 WATCH" />
+        <MetricCard label="Cash alloué" value="€3 200" sub="18.4% du capital" />
+      </div>
+
+      <DataTable
+        columns={['Symbol','GPT-5.2','Grok-4.1','Gemini-3','Consensus','Poids cible']}
+        rows={decisions.map(d => ({
+          Symbol: <strong style={{ color: T.textPrimary }}>{d.symbol}</strong>,
+          'GPT-5.2': <Badge type={d.gpt}>{d.gpt.toUpperCase()}</Badge>,
+          'Grok-4.1': <Badge type={d.grok}>{d.grok.toUpperCase()}</Badge>,
+          'Gemini-3': <Badge type={d.gem}>{d.gem.toUpperCase()}</Badge>,
+          Consensus: <Badge type={d.consensus} pill>{d.consensus.toUpperCase()}</Badge>,
+          'Poids cible': <strong style={{ color: d.consensus === 'buy' ? T.buy : d.consensus === 'sell' ? T.sell : T.textMuted }}>{d.weight}</strong>,
+          _tint: d.consensus === 'buy' ? 'rgba(34,197,94,0.06)' : d.consensus === 'sell' ? 'rgba(239,68,68,0.06)' : '',
+        }))}
+      />
+    </div>
+  );
+}
+
+/* ── PAGE: Macro & News ─────────────────────────── */
+function PageMacroNews() {
+  const [tab, setTab] = React.useState('Vue Macro (Overview)');
+  const tabs = ['Vue Macro (Overview)', 'News par valeur', 'Historique runs', 'Qualité pipeline'];
+
+  const sectors = [
+    { name: 'Technology', score: 8.4, color: T.buy },
+    { name: 'Healthcare', score: 5.1, color: T.buy },
+    { name: 'Financials', score: 2.8, color: T.buy },
+    { name: 'Consumer Disc.', score: -1.2, color: T.sell },
+    { name: 'Energy', score: -4.6, color: T.sell },
+    { name: 'Materials', score: -6.2, color: T.sell },
+  ];
+
+  const news = [
+    { title: "Fed maintient les taux — marché positive", source: "Reuters", impact: '+5', date: "il y a 2h", tags: ['Macro', 'USD'] },
+    { title: "NVDA : earnings beat Q1 — guidance relevée", source: "Bloomberg", impact: '+8', date: "il y a 4h", tags: ['NVDA', 'Technology'] },
+    { title: "Pétrole : OPEC+ annonce réduction offre", source: "WSJ", impact: '-4', date: "il y a 6h", tags: ['Energy', 'OIL'] },
+    { title: "Zone euro : PMI manufacture < 50", source: "FT", impact: '-3', date: "il y a 8h", tags: ['Macro', 'EUR'] },
+  ];
+
+  return (
+    <div>
+      <TabBar tabs={tabs} active={tab} onSelect={setTab} />
+
+      {tab === 'Vue Macro (Overview)' && (
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <div style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 8, padding: 16, flex: '1 1 260px' }}>
+            <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 12 }}>Baromètre sectoriel (30j)</div>
+            {sectors.map(s => (
+              <div key={s.name} style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 3 }}>
+                  <span style={{ color: T.textSecondary, fontSize: '0.82rem' }}>{s.name}</span>
+                  <span style={{ color: s.color, fontSize: '0.82rem', fontWeight: 700 }}>{s.score > 0 ? '+' : ''}{s.score}</span>
+                </div>
+                <div style={{ background: T.bgSubtle, borderRadius: 3, height: 6, overflow: 'hidden' }}>
+                  <div style={{ width: `${Math.abs(s.score) / 10 * 100}%`, height: '100%', background: s.color, borderRadius: 3 }}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div style={{ flex: '2 1 360px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 4 }}>Dernières news à impact</div>
+            {news.map((n, i) => (
+              <div key={i} style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 6, padding: '10px 14px', display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+                <span style={{
+                  color: parseFloat(n.impact) >= 0 ? T.buy : T.sell,
+                  fontWeight: 700, fontSize: '0.9rem', minWidth: 36,
+                }}>{n.impact}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ color: T.textPrimary, fontSize: '0.85rem', marginBottom: 4 }}>{n.title}</div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                    <span style={{ color: T.textDisabled, fontSize: '0.75rem' }}>{n.source} · {n.date}</span>
+                    {n.tags.map(t => <span key={t} style={{ background: T.bgTableHdr, color: T.textMuted, padding: '1px 6px', borderRadius: 3, fontSize: '0.72rem' }}>{t}</span>)}
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {tab !== 'Vue Macro (Overview)' && (
+        <div style={{ color: T.textMuted, padding: '32px 0', textAlign: 'center', fontSize: '0.88rem' }}>
+          Données disponibles après connexion DuckDB AG4
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── PAGE: System Health ────────────────────────── */
+function PageSystemHealth() {
+  const agents = [
+    { name: 'AG1 — Portfolio Manager', status: 'success', lastRun: 'il y a 18 min', models: 'GPT-5.2 · Grok-4.1 · Gemini-3' },
+    { name: 'AG2 — Analyse Technique', status: 'success', lastRun: 'il y a 22 min', models: 'OpenAI' },
+    { name: 'AG3 — Analyse Fondamentale', status: 'partial', lastRun: 'il y a 1h 4min', models: 'OpenAI' },
+    { name: 'AG4 — Macro & News', status: 'success', lastRun: 'il y a 34 min', models: 'RSS · OpenAI' },
+    { name: 'yfinance-api', status: 'success', lastRun: '—', models: 'Microservice HTTP' },
+    { name: 'yf-enrichment', status: 'success', lastRun: 'aujourd\'hui 06:10', models: 'Scheduler quotidien' },
+  ];
+
+  const dbs = [
+    { name: 'ag1_v3_chatgpt52.duckdb', freshness: '✅', age: '18 min', size: '42 MB' },
+    { name: 'ag1_v3_grok41_reasoning.duckdb', freshness: '✅', age: '18 min', size: '38 MB' },
+    { name: 'ag1_v3_gemini30_pro.duckdb', freshness: '✅', age: '18 min', size: '41 MB' },
+    { name: 'ag2_v3.duckdb', freshness: '✅', age: '22 min', size: '28 MB' },
+    { name: 'ag3_v2.duckdb', freshness: '⚠️', age: '1h 4min', size: '19 MB' },
+    { name: 'ag4_v3.duckdb', freshness: '✅', age: '34 min', size: '55 MB' },
+    { name: 'yf_enrichment_v1.duckdb', freshness: '✅', age: '7h', size: '112 MB' },
+  ];
+
+  return (
+    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+      <div style={{ flex: '1 1 320px' }}>
+        <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 10 }}>État des agents n8n</div>
+        {agents.map(a => (
+          <div key={a.name} style={{ background: T.bgSurface, border: `1px solid ${T.border}`, borderRadius: 6, padding: '10px 14px', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <Badge type={a.status}>{a.status.toUpperCase()}</Badge>
+            <div>
+              <div style={{ color: T.textPrimary, fontSize: '0.85rem', fontWeight: 600 }}>{a.name}</div>
+              <div style={{ color: T.textDisabled, fontSize: '0.75rem' }}>{a.models} · {a.lastRun}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ flex: '1 1 320px' }}>
+        <div style={{ color: T.textMuted, fontSize: '0.8rem', marginBottom: 10 }}>Fraîcheur DuckDB</div>
+        <DataTable
+          columns={['Fichier', '','Age','Taille']}
+          rows={dbs.map(d => ({ Fichier: <span style={{fontFamily:'monospace',fontSize:'0.78rem'}}>{d.name}</span>, '': d.freshness, Age: d.age, Taille: d.size }))}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ── Sidebar ─────────────────────────────────────── */
+const PAGES = [
+  'Dashboard Trading',
+  'System Health (Monitoring)',
+  'Vue consolidée Multi-Agents',
+  'Analyse Technique V2',
+  'Analyse Fondamentale V2',
+  'Macro & News (AG4)',
+];
+
+function Sidebar({ active, onSelect }) {
+  return (
+    <div style={{
+      width: 232, flexShrink: 0, background: '#111827',
+      borderRight: `1px solid ${T.border}`, display: 'flex', flexDirection: 'column',
+      height: '100vh', overflow: 'hidden',
+    }}>
+      <div style={{ padding: '18px 16px 14px', borderBottom: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: '1rem', fontWeight: 700, color: T.textPrimary, letterSpacing: 0.3 }}>TradingSim AI</div>
+        <div style={{ fontSize: '0.72rem', color: T.textDisabled, marginTop: 2 }}>AI Trading Executor</div>
+      </div>
+      <nav style={{ flex: 1, overflowY: 'auto', padding: '8px 0' }}>
+        <div style={{ padding: '6px 16px 4px', fontSize: '0.68rem', color: T.textDisabled, textTransform: 'uppercase', letterSpacing: 1 }}>Navigation</div>
+        {PAGES.map(p => (
+          <button key={p} onClick={() => onSelect(p)} style={{
+            display: 'block', width: '100%', textAlign: 'left',
+            background: active === p ? 'rgba(13,110,253,0.15)' : 'none',
+            border: 'none', borderLeft: `3px solid ${active === p ? T.action : 'transparent'}`,
+            color: active === p ? T.textPrimary : T.textMuted,
+            padding: '8px 14px 8px 13px', cursor: 'pointer',
+            fontSize: '0.82rem', lineHeight: 1.4,
+          }}>{p}</button>
+        ))}
+      </nav>
+      <div style={{ padding: '10px 16px', borderTop: `1px solid ${T.border}` }}>
+        <div style={{ fontSize: '0.7rem', color: T.textDisabled }}>Mode: <span style={{ color: T.agentGrok }}>SANDBOX</span></div>
+        <div style={{ fontSize: '0.7rem', color: T.textDisabled, marginTop: 2 }}>Broker: SIM</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── App ─────────────────────────────────────────── */
+function App() {
+  const [page, setPage] = React.useState('Dashboard Trading');
+
+  const content = {
+    'Dashboard Trading': <PageDashboard />,
+    'System Health (Monitoring)': <PageSystemHealth />,
+    'Vue consolidée Multi-Agents': <PageMultiAgents />,
+    'Analyse Technique V2': <PageAnalyseTech />,
+    'Analyse Fondamentale V2': (
+      <div style={{ color: T.textMuted, padding: '32px 0', textAlign: 'center', fontSize: '0.88rem' }}>
+        Analyse Fondamentale V2 — Données AG3 disponibles après connexion DuckDB
+      </div>
+    ),
+    'Macro & News (AG4)': <PageMacroNews />,
+  };
+
+  return (
+    <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
+      <Sidebar active={page} onSelect={setPage} />
+      <main style={{ flex: 1, overflow: 'auto', padding: '20px 24px' }}>
+        <div style={{ marginBottom: 14 }}>
+          <h1 style={{ fontSize: '1.25rem', fontWeight: 700, color: T.textPrimary, marginBottom: 2 }}>{page}</h1>
+          <div style={{ height: 1, background: T.border }}></div>
+        </div>
+        {content[page]}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
