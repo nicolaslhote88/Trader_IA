@@ -31,29 +31,6 @@ services:
       - web
       - traefik_proxy
 
-  yfinance-api:
-    build:
-      context: ../../services/yfinance-api
-      dockerfile: Dockerfile
-    container_name: yfinance-api
-    environment:
-      - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
-      - YF_DATA_DIR=/data
-      - YF_INIT_LOOKBACK_DAYS=400
-      - YF_OVERLAP_BARS=3
-      - YF_COOLDOWN_BASE_SEC=300
-      - YF_COOLDOWN_MAX_SEC=3600
-      - YF_COOLDOWN_RATELIMIT_SEC=1800
-      - YF_MIN_SECONDS_BETWEEN_CALLS=5
-    dns:
-      - 1.1.1.1
-      - 8.8.8.8
-    restart: unless-stopped
-    volumes:
-      - yfinance_data:/data
-    networks:
-      - web
-
   n8n:
     build: .
     labels:
@@ -95,6 +72,13 @@ services:
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
       - AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql
+      - AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb
+      - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
+      - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
+      - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
+      - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
       - EXECUTIONS_DATA_MAX_AGE=72
       - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
       - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
@@ -110,13 +94,13 @@ services:
       - n8n_data:/home/node/.n8n
       - /local-files:/files
       - /opt/trader-ia/AG1-V2-EXPORT:/files/AG1-V2-EXPORT:ro
-    depends_on:
-      - yfinance-api
     networks:
       - web
 
   task-runners:
-    image: root-task-runners:2.3.5-clean
+    build:
+      context: .
+      dockerfile: Dockerfile.runners
     deploy:
       replicas: 3
     environment:
@@ -129,6 +113,13 @@ services:
       - AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb
       - AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql
+      - AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb
+      - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
+      - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
+      - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
+      - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
+      - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -141,23 +132,6 @@ services:
       - n8n_data:/home/node/.n8n:rw
     depends_on:
       - n8n
-    networks:
-      - web
-
-  yf-enrichment:
-    build:
-      context: ../../services/yf-enrichment-service
-      dockerfile: Dockerfile
-    container_name: yf-enrichment
-    environment:
-      - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
-      - YF_ENRICH_SCRIPT=/opt/yf-enrichment-v1/daily_enrichment.py
-    restart: unless-stopped
-    volumes:
-      - /opt/yf-enrichment-v1:/opt/yf-enrichment-v1:ro
-      - /local-files:/files:rw
-    depends_on:
-      - yfinance-api
     networks:
       - web
 
@@ -177,6 +151,12 @@ services:
       - AG3_DUCKDB_PATH=/files/duckdb/ag3_v2.duckdb
       - AG4_DUCKDB_PATH=/files/duckdb/ag4_v3.duckdb
       - AG4_SPE_DUCKDB_PATH=/files/duckdb/ag4_spe_v2.duckdb
+      - AG4_FOREX_DUCKDB_PATH=/files/duckdb/ag4_forex_v1.duckdb
+      - AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb
+      - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
+      - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
+      - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - YF_ENRICH_DUCKDB_PATH=/files/duckdb/yf_enrichment_v1.duckdb
     command: sh -lc "pip install --no-cache-dir -r requirements.txt && streamlit run app.py --server.port=8501 --server.address=0.0.0.0"
     labels:
@@ -215,9 +195,3 @@ volumes:
     external: true
   n8n_data:
     external: true
-  duckdb_home:
-  yfinance_data:
-    external: true
-  runner_pydeps:
-    external: true
-    name: runner_pydeps

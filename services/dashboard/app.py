@@ -139,6 +139,12 @@ AG4_SPE_DUCKDB_PATH = _resolve_duckdb_path(
     fallback_filenames=("ag4_spe_v3.duckdb",),
 )
 YF_ENRICH_DUCKDB_PATH = _resolve_duckdb_path("YF_ENRICH_DUCKDB_PATH", "yf_enrichment_v1.duckdb")
+AG4_FOREX_DUCKDB_PATH = _resolve_duckdb_path("AG4_FOREX_DUCKDB_PATH", "ag4_forex_v1.duckdb")
+AG2_FX_V1_DUCKDB_PATH = _resolve_duckdb_path("AG2_FX_V1_DUCKDB_PATH", "ag2_fx_v1.duckdb")
+AG4_FX_V1_DUCKDB_PATH = _resolve_duckdb_path("AG4_FX_V1_DUCKDB_PATH", "ag4_fx_v1.duckdb")
+AG1_FX_V1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_CHATGPT52_DUCKDB_PATH", "ag1_fx_v1_chatgpt52.duckdb")
+AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH", "ag1_fx_v1_grok41_reasoning.duckdb")
+AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH", "ag1_fx_v1_gemini30_pro.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
 
 AG1_MULTI_PORTFOLIO_CONFIG = {
@@ -161,6 +167,344 @@ AG1_MULTI_PORTFOLIO_CONFIG = {
         "accent": "#60a5fa",
     },
 }
+
+AG1_FX_MULTI_PORTFOLIO_CONFIG = {
+    "chatgpt52": {**AG1_MULTI_PORTFOLIO_CONFIG["chatgpt52"], "db_path": AG1_FX_V1_CHATGPT52_DUCKDB_PATH},
+    "grok41_reasoning": {**AG1_MULTI_PORTFOLIO_CONFIG["grok41_reasoning"], "db_path": AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH},
+    "gemini30_pro": {**AG1_MULTI_PORTFOLIO_CONFIG["gemini30_pro"], "db_path": AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH},
+}
+
+
+def _blend_rgb(start: tuple[int, int, int], end: tuple[int, int, int], ratio: float) -> tuple[int, int, int]:
+    ratio = max(0.0, min(1.0, float(ratio or 0.0)))
+    return tuple(int(round(s + (e - s) * ratio)) for s, e in zip(start, end))
+
+
+def _signed_pnl_cell_style(value, vmax: float = 1.0) -> str:
+    try:
+        number = float(value)
+    except Exception:
+        return ""
+    vmax = max(1.0, float(vmax or 1.0))
+    ratio = min(abs(number) / vmax, 1.0)
+    white = (255, 255, 255)
+    green = (187, 247, 208)
+    red = (254, 202, 202)
+    bg = _blend_rgb(white, green if number > 0 else red, ratio) if number != 0 else white
+    return f"background-color: rgb({bg[0]}, {bg[1]}, {bg[2]}); color: #111827;"
+
+
+def _signed_pnl_styler(df: pd.DataFrame, vmax: float | None = None):
+    if df is None or df.empty:
+        return df.style.format("{:+,.2f}") if df is not None else df
+    values = pd.to_numeric(df.stack(), errors="coerce").abs()
+    if vmax is None:
+        vmax = max(1.0, float(values.max())) if not values.empty and pd.notna(values.max()) else 1.0
+    styler = df.style.format("{:+,.2f}")
+    try:
+        return styler.map(lambda value: _signed_pnl_cell_style(value, vmax))
+    except AttributeError:
+        return styler.applymap(lambda value: _signed_pnl_cell_style(value, vmax))
+
+
+def _classify_ag1_fx_snapshot(row) -> str:
+    run_id = str(row.get("run_id") or "").upper()
+    notes = str(row.get("notes") or "")
+    notes_l = notes.lower()
+    if run_id.startswith("AG1FXMTM_") or "ag1-fx-pf-v1" in notes_l or "hourly valuation" in notes_l:
+        return "Valorisation horaire"
+    return "Run gestion portefeuille"
+
+
+def _fx_pair_tokens(value: object) -> list[str]:
+    raw = str(value or "").upper()
+    if not raw:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in re.split(r"[,;|\s]+", raw):
+        pair = re.sub(r"[^A-Z]", "", token.replace("FX:", "").replace("=X", ""))
+        if len(pair) < 6:
+            continue
+        pair = pair[:6]
+        if pair[:3] not in FX_CURRENCY_CODES or pair[3:6] not in FX_CURRENCY_CODES:
+            continue
+        if pair not in seen:
+            seen.add(pair)
+            out.append(pair)
+    return out
+
+
+def _fx_technical_state(label: object, score: object, rsi: object) -> str:
+    label_s = str(label or "").strip().lower()
+    score_n = pd.to_numeric(pd.Series([score]), errors="coerce").iloc[0]
+    rsi_n = pd.to_numeric(pd.Series([rsi]), errors="coerce").iloc[0]
+    if "strong_buy" in label_s or (pd.notna(score_n) and float(score_n) >= 0.65):
+        return "Fort haussier"
+    if "buy" in label_s or (pd.notna(score_n) and float(score_n) >= 0.25):
+        return "Haussier"
+    if "strong_sell" in label_s or (pd.notna(score_n) and float(score_n) <= -0.65):
+        return "Fort baissier"
+    if "sell" in label_s or (pd.notna(score_n) and float(score_n) <= -0.25):
+        return "Baissier"
+    if pd.notna(rsi_n) and (float(rsi_n) >= 70.0 or float(rsi_n) <= 30.0):
+        return "Tendu"
+    return "Neutre"
+
+
+def _fx_source_state(news_24h: int, high_impact: int, last_news_at: object) -> str:
+    ts = pd.to_datetime(last_news_at, errors="coerce", utc=True)
+    age_h = (pd.Timestamp.now(tz="UTC") - ts).total_seconds() / 3600.0 if pd.notna(ts) else None
+    if high_impact > 0 or news_24h >= 5:
+        return "Alerte news"
+    if news_24h > 0:
+        return "Actif"
+    if age_h is not None and age_h <= 72.0:
+        return "Recent"
+    return "Calme"
+
+
+def _fx_pair_overview_summary(tech_state: str, source_state: str, open_lots: int) -> str:
+    if open_lots > 0 and source_state == "Alerte news":
+        return "Position ouverte + news fortes"
+    if tech_state in {"Fort haussier", "Haussier"} and source_state in {"Alerte news", "Actif"}:
+        return "Momentum haussier surveille"
+    if tech_state in {"Fort baissier", "Baissier"} and source_state in {"Alerte news", "Actif"}:
+        return "Momentum baissier surveille"
+    if tech_state == "Neutre" and source_state == "Calme":
+        return "Range calme"
+    return f"{tech_state} / {source_state}"
+
+
+def _load_ag1_fx_pair_overview(
+    start_ts: pd.Timestamp,
+    end_ts: pd.Timestamp,
+    df_open: pd.DataFrame,
+    df_closed: pd.DataFrame,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    diagnostics: list[dict[str, object]] = []
+    universe = pd.DataFrame()
+    tech = pd.DataFrame()
+    news = pd.DataFrame()
+
+    if AG2_FX_V1_DUCKDB_PATH and os.path.exists(AG2_FX_V1_DUCKDB_PATH):
+        conn = _duckdb_connect_readonly_retry(AG2_FX_V1_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                tables = conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchdf()
+                table_names = set(tables["table_name"].astype(str).str.lower().tolist()) if tables is not None and not tables.empty else set()
+                if "universe_fx" in table_names:
+                    universe = conn.execute(
+                        """
+                        SELECT pair, base_ccy, quote_ccy, liquidity_tier, enabled
+                        FROM main.universe_fx
+                        WHERE enabled = TRUE
+                        ORDER BY pair
+                        """
+                    ).fetchdf()
+                else:
+                    diagnostics.append({"Source": "AG2-FX", "Statut": "WARN", "Detail": "Table universe_fx absente"})
+                if "technical_signals_fx" in table_names:
+                    tech = conn.execute(
+                        """
+                        SELECT *
+                        FROM (
+                            SELECT *,
+                                   ROW_NUMBER() OVER (PARTITION BY pair ORDER BY as_of DESC, run_id DESC) AS rn
+                            FROM main.technical_signals_fx
+                        )
+                        WHERE rn = 1
+                        ORDER BY pair
+                        """
+                    ).fetchdf()
+                else:
+                    diagnostics.append({"Source": "AG2-FX", "Statut": "WARN", "Detail": "Table technical_signals_fx absente"})
+            except Exception as exc:
+                diagnostics.append({"Source": "AG2-FX", "Statut": "ERROR", "Detail": str(exc)})
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    else:
+        diagnostics.append({"Source": "AG2-FX", "Statut": "MISSING", "Detail": AG2_FX_V1_DUCKDB_PATH})
+
+    if AG4_FOREX_DUCKDB_PATH and os.path.exists(AG4_FOREX_DUCKDB_PATH):
+        conn = _duckdb_connect_readonly_retry(AG4_FOREX_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                tables = conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchdf()
+                table_names = set(tables["table_name"].astype(str).str.lower().tolist()) if tables is not None and not tables.empty else set()
+                if "fx_news_history" in table_names:
+                    news = conn.execute(
+                        """
+                        SELECT published_at, source, origin, impact_magnitude, impact_fx_pairs,
+                               urgency, confidence, impact_score, fx_directional_hint, title
+                        FROM main.fx_news_history
+                        WHERE published_at >= ? AND published_at < ?
+                        ORDER BY published_at DESC
+                        LIMIT 2000
+                        """,
+                        [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+                    ).fetchdf()
+                else:
+                    diagnostics.append({"Source": "AG4-Forex", "Statut": "WARN", "Detail": "Table fx_news_history absente"})
+            except Exception as exc:
+                diagnostics.append({"Source": "AG4-Forex", "Statut": "ERROR", "Detail": str(exc)})
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    else:
+        diagnostics.append({"Source": "AG4-Forex", "Statut": "MISSING", "Detail": AG4_FOREX_DUCKDB_PATH})
+
+    pairs: set[str] = set()
+    if not universe.empty and "pair" in universe.columns:
+        pairs.update(universe["pair"].dropna().astype(str).str.upper().tolist())
+    if not tech.empty and "pair" in tech.columns:
+        pairs.update(tech["pair"].dropna().astype(str).str.upper().tolist())
+    for df in [df_open, df_closed]:
+        if df is not None and not df.empty and "pair" in df.columns:
+            pairs.update(df["pair"].dropna().astype(str).str.upper().tolist())
+
+    valid_pairs = sorted(
+        pair for pair in pairs
+        if len(pair) == 6 and pair[:3] in FX_CURRENCY_CODES and pair[3:6] in FX_CURRENCY_CODES
+    )
+    if not valid_pairs:
+        return pd.DataFrame(), pd.DataFrame(diagnostics)
+
+    tech_map: dict[str, pd.Series] = {}
+    if not tech.empty and "pair" in tech.columns:
+        tech = normalize_cols(tech)
+        tech["pair"] = tech["pair"].fillna("").astype(str).str.upper()
+        tech_map = {str(row["pair"]): row for _, row in tech.iterrows() if str(row.get("pair") or "")}
+
+    universe_map: dict[str, pd.Series] = {}
+    if not universe.empty and "pair" in universe.columns:
+        universe = normalize_cols(universe)
+        universe["pair"] = universe["pair"].fillna("").astype(str).str.upper()
+        universe_map = {str(row["pair"]): row for _, row in universe.iterrows() if str(row.get("pair") or "")}
+
+    news_rows: list[dict[str, object]] = []
+    if not news.empty:
+        news = normalize_cols(news)
+        news["published_at"] = pd.to_datetime(news.get("published_at"), errors="coerce", utc=True)
+        cutoff_24h = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=24)
+        for _, row in news.iterrows():
+            impacted_pairs = _fx_pair_tokens(row.get("impact_fx_pairs"))
+            for pair in impacted_pairs:
+                impact_score = pd.to_numeric(pd.Series([row.get("impact_score", pd.NA)]), errors="coerce").iloc[0]
+                urgency = pd.to_numeric(pd.Series([row.get("urgency", pd.NA)]), errors="coerce").iloc[0]
+                high_impact = (
+                    str(row.get("impact_magnitude") or "").strip().lower() in {"high", "major", "critical"}
+                    or (pd.notna(impact_score) and float(impact_score) >= 70.0)
+                    or (pd.notna(urgency) and float(urgency) >= 0.75)
+                )
+                news_rows.append(
+                    {
+                        "pair": pair,
+                        "published_at": row.get("published_at"),
+                        "source": str(row.get("source") or "").strip() or "unknown",
+                        "origin": str(row.get("origin") or "").strip() or "-",
+                        "impact_score": float(impact_score) if pd.notna(impact_score) else pd.NA,
+                        "urgency": float(urgency) if pd.notna(urgency) else pd.NA,
+                        "high_impact": bool(high_impact),
+                        "is_24h": bool(pd.notna(row.get("published_at")) and row.get("published_at") >= cutoff_24h),
+                    }
+                )
+
+    news_by_pair: dict[str, dict[str, object]] = {}
+    if news_rows:
+        news_df = pd.DataFrame(news_rows)
+        for pair, grp in news_df.groupby("pair"):
+            src_counts = grp["source"].fillna("unknown").astype(str).value_counts().head(3)
+            news_by_pair[pair] = {
+                "news_count": int(len(grp)),
+                "news_24h": int(grp["is_24h"].sum()),
+                "high_impact": int(grp["high_impact"].sum()),
+                "sources": int(grp["source"].nunique()),
+                "top_sources": ", ".join(src_counts.index.tolist()),
+                "last_news_at": grp["published_at"].max(),
+                "avg_impact": float(pd.to_numeric(grp["impact_score"], errors="coerce").mean()) if pd.to_numeric(grp["impact_score"], errors="coerce").notna().any() else pd.NA,
+            }
+
+    open_by_pair: dict[str, dict[str, object]] = {}
+    if df_open is not None and not df_open.empty and "pair" in df_open.columns:
+        wk = df_open.copy()
+        wk["pair"] = wk["pair"].fillna("").astype(str).str.upper()
+        for pair, grp in wk.groupby("pair"):
+            open_by_pair[pair] = {
+                "open_lots": int(len(grp)),
+                "open_llms": int(grp["LLM"].nunique()) if "LLM" in grp.columns else 0,
+                "open_sides": ", ".join(sorted(grp.get("side", pd.Series(dtype=str)).fillna("").astype(str).str.lower().unique())),
+            }
+
+    pnl_by_pair: dict[str, float] = {}
+    if df_closed is not None and not df_closed.empty and {"pair", "pnl_eur"}.issubset(df_closed.columns):
+        wk = df_closed.copy()
+        wk["pair"] = wk["pair"].fillna("").astype(str).str.upper()
+        wk["pnl_eur"] = pd.to_numeric(wk["pnl_eur"], errors="coerce").fillna(0.0)
+        pnl_by_pair = wk.groupby("pair")["pnl_eur"].sum().to_dict()
+
+    rows: list[dict[str, object]] = []
+    now_utc = pd.Timestamp.now(tz="UTC")
+    for pair in valid_pairs:
+        t = tech_map.get(pair)
+        u = universe_map.get(pair)
+        n = news_by_pair.get(pair, {})
+        o = open_by_pair.get(pair, {})
+        score = t.get("signal_score") if t is not None else pd.NA
+        label = t.get("signal_label") if t is not None else ""
+        rsi = t.get("rsi14") if t is not None else pd.NA
+        tech_state = _fx_technical_state(label, score, rsi)
+        last_news_at = n.get("last_news_at", pd.NaT)
+        source_state = _fx_source_state(int(n.get("news_24h") or 0), int(n.get("high_impact") or 0), last_news_at)
+        as_of = pd.to_datetime(t.get("as_of") if t is not None else pd.NaT, errors="coerce", utc=True)
+        tech_age_h = (now_utc - as_of).total_seconds() / 3600.0 if pd.notna(as_of) else pd.NA
+        last_news_age_h = (now_utc - pd.to_datetime(last_news_at, errors="coerce", utc=True)).total_seconds() / 3600.0 if pd.notna(pd.to_datetime(last_news_at, errors="coerce", utc=True)) else pd.NA
+        open_lots = int(o.get("open_lots") or 0)
+        rows.append(
+            {
+                "Paire": pair,
+                "Etat general": _fx_pair_overview_summary(tech_state, source_state, open_lots),
+                "Technique": tech_state,
+                "Signal": str(label or "-"),
+                "Score": round(float(score), 2) if pd.notna(pd.to_numeric(pd.Series([score]), errors="coerce").iloc[0]) else pd.NA,
+                "Regime": str(t.get("regime") if t is not None else "-"),
+                "Prix": round(float(t.get("last_close")), 5) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("last_close")]), errors="coerce").iloc[0]) else pd.NA,
+                "Ret 1D %": round(float(t.get("ret_1d")) * 100.0, 2) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("ret_1d")]), errors="coerce").iloc[0]) else pd.NA,
+                "Ret 5D %": round(float(t.get("ret_5d")) * 100.0, 2) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("ret_5d")]), errors="coerce").iloc[0]) else pd.NA,
+                "Ret 20D %": round(float(t.get("ret_20d")) * 100.0, 2) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("ret_20d")]), errors="coerce").iloc[0]) else pd.NA,
+                "RSI14": round(float(rsi), 1) if pd.notna(pd.to_numeric(pd.Series([rsi]), errors="coerce").iloc[0]) else pd.NA,
+                "MACD hist": round(float(t.get("macd_hist")), 5) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("macd_hist")]), errors="coerce").iloc[0]) else pd.NA,
+                "Age tech h": round(float(tech_age_h), 1) if pd.notna(tech_age_h) else pd.NA,
+                "Sources": source_state,
+                "News periode": int(n.get("news_count") or 0),
+                "News 24h": int(n.get("news_24h") or 0),
+                "High impact": int(n.get("high_impact") or 0),
+                "Nb sources": int(n.get("sources") or 0),
+                "Top sources": str(n.get("top_sources") or "-"),
+                "Age derniere news h": round(float(last_news_age_h), 1) if pd.notna(last_news_age_h) else pd.NA,
+                "Lots ouverts": open_lots,
+                "LLM exposes": int(o.get("open_llms") or 0),
+                "Sens ouverts": str(o.get("open_sides") or "-"),
+                "P&L clos EUR": round(float(pnl_by_pair.get(pair, 0.0)), 2),
+                "Tier": str(u.get("liquidity_tier") if u is not None else "-"),
+            }
+        )
+
+    out = pd.DataFrame(rows)
+    if not out.empty:
+        sort_cols = ["High impact", "News 24h", "Lots ouverts", "Score"]
+        out = out.sort_values(sort_cols, ascending=[False, False, False, False], na_position="last")
+    return out, pd.DataFrame(diagnostics)
+
 
 DEFAULT_BENCHMARKS = {
     "CAC 40": {"ticker": "^FCHI"},
@@ -7631,6 +7975,8 @@ page = st.sidebar.radio(
         "Analyse Technique V2",
         "Analyse Fondamentale V2",
         "Macro & News (AG4)",
+        "Forex P&L (LLM x Paire)",
+        "Forex Trading (AG1-FX)",
     ],
 )
 
@@ -7645,6 +7991,13 @@ ag3_db_sig = duckdb_file_signature(AG3_DUCKDB_PATH)
 ag4_db_sig = duckdb_file_signature(AG4_DUCKDB_PATH)
 ag4_spe_db_sig = duckdb_file_signature(AG4_SPE_DUCKDB_PATH)
 yf_db_sig = duckdb_file_signature(YF_ENRICH_DUCKDB_PATH)
+ag4_forex_db_sig = duckdb_file_signature(AG4_FOREX_DUCKDB_PATH)
+ag2_fx_db_sig = duckdb_file_signature(AG2_FX_V1_DUCKDB_PATH)
+ag4_fx_db_sig = duckdb_file_signature(AG4_FX_V1_DUCKDB_PATH)
+ag1_fx_db_sigs = {
+    key: duckdb_file_signature(cfg["db_path"])
+    for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
+}
 
 # ------------------------------------------------------------
 # PRE-CALCULS (ROBUSTES)
@@ -13454,3 +13807,891 @@ elif page == "Analyse Fondamentale V2":
                 run_df[keep].rename(columns={k: v for k, v in ren_map.items() if k in keep}),
                 key_suffix="funda_v2_runs",
             )
+
+
+# ============================================================
+# PAGE 7: FOREX P&L (LLM x PAIRE)
+# Vue dediee a la perf realisee Forex par LLM x paire FX.
+# Source: core.position_lots des trois bases dediees AG1-FX.
+# ============================================================
+elif page == "Forex P&L (LLM x Paire)":
+    st.title("Forex P&L realise par LLM x paire")
+    st.caption(
+        "Analyse des lots Forex AG1-FX dedies. La matrice additionne le P&L realise des lots clos "
+        "par LLM et par paire; les lots encore ouverts sont listes separement."
+    )
+
+    # ----- Controls -----
+    fx_geo_default = pd.Timestamp("2026-04-24", tz="UTC").date()
+    today_utc = pd.Timestamp.now(tz="UTC").date()
+    ctrl_start, ctrl_end, ctrl_refresh = st.columns([1.3, 1.3, 0.8], gap="medium")
+    with ctrl_start:
+        fx_start_date = st.date_input(
+            "Depuis",
+            value=fx_geo_default,
+            min_value=pd.Timestamp("2026-01-01").date(),
+            max_value=today_utc,
+            key="forex_page_start",
+        )
+    with ctrl_end:
+        fx_end_date = st.date_input(
+            "Jusqu'au",
+            value=today_utc,
+            min_value=fx_start_date,
+            max_value=today_utc,
+            key="forex_page_end",
+        )
+    with ctrl_refresh:
+        st.write("")
+        if st.button("Rafraichir", key="forex_page_refresh"):
+            load_ag1_multi_portfolios.clear()
+            st.rerun()
+
+    fx_start_ts = pd.Timestamp(fx_start_date, tz="UTC")
+    fx_end_ts = pd.Timestamp(fx_end_date, tz="UTC") + pd.Timedelta(days=1)
+
+    # ----- Load dedicated AG1-FX ledgers for the 3 LLMs -----
+    fx_trades_per_llm: dict[str, pd.DataFrame] = {}
+    fx_open_lots_per_llm: dict[str, pd.DataFrame] = {}
+    fx_source_status: list[dict[str, object]] = []
+
+    for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items():
+        accent = cfg.get("accent", "#666")
+        label = cfg.get("label", key)
+        db_path = str(cfg.get("db_path") or "")
+        status_row = {
+            "LLM": label,
+            "Base": os.path.basename(db_path) if db_path else "-",
+            "Statut": "absente",
+            "Lots clos periode": 0,
+            "Lots ouverts": 0,
+            "Message": "",
+        }
+
+        if not db_path or not os.path.exists(db_path):
+            status_row["Message"] = f"Base introuvable: {db_path or '-'}"
+            fx_source_status.append(status_row)
+            continue
+
+        conn = _duckdb_connect_readonly_retry(db_path)
+        if conn is None:
+            status_row["Statut"] = "erreur"
+            status_row["Message"] = "Connexion DuckDB impossible"
+            fx_source_status.append(status_row)
+            continue
+
+        try:
+            lots = conn.execute("SELECT * FROM core.position_lots").fetchdf()
+            lots = normalize_cols(lots) if lots is not None else pd.DataFrame()
+            if lots.empty:
+                status_row["Statut"] = "vide"
+                status_row["Message"] = "core.position_lots ne contient aucun lot"
+                fx_source_status.append(status_row)
+                continue
+
+            pair_col = _first_existing_column(lots, ["pair", "symbol"])
+            status_col = _first_existing_column(lots, ["status"])
+            if not pair_col or not status_col:
+                status_row["Statut"] = "schema incomplet"
+                status_row["Message"] = "Colonnes pair/status manquantes dans core.position_lots"
+                fx_source_status.append(status_row)
+                continue
+
+            lots[pair_col] = lots[pair_col].fillna("").astype(str).str.strip().str.upper()
+            lots[status_col] = lots[status_col].fillna("").astype(str).str.strip().str.lower()
+            lots = lots[lots[pair_col] != ""].copy()
+            if lots.empty:
+                status_row["Statut"] = "vide"
+                status_row["Message"] = "Aucune paire FX renseignee"
+                fx_source_status.append(status_row)
+                continue
+
+            closed = lots[lots[status_col].eq("closed")].copy()
+            if not closed.empty:
+                ts_col = _first_existing_column(closed, ["close_at", "closed_at", "updated_at", "open_at"])
+                closed["timestamp"] = pd.to_datetime(closed[ts_col], errors="coerce", utc=True) if ts_col else pd.NaT
+                closed = closed.dropna(subset=["timestamp"])
+                closed = closed[(closed["timestamp"] >= fx_start_ts) & (closed["timestamp"] < fx_end_ts)]
+                if not closed.empty:
+                    closed["symbol"] = closed[pair_col]
+                    closed = _fx_prepare_symbol_frame(closed, symbol_col="symbol")
+                if not closed.empty:
+                    pnl_col = _first_existing_column(closed, ["pnl_eur", "realizedpnl", "realized_pnl_eur"])
+                    fees_col = _first_existing_column(closed, ["fees_eur", "fees"])
+                    qty_col = _first_existing_column(closed, ["size_lots", "quantity", "qty"])
+                    price_col = _first_existing_column(closed, ["close_price", "price", "open_price"])
+                    closed["realizedpnl"] = pd.to_numeric(closed[pnl_col], errors="coerce").fillna(0.0) if pnl_col else 0.0
+                    closed["fees_eur"] = pd.to_numeric(closed[fees_col], errors="coerce").fillna(0.0) if fees_col else 0.0
+                    closed["quantity"] = pd.to_numeric(closed[qty_col], errors="coerce").fillna(0.0) if qty_col else 0.0
+                    closed["price"] = pd.to_numeric(closed[price_col], errors="coerce").fillna(0.0) if price_col else 0.0
+                    closed["notional"] = closed["quantity"].abs() * 100000.0 * closed["price"]
+                    closed["order_type"] = "closed_lot"
+                    closed["llm_key"] = key
+                    closed["llm_label"] = label
+                    closed["accent"] = accent
+                    fx_trades_per_llm[key] = closed
+
+            open_lots = lots[lots[status_col].eq("open")].copy()
+            if not open_lots.empty:
+                open_lots["symbol"] = open_lots[pair_col]
+                open_lots = _fx_prepare_symbol_frame(open_lots, symbol_col="symbol")
+            if not open_lots.empty:
+                open_ts_col = _first_existing_column(open_lots, ["open_at", "opened_at", "created_at"])
+                qty_col = _first_existing_column(open_lots, ["size_lots", "quantity", "qty"])
+                price_col = _first_existing_column(open_lots, ["open_price", "price"])
+                open_lots["open_ts"] = pd.to_datetime(open_lots[open_ts_col], errors="coerce", utc=True) if open_ts_col else pd.NaT
+                open_lots["open_qty"] = pd.to_numeric(open_lots[qty_col], errors="coerce").fillna(0.0) if qty_col else 0.0
+                open_lots["remaining_qty"] = open_lots["open_qty"]
+                open_lots["open_price"] = pd.to_numeric(open_lots[price_col], errors="coerce").fillna(0.0) if price_col else 0.0
+                open_lots["notional"] = open_lots["remaining_qty"].abs() * 100000.0 * open_lots["open_price"]
+                open_lots["realized_partial_pnl"] = 0.0
+                open_lots["llm_key"] = key
+                open_lots["llm_label"] = label
+                open_lots["accent"] = accent
+                fx_open_lots_per_llm[key] = open_lots
+
+            status_row["Statut"] = "ok"
+            status_row["Lots clos periode"] = int(len(fx_trades_per_llm.get(key, pd.DataFrame())))
+            status_row["Lots ouverts"] = int(len(fx_open_lots_per_llm.get(key, pd.DataFrame())))
+            fx_source_status.append(status_row)
+        except Exception as exc:
+            status_row["Statut"] = "erreur"
+            status_row["Message"] = str(exc)
+            fx_source_status.append(status_row)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    df_all_fx_trades = (
+        pd.concat(fx_trades_per_llm.values(), ignore_index=True, sort=False)
+        if fx_trades_per_llm
+        else pd.DataFrame()
+    )
+    df_all_fx_open = (
+        pd.concat(fx_open_lots_per_llm.values(), ignore_index=True, sort=False)
+        if fx_open_lots_per_llm
+        else pd.DataFrame()
+    )
+
+    # ----- KPI cards par LLM -----
+    st.subheader("Synthese par LLM")
+    if df_all_fx_trades.empty and df_all_fx_open.empty:
+        st.info(
+            "Aucun lot FX clos ou ouvert detecte dans les bases AG1-FX sur la periode selectionnee. "
+            "La matrice se remplit uniquement avec des lots clos; les lots ouverts apparaissent dans l'exposition courante."
+        )
+    if fx_source_status:
+        with st.expander("Diagnostic des sources AG1-FX", expanded=df_all_fx_trades.empty and df_all_fx_open.empty):
+            render_interactive_table(pd.DataFrame(fx_source_status), key_suffix="forex_pnl_source_status", height=220)
+
+    kpi_cols = st.columns(len(AG1_FX_MULTI_PORTFOLIO_CONFIG))
+    for idx, (key, cfg) in enumerate(AG1_FX_MULTI_PORTFOLIO_CONFIG.items()):
+        accent = cfg.get("accent", "#666")
+        label = cfg.get("label", key)
+        df_llm_tx = fx_trades_per_llm.get(key, pd.DataFrame())
+        df_llm_open = fx_open_lots_per_llm.get(key, pd.DataFrame())
+
+        pnl_net = 0.0
+        fees = 0.0
+        n_closed = 0
+        winrate = None
+        if not df_llm_tx.empty and "realizedpnl" in df_llm_tx.columns:
+            closed = df_llm_tx[df_llm_tx["realizedpnl"].fillna(0).astype(float) != 0]
+            n_closed = int(len(closed))
+            pnl_net = float(closed["realizedpnl"].fillna(0).astype(float).sum())
+            if "fees_eur" in df_llm_tx.columns:
+                fees = float(df_llm_tx["fees_eur"].fillna(0).astype(float).sum())
+            if n_closed > 0:
+                winrate = float((closed["realizedpnl"].fillna(0).astype(float) > 0).mean() * 100.0)
+
+        n_open = int(len(df_llm_open)) if not df_llm_open.empty else 0
+        notional_open = 0.0
+        if not df_llm_open.empty and "notional" in df_llm_open.columns:
+            notional_open = float(pd.to_numeric(df_llm_open["notional"], errors="coerce").fillna(0.0).sum())
+        elif not df_llm_open.empty and {"open_qty", "open_price"}.issubset(df_llm_open.columns):
+            try:
+                notional_open = float(
+                    (
+                        df_llm_open["remaining_qty"].fillna(df_llm_open["open_qty"]).astype(float).abs()
+                        * df_llm_open["open_price"].astype(float)
+                    ).sum()
+                )
+            except Exception:
+                notional_open = 0.0
+
+        with kpi_cols[idx]:
+            st.markdown(
+                f"<div style='padding:10px 12px;border-left:4px solid {accent};"
+                f"background:rgba(255,255,255,0.02);border-radius:4px;'>"
+                f"<div style='color:{accent};font-weight:600;font-size:0.95rem;'>{label}</div>"
+                f"<div style='font-size:1.6rem;font-weight:700;margin-top:4px;'>"
+                f"{pnl_net:+,.2f} €</div>"
+                f"<div style='color:#999;font-size:0.85rem;margin-top:4px;'>"
+                f"P&L FX net (frais inclus si lots fermés)</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+            st.caption(
+                f"Trades fermes : **{n_closed}** · Winrate : "
+                f"**{winrate:.1f}%**" if winrate is not None else "Trades fermes : **0**"
+            )
+            st.caption(
+                f"Lots ouverts : **{n_open}** · Notional ouvert : **{notional_open:,.0f} €**"
+            )
+            st.caption(f"Frais cumules sur la fenetre : **{fees:,.2f} €**")
+
+    # ----- Matrice LLM x Paire -----
+    st.subheader("P&L net par LLM x Paire FX")
+    if df_all_fx_trades.empty:
+        st.caption("Aucun trade FX ferme sur la periode — la matrice apparaitra des le premier fill FX.")
+    else:
+        gb = (
+            df_all_fx_trades.assign(
+                realizedpnl=df_all_fx_trades.get("realizedpnl", 0).fillna(0).astype(float),
+                fees_eur=df_all_fx_trades.get("fees_eur", 0).fillna(0).astype(float),
+            )
+            .groupby(["llm_label", "_fx_pair"], as_index=False)
+            .agg(
+                pnl_net=("realizedpnl", "sum"),
+                fees=("fees_eur", "sum"),
+                trades=("realizedpnl", "size"),
+                wins=("realizedpnl", lambda s: int((s.astype(float) > 0).sum())),
+            )
+        )
+        if not gb.empty:
+            gb["winrate_pct"] = (gb["wins"] / gb["trades"].clip(lower=1) * 100.0).round(1)
+            gb = gb.sort_values(["llm_label", "pnl_net"], ascending=[True, False])
+
+            # Pivot pour matrice visuelle
+            pivot = gb.pivot_table(
+                index="llm_label",
+                columns="_fx_pair",
+                values="pnl_net",
+                aggfunc="sum",
+                fill_value=0.0,
+            )
+            with st.expander("Matrice P&L net (€) — LLM x paire", expanded=True):
+                try:
+                    st.dataframe(_signed_pnl_styler(pivot), use_container_width=True)
+                except Exception:
+                    st.dataframe(pivot.round(2), use_container_width=True)
+
+            # Detail trades agreges
+            detail = gb.rename(
+                columns={
+                    "llm_label": "LLM",
+                    "_fx_pair": "Paire",
+                    "pnl_net": "P&L net (€)",
+                    "fees": "Frais (€)",
+                    "trades": "Trades",
+                    "wins": "Wins",
+                    "winrate_pct": "Winrate %",
+                }
+            )
+            render_interactive_table(detail, key_suffix="forex_pnl_matrix", height=380)
+        else:
+            st.caption("Aucun trade FX ferme apres agregation.")
+
+    # ----- Equity curve cumulee FX par LLM -----
+    st.subheader("Courbe P&L FX cumulee par LLM")
+    if df_all_fx_trades.empty:
+        st.caption("Pas de trades FX a tracer.")
+    else:
+        cum_frames = []
+        for key, wk in fx_trades_per_llm.items():
+            if wk.empty or "realizedpnl" not in wk.columns:
+                continue
+            tmp = wk[["timestamp", "realizedpnl", "llm_label", "accent"]].copy()
+            tmp["realizedpnl"] = tmp["realizedpnl"].fillna(0).astype(float)
+            tmp = tmp.sort_values("timestamp")
+            tmp["pnl_cum"] = tmp["realizedpnl"].cumsum()
+            cum_frames.append(tmp)
+        if cum_frames:
+            df_cum = pd.concat(cum_frames, ignore_index=True, sort=False)
+            try:
+                color_map = {
+                    cfg.get("label", k): cfg.get("accent", "#666")
+                    for k, cfg in AG1_MULTI_PORTFOLIO_CONFIG.items()
+                }
+                fig = px.line(
+                    df_cum,
+                    x="timestamp",
+                    y="pnl_cum",
+                    color="llm_label",
+                    color_discrete_map=color_map,
+                    markers=True,
+                    title=None,
+                )
+                fig.update_layout(
+                    xaxis_title="Date (UTC)",
+                    yaxis_title="P&L FX cumule (€)",
+                    legend_title="LLM",
+                    height=380,
+                    margin=dict(l=10, r=10, t=20, b=10),
+                )
+                fig.add_hline(y=0, line_dash="dot", line_color="#888")
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as exc:  # pragma: no cover - defensive UI
+                st.warning(f"Courbe indisponible : {exc}")
+        else:
+            st.caption("Pas de P&L FX realise sur la fenetre.")
+
+    # ----- Lots FX ouverts -----
+    st.subheader("Lots FX ouverts (exposition courante)")
+    if df_all_fx_open.empty:
+        st.caption("Aucun lot FX ouvert dans les 3 ledgers.")
+    else:
+        cols_show = [
+            c
+            for c in [
+                "llm_label",
+                "_fx_pair",
+                "open_ts",
+                "open_qty",
+                "remaining_qty",
+                "open_price",
+                "realized_partial_pnl",
+            ]
+            if c in df_all_fx_open.columns
+        ]
+        ren = {
+            "llm_label": "LLM",
+            "_fx_pair": "Paire",
+            "open_ts": "Ouvert le",
+            "open_qty": "Qty initiale",
+            "remaining_qty": "Qty restante",
+            "open_price": "Prix d'entree",
+            "realized_partial_pnl": "P&L partiel realise (€)",
+        }
+        df_open_show = df_all_fx_open[cols_show].rename(columns=ren).copy()
+        if "Ouvert le" in df_open_show.columns:
+            df_open_show["Ouvert le"] = pd.to_datetime(df_open_show["Ouvert le"], errors="coerce", utc=True)
+        render_interactive_table(df_open_show, key_suffix="forex_open_lots", height=320)
+
+    # ----- Trades FX detailles -----
+    st.subheader("Trades FX detailles (fills sur la fenetre)")
+    if df_all_fx_trades.empty:
+        st.caption("Aucun fill FX sur la fenetre.")
+    else:
+        cols_show = [
+            c
+            for c in [
+                "timestamp",
+                "llm_label",
+                "_fx_pair",
+                "side",
+                "quantity",
+                "price",
+                "notional",
+                "realizedpnl",
+                "fees_eur",
+                "order_type",
+                "status",
+                "reason",
+            ]
+            if c in df_all_fx_trades.columns
+        ]
+        ren = {
+            "timestamp": "Timestamp",
+            "llm_label": "LLM",
+            "_fx_pair": "Paire",
+            "side": "Sens",
+            "quantity": "Qty",
+            "price": "Prix",
+            "notional": "Notional (€)",
+            "realizedpnl": "P&L realise (€)",
+            "fees_eur": "Frais (€)",
+            "order_type": "Type",
+            "status": "Statut",
+            "reason": "Motif",
+        }
+        df_tx_show = (
+            df_all_fx_trades[cols_show]
+            .rename(columns=ren)
+            .sort_values("Timestamp", ascending=False)
+        )
+        render_interactive_table(df_tx_show, key_suffix="forex_trades_detail", height=380)
+
+    # ----- Couverture news AG4-Forex -----
+    st.subheader("Couverture news AG4-Forex sur la fenetre")
+    fx_news_count = None
+    fx_macro_bias_df = pd.DataFrame()
+    fx_last_run = None
+    fx_news_per_pair = pd.DataFrame()
+
+    if AG4_FOREX_DUCKDB_PATH and os.path.exists(AG4_FOREX_DUCKDB_PATH):
+        conn_fx = _duckdb_connect_readonly_retry(AG4_FOREX_DUCKDB_PATH)
+        if conn_fx is not None:
+            try:
+                tables_q = conn_fx.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchdf()
+                tables_set = (
+                    set(tables_q["table_name"].astype(str).str.lower().tolist())
+                    if tables_q is not None and not tables_q.empty
+                    else set()
+                )
+                if "fx_news_history" in tables_set:
+                    cnt_df = conn_fx.execute(
+                        """
+                        SELECT COUNT(*) AS n
+                        FROM main.fx_news_history
+                        WHERE published_at >= ? AND published_at < ?
+                        """,
+                        [fx_start_ts.to_pydatetime(), fx_end_ts.to_pydatetime()],
+                    ).fetchdf()
+                    if cnt_df is not None and not cnt_df.empty:
+                        fx_news_count = int(cnt_df.iloc[0]["n"])
+                    fx_news_per_pair = conn_fx.execute(
+                        """
+                        SELECT
+                          impact_fx_pairs AS pairs_csv,
+                          COUNT(*) AS news_count
+                        FROM main.fx_news_history
+                        WHERE published_at >= ? AND published_at < ?
+                          AND COALESCE(impact_fx_pairs, '') <> ''
+                        GROUP BY impact_fx_pairs
+                        ORDER BY news_count DESC
+                        LIMIT 200
+                        """,
+                        [fx_start_ts.to_pydatetime(), fx_end_ts.to_pydatetime()],
+                    ).fetchdf()
+                if "fx_macro" in tables_set:
+                    fx_macro_bias_df = conn_fx.execute(
+                        """
+                        SELECT *
+                        FROM main.fx_macro
+                        ORDER BY COALESCE(updated_at, CURRENT_TIMESTAMP) DESC
+                        LIMIT 16
+                        """
+                    ).fetchdf()
+                if "run_log" in tables_set:
+                    rl = conn_fx.execute(
+                        """
+                        SELECT run_id, started_at, finished_at, news_ingested,
+                               news_from_global, news_from_fx_channels, errors
+                        FROM main.run_log
+                        ORDER BY started_at DESC
+                        LIMIT 1
+                        """
+                    ).fetchdf()
+                    if rl is not None and not rl.empty:
+                        fx_last_run = rl.iloc[0].to_dict()
+            except Exception as exc:  # pragma: no cover - defensive UI
+                st.caption(f"Lecture ag4_forex_v1 indisponible : {exc}")
+            finally:
+                try:
+                    conn_fx.close()
+                except Exception:
+                    pass
+    else:
+        st.caption(
+            f"Base ag4_forex_v1 absente du chemin attendu ({AG4_FOREX_DUCKDB_PATH}). "
+            "Lance les migrations VPS via run_ag4_geo_forex_migration_vps.sh."
+        )
+
+    cov1, cov2, cov3 = st.columns(3)
+    with cov1:
+        st.metric(
+            "News FX taguees sur la fenetre",
+            f"{fx_news_count:,}" if fx_news_count is not None else "—",
+        )
+    with cov2:
+        if fx_last_run:
+            ts_last = fx_last_run.get("started_at") or fx_last_run.get("finished_at")
+            st.metric("Dernier run AG4-Forex", str(ts_last)[:19] if ts_last else "—")
+        else:
+            st.metric("Dernier run AG4-Forex", "—")
+    with cov3:
+        if fx_last_run:
+            st.metric(
+                "News ingerees (dernier run)",
+                f"{int(fx_last_run.get('news_ingested') or 0):,}",
+                help=(
+                    f"global={int(fx_last_run.get('news_from_global') or 0)} · "
+                    f"fx_channel={int(fx_last_run.get('news_from_fx_channels') or 0)}"
+                ),
+            )
+        else:
+            st.metric("News ingerees (dernier run)", "—")
+
+    if fx_news_per_pair is not None and not fx_news_per_pair.empty:
+        # Eclate les CSV de paires (plusieurs paires par news possibles)
+        rows = []
+        for _, r in fx_news_per_pair.iterrows():
+            pairs_csv = str(r.get("pairs_csv") or "").strip()
+            n = int(r.get("news_count") or 0)
+            if not pairs_csv or n <= 0:
+                continue
+            for p in [x.strip().upper() for x in pairs_csv.split(",") if x.strip()]:
+                rows.append({"pair": p, "news_count": n})
+        if rows:
+            df_pair_cov = pd.DataFrame(rows).groupby("pair", as_index=False)["news_count"].sum()
+            df_pair_cov = df_pair_cov.sort_values("news_count", ascending=False).head(20)
+            df_pair_cov = df_pair_cov.rename(columns={"pair": "Paire", "news_count": "News taguees"})
+            with st.expander("Top paires par volume de news FX (fenetre)", expanded=False):
+                render_interactive_table(df_pair_cov, key_suffix="forex_news_per_pair", height=320)
+
+    if fx_macro_bias_df is not None and not fx_macro_bias_df.empty:
+        with st.expander("Biais macro courants (fx_macro)", expanded=False):
+            render_interactive_table(fx_macro_bias_df, key_suffix="forex_macro_bias", height=320)
+
+    st.caption(
+        "Note : la base ag4_forex_v1 vient d'etre mise en route (commits 53b4dd3 / 147f912 / 08cd363, "
+        "implementation Codex5.4). Les volumes de news monteront au fur et a mesure de l'activation des "
+        "sources FX dans infra/config/sources/fx_sources.yaml."
+    )
+
+
+# ============================================================
+# PAGE 8: FOREX TRADING (AG1-FX)
+# Portfolios Forex-only dedies: ag1_fx_v1_*.duckdb + AG2/AG4 FX.
+# ============================================================
+elif page == "Forex Trading (AG1-FX)":
+    st.title("Forex Trading (AG1-FX)")
+    st.caption("Portfolios Forex-only dedies, capital initial 10 000 EUR par LLM.")
+
+    today_utc = pd.Timestamp.now(tz="UTC").date()
+    c1, c2, c3 = st.columns([1.2, 1.2, 1.0])
+    with c1:
+        start_date = st.date_input("Depuis", value=pd.Timestamp("2026-04-26", tz="UTC").date(), key="ag1_fx_start")
+    with c2:
+        end_date = st.date_input("Jusqu'au", value=today_utc, min_value=start_date, max_value=today_utc, key="ag1_fx_end")
+    with c3:
+        opens_only = st.checkbox("Ouvertures uniquement", value=False, key="ag1_fx_opens_only")
+
+    start_ts = pd.Timestamp(start_date, tz="UTC")
+    end_ts = pd.Timestamp(end_date, tz="UTC") + pd.Timedelta(days=1)
+
+    snapshots = []
+    lots_open = []
+    lots_closed = []
+    orders = []
+    configs = []
+
+    for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items():
+        db_path = cfg["db_path"]
+        if not os.path.exists(db_path):
+            continue
+        conn = _duckdb_connect_readonly_retry(db_path)
+        if conn is None:
+            continue
+        try:
+            snap = conn.execute(
+                """
+                SELECT *
+                FROM core.portfolio_snapshot
+                WHERE as_of >= ? AND as_of < ?
+                ORDER BY as_of
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            ).fetchdf()
+            if not snap.empty:
+                snap["llm_key"] = key
+                snap["LLM"] = cfg["label"]
+                snapshots.append(snap)
+
+            open_df = conn.execute(
+                "SELECT * FROM core.position_lots WHERE status='open' ORDER BY open_at DESC"
+            ).fetchdf()
+            if not open_df.empty:
+                open_df["llm_key"] = key
+                open_df["LLM"] = cfg["label"]
+                lots_open.append(open_df)
+
+            closed_df = conn.execute(
+                """
+                SELECT *
+                FROM core.position_lots
+                WHERE status='closed' AND close_at >= ? AND close_at < ?
+                ORDER BY close_at DESC
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            ).fetchdf()
+            if not closed_df.empty:
+                closed_df["llm_key"] = key
+                closed_df["LLM"] = cfg["label"]
+                lots_closed.append(closed_df)
+
+            ord_df = conn.execute(
+                """
+                SELECT *
+                FROM core.orders
+                WHERE requested_at >= ? AND requested_at < ?
+                ORDER BY requested_at DESC
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            ).fetchdf()
+            if not ord_df.empty:
+                ord_df["llm_key"] = key
+                ord_df["LLM"] = cfg["label"]
+                orders.append(ord_df)
+
+            conf = conn.execute("SELECT * FROM cfg.portfolio_config WHERE config_key='default'").fetchdf()
+            if not conf.empty:
+                conf["llm_key"] = key
+                conf["LLM"] = cfg["label"]
+                configs.append(conf)
+        except Exception as exc:
+            st.caption(f"Lecture AG1-FX indisponible pour {cfg['label']}: {exc}")
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    df_snap = pd.concat(snapshots, ignore_index=True, sort=False) if snapshots else pd.DataFrame()
+    df_open = pd.concat(lots_open, ignore_index=True, sort=False) if lots_open else pd.DataFrame()
+    df_closed = pd.concat(lots_closed, ignore_index=True, sort=False) if lots_closed else pd.DataFrame()
+    df_orders = pd.concat(orders, ignore_index=True, sort=False) if orders else pd.DataFrame()
+    df_cfg = pd.concat(configs, ignore_index=True, sort=False) if configs else pd.DataFrame()
+
+    if not df_snap.empty:
+        df_snap["as_of"] = pd.to_datetime(df_snap["as_of"], errors="coerce", utc=True)
+        df_snap["snapshot_type"] = df_snap.apply(_classify_ag1_fx_snapshot, axis=1)
+        df_snap["_snapshot_rank"] = df_snap["snapshot_type"].map(
+            {"Run gestion portefeuille": 0, "Valorisation horaire": 1}
+        ).fillna(2)
+        df_snap = df_snap.sort_values(["LLM", "as_of", "_snapshot_rank"]).drop(columns=["_snapshot_rank"])
+
+    pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, df_open, df_closed)
+    tab_pairs, tab_pair_diag = st.tabs(["Vue paires suivies", "Diagnostic paires"])
+    with tab_pairs:
+        st.subheader("Vue generale des paires suivies")
+        if pair_overview.empty:
+            st.info(
+                "Aucune paire FX suivie disponible. Verifie la base AG2-FX pour l'univers et les signaux techniques, "
+                "puis la base AG4-Forex pour les sources/news."
+            )
+        else:
+            total_pairs = int(len(pair_overview))
+            alert_pairs = int((pair_overview["Sources"].astype(str) == "Alerte news").sum()) if "Sources" in pair_overview.columns else 0
+            active_pairs = int((pair_overview["News 24h"].fillna(0).astype(float) > 0).sum()) if "News 24h" in pair_overview.columns else 0
+            exposed_pairs = int((pair_overview["Lots ouverts"].fillna(0).astype(float) > 0).sum()) if "Lots ouverts" in pair_overview.columns else 0
+            avg_age = pd.to_numeric(pair_overview.get("Age tech h", pd.Series(dtype=float)), errors="coerce").dropna()
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Paires suivies", total_pairs)
+            m2.metric("Alertes news", alert_pairs)
+            m3.metric("News 24h", active_pairs)
+            m4.metric("Paires exposees", exposed_pairs)
+            st.caption(
+                "Lecture rapide : Technique = signal AG2-FX; Sources = intensite/news AG4-Forex sur la fenetre; "
+                f"age technique moyen = {avg_age.mean():.1f} h" if not avg_age.empty else
+                "Lecture rapide : Technique = signal AG2-FX; Sources = intensite/news AG4-Forex sur la fenetre."
+            )
+            show_cols = [
+                c
+                for c in [
+                    "Paire",
+                    "Etat general",
+                    "Technique",
+                    "Signal",
+                    "Score",
+                    "Regime",
+                    "Ret 1D %",
+                    "Ret 5D %",
+                    "Ret 20D %",
+                    "RSI14",
+                    "Sources",
+                    "News 24h",
+                    "High impact",
+                    "Nb sources",
+                    "Top sources",
+                    "Lots ouverts",
+                    "LLM exposes",
+                    "P&L clos EUR",
+                    "Age tech h",
+                ]
+                if c in pair_overview.columns
+            ]
+            render_interactive_table(pair_overview[show_cols], key_suffix="ag1_fx_pair_overview", height=520)
+
+    with tab_pair_diag:
+        st.subheader("Diagnostic donnees paires")
+        d1, d2, d3 = st.columns(3)
+        with d1:
+            st.metric("AG2-FX DB", "OK" if os.path.exists(AG2_FX_V1_DUCKDB_PATH) else "Absente")
+        with d2:
+            st.metric("AG4-Forex DB", "OK" if os.path.exists(AG4_FOREX_DUCKDB_PATH) else "Absente")
+        with d3:
+            st.metric("Paires chargees", len(pair_overview) if pair_overview is not None else 0)
+        if pair_diag is not None and not pair_diag.empty:
+            render_interactive_table(pair_diag, key_suffix="ag1_fx_pair_diag", height=220)
+        elif pair_overview is not None and not pair_overview.empty:
+            st.caption("Aucun probleme de source detecte pour cette vue.")
+        else:
+            st.caption("Aucune donnee exploitable pour construire la vue paires.")
+
+    st.subheader("Mises a jour portefeuille")
+    if df_snap.empty:
+        st.caption("Aucun snapshot de gestion ou de valorisation AG1-FX sur la periode.")
+    else:
+        counts = df_snap.groupby("snapshot_type").size().to_dict()
+        latest_ts = df_snap["as_of"].max()
+        u1, u2, u3 = st.columns(3)
+        with u1:
+            st.metric("Runs gestion", int(counts.get("Run gestion portefeuille", 0)))
+        with u2:
+            st.metric("Valorisations horaires", int(counts.get("Valorisation horaire", 0)))
+        with u3:
+            st.metric("Derniere mise a jour", str(latest_ts)[:19] if pd.notna(latest_ts) else "-")
+
+        update_cols = [
+            c
+            for c in [
+                "as_of",
+                "LLM",
+                "snapshot_type",
+                "run_id",
+                "equity_eur",
+                "pnl_total_eur",
+                "open_lots_count",
+                "leverage_effective",
+            ]
+            if c in df_snap.columns
+        ]
+        updates_show = (
+            df_snap.sort_values("as_of", ascending=False)[update_cols]
+            .head(60)
+            .rename(
+                columns={
+                    "as_of": "Timestamp",
+                    "snapshot_type": "Type mise a jour",
+                    "run_id": "Run",
+                    "equity_eur": "Equity EUR",
+                    "pnl_total_eur": "P&L total EUR",
+                    "open_lots_count": "Lots ouverts",
+                    "leverage_effective": "Leverage",
+                }
+            )
+        )
+        render_interactive_table(updates_show, key_suffix="ag1_fx_snapshot_updates", height=320)
+
+    st.subheader("KPI par LLM")
+    cols = st.columns(len(AG1_FX_MULTI_PORTFOLIO_CONFIG))
+    for idx, (key, cfg) in enumerate(AG1_FX_MULTI_PORTFOLIO_CONFIG.items()):
+        last = df_snap[df_snap.get("llm_key", pd.Series(dtype=str)) == key].tail(1)
+        closed = df_closed[df_closed.get("llm_key", pd.Series(dtype=str)) == key] if not df_closed.empty else pd.DataFrame()
+        ords = df_orders[df_orders.get("llm_key", pd.Series(dtype=str)) == key] if not df_orders.empty else pd.DataFrame()
+        equity = float(last.iloc[0]["equity_eur"]) if not last.empty else 10000.0
+        pnl = equity - 10000.0
+        pnl_pct = pnl / 10000.0 * 100.0
+        winrate = None
+        profit_factor = None
+        if not closed.empty and "pnl_eur" in closed.columns:
+            pnl_s = pd.to_numeric(closed["pnl_eur"], errors="coerce").fillna(0)
+            winrate = float((pnl_s > 0).mean() * 100.0) if len(pnl_s) else None
+            gains = float(pnl_s[pnl_s > 0].sum())
+            losses = float(abs(pnl_s[pnl_s < 0].sum()))
+            profit_factor = gains / losses if losses > 0 else None
+        rejected = int((ords.get("status", pd.Series(dtype=str)).astype(str).str.lower() == "rejected").sum()) if not ords.empty else 0
+        with cols[idx]:
+            st.markdown(f"**{cfg['label']}**")
+            st.metric("Equity", f"{equity:,.2f} EUR", f"{pnl:+,.2f} EUR / {pnl_pct:+.2f}%")
+            st.caption(f"Open lots: {len(df_open[df_open.get('llm_key', pd.Series(dtype=str)) == key]) if not df_open.empty else 0}")
+            st.caption(f"Leverage: {float(last.iloc[0]['leverage_effective']):.2f}x" if not last.empty and last.iloc[0].get("leverage_effective") is not None else "Leverage: -")
+            st.caption(f"Winrate: {winrate:.1f}%" if winrate is not None else "Winrate: -")
+            st.caption(f"Profit factor: {profit_factor:.2f}" if profit_factor is not None else "Profit factor: -")
+            st.caption(f"Rejected orders: {rejected}")
+
+    st.subheader("Courbe equity")
+    if df_snap.empty:
+        st.info("Aucun snapshot AG1-FX disponible sur la periode.")
+    else:
+        color_map = {cfg["label"]: cfg["accent"] for cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.values()}
+        hover_cols = [
+            c
+            for c in ["snapshot_type", "run_id", "pnl_total_eur", "open_lots_count", "leverage_effective"]
+            if c in df_snap.columns
+        ]
+        fig = px.line(
+            df_snap.sort_values("as_of"),
+            x="as_of",
+            y="equity_eur",
+            color="LLM",
+            color_discrete_map=color_map,
+            markers=True,
+            hover_data=hover_cols,
+        )
+        fig.add_hline(y=10000, line_dash="dot", line_color="#888")
+        fig.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Equity EUR", xaxis_title="Date")
+        st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Matrice P&L net LLM x paire")
+    if df_closed.empty:
+        st.caption("Aucun trade clos sur la periode.")
+    else:
+        matrix_src = df_closed.copy()
+        matrix_src["pnl_eur"] = pd.to_numeric(matrix_src.get("pnl_eur"), errors="coerce").fillna(0)
+        pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="pnl_eur", aggfunc="sum", fill_value=0)
+        vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
+        st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
+
+    st.subheader("Distribution des trades clos")
+    if not df_closed.empty and "pnl_eur" in df_closed.columns:
+        plot_df = df_closed.copy()
+        plot_df["pnl_eur"] = pd.to_numeric(plot_df["pnl_eur"], errors="coerce").fillna(0)
+        fig = px.histogram(plot_df, x="pnl_eur", color="LLM", barmode="overlay", nbins=30)
+        fig.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), xaxis_title="P&L EUR")
+        st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.caption("La distribution apparaitra apres les premiers trades clos.")
+
+    st.subheader("Lots ouverts")
+    if df_open.empty:
+        st.caption("Aucun lot ouvert.")
+    else:
+        cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "open_at", "fees_eur", "stop_loss_price", "take_profit_price"] if c in df_open.columns]
+        render_interactive_table(df_open[cols_show], key_suffix="ag1_fx_open_lots", height=320)
+
+    st.subheader("Trades clos")
+    if df_closed.empty:
+        st.caption("Aucun trade clos.")
+    else:
+        closed_show = df_closed if not opens_only else df_closed[df_closed["run_id_open"].notna()]
+        cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "pnl_eur", "fees_eur"] if c in closed_show.columns]
+        render_interactive_table(closed_show[cols_show].head(50), key_suffix="ag1_fx_closed_lots", height=380)
+
+    st.subheader("AG4-FX-V1 coverage")
+    if os.path.exists(AG4_FX_V1_DUCKDB_PATH):
+        conn = _duckdb_connect_readonly_retry(AG4_FX_V1_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                dig = conn.execute(
+                    """
+                    SELECT section, items_count, as_of
+                    FROM main.fx_digest
+                    WHERE run_id = (SELECT run_id FROM main.run_log ORDER BY finished_at DESC NULLS LAST, started_at DESC LIMIT 1)
+                    ORDER BY section
+                    """
+                ).fetchdf()
+                run = conn.execute("SELECT * FROM main.run_log ORDER BY finished_at DESC NULLS LAST, started_at DESC LIMIT 1").fetchdf()
+                if not run.empty:
+                    st.caption(f"Dernier run AG4-FX: {run.iloc[0].get('run_id')} | news dedupe: {run.iloc[0].get('news_after_dedupe')}")
+                if not dig.empty:
+                    render_interactive_table(dig, key_suffix="ag4_fx_coverage", height=180)
+            except Exception as exc:
+                st.caption(f"Coverage AG4-FX indisponible: {exc}")
+            finally:
+                conn.close()
+    else:
+        st.caption(f"Base AG4-FX absente: {AG4_FX_V1_DUCKDB_PATH}")
+
+    st.subheader("Risk Manager")
+    if df_orders.empty:
+        st.caption("Aucun ordre sur la periode.")
+    else:
+        rej = df_orders[df_orders["status"].astype(str).str.lower() == "rejected"].copy()
+        r1, r2 = st.columns(2)
+        with r1:
+            st.metric("Ordres rejetes", len(rej))
+        with r2:
+            active = []
+            if not df_cfg.empty and "kill_switch_active" in df_cfg.columns:
+                active = df_cfg[df_cfg["kill_switch_active"] == True]["LLM"].tolist()
+            st.metric("Kill switches actifs", len(active), ", ".join(active) if active else None)
+        if not rej.empty:
+            top = rej.groupby("rejection_reason", as_index=False).size().sort_values("size", ascending=False).head(10)
+            render_interactive_table(top.rename(columns={"rejection_reason": "Raison", "size": "Ordres"}), key_suffix="ag1_fx_rejections", height=260)

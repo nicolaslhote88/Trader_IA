@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["as_of", "decisions"],
+  "properties": {
+    "as_of": {"type": "string"},
+    "narrative": {"type": "string", "maxLength": 4000},
+    "decisions": {
+      "type": "array",
+      "maxItems": 30,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pair", "decision", "conviction"],
+        "properties": {
+          "pair": {"type": "string", "pattern": "^[A-Z]{6}$"},
+          "decision": {"type": "string", "enum": ["open_long", "open_short", "close", "partial_close", "hold"]},
+          "conviction": {"type": "number", "minimum": 0, "maximum": 1},
+          "size_lots": {"type": "number", "minimum": 0, "maximum": 5},
+          "size_pct_equity": {"type": "number", "minimum": 0, "maximum": 0.2},
+          "stop_loss_price": {"type": "number"},
+          "take_profit_price": {"type": "number"},
+          "horizon": {"type": "string", "enum": ["intraday", "1d", "3d", "1w"]},
+          "rationale": {"type": "string", "maxLength": 600},
+          "lot_id_to_close": {"type": "string"}
+        }
+      }
+    }
+  }
+}

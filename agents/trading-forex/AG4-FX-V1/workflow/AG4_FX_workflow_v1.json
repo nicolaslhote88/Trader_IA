@@ -1,0 +1,226 @@
+{
+  "name": "AG4-FX-V1 - Digest macro Forex",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 9,14 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -900,
+        -120
+      ],
+      "id": "schedule",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -900,
+        80
+      ],
+      "id": "manual",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const runId = `AG4FXD_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    lookback_hours: Number($env.AG4_FX_LOOKBACK_HOURS || 24),\n    db_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    ag4_v3_path: $env.AG4_DUCKDB_PATH || '/files/duckdb/ag4_v3.duckdb',\n    ag4_forex_path: $env.AG4_FOREX_DUCKDB_PATH || '/files/duckdb/ag4_forex_v1.duckdb',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        -20
+      ],
+      "id": "01-init-run-fx",
+      "name": "01 Init Run FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag4_v3_path\") or \"/files/duckdb/ag4_v3.duckdb\"\nlookback = int(ctx.get(\"lookback_hours\") or 24)\nitems = []\n\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            cols = {r[1].lower(): r[1] for r in con.execute(\"PRAGMA table_info('main.news_history')\").fetchall()}\n            def col(*names):\n                for n in names:\n                    if n.lower() in cols:\n                        return cols[n.lower()]\n                return None\n\n            published = col(\"published_at\", \"publishedAt\", \"date\", \"created_at\") or \"created_at\"\n            title = col(\"title\", \"Title\") or \"title\"\n            source = col(\"source\", \"Source\") or \"source\"\n            snippet = col(\"snippet\", \"strategic_summary\", \"Strategy\", \"summary\") or title\n            dedupe = col(\"dedupe_key\", \"dedupeKey\", \"event_key\", \"id\") or title\n            impact_class = col(\"impact_asset_class\") or \"impact_asset_class\"\n            pairs = col(\"impact_fx_pairs\") or \"impact_fx_pairs\"\n            mag = col(\"impact_magnitude\") or \"impact_magnitude\"\n            bull = col(\"currencies_bullish\") or \"currencies_bullish\"\n            bear = col(\"currencies_bearish\") or \"currencies_bearish\"\n            hint = col(\"fx_directional_hint\") or \"fx_directional_hint\"\n            query = f\"\"\"\n                SELECT\n                  CAST({dedupe} AS VARCHAR) AS dedupe_key,\n                  CAST({published} AS VARCHAR) AS published_at,\n                  CAST({title} AS VARCHAR) AS title,\n                  CAST({source} AS VARCHAR) AS source,\n                  CAST({snippet} AS VARCHAR) AS snippet,\n                  CAST({mag} AS VARCHAR) AS impact_magnitude,\n                  CAST({pairs} AS VARCHAR) AS impact_fx_pairs,\n                  CAST({bull} AS VARCHAR) AS currencies_bullish,\n                  CAST({bear} AS VARCHAR) AS currencies_bearish,\n                  CAST({hint} AS VARCHAR) AS fx_directional_hint\n                FROM main.news_history\n                WHERE CAST({published} AS TIMESTAMP) >= CURRENT_TIMESTAMP - INTERVAL '{lookback} hours'\n                  AND (\n                    lower(COALESCE(CAST({impact_class} AS VARCHAR), '')) LIKE '%fx%'\n                    OR lower(COALESCE(CAST({impact_class} AS VARCHAR), '')) LIKE '%mixed%'\n                  )\n                ORDER BY CAST({published} AS TIMESTAMP) DESC\n                LIMIT 200\n            \"\"\"\n            for row in con.execute(query).fetchdf().to_dict(\"records\"):\n                row[\"origin\"] = \"global_base\"\n                items.append(row)\n    except Exception as exc:\n        ctx[\"global_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"global_news\": items, \"news_global_pulled\": len(items)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        -20
+      ],
+      "id": "02-pull-global-fx-news",
+      "name": "02 Pull Global FX News"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag4_forex_path\") or \"/files/duckdb/ag4_forex_v1.duckdb\"\nlookback = int(ctx.get(\"lookback_hours\") or 24)\nnews = []\nmacro = {}\npairs_rows = []\n\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            tables = {r[0].lower() for r in con.execute(\"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\").fetchall()}\n            if \"fx_news_history\" in tables:\n                df = con.execute(\n                    f\"\"\"\n                    SELECT\n                      CAST(dedupe_key AS VARCHAR) AS dedupe_key,\n                      CAST(published_at AS VARCHAR) AS published_at,\n                      CAST(title AS VARCHAR) AS title,\n                      CAST(source AS VARCHAR) AS source,\n                      CAST(snippet AS VARCHAR) AS snippet,\n                      CAST(impact_magnitude AS VARCHAR) AS impact_magnitude,\n                      CAST(impact_fx_pairs AS VARCHAR) AS impact_fx_pairs,\n                      CAST(currencies_bullish AS VARCHAR) AS currencies_bullish,\n                      CAST(currencies_bearish AS VARCHAR) AS currencies_bearish,\n                      CAST(fx_directional_hint AS VARCHAR) AS fx_directional_hint\n                    FROM main.fx_news_history\n                    WHERE published_at >= CURRENT_TIMESTAMP - INTERVAL '{lookback} hours'\n                    ORDER BY published_at DESC\n                    LIMIT 200\n                    \"\"\"\n                ).fetchdf()\n                news = df.to_dict(\"records\")\n                for r in news:\n                    r[\"origin\"] = \"fx_channel\"\n            if \"fx_macro\" in tables:\n                df = con.execute(\"SELECT * FROM main.fx_macro ORDER BY as_of DESC LIMIT 1\").fetchdf()\n                if not df.empty:\n                    macro = df.iloc[0].to_dict()\n            if \"fx_pairs\" in tables:\n                df = con.execute(\n                    \"\"\"\n                    SELECT *\n                    FROM (\n                      SELECT *, ROW_NUMBER() OVER (PARTITION BY pair ORDER BY as_of DESC) AS rn\n                      FROM main.fx_pairs\n                    )\n                    WHERE rn = 1\n                    \"\"\"\n                ).fetchdf()\n                pairs_rows = df.to_dict(\"records\")\n    except Exception as exc:\n        ctx[\"fx_channel_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"fx_channel_news\": news, \"fx_macro\": macro, \"fx_pairs\": pairs_rows, \"news_fx_channel_pulled\": len(news)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        -20
+      ],
+      "id": "03-pull-fx-channel-news",
+      "name": "03 Pull FX Channel News"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import hashlib\n\n\ndef key_for(row):\n    raw = str(row.get(\"dedupe_key\") or \"\").strip()\n    if raw:\n        return raw\n    title = \" \".join(str(row.get(\"title\") or \"\").lower().split())\n    day = str(row.get(\"published_at\") or \"\")[:10]\n    return hashlib.sha1(f\"{title}|{day}\".encode(\"utf-8\")).hexdigest()\n\n\ndef impact_weight(row):\n    mag = str(row.get(\"impact_magnitude\") or \"\").lower()\n    base = {\"high\": 3, \"medium\": 2, \"low\": 1}.get(mag, 1)\n    pairs = [p for p in str(row.get(\"impact_fx_pairs\") or \"\").replace(\";\", \",\").split(\",\") if p.strip()]\n    return base * 10 + min(len(pairs), 8)\n\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nseen = {}\nfor row in (ctx.get(\"global_news\") or []) + (ctx.get(\"fx_channel_news\") or []):\n    k = key_for(row)\n    row = dict(row)\n    row[\"dedupe_key\"] = k\n    old = seen.get(k)\n    if old is None or impact_weight(row) > impact_weight(old):\n        seen[k] = row\n\nitems = sorted(seen.values(), key=lambda r: (impact_weight(r), str(r.get(\"published_at\") or \"\")), reverse=True)[:30]\nreturn [{\"json\": {**ctx, \"deduped_news\": items, \"news_after_dedupe\": len(items)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        -20
+      ],
+      "id": "04-dedupe-and-score",
+      "name": "04 Dedupe And Score"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "from collections import defaultdict\nfrom datetime import datetime, timezone\n\n\ndef split_csv(v):\n    return [x.strip().upper() for x in str(v or \"\").replace(\";\", \",\").split(\",\") if x.strip()]\n\n\ndef bias_for_pair(pair, bull, bear):\n    base, quote = pair[:3], pair[3:]\n    if base in bull or quote in bear:\n        return f\"bullish_{base.lower()}\"\n    if base in bear or quote in bull:\n        return f\"bearish_{base.lower()}\"\n    return \"mixed\"\n\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nas_of = ctx.get(\"as_of\") or datetime.now(timezone.utc).isoformat()\nnews = ctx.get(\"deduped_news\") or []\n\ntop_items = []\npair_focus = defaultdict(lambda: {\"news_count_24h\": 0, \"bias_votes\": defaultdict(int), \"top_drivers\": [], \"urgent_event_within_4h\": False})\nfor n in news:\n    pairs = split_csv(n.get(\"impact_fx_pairs\"))\n    bull = split_csv(n.get(\"currencies_bullish\"))\n    bear = split_csv(n.get(\"currencies_bearish\"))\n    top_items.append({\n        \"dedupe_key\": n.get(\"dedupe_key\"),\n        \"published_at\": n.get(\"published_at\"),\n        \"title\": n.get(\"title\"),\n        \"source\": n.get(\"source\"),\n        \"snippet\": n.get(\"snippet\"),\n        \"impact_magnitude\": n.get(\"impact_magnitude\"),\n        \"impact_fx_pairs\": pairs,\n        \"currencies_bullish\": bull,\n        \"currencies_bearish\": bear,\n        \"fx_directional_hint\": n.get(\"fx_directional_hint\"),\n        \"origin\": n.get(\"origin\"),\n    })\n    for pair in pairs:\n        pf = pair_focus[pair]\n        pf[\"news_count_24h\"] += 1\n        pf[\"bias_votes\"][bias_for_pair(pair, bull, bear)] += 1\n        if len(pf[\"top_drivers\"]) < 5 and n.get(\"title\"):\n            pf[\"top_drivers\"].append(n.get(\"title\"))\n        if str(n.get(\"impact_magnitude\") or \"\").lower() == \"high\":\n            pf[\"urgent_event_within_4h\"] = True\n\nfor pr in ctx.get(\"fx_pairs\") or []:\n    pair = str(pr.get(\"pair\") or \"\").upper()\n    if len(pair) != 6:\n        continue\n    pf = pair_focus[pair]\n    macro_bias = str(pr.get(\"directional_bias\") or pr.get(\"bias\") or \"\").strip()\n    if macro_bias:\n        pf[\"bias_macro\"] = macro_bias\n    conf = pr.get(\"confidence\")\n    if conf is not None:\n        try:\n            pf[\"confidence\"] = float(conf)\n        except Exception:\n            pass\n\npair_payload = {\"pairs\": {}}\nfor pair, pf in sorted(pair_focus.items()):\n    votes = dict(pf.pop(\"bias_votes\"))\n    bias_news = max(votes.items(), key=lambda kv: kv[1])[0] if votes else \"mixed\"\n    pair_payload[\"pairs\"][pair] = {\n        \"news_count_24h\": pf[\"news_count_24h\"],\n        \"bias_news\": bias_news,\n        \"bias_macro\": pf.get(\"bias_macro\", \"unknown\"),\n        \"confidence\": pf.get(\"confidence\", min(0.9, 0.35 + 0.08 * pf[\"news_count_24h\"])),\n        \"top_drivers\": pf[\"top_drivers\"],\n        \"urgent_event_within_4h\": pf[\"urgent_event_within_4h\"],\n    }\n\nmacro = ctx.get(\"fx_macro\") or {}\nmacro_payload = {\n    \"market_regime\": macro.get(\"market_regime\") or macro.get(\"regime\") or \"unknown\",\n    \"drivers\": macro.get(\"drivers\") or macro.get(\"narrative\") or macro.get(\"notes\") or \"\",\n    \"confidence\": macro.get(\"confidence\"),\n    \"biases\": macro.get(\"biases\") or {},\n    \"as_of\": str(macro.get(\"as_of\") or as_of),\n}\n\nsections = {\n    \"top_news\": {\"items\": top_items, \"as_of\": as_of, \"lookback_hours\": int(ctx.get(\"lookback_hours\") or 24)},\n    \"pair_focus\": pair_payload,\n    \"macro_regime\": macro_payload,\n}\n\nreturn [{\"json\": {**ctx, \"digest_sections\": sections}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        -20
+      ],
+      "id": "05-compute-fx-macro-digest",
+      "name": "05 Compute FX Macro Digest"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag4_fx_v1.duckdb\"\nrun_id = ctx.get(\"run_id\") or \"\"\nas_of = ctx.get(\"as_of\")\nsections = ctx.get(\"digest_sections\") or {}\n\nwith duckdb.connect(db_path) as con:\n    con.execute(\"CREATE SCHEMA IF NOT EXISTS main\")\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.fx_digest (\n          run_id VARCHAR NOT NULL,\n          as_of TIMESTAMP NOT NULL,\n          section VARCHAR NOT NULL,\n          payload VARCHAR NOT NULL,\n          items_count INTEGER,\n          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n          PRIMARY KEY (run_id, section)\n        )\n        \"\"\"\n    )\n    for name, payload in sections.items():\n        if name == \"top_news\":\n            cnt = len(payload.get(\"items\") or [])\n        elif name == \"pair_focus\":\n            cnt = len((payload.get(\"pairs\") or {}).keys())\n        else:\n            cnt = 1 if payload else 0\n        con.execute(\n            \"INSERT OR REPLACE INTO main.fx_digest VALUES (?, CAST(? AS TIMESTAMP), ?, ?, ?, CURRENT_TIMESTAMP)\",\n            [run_id, as_of, name, json.dumps(payload, ensure_ascii=False), cnt],\n        )\n\nreturn [{\"json\": {**ctx, \"sections_written\": len(sections)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        -20
+      ],
+      "id": "06-write-digest-fx",
+      "name": "06 Write Digest FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag4_fx_v1.duckdb\"\n\nwith duckdb.connect(db_path) as con:\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.run_log (\n          run_id VARCHAR PRIMARY KEY,\n          started_at TIMESTAMP,\n          finished_at TIMESTAMP,\n          news_global_pulled INTEGER,\n          news_fx_channel_pulled INTEGER,\n          news_after_dedupe INTEGER,\n          sections_written INTEGER,\n          errors INTEGER,\n          notes VARCHAR\n        )\n        \"\"\"\n    )\n    errors = int(bool(ctx.get(\"global_error\"))) + int(bool(ctx.get(\"fx_channel_error\")))\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO main.run_log VALUES (\n          ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?\n        )\n        \"\"\",\n        [\n            ctx.get(\"run_id\"),\n            int(ctx.get(\"news_global_pulled\") or 0),\n            int(ctx.get(\"news_fx_channel_pulled\") or 0),\n            int(ctx.get(\"news_after_dedupe\") or 0),\n            int(ctx.get(\"sections_written\") or 0),\n            errors,\n            \"AG4-FX-V1 digest completed\",\n        ],\n    )\n\nreturn [{\"json\": {\"run_id\": ctx.get(\"run_id\"), \"sections_written\": ctx.get(\"sections_written\"), \"errors\": errors}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        -20
+      ],
+      "id": "07-log-run-fx",
+      "name": "07 Log Run FX"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01 Init Run FX": {
+      "main": [
+        [
+          {
+            "node": "02 Pull Global FX News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Pull Global FX News": {
+      "main": [
+        [
+          {
+            "node": "03 Pull FX Channel News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Pull FX Channel News": {
+      "main": [
+        [
+          {
+            "node": "04 Dedupe And Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 Dedupe And Score": {
+      "main": [
+        [
+          {
+            "node": "05 Compute FX Macro Digest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 Compute FX Macro Digest": {
+      "main": [
+        [
+          {
+            "node": "06 Write Digest FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 Write Digest FX": {
+      "main": [
+        [
+          {
+            "node": "07 Log Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Europe/Paris"
+  }
+}
