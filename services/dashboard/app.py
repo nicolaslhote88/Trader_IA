@@ -813,47 +813,94 @@ def _metrics_dictionary_df(metric_ids: list[str] | None = None) -> pd.DataFrame:
 st.markdown(
     """
 <style>
+    /* ── Design Tokens ────────────────────────────────── */
+    :root {
+        --bg-app:           #0e1117;
+        --bg-surface:       #1e1e2e;
+        --bg-table-header:  #262730;
+        --bg-subtle:        #222222;
+        --bg-input:         #1f2937;
+        --border-strong:    #444444;
+        --border-default:   #333333;
+        --text-primary:     #ffffff;
+        --text-secondary:   #cccccc;
+        --text-muted:       #9aa0a6;
+        --text-disabled:    #666666;
+        --color-buy:        #28a745;
+        --color-sell:       #dc3545;
+        --color-watch:      #fd7e14;
+        --color-action:     #0d6efd;
+        --color-neutral:    #6c757d;
+        --agent-gpt:        #10b981;
+        --agent-grok:       #f59e0b;
+        --agent-gemini:     #60a5fa;
+        --badge-buy-bg:     #14532d;
+        --badge-buy-text:   #dcfce7;
+        --badge-sell-bg:    #7f1d1d;
+        --badge-sell-text:  #fee2e2;
+        --badge-neutral-bg: #374151;
+        --badge-neutral-text: #e5e7eb;
+        --badge-approve-bg: #14532d;
+        --badge-approve-text: #dcfce7;
+        --badge-reject-bg:  #7c2d12;
+        --badge-reject-text: #ffedd5;
+        --badge-watch-bg:   #78350f;
+        --badge-watch-text: #fef3c7;
+        --badge-skip-bg:    #1f2937;
+        --badge-skip-text:  #d1d5db;
+        --chart-line:       #4ea1ff;
+        --chart-fill-pos:   rgba(40, 167, 69, 0.18);
+        --chart-fill-neg:   rgba(220, 53, 69, 0.16);
+    }
+
+    /* ── Tables ───────────────────────────────────────── */
     .dataframe-wrap {
         width: 100% !important;
         border-collapse: collapse !important;
-        font-family: sans-serif;
+        font-family: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
         font-size: 0.9rem;
     }
     .dataframe-wrap th {
-        background-color: #262730;
-        color: white;
+        background-color: var(--bg-table-header);
+        color: var(--text-primary);
         padding: 12px !important;
         text-align: left !important;
-        border-bottom: 2px solid #444 !important;
+        border-bottom: 2px solid var(--border-strong) !important;
     }
     .dataframe-wrap td {
         padding: 12px !important;
-        border-bottom: 1px solid #333 !important;
+        border-bottom: 1px solid var(--border-default) !important;
         vertical-align: top !important;
         white-space: normal !important;
         line-height: 1.5 !important;
+        color: var(--text-secondary);
     }
-    .badge-risk-off { background-color: #dc3545; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
-    .badge-risk-on { background-color: #28a745; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
-    .badge-neutral { background-color: #6c757d; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.8em; }
-    .badge-buy { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-sell { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-neutral-v2 { background-color: #6c757d; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-approve { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-reject { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-watch { background-color: #fd7e14; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-running { background-color: #0d6efd; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-success { background-color: #28a745; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-partial { background-color: #fd7e14; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
-    .badge-failed { background-color: #dc3545; color: white; padding: 3px 8px; border-radius: 4px; font-weight: bold; }
+
+    /* ── Badges ───────────────────────────────────────── */
+    .badge-buy     { background-color: var(--badge-buy-bg);     color: var(--badge-buy-text);     padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-sell    { background-color: var(--badge-sell-bg);    color: var(--badge-sell-text);    padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-neutral { background-color: var(--badge-neutral-bg); color: var(--badge-neutral-text); padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+    .badge-neutral-v2 { background-color: var(--badge-neutral-bg); color: var(--badge-neutral-text); padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-approve { background-color: var(--badge-approve-bg); color: var(--badge-approve-text); padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-reject  { background-color: var(--badge-reject-bg);  color: var(--badge-reject-text);  padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-watch   { background-color: var(--badge-watch-bg);   color: var(--badge-watch-text);   padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-skip    { background-color: var(--badge-skip-bg);    color: var(--badge-skip-text);    padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-running { background-color: var(--color-action);     color: #fff;                      padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-success { background-color: var(--badge-approve-bg); color: var(--badge-approve-text); padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-partial { background-color: var(--badge-watch-bg);   color: var(--badge-watch-text);   padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-failed  { background-color: var(--badge-sell-bg);    color: var(--badge-sell-text);    padding: 3px 8px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+    .badge-risk-on  { background-color: var(--badge-buy-bg);    color: var(--badge-buy-text);     padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+    .badge-risk-off { background-color: var(--badge-sell-bg);   color: var(--badge-sell-text);    padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+
+    /* ── Cards ────────────────────────────────────────── */
     .v2-card {
-        background-color: #1e1e2e;
-        border: 1px solid #333;
+        background-color: var(--bg-surface);
+        border: 1px solid var(--border-default);
         border-radius: 8px;
         padding: 16px;
         margin-bottom: 12px;
     }
-    .v2-card h4 { margin-top: 0; color: #ccc; }
+    .v2-card h4 { margin-top: 0; color: var(--text-secondary); }
 </style>
 """,
     unsafe_allow_html=True,
@@ -1543,7 +1590,7 @@ def load_ag3_page_data(
 
 
 def _action_badge(action: object) -> str:
-    """Retourne un badge HTML colore selon l'action (BUY/SELL/NEUTRAL)."""
+    """Retourne un badge HTML colore selon l'action (BUY/SELL/NEUTRAL/SKIP)."""
     s = str(action).strip().upper() if action else ""
     if s == "BUY":
         return '<span class="badge-buy">BUY</span>'
@@ -1551,6 +1598,8 @@ def _action_badge(action: object) -> str:
         return '<span class="badge-sell">SELL</span>'
     elif s == "NEUTRAL":
         return '<span class="badge-neutral-v2">NEUTRAL</span>'
+    elif s == "SKIP":
+        return '<span class="badge-skip">SKIP</span>'
     return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
 
 
@@ -1563,6 +1612,8 @@ def _ai_badge(decision: object) -> str:
         return '<span class="badge-reject">REJECT</span>'
     elif s == "WATCH":
         return '<span class="badge-watch">WATCH</span>'
+    elif s == "SKIP":
+        return '<span class="badge-skip">SKIP</span>'
     return f'<span class="badge-neutral-v2">{s if s else "—"}</span>'
 
 
@@ -5021,20 +5072,20 @@ def _news_filter_window(df: pd.DataFrame, window_key: str, ts_col: str = "publis
 def _news_pill_html(label: str, tone: str = "neutral") -> str:
     tone_norm = str(tone or "neutral").lower()
     color_map = {
-        "buy": "#16a34a",
-        "bullish": "#16a34a",
-        "ok": "#16a34a",
-        "sell": "#dc2626",
-        "bearish": "#dc2626",
-        "error": "#dc2626",
-        "warn": "#d97706",
-        "warning": "#d97706",
-        "info": "#2563eb",
-        "neutral": "#6b7280",
-        "risk-on": "#16a34a",
-        "risk-off": "#dc2626",
+        "buy": "#28a745",
+        "bullish": "#28a745",
+        "ok": "#28a745",
+        "risk-on": "#28a745",
+        "sell": "#dc3545",
+        "bearish": "#dc3545",
+        "error": "#dc3545",
+        "risk-off": "#dc3545",
+        "warn": "#fd7e14",
+        "warning": "#fd7e14",
+        "info": "#0d6efd",
+        "neutral": "#6c757d",
     }
-    bg = color_map.get(tone_norm, "#6b7280")
+    bg = color_map.get(tone_norm, "#6c757d")
     return (
         f"<span style='display:inline-block;padding:3px 8px;border-radius:999px;"
         f"background:{bg};color:#fff;font-weight:700;font-size:0.75rem;'>{html.escape(str(label))}</span>"
@@ -5116,18 +5167,20 @@ def _news_fmt_score(v: object, ndigits: int = 1) -> str:
 def _news_pill_html(label: str, tone: str = "neutral") -> str:
     tone_norm = str(tone or "neutral").lower()
     color_map = {
-        "ok": "#16a34a",
-        "bullish": "#16a34a",
-        "risk-on": "#16a34a",
-        "warn": "#d97706",
-        "warning": "#d97706",
-        "error": "#dc2626",
-        "bearish": "#dc2626",
-        "risk-off": "#dc2626",
-        "info": "#2563eb",
-        "neutral": "#6b7280",
+        "buy": "#28a745",
+        "bullish": "#28a745",
+        "ok": "#28a745",
+        "risk-on": "#28a745",
+        "sell": "#dc3545",
+        "bearish": "#dc3545",
+        "error": "#dc3545",
+        "risk-off": "#dc3545",
+        "warn": "#fd7e14",
+        "warning": "#fd7e14",
+        "info": "#0d6efd",
+        "neutral": "#6c757d",
     }
-    bg = color_map.get(tone_norm, "#6b7280")
+    bg = color_map.get(tone_norm, "#6c757d")
     return (
         f"<span style='display:inline-block;padding:3px 8px;border-radius:999px;"
         f"background:{bg};color:#fff;font-weight:700;font-size:0.75rem;'>{html.escape(str(label))}</span>"
