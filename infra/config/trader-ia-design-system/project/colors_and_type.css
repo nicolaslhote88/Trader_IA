@@ -1,0 +1,130 @@
+/**
+ * Trader IA — Design Tokens
+ * Dark-mode only. All CSS variables below.
+ * Source: services/dashboard/app.py (Streamlit dashboard)
+ */
+
+:root {
+  /* ── Backgrounds ─────────────────────────────────── */
+  --bg-app:          #0e1117;   /* Streamlit app background */
+  --bg-surface:      #1e1e2e;   /* Cards, panels */
+  --bg-table-header: #262730;   /* Table <th> */
+  --bg-subtle:       #222222;   /* Progress bar tracks, inner elements */
+  --bg-input:        #1f2937;   /* Skip badge bg, reused for input surfaces */
+
+  /* ── Borders ─────────────────────────────────────── */
+  --border-strong:   #444444;   /* Table header bottom border */
+  --border-default:  #333333;   /* Card border, table cell borders */
+
+  /* ── Text ────────────────────────────────────────── */
+  --text-primary:    #ffffff;
+  --text-secondary:  #cccccc;
+  --text-muted:      #9aa0a6;
+  --text-disabled:   #666666;
+
+  /* ── Signal / Semantic ───────────────────────────── */
+  --color-buy:       #28a745;   /* BUY / success / approve / risk-on */
+  --color-sell:      #dc3545;   /* SELL / danger / reject / risk-off */
+  --color-watch:     #fd7e14;   /* WATCH / partial / warning */
+  --color-action:    #0d6efd;   /* Primary action / running / button */
+  --color-neutral:   #6c757d;   /* Neutral / muted badge */
+  --color-success-alt: #198754; /* Secondary success (copy-json button) */
+
+  /* ── Agent Accent Colors ─────────────────────────── */
+  --agent-gpt:       #10b981;   /* ChatGPT 5.2 — emerald */
+  --agent-grok:      #f59e0b;   /* Grok 4.1 Reasoning — amber */
+  --agent-gemini:    #60a5fa;   /* Gemini 3.0 Pro — sky blue */
+
+  /* ── Badge Cell Pairs (bg / text) ────────────────── */
+  --badge-buy-bg:     #14532d;
+  --badge-buy-text:   #dcfce7;
+  --badge-sell-bg:    #7f1d1d;
+  --badge-sell-text:  #fee2e2;
+  --badge-neutral-bg: #374151;
+  --badge-neutral-text:#e5e7eb;
+  --badge-approve-bg: #14532d;
+  --badge-approve-text:#dcfce7;
+  --badge-reject-bg:  #7c2d12;
+  --badge-reject-text:#ffedd5;
+  --badge-watch-bg:   #78350f;
+  --badge-watch-text: #fef3c7;
+  --badge-skip-bg:    #1f2937;
+  --badge-skip-text:  #d1d5db;
+
+  /* ── Table Row Tints ─────────────────────────────── */
+  --row-confluence-buy:  rgba(34, 197, 94, 0.08);
+  --row-confluence-sell: rgba(239, 68, 68, 0.08);
+  --row-divergence:      rgba(245, 158, 11, 0.08);
+  --row-reject-high-d1:  rgba(251, 191, 36, 0.10);
+
+  /* ── Chart Colors ────────────────────────────────── */
+  --chart-line:          #4ea1ff;
+  --chart-fill-positive: rgba(40, 167, 69, 0.18);
+  --chart-fill-negative: rgba(220, 53, 69, 0.16);
+
+  /* ── Impact Score Text Colors ────────────────────── */
+  --impact-strong-positive: #28a745;
+  --impact-strong-negative: #dc3545;
+  --impact-weak-positive:   #90ee90;
+  --impact-weak-negative:   #f08080;
+  --impact-neutral:         #888888;
+
+  /* ── Typography ──────────────────────────────────── */
+  --font-sans:     system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  --font-mono:     "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+
+  --text-xs:    0.70rem;   /* Range labels, chart axis */
+  --text-sm:    0.80rem;   /* Badges */
+  --text-base:  0.85rem;   /* Labels, captions */
+  --text-md:    0.90rem;   /* Table body */
+  --text-lg:    1.00rem;   /* Body / default */
+  --text-xl:    1.10rem;   /* Subheadings */
+  --text-2xl:   1.30rem;   /* Section headings */
+  --text-3xl:   1.60rem;   /* Page headings / metric values */
+
+  --weight-normal:   400;
+  --weight-semibold: 600;
+  --weight-bold:     700;
+
+  --leading-tight:  1.25;
+  --leading-normal: 1.5;
+
+  /* ── Spacing ─────────────────────────────────────── */
+  --space-1:  2px;
+  --space-2:  4px;
+  --space-3:  6px;
+  --space-4:  8px;
+  --space-5:  12px;
+  --space-6:  16px;
+  --space-7:  24px;
+  --space-8:  32px;
+
+  /* ── Border Radii ────────────────────────────────── */
+  --radius-sm:   4px;    /* Badge inline */
+  --radius-md:   5px;    /* Progress bars */
+  --radius-lg:   6px;    /* Buttons */
+  --radius-xl:   8px;    /* Cards */
+  --radius-pill: 999px;  /* Severity pill badges */
+
+  /* ── Component: Card ─────────────────────────────── */
+  --card-bg:      var(--bg-surface);
+  --card-border:  1px solid var(--border-default);
+  --card-radius:  var(--radius-xl);
+  --card-padding: var(--space-6);
+
+  /* ── Component: Badge (inline) ───────────────────── */
+  --badge-padding-y: 3px;
+  --badge-padding-x: 8px;
+  --badge-radius:    var(--radius-sm);
+  --badge-weight:    var(--weight-bold);
+
+  /* ── Component: Table ────────────────────────────── */
+  --table-th-bg:         var(--bg-table-header);
+  --table-th-color:      var(--text-primary);
+  --table-th-padding:    12px;
+  --table-th-border:     2px solid var(--border-strong);
+  --table-td-padding:    12px;
+  --table-td-border:     1px solid var(--border-default);
+  --table-font-size:     var(--text-md);
+  --table-line-height:   var(--leading-normal);
+}

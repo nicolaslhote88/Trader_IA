@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #0e1117; font-family: system-ui, sans-serif; padding: 16px; display: flex; flex-direction: column; gap: 14px; width: 420px; }
+  .indicator { display: flex; flex-direction: column; gap: 4px; }
+  .ind-header { display: flex; justify-content: space-between; align-items: center; }
+  .ind-label { color: #ccc; font-size: 0.85em; font-weight: 600; }
+  .ind-value { font-size: 0.85em; font-weight: bold; }
+  .track { position: relative; height: 10px; background: #222; border-radius: 5px; overflow: hidden; }
+  .segment { position: absolute; top: 0; height: 100%; opacity: 0.25; }
+  .cursor { position: absolute; top: 0; width: 3px; height: 100%; background: #fff; border-radius: 1px; transform: translateX(-1px); z-index: 2; }
+  .range { display: flex; justify-content: space-between; margin-top: 1px; }
+  .range span { color: #666; font-size: 0.7em; }
+</style>
+</head><body>
+  <!-- RSI 14 — Overbought -->
+  <div class="indicator">
+    <div class="ind-header">
+      <span class="ind-label">RSI 14</span>
+      <span class="ind-value" style="color:#dc3545;">72.4 — Overbought</span>
+    </div>
+    <div class="track">
+      <div class="segment" style="left:0%;width:30%;background:#28a745;"></div>
+      <div class="segment" style="left:30%;width:40%;background:#6c757d;"></div>
+      <div class="segment" style="left:70%;width:30%;background:#dc3545;"></div>
+      <div class="cursor" style="left:72.4%;"></div>
+    </div>
+    <div class="range"><span>0</span><span>100</span></div>
+  </div>
+
+  <!-- MACD Signal — Neutral -->
+  <div class="indicator">
+    <div class="ind-header">
+      <span class="ind-label">MACD Signal</span>
+      <span class="ind-value" style="color:#9aa0a6;">0.18 — Neutral</span>
+    </div>
+    <div class="track">
+      <div class="segment" style="left:0%;width:50%;background:#dc3545;"></div>
+      <div class="segment" style="left:50%;width:50%;background:#28a745;"></div>
+      <div class="cursor" style="left:53%;"></div>
+    </div>
+    <div class="range"><span>-2.0</span><span>2.0</span></div>
+  </div>
+
+  <!-- ADX — Trend strong -->
+  <div class="indicator">
+    <div class="ind-header">
+      <span class="ind-label">ADX</span>
+      <span class="ind-value" style="color:#28a745;">38.2 — Trending</span>
+    </div>
+    <div class="track">
+      <div class="segment" style="left:0%;width:25%;background:#6c757d;"></div>
+      <div class="segment" style="left:25%;width:75%;background:#28a745;"></div>
+      <div class="cursor" style="left:38.2%;"></div>
+    </div>
+    <div class="range"><span>0</span><span>100</span></div>
+  </div>
+
+  <!-- ATR — High volatility -->
+  <div class="indicator">
+    <div class="ind-header">
+      <span class="ind-label">ATR (14)</span>
+      <span class="ind-value" style="color:#fd7e14;">4.21 — Elevated</span>
+    </div>
+    <div class="track">
+      <div class="segment" style="left:0%;width:33%;background:#28a745;"></div>
+      <div class="segment" style="left:33%;width:34%;background:#fd7e14;"></div>
+      <div class="segment" style="left:67%;width:33%;background:#dc3545;"></div>
+      <div class="cursor" style="left:67%;"></div>
+    </div>
+    <div class="range"><span>0</span><span>6.3</span></div>
+  </div>
+</body></html>

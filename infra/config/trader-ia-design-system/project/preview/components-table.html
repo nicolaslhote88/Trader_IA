@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+  body { margin: 0; background: #0e1117; font-family: system-ui, sans-serif; padding: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th {
+    background: #262730; color: #fff;
+    padding: 12px; text-align: left;
+    border-bottom: 2px solid #444;
+  }
+  td { padding: 12px; border-bottom: 1px solid #333; vertical-align: top; color: #ccc; line-height: 1.5; }
+  .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 700; }
+  .row-buy  td { background: rgba(34,197,94,0.08); }
+  .row-sell td { background: rgba(239,68,68,0.08); }
+  .row-div  td { background: rgba(245,158,11,0.08); }
+</style>
+</head><body>
+<table>
+  <thead>
+    <tr>
+      <th>Symbol</th>
+      <th>Nom</th>
+      <th>D1 Signal</th>
+      <th>H1 Signal</th>
+      <th>Score IA</th>
+      <th>Grade</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr class="row-buy">
+      <td>AAPL</td><td>Apple Inc.</td>
+      <td><span class="badge" style="background:#14532d;color:#dcfce7;">BUY</span></td>
+      <td><span class="badge" style="background:#14532d;color:#dcfce7;">BUY</span></td>
+      <td>84.2</td><td><strong style="color:#10b981;">A</strong></td>
+    </tr>
+    <tr class="row-div">
+      <td>MSFT</td><td>Microsoft Corp.</td>
+      <td><span class="badge" style="background:#14532d;color:#dcfce7;">BUY</span></td>
+      <td><span class="badge" style="background:#374151;color:#e5e7eb;">NEUTRAL</span></td>
+      <td>67.1</td><td><strong style="color:#f59e0b;">B</strong></td>
+    </tr>
+    <tr>
+      <td>TTE</td><td>TotalEnergies SE</td>
+      <td><span class="badge" style="background:#374151;color:#e5e7eb;">NEUTRAL</span></td>
+      <td><span class="badge" style="background:#374151;color:#e5e7eb;">NEUTRAL</span></td>
+      <td>51.0</td><td><strong style="color:#6c757d;">C</strong></td>
+    </tr>
+    <tr class="row-sell">
+      <td>TSLA</td><td>Tesla Inc.</td>
+      <td><span class="badge" style="background:#7f1d1d;color:#fee2e2;">SELL</span></td>
+      <td><span class="badge" style="background:#7f1d1d;color:#fee2e2;">SELL</span></td>
+      <td>22.8</td><td><strong style="color:#dc3545;">C</strong></td>
+    </tr>
+  </tbody>
+</table>
+</body></html>
