@@ -152,10 +152,61 @@ def build() -> dict:
             "name": "20G0 - Add Keys",
         },
         {
-            "parameters": {"jsCode": load_code("03_prepare_llm_input.js")},
+            "parameters": {"language": "pythonNative", "pythonCode": load_code("03_route_seen_fx_news.py")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
             "position": [448, 64],
+            "id": "5d744ad3-85ff-4ced-81ad-c5756cf2614e",
+            "name": "20G1 - Route Seen FX News",
+        },
+        {
+            "parameters": {
+                "rules": {
+                    "values": [
+                        {
+                            "conditions": {
+                                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "loose", "version": 3},
+                                "conditions": [
+                                    {
+                                        "id": "analyze",
+                                        "leftValue": "={{$json._action}}",
+                                        "rightValue": "analyze",
+                                        "operator": {"type": "string", "operation": "equals"},
+                                    }
+                                ],
+                                "combinator": "and",
+                            }
+                        },
+                        {
+                            "conditions": {
+                                "options": {"caseSensitive": True, "leftValue": "", "typeValidation": "loose", "version": 3},
+                                "conditions": [
+                                    {
+                                        "id": "skip",
+                                        "leftValue": "={{$json._action}}",
+                                        "rightValue": "skip",
+                                        "operator": {"type": "string", "operation": "equals"},
+                                    }
+                                ],
+                                "combinator": "and",
+                            }
+                        },
+                    ]
+                },
+                "looseTypeValidation": True,
+                "options": {},
+            },
+            "type": "n8n-nodes-base.switch",
+            "typeVersion": 3.4,
+            "position": [672, 64],
+            "id": "1c20d627-77b2-4774-9b72-68d24d3358f7",
+            "name": "20G2 - Router Analyze vs Skip",
+        },
+        {
+            "parameters": {"jsCode": load_code("03_prepare_llm_input.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [896, 64],
             "id": "a66d30b6-108c-493e-a686-e52836876c8f",
             "name": "20H0 - Prepare LLM Input",
         },
@@ -182,7 +233,7 @@ def build() -> dict:
             },
             "type": "@n8n/n8n-nodes-langchain.openAi",
             "typeVersion": 2.1,
-            "position": [672, 64],
+            "position": [1120, 64],
             "id": "c684af9d-1471-458c-8224-cfc03227d129",
             "name": "20H1 - Analyze with OpenAI",
             "credentials": {"openAiApi": {"id": "rILpYjTayqc4jXXZ", "name": "OpenAi account"}},
@@ -191,7 +242,7 @@ def build() -> dict:
             "parameters": {"mode": "combine", "combineBy": "combineByPosition", "options": {}},
             "type": "n8n-nodes-base.merge",
             "typeVersion": 3.2,
-            "position": [896, 64],
+            "position": [1344, 64],
             "id": "151e64e7-a473-4454-b8f2-923e77832577",
             "name": "20H1B - Merge AI + Context",
         },
@@ -199,7 +250,7 @@ def build() -> dict:
             "parameters": {"jsCode": load_code("04_parse_llm_output.js")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [1120, 64],
+            "position": [1568, 64],
             "id": "09a87adf-ed70-46da-9adf-fd0cc58936f5",
             "name": "20H2 - Parse AI Output",
         },
@@ -207,7 +258,7 @@ def build() -> dict:
             "parameters": {"language": "pythonNative", "pythonCode": load_code("05_write_fx_news_duckdb.py")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [1344, 64],
+            "position": [1792, 64],
             "id": "a8c43031-7318-4aa6-a10f-b98d12e14ac1",
             "name": "20DBW - Upsert FX News DuckDB",
         },
@@ -244,7 +295,14 @@ def build() -> dict:
                 [{"node": "20G0 - Add Keys", "type": "main", "index": 0}],
             ]
         },
-        "20G0 - Add Keys": {"main": [[{"node": "20H0 - Prepare LLM Input", "type": "main", "index": 0}]]},
+        "20G0 - Add Keys": {"main": [[{"node": "20G1 - Route Seen FX News", "type": "main", "index": 0}]]},
+        "20G1 - Route Seen FX News": {"main": [[{"node": "20G2 - Router Analyze vs Skip", "type": "main", "index": 0}]]},
+        "20G2 - Router Analyze vs Skip": {
+            "main": [
+                [{"node": "20H0 - Prepare LLM Input", "type": "main", "index": 0}],
+                [{"node": "20G - Split FX Items", "type": "main", "index": 0}],
+            ]
+        },
         "20H0 - Prepare LLM Input": {
             "main": [
                 [

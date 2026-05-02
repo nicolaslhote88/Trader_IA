@@ -121,12 +121,88 @@
     },
     {
       "parameters": {
-        "jsCode": "function stripHtml(s) {\n  if (!s) return '';\n  return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nconst j = $json || {};\nconst payload = {\n  dedupeKey: j.dedupeKey,\n  eventKey: j.eventKey,\n  origin: 'fx_channel',\n  source: j.source || 'fx_channel',\n  sourceTier: j.sourceTier || 'A',\n  title: stripHtml(j.title || 'unknown'),\n  snippet: stripHtml(j.snippet || ''),\n  url: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n  publishedAt: j.publishedAt || 'unknown',\n};\n\nreturn {\n  ...j,\n  llmInput: JSON.stringify(payload),\n};\n\n"
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nfrom datetime import datetime, timezone\n\nDB_PATH = \"/files/duckdb/ag4_forex_v1.duckdb\"\n\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = str(ctx.get(\"db_path\") or DB_PATH)\ndedupe_key = str(ctx.get(\"dedupeKey\") or \"\").strip()\nnow = datetime.now(timezone.utc)\n\nif not dedupe_key:\n    return [{\"json\": {**ctx, \"_action\": \"analyze\", \"_reason\": \"missing_dedupe_key\"}}]\n\ntry:\n    with duckdb.connect(db_path) as con:\n        con.execute(\"CREATE SCHEMA IF NOT EXISTS main\")\n        tables = {\n            r[0].lower()\n            for r in con.execute(\n                \"SELECT table_name FROM information_schema.tables WHERE table_schema='main'\"\n            ).fetchall()\n        }\n        if \"fx_news_history\" not in tables:\n            return [{\"json\": {**ctx, \"_action\": \"analyze\", \"_reason\": \"history_table_missing\"}}]\n\n        row = con.execute(\n            \"\"\"\n            SELECT dedupe_key\n            FROM main.fx_news_history\n            WHERE dedupe_key = ?\n            LIMIT 1\n            \"\"\",\n            [dedupe_key],\n        ).fetchone()\n\n        if not row:\n            return [{\"json\": {**ctx, \"_action\": \"analyze\", \"_reason\": \"new_dedupe_key\"}}]\n\n        con.execute(\n            \"\"\"\n            UPDATE main.fx_news_history\n            SET last_seen_at = ?, updated_at = CURRENT_TIMESTAMP\n            WHERE dedupe_key = ?\n            \"\"\",\n            [now, dedupe_key],\n        )\n        return [{\"json\": {**ctx, \"_action\": \"skip\", \"_reason\": \"dedupe_key_seen\"}}]\nexcept Exception as exc:\n    return [{\"json\": {**ctx, \"_action\": \"analyze\", \"_reason\": \"dedupe_check_error\", \"_dedupe_error\": str(exc)}}]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         448,
+        64
+      ],
+      "id": "5d744ad3-85ff-4ced-81ad-c5756cf2614e",
+      "name": "20G1 - Route Seen FX News"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "analyze",
+                    "leftValue": "={{$json._action}}",
+                    "rightValue": "analyze",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "skip",
+                    "leftValue": "={{$json._action}}",
+                    "rightValue": "skip",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              }
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        672,
+        64
+      ],
+      "id": "1c20d627-77b2-4774-9b72-68d24d3358f7",
+      "name": "20G2 - Router Analyze vs Skip"
+    },
+    {
+      "parameters": {
+        "jsCode": "function stripHtml(s) {\n  if (!s) return '';\n  return String(s).replace(/<[^>]*>/g, ' ').replace(/\\s+/g, ' ').trim();\n}\n\nconst j = $json || {};\nconst payload = {\n  dedupeKey: j.dedupeKey,\n  eventKey: j.eventKey,\n  origin: 'fx_channel',\n  source: j.source || 'fx_channel',\n  sourceTier: j.sourceTier || 'A',\n  title: stripHtml(j.title || 'unknown'),\n  snippet: stripHtml(j.snippet || ''),\n  url: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',\n  publishedAt: j.publishedAt || 'unknown',\n};\n\nreturn {\n  ...j,\n  llmInput: JSON.stringify(payload),\n};\n\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
         64
       ],
       "id": "a66d30b6-108c-493e-a686-e52836876c8f",
@@ -166,7 +242,7 @@
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 2.1,
       "position": [
-        672,
+        1120,
         64
       ],
       "id": "c684af9d-1471-458c-8224-cfc03227d129",
@@ -187,7 +263,7 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        896,
+        1344,
         64
       ],
       "id": "151e64e7-a473-4454-b8f2-923e77832577",
@@ -200,7 +276,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1120,
+        1568,
         64
       ],
       "id": "09a87adf-ed70-46da-9adf-fd0cc58936f5",
@@ -214,7 +290,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        1344,
+        1792,
         64
       ],
       "id": "a8c43031-7318-4aa6-a10f-b98d12e14ac1",
@@ -338,7 +414,36 @@
       "main": [
         [
           {
+            "node": "20G1 - Route Seen FX News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20G1 - Route Seen FX News": {
+      "main": [
+        [
+          {
+            "node": "20G2 - Router Analyze vs Skip",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "20G2 - Router Analyze vs Skip": {
+      "main": [
+        [
+          {
             "node": "20H0 - Prepare LLM Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "20G - Split FX Items",
             "type": "main",
             "index": 0
           }
