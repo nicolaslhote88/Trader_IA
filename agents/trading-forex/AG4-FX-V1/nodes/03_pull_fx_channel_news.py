@@ -3,7 +3,7 @@ import duckdb
 
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 path = ctx.get("ag4_forex_path") or "/files/duckdb/ag4_forex_v1.duckdb"
-lookback = int(ctx.get("lookback_hours") or 24)
+lookback = max(1, min(168, int(ctx.get("lookback_hours") or 96)))
 news = []
 macro = {}
 pairs_rows = []
@@ -25,16 +25,20 @@ if os.path.exists(path):
                       CAST(impact_fx_pairs AS VARCHAR) AS impact_fx_pairs,
                       CAST(currencies_bullish AS VARCHAR) AS currencies_bullish,
                       CAST(currencies_bearish AS VARCHAR) AS currencies_bearish,
-                      CAST(fx_directional_hint AS VARCHAR) AS fx_directional_hint
+                      CAST(fx_directional_hint AS VARCHAR) AS fx_directional_hint,
+                      CAST(regime AS VARCHAR) AS regime,
+                      CAST(confidence AS VARCHAR) AS confidence,
+                      CAST(impact_score AS VARCHAR) AS impact_score,
+                      CAST(urgency AS VARCHAR) AS urgency,
+                      CAST(origin AS VARCHAR) AS origin
                     FROM main.fx_news_history
-                    WHERE published_at >= CURRENT_TIMESTAMP - INTERVAL '{lookback} hours'
+                    WHERE origin = 'fx_channel'
+                      AND published_at >= CURRENT_TIMESTAMP - INTERVAL '{lookback} hours'
                     ORDER BY published_at DESC
                     LIMIT 200
                     """
                 ).fetchdf()
                 news = df.to_dict("records")
-                for r in news:
-                    r["origin"] = "fx_channel"
             if "fx_macro" in tables:
                 df = con.execute("SELECT * FROM main.fx_macro ORDER BY as_of DESC LIMIT 1").fetchdf()
                 if not df.empty:

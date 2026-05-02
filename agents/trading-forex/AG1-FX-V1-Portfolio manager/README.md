@@ -31,7 +31,10 @@ JSON workflows by hand — regenerate them.
 
 ## Safety
 
-The generated workflows keep a P3-safe `LLM Decision Placeholder` that emits `hold` decisions until Nicolas validates the first manual run and the real provider nodes are connected in n8n. The downstream parser, risk manager, execution simulator and ledger writes are already wired.
+The generated workflows use real LangChain agent nodes for all three variants:
+OpenAI (`chatgpt52`), xAI Grok (`grok41_reasoning`) and Google Gemini
+(`gemini30_pro`). The downstream parser, risk manager, execution simulator and
+ledger writes are wired after each provider-specific agent merge.
 
 ## Local replay
 

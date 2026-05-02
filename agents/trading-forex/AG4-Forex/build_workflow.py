@@ -125,7 +125,7 @@ def build() -> dict:
             "name": "20E - RSS Feed Read",
             "retryOnFail": True,
             "maxTries": 2,
-            "onError": "continueRegularOutput",
+            "onError": "continueErrorOutput",
         },
         {
             "parameters": {"jsCode": load_code("01_normalize_fx_rss_items.js")},
@@ -231,7 +231,12 @@ def build() -> dict:
                 [{"node": "20E - RSS Feed Read", "type": "main", "index": 0}],
             ]
         },
-        "20E - RSS Feed Read": {"main": [[{"node": "20F - Normalize FX RSS Items", "type": "main", "index": 0}]]},
+        "20E - RSS Feed Read": {
+            "main": [
+                [{"node": "20F - Normalize FX RSS Items", "type": "main", "index": 0}],
+                [{"node": "20D - Split FX Feeds", "type": "main", "index": 0}],
+            ]
+        },
         "20F - Normalize FX RSS Items": {"main": [[{"node": "20G - Split FX Items", "type": "main", "index": 0}]]},
         "20G - Split FX Items": {
             "main": [

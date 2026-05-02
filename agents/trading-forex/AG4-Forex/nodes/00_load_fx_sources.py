@@ -25,25 +25,25 @@ sources:
     type: rss
     url: https://www.fxstreet.com/rss/news
     tier: A
-    enabled: false
+    enabled: true
 
   - id: fed_statements
     type: rss
     url: https://www.federalreserve.gov/feeds/press_monetary.xml
     tier: S
-    enabled: false
+    enabled: true
 
   - id: ecb_press
     type: rss
     url: https://www.ecb.europa.eu/rss/press.html
     tier: S
-    enabled: false
+    enabled: true
 
   - id: boj_statements
     type: rss
     url: https://www.boj.or.jp/en/rss/whatsnew.xml
     tier: S
-    enabled: false
+    enabled: true
 """
 
 

@@ -1,4 +1,4 @@
-const model = $env.AG1_FX_LLM_MODEL || $json.llm_model || 'gpt-5.2-2025-12-11';
+const model = $env.AG1_FX_LLM_MODEL || $json.llm_model || 'gpt-5.5';
 const variant = $env.AG1_FX_VARIANT || $json.variant || 'chatgpt52';
 const dbPathByVariant = {
   chatgpt52: $env.AG1_FX_V1_CHATGPT52_DUCKDB_PATH || '/files/duckdb/ag1_fx_v1_chatgpt52.duckdb',
