@@ -19,12 +19,24 @@ sources:
     type: rss
     url: https://www.dailyfx.com/feeds/market-news
     tier: A
-    enabled: false
+    enabled: true
 
   - id: fxstreet_news
     type: rss
     url: https://www.fxstreet.com/rss/news
     tier: A
+    enabled: true
+
+  - id: investing_econ_calendar
+    type: api
+    url: https://api.investing.com/api/financialdata/economic-calendar
+    tier: A
+    enabled: true
+
+  - id: bis_press
+    type: rss
+    url: https://www.bis.org/rss/press.xml
+    tier: S
     enabled: true
 
   - id: fed_statements

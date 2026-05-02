@@ -187,7 +187,7 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
 - Trigger :
   - cadence Ã  fixer par Nicolas (proposÃ© : toutes les 30 min).
 - Sources :
-  - `infra/config/sources/fx_sources.yaml` â€” liste dans l'ordre : ForexLive (actif par dÃ©faut), DailyFX, FXStreet, Investing economic calendar, BIS, Fed, ECB, BoJ. Les sources sont activÃ©es progressivement via le flag `enabled` par Nicolas.
+  - `infra/config/sources/fx_sources.yaml` â€” liste dans l'ordre : ForexLive, DailyFX, FXStreet, Investing economic calendar, BIS, Fed, ECB, BoJ. Toutes les entrÃ©es sont dÃ©sormais `enabled: true` pour le passage sandbox complet; le loader AG4-Forex ne consomme toutefois que `type=rss`, donc `investing_econ_calendar` nÃ©cessite encore une branche API avant ingestion effective.
 - Pipeline :
   1. `00_load_fx_sources.py` â€” chargement YAML + filtre `enabled=true`, init schema, ouverture run log,
   2. `01_normalize_fx_rss_items.js` â€” normalisation RSS â†’ schÃ©ma commun,

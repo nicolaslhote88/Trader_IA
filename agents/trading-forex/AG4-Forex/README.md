@@ -5,6 +5,13 @@ deduplicates news before the LLM call, applies the AG4 geo/asset-class tagger to
 new items only, and writes actionable FX/Mixed items into
 `/files/duckdb/ag4_forex_v1.duckdb`.
 
+## Source activation
+
+All entries in `infra/config/sources/fx_sources.yaml` are set to `enabled: true`
+for the full sandbox coverage pass. The current workflow loader only emits
+sources where `type: rss`; `investing_econ_calendar` is enabled in config but
+requires a future API ingestion branch before it can produce items.
+
 ## Dedupe and LLM bypass
 
 `02_add_keys.js` computes a stable `dedupeKey` from the canonical URL, or from
