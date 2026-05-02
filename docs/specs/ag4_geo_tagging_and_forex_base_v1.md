@@ -17,7 +17,7 @@ La livraison Codex a Ã©tÃ© vÃ©rifiÃ©e section par section contre ce brie
 - âœ… Guardrails taxonomie dans `agents/common/AG4-V3/nodes/10_parse_llm_output.js` (ALLOWED_REGIONS / CLASSES / MAG / PAIRS, dÃ©rivation FX pairs depuis `currencies_bullish/bearish`, `tagger_version = 'geo_v1'`).
 - âœ… Dual-write conditionnel via `agents/common/AG4-V3/nodes/14_write_fx_news_duckdb.py` (filtre `impact_asset_class âˆˆ {FX, Mixed}`, `origin='global_base'`).
 - âœ… Prompt LLM et JSON schema Ã©tendus dans `AG4-V3-workflow.json`.
-- âœ… Workflow `AG4-Forex` complet (7 nodes, cron `*/30 7-20 * * 1-5`, `origin='fx_channel'`).
+- âœ… Workflow `AG4-Forex` complet (16 nodes, cron `*/30 7-20 * * 1-5`, `origin='fx_channel'`, bypass prÃ©-LLM des `dedupe_key` dÃ©jÃ  vus).
 - âœ… Config `infra/config/sources/fx_sources.yaml` (forexlive_main enabled par dÃ©faut, 7 autres sources prÃªtes Ã  activer).
 - âœ… Backfill idempotent `infra/maintenance/ag4_geo_backfill/backfill_geo_tags.py` + runner VPS.
 
@@ -551,9 +551,10 @@ Trois changements :
 Nouveau workflow n8n sÃ©parÃ©. ResponsabilitÃ©s :
 
 1. **Ingestion depuis `fx_sources.yaml`** : poller les sources marquÃ©es `enabled: true` (Â§5.1).
-2. **DÃ©duplication** sur `dedupe_key`.
-3. **Analyse LLM** : mÃªme prompt qu'AG4_V3 (rÃ©utilisation), mais la sortie Ã©crit dans `fx_news_history` avec `origin='fx_channel'`.
-4. **AgrÃ©gation horaire** (frÃ©quence Ã  fixer par Nicolas, proposition : toutes les 30 min) :
+2. **DÃ©duplication prÃ©-LLM** sur `dedupe_key` : `03_route_seen_fx_news.py` lit `fx_news_history`; si la news existe dÃ©jÃ , le workflow met Ã  jour `last_seen_at` puis retourne Ã  la boucle sans nouvel appel LLM.
+3. **Analyse LLM des nouvelles news uniquement** : mÃªme prompt qu'AG4_V3 (rÃ©utilisation), mais la sortie Ã©crit dans `fx_news_history` avec `origin='fx_channel'`.
+4. **Garde d'Ã©criture idempotente** : `dedupe_key` reste la clÃ© primaire et `INSERT OR REPLACE` protÃ¨ge contre les doublons rÃ©siduels.
+5. **AgrÃ©gation horaire** (frÃ©quence Ã  fixer par Nicolas, proposition : toutes les 30 min) :
    - Recalcul de `fx_macro` (rÃ©gime FX global, biais par devise) via synthÃ¨se LLM sur les N derniÃ¨res news FX de la fenÃªtre.
    - Recalcul de `fx_pairs` (biais directionnel par paire) via synthÃ¨se LLM.
 

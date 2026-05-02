@@ -192,10 +192,12 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   1. `00_load_fx_sources.py` â€” chargement YAML + filtre `enabled=true`, init schema, ouverture run log,
   2. `01_normalize_fx_rss_items.js` â€” normalisation RSS â†’ schÃ©ma commun,
   3. `02_add_keys.js` â€” calcul `dedupe_key` / `event_key` alignÃ©s sur AG4-V3,
-  4. `03_prepare_llm_input.js` â€” prompt harmonisÃ© avec AG4-V3 (rÃ©utilisation du mÃªme LLM),
-  5. `04_parse_llm_output.js` â€” parsing + sanitize identique,
-  6. `05_write_fx_news_duckdb.py` â€” Ã©criture dans `ag4_forex_v1.fx_news_history` avec `origin='fx_channel'`,
-  7. `06_finalize_fx_run.py` â€” clÃ´ture `run_log`.
+  4. `03_route_seen_fx_news.py` â€” bypass prÃ©-LLM : si le `dedupe_key` existe dÃ©jÃ  dans `ag4_forex_v1.fx_news_history`, mise Ã  jour de `last_seen_at` puis retour Ã  la boucle sans appel OpenAI,
+  5. `20G2 - Router Analyze vs Skip` â€” route les news nouvelles vers le LLM et les doublons vers `20G - Split FX Items`,
+  6. `03_prepare_llm_input.js` â€” prompt harmonisÃ© avec AG4-V3 (rÃ©utilisation du mÃªme LLM),
+  7. `04_parse_llm_output.js` â€” parsing + sanitize identique,
+  8. `05_write_fx_news_duckdb.py` â€” Ã©criture dans `ag4_forex_v1.fx_news_history` avec `origin='fx_channel'` (`dedupe_key` reste la garde finale cÃ´tÃ© DuckDB),
+  9. `06_finalize_fx_run.py` â€” clÃ´ture `run_log`.
 - RÃ´le : alimenter une base FX isolÃ©e pour que le futur PM Forex dÃ©diÃ© (AG1_Forex, hors scope pour l'instant) puisse produire un brief pondÃ©rÃ© sans mÃ©lange avec les signaux actions.
 
 ### 3.7 AG4-SPE-V2 â€” News spÃ©cifiques par valeur
