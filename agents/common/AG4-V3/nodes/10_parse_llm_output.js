@@ -167,7 +167,6 @@ function ensureFxPairs(assetClass, rawPairs, ccyBullish, ccyBearish, violations)
     if (ccy === 'CAD') { add('USDCAD'); add('CADJPY'); add('EURCAD'); }
     if (ccy === 'NZD') { add('NZDUSD'); add('NZDJPY'); add('EURNZD'); }
   }
-  if (derived.length === 0) add('EURUSD');
   violations.push('impact_fx_pairs:missing_derived');
   return derived.slice(0, 5).join(', ');
 }

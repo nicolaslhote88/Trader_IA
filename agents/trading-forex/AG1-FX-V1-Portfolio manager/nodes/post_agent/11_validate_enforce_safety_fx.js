@@ -44,6 +44,18 @@ function currencyExposures(lots, addOrders, brief) {
   return ex;
 }
 
+function rejectionSummary(orders) {
+  const byReason = {};
+  let rejected = 0;
+  for (const order of orders || []) {
+    if (order.status !== 'rejected') continue;
+    rejected += 1;
+    const reason = order.rejection_reason || 'UNKNOWN';
+    byReason[reason] = (byReason[reason] || 0) + 1;
+  }
+  return { rejected_orders_count: rejected, rejection_reasons: byReason };
+}
+
 const j = $json || {};
 const brief = j.brief || {};
 const cfg = brief.config || {};
@@ -154,4 +166,5 @@ for (const d of decisions) {
   orders.push(base);
 }
 
-return [{ json: { ...j, kill_switch_active_effective: killSwitch, executable_orders: orders, risk_alerts: alerts } }];
+const safetySummary = rejectionSummary(orders);
+return [{ json: { ...j, kill_switch_active_effective: killSwitch, executable_orders: orders, risk_alerts: alerts, safety_summary: safetySummary } }];

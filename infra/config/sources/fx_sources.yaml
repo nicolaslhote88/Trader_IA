@@ -9,19 +9,19 @@ sources:
     type: rss
     url: https://www.dailyfx.com/feeds/market-news
     tier: A
-    enabled: false
+    enabled: true
 
   - id: fxstreet_news
     type: rss
     url: https://www.fxstreet.com/rss/news
     tier: A
-    enabled: false
+    enabled: true
 
   - id: investing_econ_calendar
     type: api
     url: https://api.investing.com/api/financialdata/economic-calendar
     tier: A
-    enabled: false
+    enabled: true
     params:
       countries: [US, EU, JP, GB, CH, AU, CA, NZ]
       importance: [2, 3]
@@ -30,22 +30,22 @@ sources:
     type: rss
     url: https://www.bis.org/rss/press.xml
     tier: S
-    enabled: false
+    enabled: true
 
   - id: fed_statements
     type: rss
     url: https://www.federalreserve.gov/feeds/press_monetary.xml
     tier: S
-    enabled: false
+    enabled: true
 
   - id: ecb_press
     type: rss
     url: https://www.ecb.europa.eu/rss/press.html
     tier: S
-    enabled: false
+    enabled: true
 
   - id: boj_statements
     type: rss
     url: https://www.boj.or.jp/en/rss/whatsnew.xml
     tier: S
-    enabled: false
+    enabled: true

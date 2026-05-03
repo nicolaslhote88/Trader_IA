@@ -17,8 +17,8 @@ La livraison Codex a Ã©tÃ© vÃ©rifiÃ©e section par section contre ce brie
 - âœ… Guardrails taxonomie dans `agents/common/AG4-V3/nodes/10_parse_llm_output.js` (ALLOWED_REGIONS / CLASSES / MAG / PAIRS, dÃ©rivation FX pairs depuis `currencies_bullish/bearish`, `tagger_version = 'geo_v1'`).
 - âœ… Dual-write conditionnel via `agents/common/AG4-V3/nodes/14_write_fx_news_duckdb.py` (filtre `impact_asset_class âˆˆ {FX, Mixed}`, `origin='global_base'`).
 - âœ… Prompt LLM et JSON schema Ã©tendus dans `AG4-V3-workflow.json`.
-- âœ… Workflow `AG4-Forex` complet (7 nodes, cron `*/30 7-20 * * 1-5`, `origin='fx_channel'`).
-- âœ… Config `infra/config/sources/fx_sources.yaml` (forexlive_main enabled par dÃ©faut, 7 autres sources prÃªtes Ã  activer).
+- âœ… Workflow `AG4-Forex` complet (16 nodes, cron `*/30 7-20 * * 1-5`, `origin='fx_channel'`, bypass prÃ©-LLM des `dedupe_key` dÃ©jÃ  vus).
+- âœ… Config `infra/config/sources/fx_sources.yaml` (toutes les sources `enabled: true`; le workflow actuel ne consomme que les entrÃ©es `type: rss`, la source API Investing restant Ã  brancher).
 - âœ… Backfill idempotent `infra/maintenance/ag4_geo_backfill/backfill_geo_tags.py` + runner VPS.
 
 **Reste Ã  faire cÃ´tÃ© opÃ©rationnel (non couvert par la livraison code)** :
@@ -26,7 +26,7 @@ La livraison Codex a Ã©tÃ© vÃ©rifiÃ©e section par section contre ce brie
 1. DÃ©ployer les migrations sur le VPS via `infra/maintenance/ag4_geo_backfill/run_ag4_geo_forex_migration_vps.sh`.
 2. Lancer le backfill 3 mois (`python backfill_geo_tags.py --since 90`) et vÃ©rifier la couverture via les requÃªtes Â§9.
 3. Laisser tourner AG4-V3 enrichi pendant ~48 h avant d'activer AG4-Forex puis, plus tard, un PM Forex dÃ©diÃ©.
-4. Activer progressivement les sources FX supplÃ©mentaires (`enabled: true` dans `fx_sources.yaml`) aprÃ¨s contrÃ´le qualitÃ©.
+4. Surveiller les sources FX supplÃ©mentaires maintenant activÃ©es (`enabled: true` dans `fx_sources.yaml`) et dÃ©sactiver temporairement celles qui renvoient des erreurs persistantes.
 
 ---
 
@@ -432,19 +432,19 @@ sources:
     type: rss
     url: https://www.dailyfx.com/feeds/market-news
     tier: A
-    enabled: false   # dÃ©sactivÃ© par dÃ©faut, Nicolas active aprÃ¨s review
+    enabled: true
 
   - id: fxstreet_news
     type: rss
     url: https://www.fxstreet.com/rss/news
     tier: A
-    enabled: false
+    enabled: true
 
   - id: investing_econ_calendar
     type: api
     url: https://api.investing.com/api/financialdata/economic-calendar
     tier: A
-    enabled: false
+    enabled: true
     params:
       countries: [US, EU, JP, GB, CH, AU, CA, NZ]
       importance: [2, 3]   # medium et high seulement
@@ -453,28 +453,34 @@ sources:
     type: rss
     url: https://www.bis.org/rss/press.xml
     tier: S
-    enabled: false
+    enabled: true
 
   - id: fed_statements
     type: rss
     url: https://www.federalreserve.gov/feeds/press_monetary.xml
     tier: S
-    enabled: false
+    enabled: true
 
   - id: ecb_press
     type: rss
     url: https://www.ecb.europa.eu/rss/press.html
     tier: S
-    enabled: false
+    enabled: true
 
   - id: boj_statements
     type: rss
     url: https://www.boj.or.jp/en/rss/whatsnew.xml
     tier: S
-    enabled: false
+    enabled: true
 ```
 
 **Convention `tier`** : `S` = source primaire officielle (banque centrale), `A` = financier spÃ©cialisÃ© FX, `B` = gÃ©nÃ©raliste.
+
+**Note 2026-05-02** : toutes les sources sont activÃ©es dans le fichier de config
+pour le run sandbox complet. Le workflow AG4-Forex actuel filtre encore
+`type == "rss"` dans `00_load_fx_sources.py`; la source `investing_econ_calendar`
+est donc prÃªte cÃ´tÃ© configuration mais n'est pas ingÃ©rÃ©e tant qu'une branche API
+n'est pas ajoutÃ©e au workflow.
 
 ### 5.2 Normalisation
 
@@ -551,9 +557,10 @@ Trois changements :
 Nouveau workflow n8n sÃ©parÃ©. ResponsabilitÃ©s :
 
 1. **Ingestion depuis `fx_sources.yaml`** : poller les sources marquÃ©es `enabled: true` (Â§5.1).
-2. **DÃ©duplication** sur `dedupe_key`.
-3. **Analyse LLM** : mÃªme prompt qu'AG4_V3 (rÃ©utilisation), mais la sortie Ã©crit dans `fx_news_history` avec `origin='fx_channel'`.
-4. **AgrÃ©gation horaire** (frÃ©quence Ã  fixer par Nicolas, proposition : toutes les 30 min) :
+2. **DÃ©duplication prÃ©-LLM** sur `dedupe_key` : `03_route_seen_fx_news.py` lit `fx_news_history`; si la news existe dÃ©jÃ , le workflow met Ã  jour `last_seen_at` puis retourne Ã  la boucle sans nouvel appel LLM.
+3. **Analyse LLM des nouvelles news uniquement** : mÃªme prompt qu'AG4_V3 (rÃ©utilisation), mais la sortie Ã©crit dans `fx_news_history` avec `origin='fx_channel'`.
+4. **Garde d'Ã©criture idempotente** : `dedupe_key` reste la clÃ© primaire et `INSERT OR REPLACE` protÃ¨ge contre les doublons rÃ©siduels.
+5. **AgrÃ©gation horaire** (frÃ©quence Ã  fixer par Nicolas, proposition : toutes les 30 min) :
    - Recalcul de `fx_macro` (rÃ©gime FX global, biais par devise) via synthÃ¨se LLM sur les N derniÃ¨res news FX de la fenÃªtre.
    - Recalcul de `fx_pairs` (biais directionnel par paire) via synthÃ¨se LLM.
 
@@ -583,7 +590,7 @@ Nicolas ne dispose pas de 3 mois de sandbox avant live. Le plan doit permettre d
 | **P1** | 30 min | ALTER `news_history` (script Â§3.1) | nul, colonnes nullable |
 | **P2** | 2-3 h | MAJ workflow AG4_V3 (prompt, guardrails, FX conditional write) | dÃ¨s le prochain tick, les nouvelles news arrivent taguÃ©es |
 | **P3** | 1-2 h run + monitoring | Backfill 3 mois (script Â§6) | aucun, tourne en batch hors-ligne |
-| **P4** | 2-3 h | Workflow AG4_Forex + ingestion 2-3 sources FX pour commencer (Nicolas active progressivement dans `fx_sources.yaml`) | nul cÃ´tÃ© AG4_V3, ajoute un flux parallÃ¨le |
+| **P4** | 2-3 h | Workflow AG4_Forex + ingestion des sources FX RSS activÃ©es dans `fx_sources.yaml` | nul cÃ´tÃ© AG4_V3, ajoute un flux parallÃ¨le |
 | **P5** | validation | VÃ©rification des invariants (Â§9) sur 48 h de donnÃ©es live-taguÃ©es | go/no-go pour passer Ã  AG1_Forex |
 
 **CritÃ¨res de go pour P5 â†’ AG1_Forex** (Ã  poser avant de commencer) :

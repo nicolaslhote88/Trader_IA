@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS core.runs (
     decisions_count     INTEGER,
     orders_count        INTEGER,
     fills_count         INTEGER,
+    rejected_orders_count INTEGER,
+    risk_rejection_json VARCHAR,
     errors              INTEGER,
     leverage_max_used   DOUBLE,
     kill_switch_active  BOOLEAN,

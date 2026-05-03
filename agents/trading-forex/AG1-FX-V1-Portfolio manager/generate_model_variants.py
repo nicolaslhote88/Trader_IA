@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import copy
 import json
 from pathlib import Path
 
@@ -11,23 +10,43 @@ WORKFLOW = ROOT / "workflow"
 
 VARIANTS = {
     "chatgpt52": {
-        "model": "gpt-5.2-2025-12-11",
-        # 9h30 et 14h30 Paris lun-ven : run matin (après ouverture bourse FR + AG2 8h + AG4 9h15)
-        # et run après-midi (avant session US 15h30 + AG2 12h + AG4 14h15).
+        "model": "gpt-5.5",
+        "provider": "openai",
         "cron": "30 9,14 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_chatgpt52.duckdb",
     },
     "grok41_reasoning": {
         "model": "grok-4.20-0309-reasoning",
-        # +15 min vs chatgpt52 pour étaler la charge runner et éviter conflits lecture concurrente DuckDB.
+        "provider": "grok",
         "cron": "45 9,14 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb",
     },
     "gemini30_pro": {
-        "model": "models/gemini-3-pro-preview",
-        # +30 min vs chatgpt52 (10h00 / 15h00). Reste dans la fenêtre ouverture bourse FR (9h-17h30).
+        "model": "models/gemini-3.1-pro-preview",
+        "provider": "gemini",
         "cron": "0 10,15 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb",
+    },
+}
+
+PROVIDER_META = {
+    "openai": {
+        "merge": "Merge GPT Output + Brief",
+        "model_name": "OpenAI Chat Model - GPT5.5",
+        "credential_key": "openAiApi",
+        "credential": {"id": "rILpYjTayqc4jXXZ", "name": "OpenAi account"},
+    },
+    "gemini": {
+        "merge": "Merge Gemini Output + Brief",
+        "model_name": "Google Gemini Chat Model",
+        "credential_key": "googlePalmApi",
+        "credential": {"id": "JvctQP9WhDcQkucy", "name": "Google Gemini(PaLM) Api account 2"},
+    },
+    "grok": {
+        "merge": "Merge Grok Output + Brief",
+        "model_name": "xAI Grok Chat Model",
+        "credential_key": "xAiApi",
+        "credential": {"id": "8nKnkigAO1POxfzs", "name": "xAi account"},
     },
 }
 
@@ -41,11 +60,11 @@ def code_node(name: str, rel: str, x: int, y: int, lang: str = "pythonNative") -
     return {"parameters": params, "type": "n8n-nodes-base.code", "typeVersion": 2, "position": [x, y], "id": name.lower().replace(" ", "-"), "name": name}
 
 
-def grok_agent_nodes(cfg: dict) -> list[dict]:
+def agent_system_prompt() -> str:
     system_prompt = read("agent_input/07_system_prompt_fx.md")
     system_prompt = system_prompt.replace("{{llm_model}}", "{{ $json.llm_model }}")
     system_prompt = system_prompt.replace("{{leverage_max}}", "{{ $json.brief.config.leverage_max }}")
-    system_prompt += (
+    return system_prompt + (
         "\n\nResponse schema reminder:\n"
         "- Return valid JSON only, no markdown fences.\n"
         "- Required top-level keys: as_of, decisions.\n"
@@ -53,76 +72,89 @@ def grok_agent_nodes(cfg: dict) -> list[dict]:
         "stop_loss_price, take_profit_price, horizon, rationale, lot_id_to_close.\n"
         "- decision must be one of open_long, open_short, close, partial_close, hold.\n"
     )
-    return [
-        {
-            "parameters": {
-                "promptType": "define",
-                "text": "={{ $json.user_prompt }}",
-                "options": {
-                    "systemMessage": "=" + system_prompt,
-                    "maxIterations": 20,
-                },
-            },
-            "type": "@n8n/n8n-nodes-langchain.agent",
-            "typeVersion": 3.1,
-            "position": [580, -160],
-            "id": "e5c4046e-e795-4c38-89b8-32cc6493ebd6",
-            "name": "Agent #1 - Portfolio manager1",
-        },
-        {
-            "parameters": {
-                "model": cfg["model"],
-                "options": {},
-            },
-            "type": "@n8n/n8n-nodes-langchain.lmChatXAiGrok",
-            "typeVersion": 1,
-            "position": [580, 80],
-            "id": "2cda413f-27f9-4a0c-9f16-f1d4d5b0b98f",
-            "name": "xAI Grok Chat Model",
-            "credentials": {
-                "xAiApi": {
-                    "id": "8nKnkigAO1POxfzs",
-                    "name": "xAi account",
-                }
+
+
+def agent_node() -> dict:
+    return {
+        "parameters": {
+            "promptType": "define",
+            "text": "={{ $json.user_prompt }}",
+            "options": {
+                "systemMessage": "=" + agent_system_prompt(),
+                "maxIterations": 20,
             },
         },
-        {
-            "parameters": {
-                "mode": "combine",
-                "combineBy": "combineByPosition",
-                "options": {},
-            },
-            "type": "n8n-nodes-base.merge",
-            "typeVersion": 3.2,
-            "position": [820, -20],
-            "id": "merge-grok-agent-output",
-            "name": "Merge Grok Output + Brief",
+        "type": "@n8n/n8n-nodes-langchain.agent",
+        "typeVersion": 3.1,
+        "position": [580, -160],
+        "id": "e5c4046e-e795-4c38-89b8-32cc6493ebd6",
+        "name": "Agent #1 - Portfolio manager1",
+    }
+
+
+def model_node(variant: str, cfg: dict) -> dict:
+    provider = cfg["provider"]
+    meta = PROVIDER_META[provider]
+    if provider == "openai":
+        params = {
+            "model": {"__rl": True, "value": cfg["model"], "mode": "list", "cachedResultName": cfg["model"]},
+            "builtInTools": {},
+            "options": {"timeout": 1500000},
+        }
+        node_type = "@n8n/n8n-nodes-langchain.lmChatOpenAi"
+        type_version = 1.2
+    elif provider == "gemini":
+        params = {"modelName": cfg["model"], "options": {}}
+        node_type = "@n8n/n8n-nodes-langchain.lmChatGoogleGemini"
+        type_version = 1
+    else:
+        params = {"model": cfg["model"], "options": {}}
+        node_type = "@n8n/n8n-nodes-langchain.lmChatXAiGrok"
+        type_version = 1
+
+    return {
+        "parameters": params,
+        "type": node_type,
+        "typeVersion": type_version,
+        "position": [580, 80],
+        "id": "2cda413f-27f9-4a0c-9f16-f1d4d5b0b98f",
+        "name": meta["model_name"],
+        "credentials": {meta["credential_key"]: meta["credential"]},
+    }
+
+
+def merge_node(cfg: dict) -> dict:
+    return {
+        "parameters": {
+            "mode": "combine",
+            "combineBy": "combineByPosition",
+            "options": {},
         },
-    ]
+        "type": "n8n-nodes-base.merge",
+        "typeVersion": 3.2,
+        "position": [820, -20],
+        "id": "merge-agent-output",
+        "name": PROVIDER_META[cfg["provider"]]["merge"],
+    }
 
 
 def llm_segment_nodes(variant: str, cfg: dict) -> list[dict]:
-    if variant == "grok41_reasoning":
-        return grok_agent_nodes(cfg)
-    return [
-        {
-            "parameters": {
-                "jsCode": "const j = $json;\nreturn [{json: {...j, decision_json: {as_of: j.as_of, narrative: 'P3 dry-run placeholder; connect LLM node here after manual review', decisions: (j.brief?.universe?.pairs || []).map((pair) => ({pair, decision: 'hold', conviction: 0.1}))}}}];\n"
-            },
-            "type": "n8n-nodes-base.code",
-            "typeVersion": 2,
-            "position": [580, -20],
-            "id": "llm-placeholder",
-            "name": "LLM Decision Placeholder",
-        }
-    ]
+    return [agent_node(), model_node(variant, cfg), merge_node(cfg)]
+
+
+def connect_linear(connections: dict, names: list[str]) -> None:
+    for a, b in zip(names, names[1:]):
+        connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
 
 
 def build_template(variant: str = "chatgpt52") -> dict:
     cfg = VARIANTS[variant]
-    init_code = read("pre_agent/01_init_run_fx.js").replace("'gpt-5.2-2025-12-11'", repr(cfg["model"])).replace("'chatgpt52'", repr(variant))
+    init_code = read("pre_agent/01_init_run_fx.js")
+    init_code = init_code.replace("'gpt-5.2-2025-12-11'", repr(cfg["model"]))
+    init_code = init_code.replace("'chatgpt52'", repr(variant))
     init_code = init_code.replace("dbPathByVariant[variant] || dbPathByVariant.chatgpt52", repr(cfg["db_path"]))
-    post_x0 = 1060 if variant == "grok41_reasoning" else 820
+
+    post_x0 = 1060
     nodes = [
         {
             "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": cfg["cron"]}]}},
@@ -149,36 +181,40 @@ def build_template(variant: str = "chatgpt52") -> dict:
         code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", post_x0 + 1440, -20),
         code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", post_x0 + 1680, -20),
     ]
-    order = [n["name"] for n in nodes[2:]]
+
+    merge = PROVIDER_META[cfg["provider"]]["merge"]
+    model = PROVIDER_META[cfg["provider"]]["model_name"]
     connections = {
-        "Schedule Trigger": {"main": [[{"node": order[0], "type": "main", "index": 0}]]},
-        "Manual Trigger": {"main": [[{"node": order[0], "type": "main", "index": 0}]]},
+        "Schedule Trigger": {"main": [[{"node": "01 Init Run FX", "type": "main", "index": 0}]]},
+        "Manual Trigger": {"main": [[{"node": "01 Init Run FX", "type": "main", "index": 0}]]},
     }
-    if variant == "grok41_reasoning":
-        main_order = [
+    connect_linear(
+        connections,
+        [
             "01 Init Run FX",
             "02 Load Universe FX",
             "03 Load Portfolio State FX",
             "04 Load Technical Signals FX",
             "05 Load News Macro FX",
             "06 Assemble Brief FX",
-        ]
-        for a, b in zip(main_order, main_order[1:]):
-            connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
-        connections["06 Assemble Brief FX"] = {
-            "main": [[
-                {"node": "Agent #1 - Portfolio manager1", "type": "main", "index": 0},
-                {"node": "Merge Grok Output + Brief", "type": "main", "index": 0},
-            ]]
-        }
-        connections["xAI Grok Chat Model"] = {
-            "ai_languageModel": [[{"node": "Agent #1 - Portfolio manager1", "type": "ai_languageModel", "index": 0}]]
-        }
-        connections["Agent #1 - Portfolio manager1"] = {
-            "main": [[{"node": "Merge Grok Output + Brief", "type": "main", "index": 1}]]
-        }
-        tail_order = [
-            "Merge Grok Output + Brief",
+        ],
+    )
+    connections["06 Assemble Brief FX"] = {
+        "main": [[
+            {"node": "Agent #1 - Portfolio manager1", "type": "main", "index": 0},
+            {"node": merge, "type": "main", "index": 0},
+        ]]
+    }
+    connections[model] = {
+        "ai_languageModel": [[{"node": "Agent #1 - Portfolio manager1", "type": "ai_languageModel", "index": 0}]]
+    }
+    connections["Agent #1 - Portfolio manager1"] = {
+        "main": [[{"node": merge, "type": "main", "index": 1}]]
+    }
+    connect_linear(
+        connections,
+        [
+            merge,
             "10 Parse Decision FX",
             "11 Validate Enforce Safety FX",
             "12 Simulate Fills FX",
@@ -187,26 +223,18 @@ def build_template(variant: str = "chatgpt52") -> dict:
             "15 Close Lots FX",
             "16 Snapshot Portfolio FX",
             "17 Log Run FX",
-        ]
-        for a, b in zip(tail_order, tail_order[1:]):
-            connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
-    else:
-        for a, b in zip(order, order[1:]):
-            connections[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
-    meta = (
-        {
-            "templateCredsSetupCompleted": True,
-            "note": "Grok variant uses xAI Grok Chat Model and merges agent output back with the AG1-FX brief.",
-        }
-        if variant == "grok41_reasoning"
-        else {"note": "LLM placeholder is intentional for P3 manual dry-run; replace with provider node after Nicolas review."}
+        ],
     )
+
     return {
         "name": f"AG1-FX-V1 Portfolio Manager - {variant}",
         "nodes": nodes,
         "connections": connections,
         "settings": {"timezone": "Europe/Paris"},
-        "meta": meta,
+        "meta": {
+            "templateCredsSetupCompleted": True,
+            "note": f"{model} variant uses a LangChain agent and merges agent output back with the AG1-FX brief.",
+        },
     }
 
 
