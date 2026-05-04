@@ -536,6 +536,8 @@ def build_agent_brief(summary, positions, recent_ideas):
         "POSITIONS ACTUELLES:",
     ]
 
+    portfolio_symbols = set()
+
     if not positions:
         lines.append("(Aucune position en portefeuille)")
     else:
@@ -544,8 +546,13 @@ def build_agent_brief(summary, positions, recent_ideas):
             r = d.get("riskPlan") or {}
             e = p.get("executionMemory") or {}
             entry = d.get("entryPlan") or {}
+
+            sym = p.get("symbol")
+            if sym:
+                portfolio_symbols.add(sym)
+
             lines.append(
-                f"- {p.get('symbol')} ({p.get('name')}) [{p.get('sector')}]: qty={fmt_num(p.get('quantity'))} "
+                f"- {sym} ({p.get('name')}) [{p.get('sector')}]: qty={fmt_num(p.get('quantity'))} "
                 f"avg={fmt_num(p.get('avgPrice'))} last={fmt_num(p.get('lastPrice'))} "
                 f"value={fmt_num(p.get('marketValue'))} pnl={fmt_num(p.get('unrealizedPnL'))}"
             )
@@ -562,27 +569,55 @@ def build_agent_brief(summary, positions, recent_ideas):
                 f"nextReviewDays={d.get('nextReviewDays') if d.get('nextReviewDays') is not None else 'n/a'}"
                 + review_info
             )
-            lines.append(
-                "  Parametres: "
-                f"targetQty={fmt_num(d.get('targetQty'))}, targetWeightPct={fmt_num(d.get('targetWeightPct'))}, "
-                f"entry(orderType={entry.get('orderType') or 'n/a'}, limitPrice={fmt_num(entry.get('limitPrice'))}, "
-                f"tif={entry.get('timeInForce') or 'n/a'})"
+
+            # Parametres: show only if there's an actionable order
+            has_params = (
+                d.get("targetQty") is not None
+                or d.get("targetWeightPct") is not None
+                or (entry.get("orderType") and entry.get("orderType") != "n/a")
             )
-            lines.append(
-                "  Risk: "
-                f"stopLossPct={fmt_num(r.get('stopLossPct'))}, takeProfitPct={fmt_num(r.get('takeProfitPct'))}, "
-                f"maxLossEUR={fmt_num(r.get('maxLossEUR'))}"
+            if has_params:
+                lines.append(
+                    "  Parametres: "
+                    f"targetQty={fmt_num(d.get('targetQty'))}, targetWeightPct={fmt_num(d.get('targetWeightPct'))}, "
+                    f"entry(orderType={entry.get('orderType') or 'n/a'}, limitPrice={fmt_num(entry.get('limitPrice'))}, "
+                    f"tif={entry.get('timeInForce') or 'n/a'})"
+                )
+
+            # Risk: show only if meaningful values (not all zero/null)
+            sl = r.get("stopLossPct")
+            tp = r.get("takeProfitPct")
+            ml = r.get("maxLossEUR")
+            has_risk = (
+                (sl is not None and abs(float(sl or 0)) > 0.001)
+                or (tp is not None and abs(float(tp or 0)) > 0.001)
+                or ml is not None
             )
-            lines.append(
-                "  Execution: "
-                f"status={e.get('lastExecutionStatus') or 'NO_ORDER'}, reason={e.get('lastExecutionReason') or 'n/a'}, "
-                f"requested={fmt_num(e.get('lastOrderQtyRequested'))}, executed={fmt_num(e.get('lastOrderQtyExecuted'))}, "
-                f"price={fmt_num(e.get('lastOrderPrice'))}"
-            )
+            if has_risk:
+                lines.append(
+                    "  Risk: "
+                    f"stopLossPct={fmt_num(sl)}, takeProfitPct={fmt_num(tp)}, "
+                    f"maxLossEUR={fmt_num(ml)}"
+                )
+
+            # Execution: show only if something was actually attempted/done
+            exec_status = e.get("lastExecutionStatus") or "NO_ORDER"
+            if exec_status != "NO_ORDER":
+                lines.append(
+                    "  Execution: "
+                    f"status={exec_status}, reason={e.get('lastExecutionReason') or 'n/a'}, "
+                    f"requested={fmt_num(e.get('lastOrderQtyRequested'))}, executed={fmt_num(e.get('lastOrderQtyExecuted'))}, "
+                    f"price={fmt_num(e.get('lastOrderPrice'))}"
+                )
+
             if d.get("rationale"):
                 lines.append(f"  Rationale: {str(d.get('rationale')).strip()}")
-            if d.get("dependencies") is not None:
-                lines.append(f"  Dependencies: {d.get('dependencies')}")
+
+            # Dependencies: show only if something needs attention
+            deps = d.get("dependencies") or {}
+            has_deps = isinstance(deps, dict) and any(v is True for v in deps.values())
+            if has_deps:
+                lines.append(f"  Dependencies: {deps}")
 
     lines.extend(["", "IDEES RECENTES NON EXECUTEES:"])
     if not recent_ideas:
@@ -594,6 +629,9 @@ def build_agent_brief(summary, positions, recent_ideas):
                 break
             sym = idea.get("symbol") or ""
             if is_fx_symbol(sym, idea.get("assetClass")):
+                continue
+            # Skip stale ideas for symbols already managed in current portfolio
+            if sym and sym in portfolio_symbols:
                 continue
             lines.append(
                 f"- {sym} | action={idea.get('action')} | targetQty={fmt_num(idea.get('targetQty'))}"
