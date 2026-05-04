@@ -150,9 +150,8 @@ def connect_linear(connections: dict, names: list[str]) -> None:
 def build_template(variant: str = "chatgpt52") -> dict:
     cfg = VARIANTS[variant]
     init_code = read("pre_agent/01_init_run_fx.js")
-    init_code = init_code.replace("'gpt-5.2-2025-12-11'", repr(cfg["model"]))
-    init_code = init_code.replace("'chatgpt52'", repr(variant))
-    init_code = init_code.replace("dbPathByVariant[variant] || dbPathByVariant.chatgpt52", repr(cfg["db_path"]))
+    init_code = init_code.replace("const DEFAULT_VARIANT = 'chatgpt52';", f"const DEFAULT_VARIANT = {variant!r};")
+    init_code = init_code.replace("dbPathByVariant[variant] || dbPathByVariant[DEFAULT_VARIANT]", repr(cfg["db_path"]))
 
     post_x0 = 1060
     nodes = [

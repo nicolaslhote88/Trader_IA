@@ -187,11 +187,11 @@ def build() -> dict:
         "AG3V2.03 - Split Symbols": {
             "main": [
                 [
-                    {"node": "AG3V2.04 - HTTP Fundamentals", "type": "main", "index": 0},
-                    {"node": "AG3V2.05 - Merge Queue + API", "type": "main", "index": 1},
+                    {"node": "AG3V2.09 - Finalize Run", "type": "main", "index": 0},
                 ],
                 [
-                    {"node": "AG3V2.09 - Finalize Run", "type": "main", "index": 0},
+                    {"node": "AG3V2.05 - Merge Queue + API", "type": "main", "index": 1},
+                    {"node": "AG3V2.04 - HTTP Fundamentals", "type": "main", "index": 0},
                 ],
             ]
         },

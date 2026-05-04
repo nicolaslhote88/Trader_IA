@@ -85,7 +85,7 @@ def schema() -> str:
 def build() -> dict:
     nodes = [
         {
-            "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "*/30 7-20 * * 1-5"}]}},
+            "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": "45 3,9,15,21 * * 1-5"}]}},
             "type": "n8n-nodes-base.scheduleTrigger",
             "typeVersion": 1.3,
             "position": [-1120, -120],

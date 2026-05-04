@@ -1,5 +1,5 @@
-Use this AG1-FX-V1 briefing JSON:
+Use this compact AG1-FX-V1 briefing JSON:
 
 ```json
-{{brief_json}}
+{{llm_brief_json}}
 ```

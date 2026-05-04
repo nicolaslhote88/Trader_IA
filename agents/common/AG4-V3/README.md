@@ -5,14 +5,15 @@ AG4-V3 collecte les flux RSS, dedupe les news, analyse les impacts marche/secteu
 Google Sheets est utilise uniquement pour les entrees de configuration.
 
 ## Architecture
-1. Chargement des sources RSS depuis `Source_RSS`.
-2. Initialisation DuckDB (`/files/duckdb/ag4_v3.duckdb`) + `run_id`.
-3. Lecture de l'index historique depuis DuckDB (pas depuis Sheets).
-4. Traitement news: normalisation, dedupe, clustering, pre-score, analyse IA si necessaire.
-5. Ecriture continue dans DuckDB:
+1. Declenchement 4 fois par jour ouvré (`01:45`, `06:45`, `10:45`, `18:45`, Europe/Paris) pour eviter les chevauchements de runs longs et les verrous DuckDB.
+2. Chargement des sources RSS depuis `Source_RSS`.
+3. Initialisation DuckDB (`/files/duckdb/ag4_v3.duckdb`) + `run_id`.
+4. Lecture de l'index historique depuis DuckDB (pas depuis Sheets).
+5. Traitement news: normalisation, dedupe, clustering, pre-score, analyse IA si necessaire.
+6. Ecriture continue dans DuckDB:
    - `news_history` pour news analysees/skipped
    - `news_errors` pour erreurs RSS
-6. Fin de run:
+7. Fin de run:
    - maj `run_log`
    - consolidation des sorties dans DuckDB
 

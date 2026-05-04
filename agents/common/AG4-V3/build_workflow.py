@@ -18,7 +18,7 @@ def build() -> dict:
             'parameters': {
                 'rule': {
                     'interval': [
-                        {'field': 'cronExpression', 'expression': '*/30 7-20 * * 1-5'}
+                        {'field': 'cronExpression', 'expression': '45 1,6,10,18 * * 1-5'}
                     ]
                 }
             },

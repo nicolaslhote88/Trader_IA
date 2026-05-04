@@ -211,12 +211,21 @@ def normalize_db_path(path_value):
 
 
 def candidate_db_paths(path_value):
-    base = normalize_db_path(path_value)
-    cands = [base]
-    if "/files/" in base:
-        cands.append(base.replace("/files/", "/local-files/", 1))
-    elif "/local-files/" in base:
-        cands.append(base.replace("/local-files/", "/files/", 1))
+    cands = []
+
+    def add_path_and_mount_aliases(raw_path):
+        base = normalize_db_path(raw_path)
+        if not base:
+            return
+        cands.append(base)
+        if "/files/" in base:
+            cands.append(base.replace("/files/", "/local-files/", 1))
+        elif "/local-files/" in base:
+            cands.append(base.replace("/local-files/", "/files/", 1))
+
+    add_path_and_mount_aliases(path_value)
+    add_path_and_mount_aliases(DB_PATH_DEFAULT)
+
     out = []
     seen = set()
     for c in cands:
