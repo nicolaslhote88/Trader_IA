@@ -1100,6 +1100,13 @@ def enrich_position_rows_with_instruments(rows, instrument_meta):
     return out
 
 
+def is_fx_symbol(symbol, asset_class=None):
+    if symbol.startswith("FX:") or symbol.endswith("=X"):
+        return True
+    ac = str(asset_class or "").strip().upper()
+    return ac in {"CURRENCY", "FOREX", "FX"}
+
+
 def build_recent_unexecuted(decisions_recent, order_events_by_run_symbol, alert_events_by_run_symbol):
     seen = set()
     ideas = []
@@ -1107,6 +1114,8 @@ def build_recent_unexecuted(decisions_recent, order_events_by_run_symbol, alert_
         symbol = norm_symbol(d.get("_symbol"), d.get("assetClass"))
         run_id = str(d.get("runId") or "").strip()
         if not symbol or not run_id:
+            continue
+        if is_fx_symbol(symbol, d.get("assetClass")):
             continue
         key = (run_id, symbol)
         if key in seen:
