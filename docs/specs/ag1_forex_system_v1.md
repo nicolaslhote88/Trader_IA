@@ -303,7 +303,6 @@ CREATE TABLE IF NOT EXISTS main.run_log (
 - **Pas de table `universe` partagee** : les paires FX sont gerees separement (champs `base_ccy`, `quote_ccy`, `pip_size`, `price_decimals`).
 - **Pas d'indicateurs sectoriels** (les paires n'ont pas de secteur).
 - **`signal_score` borne [-1, +1]** pour faciliter la consommation par le PM.
-- Le node `11_build_vector_docs_fx.py` reste un best-effort si Qdrant est utilise ; sinon, le supprimer pour la v1.
 
 ---
 

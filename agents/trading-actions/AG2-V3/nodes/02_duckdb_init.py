@@ -231,10 +231,6 @@ SCHEMA_STMTS = [
       ai_anomalies VARCHAR,
       ai_output_ref VARCHAR,
       ai_rr_theoretical DOUBLE,
-      should_vectorize BOOLEAN DEFAULT FALSE,
-      vector_status VARCHAR DEFAULT 'PENDING',
-      vector_id VARCHAR,
-      vectorized_at TIMESTAMP,
       row_hash VARCHAR,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -267,7 +263,6 @@ SCHEMA_STMTS = [
       symbols_ok INTEGER DEFAULT 0,
       symbols_error INTEGER DEFAULT 0,
       ai_calls INTEGER DEFAULT 0,
-      vectors_written INTEGER DEFAULT 0,
       error_detail VARCHAR,
       version VARCHAR DEFAULT '3.0.0'
     )
@@ -304,7 +299,6 @@ MIGRATE_STMTS = [
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_d1_hours DOUBLE",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bb_status VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_rsi_status VARCHAR",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS should_vectorize BOOLEAN DEFAULT FALSE",
 ]
 
 VIEW_STMTS = [

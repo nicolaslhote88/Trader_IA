@@ -13254,7 +13254,6 @@ elif page == "Analyse Technique V2":
                 "symbols_ok": "Symboles OK",
                 "symbols_error": "Symboles Erreur",
                 "ai_calls": "Appels IA",
-                "vectors_written": "Vecteurs écrits",
             }
 
             for src, dst in col_mapping.items():

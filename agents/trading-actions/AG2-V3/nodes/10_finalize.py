@@ -37,7 +37,6 @@ run_id = ""
 symbols_ok = 0
 symbols_error = 0
 ai_calls = 0
-vectors_written = 0
 errors = []
 
 for it in items:
@@ -57,22 +56,18 @@ for it in items:
     if d.get("call_ai") is True:
         ai_calls += 1
 
-    if str(d.get("vector_status", "") or "").upper() == "DONE":
-        vectors_written += 1
-
 status = "NO_RUN"
 if run_id:
     status = "SUCCESS" if symbols_error == 0 else ("PARTIAL" if symbols_ok > 0 else "FAILED")
 
     with db_con() as con:
         con.execute(
-            "UPDATE run_log SET finished_at = CURRENT_TIMESTAMP, status = ?, symbols_ok = ?, symbols_error = ?, ai_calls = ?, vectors_written = ?, error_detail = ? WHERE run_id = ?",
+            "UPDATE run_log SET finished_at = CURRENT_TIMESTAMP, status = ?, symbols_ok = ?, symbols_error = ?, ai_calls = ?, error_detail = ? WHERE run_id = ?",
             [
                 status,
                 symbols_ok,
                 symbols_error,
                 ai_calls,
-                vectors_written,
                 ("; ".join(errors)[:500] if errors else None),
                 run_id,
             ],
@@ -84,5 +79,4 @@ return [{"json": {
     "symbols_ok": symbols_ok,
     "symbols_error": symbols_error,
     "ai_calls": ai_calls,
-    "vectors_written": vectors_written,
 }}]

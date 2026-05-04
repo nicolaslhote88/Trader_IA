@@ -13,7 +13,6 @@ Le projet est une plateforme multi-agents de trading organisÃ©e autour de :
 
 - `n8n` (orchestration des workflows AG0/AG1/AG2/AG3/AG4/YF enrichment),
 - `DuckDB` (source of truth analytique et exÃ©cution),
-- `Qdrant` (RAG/vector search),
 - `yfinance-api` (accÃ¨s Yahoo avec cache/cooldown robuste),
 - `trading-dashboard` (Streamlit, vue opÃ©rationnelle multi-agents),
 - `Traefik` (reverse proxy TLS).
@@ -28,7 +27,6 @@ Points structurants observÃ©s :
 
 ## 2. Services dÃ©ployÃ©s sur le VPS
 
-Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_config/docker-compose.qdrant.yml`.
 
 ### 2.1 Catalogue des services
 
@@ -40,28 +38,23 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
 | `yfinance-api` | API marchÃ© (history/quote/options/calendar/fundamentals) avec cache disque | interne rÃ©seau Docker | aucune |
 | `yf-enrichment` | Microservice FastAPI qui lance `daily_enrichment.py` | interne rÃ©seau Docker (`:8081`) | `yfinance-api` |
 | `trading-dashboard` | App Streamlit (dashboard) | proxyfiÃ© Traefik (`${DASHBOARD_DOMAIN}`) | sources DuckDB + yfinance-api |
-| `qdrant` (stack sÃ©parÃ©e) | Vector DB (RAG) | `127.0.0.1:6333/6334` | aucune |
 | `toolbox` | Container utilitaire debug (`curl`, `jq`) | interne | aucune |
 
 ### 2.2 ParamÃ¨tres d'architecture importants
 
 - RÃ©seaux : `web` (externe) et `traefik_proxy` (externe).
 - Stockage persistant :
-  - `n8n_data`, `traefik_data`, `qdrant_data`, `yfinance_data`, `runner_pydeps` en volumes externes.
   - partage cross-services via `/local-files` montÃ© sur `/files`.
 - `n8n` tourne en mode runners externes :
   - `N8N_RUNNERS_ENABLED=true`
   - broker `:5679`
   - `task-runners` en parallÃ©lisme (3 replicas).
-- `qdrant` sÃ©curisÃ© par API key (`QDRANT__SERVICE__API_KEY`).
 - Dashboard protÃ©gÃ© par BasicAuth Traefik.
 
 ### 2.3 Flux inter-services (fonctionnel)
 
 1. `n8n` orchestre les workflows.
 2. AG2/AG3/AG1-PF/YF enrichment interrogent `yfinance-api`.
-3. AG2/AG3/AG4-SPE vectorisent dans `qdrant`.
-4. AG1-V3 lit DuckDB + outils RAG Qdrant, puis Ã©crit ledger AG1.
 5. `trading-dashboard` lit majoritairement DuckDB et appelle `yfinance-api` pour certains graphes/snapshots.
 
 ## 3. Workflows et rÃ´le mÃ©tier
@@ -109,9 +102,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   - upsert dans ledger AG1 DuckDB (`core.*` + `cfg.*`),
   - calcule snapshots + health post-run.
 - RAG utilisÃ© par agent :
-  - `financial_news_v3_clean` (news),
-  - `fundamental_analysis` (fonda),
-  - `financial_tech_v1` (tech).
 - Note : legacy branches Google Sheets conservÃ©es mais dÃ©sactivÃ©es dans variants exportÃ©s.
 
 ### 3.4 AG2-V3 â€” Analyse technique
@@ -125,7 +115,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   - Universe (Google Sheets),
   - `yfinance-api /history` (1H et 1D),
   - LLM validation (route FX vs Equity/ETF),
-  - Qdrant collection `financial_tech_v1`.
 - Pipeline fonctionnel :
   1. init config + batch rotation,
   2. init schema DuckDB,
@@ -135,7 +124,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   6. validation IA (prompts diffÃ©renciÃ©s FX vs actions),
   7. write `technical_signals`,
   8. finalize run + optional sync sheets,
-  9. build vector docs (`VectorDoc_v2`), delete-by-doc_id, upsert Qdrant, mark vectorized.
 - Sorties principales :
   - table `technical_signals` + vues `v_latest_signals`, `v_ag1_summary`, `v_ag2_fx_output`.
 
@@ -148,7 +136,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
 - Sources :
   - Universe (Google Sheets),
   - `yfinance-api /fundamentals`,
-  - Qdrant collection `fundamental_analysis`.
 - Pipeline :
   1. init contexte + queue,
   2. init schema + run (DuckDB),
@@ -156,7 +143,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   4. scoring (quality/growth/valuation/health/consensus/risk),
   5. Ã©criture triage/consensus/metrics/snapshot,
   6. finalize run,
-  7. vector docs + delete/upsert + mark vectorized.
 
 ### 3.6 AG4-V3 â€” Macro & News (+ geo-tagging depuis 2026-04-24)
 
@@ -218,7 +204,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
   6. prÃ©paration prompt + analyse OpenAI (schema JSON strict),
   7. upsert `news_history`, write `news_errors`,
   8. finalize run,
-  9. vector docs Qdrant (`financial_news_v3_clean`) + mark vectorized.
 
 ### 3.8 YF-ENRICH-V1 â€” Enrichissement quotidien marchÃ©
 
@@ -261,7 +246,6 @@ Source : `infra/vps_hostinger_config/docker-compose.yml` + `infra/vps_hostinger_
 | `yf_enrichment_v1.duckdb` | YF enrichment | AG1-V3, dashboard |
 | `ag1_v3*.duckdb` (Ã—3 modÃ¨les) | AG1-V3 | dashboard, AG1-PF (selon config) |
 | `ag1_v2*.duckdb` | AG1-V2/AG1-PF | dashboard legacy + compat |
-| Qdrant collections | AG2/AG3/AG4-SPE vector docs | AG1-V3 tools (RAG) |
 
 ## 5. Bases de donnÃ©es gÃ©nÃ©rÃ©es et schÃ©mas
 
@@ -316,7 +300,6 @@ Schema notable `technical_signals` :
 - indicateurs techniques complets (SMA/EMA/MACD/RSI/ATR/BB/Stoch/ADX/OBV/Support/Resistance)
 - mÃ©tadonnÃ©es FX (`base_ccy`, `quote_ccy`, `pip_size`, `atr_pips_*`)
 - AI validation (`ai_decision`, `ai_quality`, `ai_alignment`, `ai_stop_loss`, `ai_rr_theoretical`, etc.)
-- vector tracking (`vector_status`, `vector_id`, `vectorized_at`).
 
 ### 5.4 DuckDB AG3-V2 â€” `agents/trading-actions/AG3-V2/nodes/06_duckdb_init.py`
 
@@ -388,7 +371,6 @@ Colonnes notables `news_history` :
 - identitÃ© : `news_id`, `symbol`, `canonical_url`
 - contenu : `title`, `snippet`, `text`, `summary`, `published_at`
 - IA : `impact_score`, `sentiment`, `confidence_score`, `horizon`, `urgency`, `suggested_signal`, `key_drivers`, `needs_follow_up`, `is_relevant`
-- vector : `vector_status`, `vector_id`, `vectorized_at`, `chunk_total`
 - lifecycle : `first_seen_at`, `last_seen_at`, `analyzed_at`, `fetched_at`.
 
 ### 5.7 DuckDB YF enrichment â€” `agents/common/yf-enrichment-v1/daily_enrichment.py`
@@ -405,16 +387,10 @@ Colonnes notables :
 - options : `iv_atm`, `skew_put_minus_call_5pct`, `put_call_oi_ratio`, `options_ok/options_error/options_warning`
 - calendar : `next_earnings_date`, `days_to_earnings`, `calendar_ok/calendar_error`.
 
-### 5.8 Qdrant (vector DB)
 
 Collections observÃ©es :
-- `financial_tech_v1` (AG2)
-- `fundamental_analysis` (AG3)
-- `financial_news_v3_clean` (AG4-SPE)
 
-Convention metadata (`VectorDoc_v2`) :
 - `doc_id` stable,
-- `schema_version="VectorDoc_v2"`,
 - `doc_kind` (`TECH`/`FUNDA`/`NEWS`),
 - delete-by-filter `doc_id` avant upsert pour idempotence.
 

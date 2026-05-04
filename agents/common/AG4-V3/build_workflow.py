@@ -457,7 +457,7 @@ def build() -> dict:
         },
         {
             'parameters': {
-                'content': 'AG4-V3 News Watcher: DuckDB on VPS is source of truth (Qdrant vectorization enabled).',
+                'content': 'AG4-V3 News Watcher: DuckDB on VPS is source of truth.',
                 'height': 220,
                 'width': 1420,
                 'color': 5,

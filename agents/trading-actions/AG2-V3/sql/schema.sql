@@ -157,12 +157,6 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     ai_anomalies        VARCHAR,              -- JSON array
     ai_output_ref       VARCHAR,
     ai_rr_theoretical   DOUBLE,
-    should_vectorize    BOOLEAN DEFAULT FALSE,
-
-    -- Vectorization tracking
-    vector_status       VARCHAR DEFAULT 'PENDING',  -- 'PENDING' | 'DONE' | 'ERROR'
-    vector_id           VARCHAR,
-    vectorized_at       TIMESTAMP,
     row_hash            VARCHAR,
 
     -- Timestamps
@@ -176,7 +170,6 @@ CREATE INDEX IF NOT EXISTS idx_ts_symbol_yahoo ON technical_signals(symbol_yahoo
 CREATE INDEX IF NOT EXISTS idx_ts_asset_class ON technical_signals(asset_class);
 CREATE INDEX IF NOT EXISTS idx_ts_run ON technical_signals(run_id);
 CREATE INDEX IF NOT EXISTS idx_ts_date ON technical_signals(workflow_date);
-CREATE INDEX IF NOT EXISTS idx_ts_vector ON technical_signals(vector_status);
 CREATE INDEX IF NOT EXISTS idx_ts_pass_pm ON technical_signals(pass_pm);
 
 -- AI dedup cache.
@@ -206,7 +199,6 @@ CREATE TABLE IF NOT EXISTS run_log (
     symbols_ok          INTEGER DEFAULT 0,
     symbols_error       INTEGER DEFAULT 0,
     ai_calls            INTEGER DEFAULT 0,
-    vectors_written     INTEGER DEFAULT 0,
     error_detail        VARCHAR,
     version             VARCHAR DEFAULT '3.0.0'
 );
@@ -226,15 +218,6 @@ INNER JOIN (
     FROM technical_signals
     GROUP BY symbol
 ) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date;
-
--- Rows ready for vectorization.
-CREATE OR REPLACE VIEW v_pending_vectors AS
-SELECT ts.*, u.name, u.sector, u.industry, u.currency
-FROM technical_signals ts
-JOIN universe u ON ts.symbol = u.symbol
-WHERE ts.vector_status = 'PENDING'
-  AND ts.h1_status = 'OK'
-ORDER BY ts.workflow_date DESC;
 
 -- AG1-ready summary.
 CREATE OR REPLACE VIEW v_ag1_summary AS

@@ -24,7 +24,7 @@ Chaque entrÃ©e est annotÃ©e avec son statut :
 
 ### ðŸŸ¡ 3. Secrets dans le docker-compose
 
-**Constat 2026-03-02** : `N8N_RUNNERS_AUTH_TOKEN`, `QDRANT_API_KEY`, `DASHBOARD_BASIC_AUTH` apparaissaient en clair dans le compose.
+**Constat 2026-03-02** : `N8N_RUNNERS_AUTH_TOKEN` et `DASHBOARD_BASIC_AUTH` apparaissaient en clair dans le compose.
 **Statut 2026-04-21** : le compose utilise dÃ©sormais des interpolations `${VAR}` vers un `.env`. Un template `.env.example` a Ã©tÃ© publiÃ©. **Reste Ã  faire** : chiffrer le `.env` ou migrer vers un vault (sops / docker secrets) avant mise en production live.
 
 ### âŒ 4. Duplication de `_news_pill_html` dans `services/dashboard/app.py`
@@ -39,7 +39,7 @@ Chaque entrÃ©e est annotÃ©e avec son statut :
 
 ### âŒ 6. Audit post-dÃ©ploiement automatique
 
-**Recommandation 2026-03-02** : ajouter un audit automatique post-deploy (prÃ©sence DB/tables/views, dernier run status par workflow, couverture YF enrichment, disponibilitÃ© Qdrant).
+**Recommandation 2026-03-02** : ajouter un audit automatique post-deploy (prÃ©sence DB/tables/views, dernier run status par workflow, couverture YF enrichment).
 **Statut 2026-04-21** : non rÃ©alisÃ©. Un script `post_deploy_audit.py` serait naturellement hÃ©bergÃ© dans `yfinance-api` ou dans un service `audit` dÃ©diÃ©.
 
 ### âŒ 7. Matrice "workflow â†’ DB â†’ dashboard page"

@@ -765,8 +765,6 @@ for it in items:
                 "sig_hash": sig_hash,
                 "call_ai": call_ai,
                 "dedup_reason": dedup_reason,
-                "vector_status": "PENDING",
-                "should_vectorize": True,
                 "data_age_h1_hours": h1_age_h,
                 "data_age_d1_hours": d1_age_h,
             }

@@ -17,14 +17,6 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `DOMAIN_NAME` | Domaine racine (ex. `trader-ia.com`). |
 | `N8N_RUNNERS_AUTH_TOKEN` | Token partagé entre `n8n` et `task-runners`. Doit être identique. Valeur forte obligatoire. |
 
-## Qdrant
-
-Qdrant tourne dans sa propre stack (`docker-compose.qdrant.yml`).
-
-| Variable | Rôle |
-|---|---|
-| `QDRANT_API_KEY` | Clé API Qdrant. Utilisée par `n8n` pour les nœuds `Qdrant Delete` / `Qdrant Upsert`. |
-
 ## Services externes
 
 | Variable | Rôle |

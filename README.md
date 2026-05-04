@@ -22,7 +22,6 @@ Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-
 
 - **n8n** : orchestration des workflows (13 workflows â€” 10 actifs, 3 inactifs)
 - **DuckDB** : source of truth analytique + ledger d'exÃ©cution (`cfg.portfolio_config`, `core.orders`, `core.fills`, `core.lots`, snapshots, cash ledger)
-- **Qdrant** : RAG pour recherche sÃ©mantique (technique / fundamental / news)
 - **yfinance-api** : service maison autour de `yfinance` (cache, cooldown par symbole, endpoints `/history`, `/quote`, `/options`, `/calendar`, `/fundamentals`)
 - **yf-enrichment** : enrichissement quotidien (volatilitÃ©, earnings, calendar)
 - **Streamlit** : dashboard opÃ©rationnel (`dashboard/`, `trading-dashboard` service)
@@ -44,9 +43,6 @@ cp .env.example .env
 
 # Lancer la stack principale
 docker compose up -d
-
-# Lancer Qdrant (stack sÃ©parÃ©e)
-docker compose -f docker-compose.qdrant.yml up -d
 ```
 
 ## 4. Structure du repo

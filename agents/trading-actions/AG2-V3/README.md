@@ -28,7 +28,7 @@ Le validator FOREX renvoie et persiste :
 - `bb_status` → `ai_bb_status`
 - `rsi_status` → `ai_rsi_status`
 
-Ces champs sont disponibles dans DuckDB (`technical_signals`), la vue `v_ag2_fx_output`, les payloads vectoriels, et la sortie Google Sheets (si le nœud de sync est utilisé).
+Ces champs sont disponibles dans DuckDB (`technical_signals`), la vue `v_ag2_fx_output`, et la sortie Google Sheets (si le nœud de sync est utilisé).
 
 ## Scripts nœuds
 
