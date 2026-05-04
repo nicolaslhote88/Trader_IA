@@ -488,6 +488,42 @@ def fmt_num(v, nd=2):
         return "n/a"
 
 
+def compute_review_info(decision_ts, next_review_days):
+    """Returns (decision_date_str, review_date_str, review_status_str) for display."""
+    if not decision_ts:
+        return None, None, None
+    try:
+        from datetime import timedelta
+        s = str(decision_ts).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        decision_date = str(dt.date())
+        if next_review_days is None:
+            return decision_date, None, None
+        review_dt = dt + timedelta(days=int(next_review_days))
+        review_date = str(review_dt.date())
+        today = datetime.now(timezone.utc).date()
+        delta = (review_dt.date() - today).days
+        if delta < 0:
+            status = f"OVERDUE+{abs(delta)}j"
+        elif delta == 0:
+            status = "AUJOURD_HUI"
+        else:
+            status = f"dans_{delta}j"
+        return decision_date, review_date, status
+    except Exception:
+        return None, None, None
+
+
+def is_fx_symbol(symbol, asset_class=None):
+    if str(symbol or "").upper().startswith("FX:") or str(symbol or "").upper().endswith("=X"):
+        return True
+    return str(asset_class or "").strip().upper() in {"CURRENCY", "FOREX", "FX"}
+
+
 def build_agent_brief(summary, positions, recent_ideas):
     lines = [
         "ETAT DU PORTEFEUILLE (memoire decisionnelle + execution):",
@@ -513,11 +549,18 @@ def build_agent_brief(summary, positions, recent_ideas):
                 f"avg={fmt_num(p.get('avgPrice'))} last={fmt_num(p.get('lastPrice'))} "
                 f"value={fmt_num(p.get('marketValue'))} pnl={fmt_num(p.get('unrealizedPnL'))}"
             )
+            decision_date, review_date, review_status = compute_review_info(d.get("ts"), d.get("nextReviewDays"))
+            review_info = ""
+            if decision_date:
+                review_info = f", decisionDt={decision_date}"
+            if review_date:
+                review_info += f", reviewDt={review_date}[{review_status}]"
             lines.append(
                 "  These IA: "
                 f"action={d.get('action') or 'n/a'}, signal={d.get('signal') or 'n/a'}, conf={fmt_num(d.get('confidence'), 0)}, "
                 f"horizonDays={d.get('horizonDays') if d.get('horizonDays') is not None else 'n/a'}, "
                 f"nextReviewDays={d.get('nextReviewDays') if d.get('nextReviewDays') is not None else 'n/a'}"
+                + review_info
             )
             lines.append(
                 "  Parametres: "
@@ -541,18 +584,23 @@ def build_agent_brief(summary, positions, recent_ideas):
             if d.get("dependencies") is not None:
                 lines.append(f"  Dependencies: {d.get('dependencies')}")
 
-    lines.extend(["", "IDEES RECENTES NON EXECUTEES / PARTIELLES:"])
+    lines.extend(["", "IDEES RECENTES NON EXECUTEES:"])
     if not recent_ideas:
         lines.append("(Aucune idee non executee recente)")
     else:
-        for idea in recent_ideas[:MAX_IDEAS_IN_BRIEF]:
+        count = 0
+        for idea in recent_ideas:
+            if count >= MAX_IDEAS_IN_BRIEF:
+                break
+            sym = idea.get("symbol") or ""
+            if is_fx_symbol(sym, idea.get("assetClass")):
+                continue
             lines.append(
-                f"- {idea.get('symbol')} | action={idea.get('action')} | status={idea.get('executionStatus')} | "
-                f"reason={idea.get('executionReason')} | targetQty={fmt_num(idea.get('targetQty'))} | "
-                f"requested={fmt_num(idea.get('requestedQty'))} | executed={fmt_num(idea.get('executedQty'))}"
+                f"- {sym} | action={idea.get('action')} | targetQty={fmt_num(idea.get('targetQty'))}"
             )
             if idea.get("rationale"):
                 lines.append(f"  rationale: {str(idea.get('rationale')).strip()}")
+            count += 1
 
     return "\n".join(lines)
 
