@@ -116,11 +116,6 @@ SCHEMA_STMTS = [
       isin VARCHAR,
       enabled BOOLEAN DEFAULT TRUE,
       boursorama_ref VARCHAR,
-      base_ccy VARCHAR,
-      quote_ccy VARCHAR,
-      pip_size DOUBLE,
-      price_decimals INTEGER,
-      trading_hours VARCHAR DEFAULT '24x5',
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
@@ -133,11 +128,6 @@ SCHEMA_STMTS = [
       symbol_yahoo VARCHAR,
       asset_class VARCHAR DEFAULT 'EQUITY',
       workflow_date TIMESTAMP NOT NULL,
-      base_ccy VARCHAR,
-      quote_ccy VARCHAR,
-      pip_size DOUBLE,
-      price_decimals INTEGER,
-      trading_hours VARCHAR,
       h1_date TIMESTAMP,
       h1_source VARCHAR,
       h1_status VARCHAR,
@@ -203,9 +193,6 @@ SCHEMA_STMTS = [
       d1_support DOUBLE,
       d1_dist_res_pct DOUBLE,
       d1_dist_sup_pct DOUBLE,
-      atr_pips_h1 DOUBLE,
-      atr_pips_d1 DOUBLE,
-      stop_pips_suggested DOUBLE,
       data_quality_flags VARCHAR,
       data_age_h1_hours DOUBLE,
       data_age_d1_hours DOUBLE,
@@ -278,22 +265,9 @@ SCHEMA_STMTS = [
 
 MIGRATE_STMTS = [
     "ALTER TABLE universe ADD COLUMN IF NOT EXISTS symbol_yahoo VARCHAR",
-    "ALTER TABLE universe ADD COLUMN IF NOT EXISTS base_ccy VARCHAR",
-    "ALTER TABLE universe ADD COLUMN IF NOT EXISTS quote_ccy VARCHAR",
-    "ALTER TABLE universe ADD COLUMN IF NOT EXISTS pip_size DOUBLE",
-    "ALTER TABLE universe ADD COLUMN IF NOT EXISTS price_decimals INTEGER",
-    "ALTER TABLE universe ADD COLUMN IF NOT EXISTS trading_hours VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS symbol_internal VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS symbol_yahoo VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS asset_class VARCHAR",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS base_ccy VARCHAR",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS quote_ccy VARCHAR",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS pip_size DOUBLE",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS price_decimals INTEGER",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS trading_hours VARCHAR",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS atr_pips_h1 DOUBLE",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS atr_pips_d1 DOUBLE",
-    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS stop_pips_suggested DOUBLE",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_quality_flags VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_h1_hours DOUBLE",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_d1_hours DOUBLE",
@@ -304,47 +278,6 @@ MIGRATE_STMTS = [
 VIEW_STMTS = [
     "CREATE INDEX IF NOT EXISTS idx_ts_symbol_internal ON technical_signals(symbol_internal)",
     "CREATE INDEX IF NOT EXISTS idx_ts_asset_class ON technical_signals(asset_class)",
-    """
-    CREATE OR REPLACE VIEW v_ag2_fx_output AS
-    SELECT
-      id,
-      run_id,
-      COALESCE(symbol_internal, symbol) AS symbol,
-      symbol_yahoo,
-      asset_class,
-      base_ccy,
-      quote_ccy,
-      pip_size,
-      price_decimals,
-      trading_hours,
-      workflow_date,
-      h1_date,
-      d1_date,
-      h1_status,
-      d1_status,
-      h1_action,
-      d1_action,
-      h1_score,
-      d1_score,
-      h1_confidence,
-      d1_confidence,
-      h1_atr,
-      d1_atr,
-      atr_pips_h1,
-      atr_pips_d1,
-      stop_pips_suggested,
-      data_quality_flags,
-      data_age_h1_hours,
-      data_age_d1_hours,
-      ai_decision,
-      ai_quality,
-      ai_bb_status,
-      ai_rsi_status,
-      pass_pm,
-      updated_at
-    FROM technical_signals
-    WHERE UPPER(COALESCE(asset_class, '')) = 'FX'
-    """,
 ]
 
 
@@ -529,12 +462,9 @@ config = {
     "strategy_version": str(first_json.get("strategy_version") or "strategy_v3"),
     "config_version": str(first_json.get("config_version") or "config_v3"),
     "prompt_version": str(first_json.get("prompt_version") or "prompt_v3"),
-    "enable_fx": bool(first_json.get("enable_fx")),
-    "universe_mode": str(first_json.get("universe_mode") or "ALL").upper(),
+    "universe_mode": str(first_json.get("universe_mode") or "ACTIONS_ONLY").upper(),
     "batch_state_key": str(first_json.get("batch_state_key") or "last_index"),
-    "fx_universe_count": int(first_json.get("fx_universe_count") or 0),
-    "non_fx_universe_count": int(first_json.get("non_fx_universe_count") or 0),
-    "universe_scope": first_json.get("universe_scope") or ["EQUITY", "CRYPTO"],
+    "universe_scope": first_json.get("universe_scope") or ["EQUITY", "ETF", "CRYPTO"],
 }
 
 with db_con() as con:
@@ -563,8 +493,8 @@ with db_con() as con:
             """
             INSERT OR REPLACE INTO universe (
               symbol, symbol_yahoo, name, asset_class, exchange, currency, country, sector, industry,
-              isin, enabled, boursorama_ref, base_ccy, quote_ccy, pip_size, price_decimals, trading_hours, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+              isin, enabled, boursorama_ref, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """,
             [
                 sym,
@@ -579,11 +509,6 @@ with db_con() as con:
                 r.get("isin") or r.get("ISIN") or "",
                 str(r.get("enabled", True)).lower() == "true",
                 r.get("boursorama_ref") or r.get("BoursoramaRef") or "",
-                r.get("base_ccy"),
-                r.get("quote_ccy"),
-                r.get("pip_size"),
-                r.get("price_decimals"),
-                r.get("trading_hours") or ("24x5" if str(r.get("asset_class", "")).upper() == "FX" else ""),
             ],
         )
 
@@ -626,11 +551,6 @@ for i, entry in enumerate(batch):
                 "symbol_internal": symbol_internal,
                 "symbol_yahoo": symbol_yahoo,
                 "asset_class": str(entry.get("asset_class") or "EQUITY").upper(),
-                "base_ccy": entry.get("base_ccy"),
-                "quote_ccy": entry.get("quote_ccy"),
-                "pip_size": entry.get("pip_size"),
-                "price_decimals": entry.get("price_decimals"),
-                "trading_hours": entry.get("trading_hours"),
                 "run_id": run_id,
                 "db_path": DB_PATH,
                 "legacy_migration": legacy_migration_report,
@@ -640,11 +560,8 @@ for i, entry in enumerate(batch):
                 "strategy_version": config["strategy_version"],
                 "config_version": config["config_version"],
                 "prompt_version": config["prompt_version"],
-                "enable_fx": config["enable_fx"],
                 "universe_mode": config["universe_mode"],
                 "batch_state_key": config["batch_state_key"],
-                "fx_universe_count": config["fx_universe_count"],
-                "non_fx_universe_count": config["non_fx_universe_count"],
                 "universe_scope": config["universe_scope"],
                 "batch_info": {"start": idx, "size": len(batch), "total": total},
                 "_index": i,

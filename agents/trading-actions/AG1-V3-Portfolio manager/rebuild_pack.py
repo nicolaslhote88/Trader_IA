@@ -61,7 +61,6 @@ EXPORT_SPECS: tuple[ExportSpec, ...] = (
     ExportSpec("pre_agent", "20J_final_build_market_news_pack", ("20j final build marketnewspack final",)),
     ExportSpec("pre_agent", "R8_data_prep_matrix", ("r8 data prep for matrix fusion filter",)),
     ExportSpec("pre_agent", "calcul_matrice_briefing", ("calcul matrice briefing",)),
-    ExportSpec("pre_agent", "fx_00_prepare_brief_context", ("fx 00 prepare brief context", "fx 00 prepare fx brief context")),
     ExportSpec("pre_agent", "merge7", ("merge7",)),
     ExportSpec("agent_input", "ag1_00_assemble_input_packs", ("ag1 00 assemble input packs",)),
     ExportSpec("agent_input", "agent_1_portfolio_manager", ("agent 1 portfolio manager",)),

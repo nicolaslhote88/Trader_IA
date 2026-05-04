@@ -8,42 +8,6 @@ import duckdb
 
 DB_PATH_DEFAULT = os.getenv("AG1_DUCKDB_PATH", "/files/duckdb/ag1_v3.duckdb")
 MAX_IDEAS_IN_BRIEF = 20
-CURRENCY_CODES = {
-    "AED",
-    "ARS",
-    "AUD",
-    "BRL",
-    "CAD",
-    "CHF",
-    "CLP",
-    "CNH",
-    "CNY",
-    "CZK",
-    "DKK",
-    "EUR",
-    "GBP",
-    "HKD",
-    "HUF",
-    "IDR",
-    "ILS",
-    "INR",
-    "JPY",
-    "KRW",
-    "MXN",
-    "MYR",
-    "NOK",
-    "NZD",
-    "PHP",
-    "PLN",
-    "RUB",
-    "SEK",
-    "SGD",
-    "THB",
-    "TRY",
-    "TWD",
-    "USD",
-    "ZAR",
-}
 
 
 def to_num(v, default=0.0):
@@ -81,43 +45,15 @@ def is_unknown_text(v):
     return (not s) or s in {"UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
 
 
-def parse_fx_pair(v):
-    s = norm_text(v)
-    if not s:
-        return None
-    if s.startswith("FX:"):
-        s = s[3:]
-    if s.endswith("=X"):
-        s = s[:-2]
-    s = s.replace("/", "").replace("-", "").replace("_", "")
-    pair = "".join(ch for ch in s if ch.isalpha()).upper()[:6]
-    if len(pair) != 6:
-        return None
-    base, quote = pair[:3], pair[3:]
-    if base in CURRENCY_CODES and quote in CURRENCY_CODES:
-        return pair
-    return None
-
-
 def normalize_asset_class(asset_class, symbol=None):
     a = norm_text(asset_class)
-    if a in {"FX", "FOREX", "CURRENCY"}:
-        return "FX"
-    if parse_fx_pair(symbol):
-        return "FX"
+    if a in {"EQUITY", "STOCK", "ETF", "CRYPTO"}:
+        return "EQUITY" if a == "STOCK" else a
     return a or None
 
 
 def norm_symbol(v, asset_class_hint=None):
-    raw = str(v or "").strip()
-    s = raw.upper()
-    if not s:
-        return ""
-    pair = parse_fx_pair(s)
-    hint = norm_text(asset_class_hint)
-    if pair and (hint in {"FX", "FOREX", "CURRENCY"} or s.startswith("FX:") or s.endswith("=X") or "/" in raw or len(s) == 6):
-        return f"FX:{pair}"
-    return s
+    return str(v or "").strip().upper()
 
 
 def infer_side_from_action_or_signal(action=None, signal=None):

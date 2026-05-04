@@ -36,7 +36,6 @@ COMMON_NODES = {
     "9 - Upsert Run Bundle (DuckDB)",
     "10 - Post-Run Health (DuckDB)",
     "0 - SEED Portfolio",
-    "FX.00 - Prepare FX Brief Context",
 }
 
 
@@ -122,7 +121,6 @@ LAYOUT_OVERRIDES = {
             "When clicking ‘Execute workflow’": [43008, 18992],
             "R8 — Data Prep for Matrix (Fusion Filter)": [43632, 19200],
             "Calcul Matrice & Briefing": [43856, 19200],
-            "FX.00 - Prepare FX Brief Context": [43728, 19600],
             "Merge7": [44320, 18704],
             "AG1.00 — Assemble Input Packs": [44480, 18736],
             "merge": [46624, 18608],
@@ -200,7 +198,6 @@ LAYOUT_OVERRIDES = {
             "When clicking \u2018Execute workflow\u2019": [51584, 59584],
             "R8 \u2014 Data Prep for Matrix (Fusion Filter)": [52208, 59792],
             "Calcul Matrice & Briefing": [52416, 59792],
-            "FX.00 - Prepare FX Brief Context": [52304, 60144],
             "Merge7": [52880, 59296],
             "AG1.00 \u2014 Assemble Input Packs": [53056, 59328],
             "merge": [55184, 59200],
@@ -254,7 +251,6 @@ LAYOUT_OVERRIDES = {
             "When clicking \u2018Execute workflow\u2019": [1552, 21696],
             "R8 \u2014 Data Prep for Matrix (Fusion Filter)": [2176, 21904],
             "Calcul Matrice & Briefing": [2384, 21904],
-            "FX.00 - Prepare FX Brief Context": [2240, 22176],
             "Merge7": [2848, 21408],
             "AG1.00 \u2014 Assemble Input Packs": [3024, 21440],
             "merge": [5152, 21312],
