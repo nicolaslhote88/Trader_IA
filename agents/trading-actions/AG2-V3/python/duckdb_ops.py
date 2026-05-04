@@ -47,8 +47,7 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     ai_bias_sma200 VARCHAR, ai_regime_d1 VARCHAR, ai_alignment VARCHAR,
     ai_bb_status VARCHAR, ai_rsi_status VARCHAR,
     ai_missing VARCHAR, ai_anomalies VARCHAR, ai_output_ref VARCHAR, ai_rr_theoretical DOUBLE,
-    vector_status VARCHAR DEFAULT 'PENDING', vector_id VARCHAR,
-    vectorized_at TIMESTAMP, row_hash VARCHAR,
+    row_hash VARCHAR,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS ai_dedup_cache (
@@ -64,12 +63,11 @@ CREATE TABLE IF NOT EXISTS run_log (
     finished_at TIMESTAMP, status VARCHAR DEFAULT 'RUNNING',
     batch_start INTEGER, batch_size INTEGER, total_pool INTEGER,
     symbols_ok INTEGER DEFAULT 0, symbols_error INTEGER DEFAULT 0,
-    ai_calls INTEGER DEFAULT 0, vectors_written INTEGER DEFAULT 0,
+    ai_calls INTEGER DEFAULT 0,
     error_detail VARCHAR, version VARCHAR DEFAULT '2.0.0'
 );
 CREATE INDEX IF NOT EXISTS idx_ts_symbol ON technical_signals(symbol);
 CREATE INDEX IF NOT EXISTS idx_ts_run ON technical_signals(run_id);
-CREATE INDEX IF NOT EXISTS idx_ts_vector ON technical_signals(vector_status);
 """
 
 
@@ -143,20 +141,8 @@ def update_ai_result(signal_id: str, ai_data: dict):
     con.close()
 
 
-def mark_vectorized(signal_id: str, vector_id: str):
-    """Mark a signal as vectorized in DuckDB."""
-    con = duckdb.connect(DB_PATH)
-    con.execute("""
-        UPDATE technical_signals
-        SET vector_status = 'DONE', vector_id = ?, vectorized_at = CURRENT_TIMESTAMP,
-            updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
-    """, [vector_id, signal_id])
-    con.close()
-
-
 def finalize_run(run_id: str, symbols_ok: int, symbols_error: int,
-                 ai_calls: int, vectors_written: int, error_detail: str = None):
+                 ai_calls: int, error_detail: str = None):
     """Finalize run log entry."""
     status = "SUCCESS" if symbols_error == 0 else "PARTIAL"
     if symbols_ok == 0:
@@ -166,10 +152,9 @@ def finalize_run(run_id: str, symbols_ok: int, symbols_error: int,
         UPDATE run_log
         SET finished_at = CURRENT_TIMESTAMP, status = ?,
             symbols_ok = ?, symbols_error = ?, ai_calls = ?,
-            vectors_written = ?, error_detail = ?
+            error_detail = ?
         WHERE run_id = ?
-    """, [status, symbols_ok, symbols_error, ai_calls, vectors_written,
-          error_detail, run_id])
+    """, [status, symbols_ok, symbols_error, ai_calls, error_detail, run_id])
     con.close()
 
 

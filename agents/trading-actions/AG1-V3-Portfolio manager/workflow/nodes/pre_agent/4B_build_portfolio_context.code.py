@@ -19,7 +19,6 @@ VALID_EXECUTION_STATUSES = {"EXECUTED", "RESIZED", "SKIPPED", "NO_ORDER", "REJEC
 NO_ORDER_REASONS_ALLOWED = {
     "ACTION_NOT_EXECUTABLE",
     "NO_ORDER_GENERATED",
-    "FX_WATCH_NOT_EXECUTED",
     "MISSING_EXECUTION_ROW",
     "INVALID_EXECUTION_QTY",
     "INVALID_RESIZE_SHAPE",
@@ -41,44 +40,6 @@ NOISY_SYMBOL_TOKENS = {
     "TRADE",
     "GLOBAL",
 }
-CURRENCY_CODES = {
-    "AED",
-    "ARS",
-    "AUD",
-    "BRL",
-    "CAD",
-    "CHF",
-    "CLP",
-    "CNH",
-    "CNY",
-    "CZK",
-    "DKK",
-    "EUR",
-    "GBP",
-    "HKD",
-    "HUF",
-    "IDR",
-    "ILS",
-    "INR",
-    "JPY",
-    "KRW",
-    "MXN",
-    "MYR",
-    "NOK",
-    "NZD",
-    "PHP",
-    "PLN",
-    "RUB",
-    "SEK",
-    "SGD",
-    "THB",
-    "TRY",
-    "TWD",
-    "USD",
-    "ZAR",
-}
-
-
 def to_num(v, default=None):
     try:
         if v is None or v == "":
@@ -122,43 +83,17 @@ def is_unknown_text(v):
     return (not s) or s in {"UNKNOWN", "N/A", "NA", "NONE", "NULL", "-"}
 
 
-def parse_fx_pair(v):
-    s = norm_text(v)
-    if not s:
-        return None
-    if s.startswith("FX:"):
-        s = s[3:]
-    if s.endswith("=X"):
-        s = s[:-2]
-    s = s.replace("/", "").replace("-", "").replace("_", "")
-    pair = "".join(ch for ch in s if ch.isalpha()).upper()[:6]
-    if len(pair) != 6:
-        return None
-    base, quote = pair[:3], pair[3:]
-    if base in CURRENCY_CODES and quote in CURRENCY_CODES:
-        return pair
-    return None
-
-
 def normalize_asset_class(asset_class, symbol=None):
     a = norm_text(asset_class)
-    if a in {"FX", "FOREX", "CURRENCY"}:
-        return "FX"
-    if parse_fx_pair(symbol):
-        return "FX"
+    if a in {"CRYPTO", "ETF"}:
+        return a
+    if a in {"EQUITY", "STOCK"}:
+        return "EQUITY"
     return a or None
 
 
 def norm_symbol(v, asset_class_hint=None):
-    raw = str(v or "").strip()
-    s = raw.upper()
-    if not s:
-        return ""
-    pair = parse_fx_pair(s)
-    hint = norm_text(asset_class_hint)
-    if pair and (hint in {"FX", "FOREX", "CURRENCY"} or s.startswith("FX:") or s.endswith("=X") or "/" in raw or len(s) == 6):
-        return f"FX:{pair}"
-    return s
+    return str(v or "").strip().upper()
 
 
 def to_iso(v, default="unknown"):
@@ -353,10 +288,6 @@ def parse_symbol_from_tokens(tokens, start_idx):
     if start_idx >= len(tokens):
         return None, start_idx
     tok = norm_symbol(tokens[start_idx])
-    if tok == "FX" and start_idx + 1 < len(tokens):
-        pair = re.sub(r"[^A-Z]", "", str(tokens[start_idx + 1] or "").upper())[:6]
-        if len(pair) == 6:
-            return norm_symbol(f"FX:{pair}", asset_class_hint="FX"), start_idx + 2
     return (norm_symbol(tok) or None), start_idx + 1
 
 
@@ -370,9 +301,6 @@ def parse_symbol_from_warning(message, fallback_symbol=None):
         if sym and sym not in NOISY_SYMBOL_TOKENS:
             return norm_symbol(sym)
 
-    fx_match = re.search(r"\bFX:[A-Z]{6}\b", up)
-    if fx_match:
-        return norm_symbol(fx_match.group(0), asset_class_hint="FX")
 
     for m in re.finditer(r"\b[A-Z0-9]{1,10}(?:\.[A-Z]{1,4})?\b", up):
         tok = m.group(0).upper()
@@ -504,10 +432,7 @@ def infer_side_from_action(action):
 
 def derive_no_order_reason(decision, symbol=None):
     action = norm_text((decision or {}).get("action"))
-    asset_class = normalize_asset_class((decision or {}).get("assetClass"), symbol)
     if action in NON_EXECUTABLE_ACTIONS:
-        if action == "WATCH" and asset_class == "FX":
-            return "FX_WATCH_NOT_EXECUTED"
         return "ACTION_NOT_EXECUTABLE"
     if action in EXECUTABLE_ACTIONS:
         return "NO_ORDER_GENERATED"
@@ -556,8 +481,6 @@ def sanitize_execution_memory(mem, decision, symbol=None):
     if action in NON_EXECUTABLE_ACTIONS:
         status = "NO_ORDER"
         reason = "ACTION_NOT_EXECUTABLE"
-        if action == "WATCH" and normalize_asset_class(decision.get("assetClass"), symbol) == "FX":
-            reason = "FX_WATCH_NOT_EXECUTED"
 
     if status == "EXECUTED":
         if side not in {"BUY", "SELL"} or executed_qty is None or executed_qty <= 0:
@@ -637,7 +560,7 @@ def assert_execution_invariants(symbol, decision, mem):
 
     if action in NON_EXECUTABLE_ACTIONS:
         assert status == "NO_ORDER", f"T4 HOLD/WATCH must be NO_ORDER :: {payload}"
-        assert reason in {"ACTION_NOT_EXECUTABLE", "FX_WATCH_NOT_EXECUTED"}, f"T4 HOLD/WATCH invalid reason :: {payload}"
+        assert reason == "ACTION_NOT_EXECUTABLE", f"T4 HOLD/WATCH invalid reason :: {payload}"
 
 
 def is_cash_row(row):
@@ -1206,9 +1129,8 @@ def build_recent_unexecuted(decisions_recent, order_events_by_run_symbol, alert_
         if status not in {"NO_ORDER", "RESIZED", "REJECTED", "CANCELLED"}:
             continue
 
-        is_fx_watch = asset_class == "FX" and action == "WATCH"
         is_trade_action = action in EXECUTABLE_ACTIONS
-        if not (is_trade_action or is_fx_watch):
+        if not is_trade_action:
             continue
 
         ideas.append(

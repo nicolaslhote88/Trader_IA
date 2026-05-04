@@ -170,20 +170,6 @@
       ],
       "id": "10-log-run-fx",
       "name": "10 Log Run FX"
-    },
-    {
-      "parameters": {
-        "language": "pythonNative",
-        "pythonCode": "return [{\"json\": {**(it.get(\"json\", {}) or {}), \"vector_status\": \"SKIPPED_V1\"}} for it in (_items or [])]\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        1740,
-        -20
-      ],
-      "id": "11-build-vector-docs-fx",
-      "name": "11 Build Vector Docs FX"
     }
   ],
   "connections": {
@@ -302,17 +288,6 @@
         [
           {
             "node": "10 Log Run FX",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "10 Log Run FX": {
-      "main": [
-        [
-          {
-            "node": "11 Build Vector Docs FX",
             "type": "main",
             "index": 0
           }

@@ -84,7 +84,6 @@ for it in items:
 
     dd = dict(d)
     dd.update(ai_data)
-    dd["should_vectorize"] = dd["pass_pm"] or dd["ai_decision"] in ("APPROVE", "WATCH")
     out.append({"json": dd})
 
 return out

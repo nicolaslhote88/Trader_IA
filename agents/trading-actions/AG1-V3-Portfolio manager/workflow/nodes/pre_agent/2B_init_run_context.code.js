@@ -41,8 +41,7 @@ const timestampParis = `${isoLocal}${offsetStr}`;
 const timestampUtc = now.toISOString();
 
 const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
-const enableFx = true;
-const universeScope = ["CURRENCY", "EQUITY", "ETF", "MUTUALFUND"];
+const universeScope = ["EQUITY", "ETF", "CRYPTO"];
 
 // run_id: RUN_YYYYMMDD_HHMMSS_<executionId|rand>
 const yyyymmdd = `${parts.year}${parts.month}${parts.day}`;
@@ -54,7 +53,6 @@ return [
   {
     json: {
       ...cfg,
-      enable_fx: enableFx,
       universe_scope: universeScope,
       run: {
         runId,
@@ -67,7 +65,6 @@ return [
         configVersion: String(cfg.config_version || "config_v3"),
         promptVersion: String(cfg.prompt_version || "prompt_v3"),
         model: "gpt-5.2", // <--- Forcez cette valeur exacte
-        enable_fx: enableFx,
         universe_scope: universeScope,
         inputSnapshot: {
           universe_scope: universeScope,

@@ -44,11 +44,9 @@ Avant toute chose, voici les chemins **load-bearing** que j'ai croisés avec ton
 Diff constaté (ton paste vs. le fichier du repo) :
 - Ton paste ajoute `--accesslog=true` + `accesslog.filepath` + volume `/opt/traefik_logs` → non présent dans le repo.
 - Ton paste ajoute `N8N_PROXY_HOPS=1`, `EXECUTIONS_DATA_MAX_AGE=72`, `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none`, `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false`, `EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000`, `DB_SQLITE_VACUUM_ON_STARTUP=true` → non présent dans le repo.
-- Le repo contient **en plus** un bloc `qdrant:` dans le même fichier, alors que ton paste sépare qdrant dans un fichier dédié.
 
 **Proposition :**
 - Remplacer `vps_hostinger_config/docker-compose.yml` par ton paste à jour.
-- Ajouter un second fichier `vps_hostinger_config/docker-compose.qdrant.yml` pour qdrant (ton 2ème paste).
 
 **Risque :** zéro. C'est un rapprochement vers la vérité prod, pas un changement prod.
 
@@ -106,9 +104,7 @@ Etude_Comparative_Brokers_Trader_IA.docx  # → déplacé dans docs/
 
 ### B5 — `MIGRATION.md` racine
 
-Fichier daté 2026-03-01, "RAG Qdrant Migration Notes (VectorDoc_v2)". C'est une note ponctuelle d'une migration accomplie.
 
-**Proposition :** déplacer dans `docs/history/MIGRATION_qdrant_vectordoc_v2.md` (archive historique), pour alléger la racine.
 
 **Risque :** zéro.
 
@@ -132,7 +128,6 @@ Contenu suggéré (sections ~15 lignes chacune) :
 
 1. **Qu'est-ce que Trader_IA ?** — 1 paragraphe, en français, définit le système multi-agent et ses 3 classes d'actifs.
 2. **Taxonomie 6 agents** — schéma textuel Portfolio Manager + 3 analystes + Risk Manager + Execution Trader, et mapping AG0→AG4.
-3. **Architecture physique** — VPS Hostinger → Docker Compose (traefik, n8n, task-runners, yfinance-api, yf-enrichment, trading-dashboard, qdrant séparé).
 4. **Arborescence du repo** — liste des dossiers et leur rôle en 1 ligne.
 5. **Documentation** — pointeurs vers `docs/architecture/overview.md`, `docs/operations/deploy.md`, `ANALYSE_SYSTEME_AVANT_AGENT6.md`.
 6. **Getting started dev** — comment régénérer le pack AG1 avec `rebuild_pack.py`, comment lancer le dashboard en local.
@@ -144,7 +139,6 @@ Contenu suggéré (sections ~15 lignes chacune) :
 - `docs/architecture/etat_des_lieux.md` ← depuis `./ETAT_DES_LIEUX_FONCTIONNEL.md` (renommé, minuscules)
 - `docs/architecture/analyse_avant_agent6.md` ← depuis `./ANALYSE_SYSTEME_AVANT_AGENT6.md`
 - `docs/studies/Etude_Comparative_Brokers_Trader_IA.docx` ← depuis racine
-- `docs/history/MIGRATION_qdrant_vectordoc_v2.md` ← depuis `./MIGRATION.md`
 - `docs/operations/deploy.md` ← **nouveau**, documente les commandes `docker compose`, volumes, secrets, rollback.
 - `docs/operations/env_vars.md` ← **nouveau**, liste toutes les variables d'env utilisées dans `docker-compose.yml` avec explication.
 - `docs/dev/rebuild_pack.md` ← **nouveau**, explique le workflow `rebuild_pack.py` et la relation entre `workflow/` et les fichiers extraits.
@@ -157,7 +151,6 @@ Contenu suggéré (sections ~15 lignes chacune) :
 
 ### C4 — Compléter `.env.example`
 
-Tes `docker-compose.yml` référencent : `SSL_EMAIL`, `GENERIC_TIMEZONE`, `SUBDOMAIN`, `DOMAIN_NAME`, `N8N_RUNNERS_AUTH_TOKEN`, `QDRANT_API_KEY`, `TRANSCRIPT_API_BASE`, `GOOGLE_SHEET_ID`, `DASHBOARD_DOMAIN`, `DASHBOARD_BASIC_AUTH`.
 
 **Proposition :** créer `vps_hostinger_config/.env.example` qui liste toutes ces variables avec valeurs factices + un commentaire sur chacune.
 

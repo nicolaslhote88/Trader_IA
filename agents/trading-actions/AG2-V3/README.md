@@ -1,35 +1,25 @@
-# AG2-V3 — Analyse technique (double agent)
+# AG2-V3 - Analyse technique actions
 
-## Versions actives en n8n
+## Workflow actif en n8n
 
-Les deux workflows officiels importés dans n8n sont :
+Le workflow officiel de la partie trading actions est :
 
-- `AG2-V3/AG2-V3 - Analyse technique (FX only).json` — univers FOREX.
-- `AG2-V3/AG2-V3 - Analyse technique (non-FX).json` — univers EQUITY / ETF / CRYPTO.
+- `AG2-V3/AG2-V3 - Analyse technique actions ETF crypto.json` - univers actions / ETF / crypto.
 
-Ces deux JSON sont désormais les **sources de vérité** : édités directement (via n8n puis exportés) ou manuellement, sans étape de build intermédiaire. L'ancien workflow canonique (`AG2-V3/AG2-V3 - Analyse technique.json`) ainsi que les scripts `build_workflow.py` / `build_split_workflows.py` ont été retirés du repo dans la phase de nettoyage d'avril 2026.
+## Agent technique
 
-## Double agent technique (ACTIONS/ETF + FOREX)
+Le pipeline charge l'univers, recupere les donnees Yahoo Finance H1/D1, calcule les indicateurs, applique le prefiltre technique puis valide les candidats via le prompt ACTIONS/ETF.
 
-Chaque workflow route vers un agent LLM dédié :
+Le schema DuckDB conserve les sorties utiles a AG1 :
 
-- `AG2-V3 - Analyse technique (non-FX).json` : gate long-only (SELL → REJECT) pour EQUITY / ETF / CRYPTO.
-- `AG2-V3 - Analyse technique (FX only).json` : gate bidirectionnel (BUY / SELL) avec filtres SMA200 + Bollinger + RSI.
+- `universe`
+- `technical_signals`
+- `v_latest_signals`
+- `v_ag1_summary`
+- `ai_dedup_cache`
+- `run_log`
+- `batch_state`
 
-Points importants :
+## Scripts noeuds
 
-- Prompt USER identique sur les 2 agents (injecte `ai_context` brut).
-- Prompt SYSTEM spécifique par univers.
-
-## Champs Forex AI (V3)
-
-Le validator FOREX renvoie et persiste :
-
-- `bb_status` → `ai_bb_status`
-- `rsi_status` → `ai_rsi_status`
-
-Ces champs sont disponibles dans DuckDB (`technical_signals`), la vue `v_ag2_fx_output`, les payloads vectoriels, et la sortie Google Sheets (si le nœud de sync est utilisé).
-
-## Scripts nœuds
-
-Les fichiers dans `AG2-V3/nodes/` reflètent le code embarqué dans les deux workflows. Pour resynchroniser manuellement le contenu d'un nœud code : copier depuis n8n → coller dans le fichier correspondant, puis committer.
+Les fichiers dans `AG2-V3/nodes/` refletent le code embarque dans le workflow. Pour resynchroniser manuellement le contenu d'un noeud code : copier depuis n8n, coller dans le fichier correspondant, puis committer.

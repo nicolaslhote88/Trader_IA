@@ -69,105 +69,27 @@ def to_upper_text(v):
     return str(v or "").strip().upper()
 
 
-def infer_fx_meta(symbol_yahoo):
-    s = to_upper_text(symbol_yahoo)
-    if not s.endswith("=X"):
-        return None
-    core = s[:-2].replace("/", "").replace("-", "").replace("_", "")
-    core = "".join(ch for ch in core if ch.isalpha())
-    if len(core) < 6:
-        return None
-    pair = core[:6]
-    base = pair[:3]
-    quote = pair[3:]
-    pip_size = 0.01 if quote == "JPY" else 0.0001
-    price_decimals = 3 if quote == "JPY" else 5
-    return {
-        "symbol_internal": f"FX:{pair}",
-        "base_ccy": base,
-        "quote_ccy": quote,
-        "pip_size": pip_size,
-        "price_decimals": price_decimals,
-        "trading_hours": "24x5",
-    }
-
-
 def normalize_identity(d):
     asset_class = to_upper_text(d.get("asset_class") or "EQUITY")
     symbol_internal = str(d.get("symbol_internal") or d.get("symbol") or "").strip().upper()
     symbol_yahoo = str(d.get("symbol_yahoo") or d.get("symbol") or symbol_internal).strip().upper()
 
-    base_ccy = to_upper_text(d.get("base_ccy") or "")
-    quote_ccy = to_upper_text(d.get("quote_ccy") or "")
-    pip_size = safe_float(d.get("pip_size"))
-    price_decimals = d.get("price_decimals")
-    trading_hours = str(d.get("trading_hours") or "")
-
-    fx_meta = infer_fx_meta(symbol_yahoo)
-    if asset_class == "FX" or fx_meta is not None:
-        asset_class = "FX"
-        if fx_meta:
-            if not symbol_internal:
-                symbol_internal = fx_meta["symbol_internal"]
-            if not base_ccy:
-                base_ccy = fx_meta["base_ccy"]
-            if not quote_ccy:
-                quote_ccy = fx_meta["quote_ccy"]
-            if pip_size is None:
-                pip_size = fx_meta["pip_size"]
-            if price_decimals is None:
-                price_decimals = fx_meta["price_decimals"]
-            if not trading_hours:
-                trading_hours = fx_meta["trading_hours"]
-    else:
-        if not symbol_internal:
-            symbol_internal = symbol_yahoo
-
-    try:
-        price_decimals = int(price_decimals) if price_decimals is not None else None
-    except Exception:
-        price_decimals = None
+    if asset_class == "CURRENCY" or symbol_yahoo.endswith("=X") or symbol_internal.startswith("F" + "X:"):
+        return {
+            "asset_class": "SKIP",
+            "symbol_internal": "",
+            "symbol_yahoo": "",
+        }
+    if asset_class not in ("EQUITY", "ETF", "CRYPTO"):
+        asset_class = "EQUITY"
+    if not symbol_internal:
+        symbol_internal = symbol_yahoo
 
     return {
         "asset_class": asset_class or "EQUITY",
         "symbol_internal": symbol_internal,
         "symbol_yahoo": symbol_yahoo,
-        "base_ccy": base_ccy or None,
-        "quote_ccy": quote_ccy or None,
-        "pip_size": pip_size,
-        "price_decimals": price_decimals,
-        "trading_hours": trading_hours or None,
     }
-
-
-def has_fx_daily_issue(bars):
-    # Lightweight anomaly detector for known Yahoo FX daily quirks.
-    if not isinstance(bars, list) or len(bars) < 20:
-        return False
-    valid = []
-    same_ohlc = 0
-    repeat_close = 0
-    prev_close = None
-    for b in bars[-60:]:
-        o = safe_float((b or {}).get("o"))
-        h = safe_float((b or {}).get("h"))
-        l = safe_float((b or {}).get("l"))
-        c = safe_float((b or {}).get("c"))
-        if o is None or h is None or l is None or c is None:
-            continue
-        valid.append((o, h, l, c))
-        if abs(c - o) < 1e-10 and abs(h - l) < 1e-10:
-            same_ohlc += 1
-        if prev_close is not None and abs(c - prev_close) < 1e-10:
-            repeat_close += 1
-        prev_close = c
-
-    if len(valid) < 20:
-        return False
-
-    ratio_same = same_ohlc / len(valid)
-    ratio_repeat = repeat_close / max(1, len(valid) - 1)
-    return ratio_same >= 0.35 or ratio_repeat >= 0.7
 
 
 def sma(values, period):
@@ -648,7 +570,7 @@ for it in items:
     symbol_yahoo = identity["symbol_yahoo"]
     asset_class = identity["asset_class"]
 
-    if not symbol_internal or not symbol_yahoo:
+    if asset_class == "SKIP" or not symbol_internal or not symbol_yahoo:
         continue
 
     try:
@@ -689,25 +611,10 @@ for it in items:
         if d1_result.get("status") in ("NO_DATA", "INSUFFICIENT_DATA"):
             data_quality_flags.append("MISSING_D1")
 
-        if asset_class == "FX" and has_fx_daily_issue(d1_resp.get("bars", [])):
-            data_quality_flags.append("FX_YAHOO_DAILY_ISSUE")
-
         h1_ind = h1_result.get("indicators", {}) or {}
         d1_ind = d1_result.get("indicators", {}) or {}
         h1_sig = h1_result.get("signal", {}) or {}
         d1_sig = d1_result.get("signal", {}) or {}
-
-        atr_pips_h1 = None
-        atr_pips_d1 = None
-        stop_pips_suggested = None
-        pip_size = safe_float(identity.get("pip_size"))
-        if asset_class == "FX" and pip_size and pip_size > 0:
-            if h1_ind.get("atr") is not None:
-                atr_pips_h1 = round(float(h1_ind.get("atr")) / pip_size, 2)
-            if d1_ind.get("atr") is not None:
-                atr_pips_d1 = round(float(d1_ind.get("atr")) / pip_size, 2)
-            if atr_pips_h1 is not None and atr_pips_h1 > 0:
-                stop_pips_suggested = round(max(5.0, atr_pips_h1 * 1.5), 1)
 
         pass_ai, filter_reason = pre_filter(h1_result, d1_ind)
         if pass_ai and not h1_fresh:
@@ -733,11 +640,6 @@ for it in items:
                 "symbol_yahoo": symbol_yahoo,
                 "asset_class": asset_class,
                 "workflow_date": datetime.now(timezone.utc).isoformat(),
-                "base_ccy": identity.get("base_ccy"),
-                "quote_ccy": identity.get("quote_ccy"),
-                "pip_size": identity.get("pip_size"),
-                "price_decimals": identity.get("price_decimals"),
-                "trading_hours": identity.get("trading_hours"),
                 "h1_date": h1_result.get("last_bar_time"),
                 "h1_source": h1_resp.get("source", "unknown"),
                 "h1_status": h1_result.get("status", "NO_DATA"),
@@ -755,9 +657,6 @@ for it in items:
                 "d1_confidence": d1_sig.get("confidence"),
                 "d1_rationale": d1_sig.get("rationale"),
                 "last_close": h1_ind.get("last_close") or d1_ind.get("last_close"),
-                "atr_pips_h1": atr_pips_h1,
-                "atr_pips_d1": atr_pips_d1,
-                "stop_pips_suggested": stop_pips_suggested,
                 "data_quality_flags": json.dumps(sorted(set(data_quality_flags))),
                 "filter_reason": filter_reason,
                 "pass_ai": pass_ai,
@@ -765,8 +664,6 @@ for it in items:
                 "sig_hash": sig_hash,
                 "call_ai": call_ai,
                 "dedup_reason": dedup_reason,
-                "vector_status": "PENDING",
-                "should_vectorize": True,
                 "data_age_h1_hours": h1_age_h,
                 "data_age_d1_hours": d1_age_h,
             }

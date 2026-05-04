@@ -3,7 +3,6 @@
 Déploiement de référence sur un VPS Hostinger Linux. Deux stacks Docker Compose cohabitent :
 
 - **Stack principale** : `infra/vps_hostinger_config/docker-compose.yml` — `traefik`, `n8n`, `task-runners` ×3, `yfinance-api`, `yf-enrichment`, `trading-dashboard`, `toolbox`.
-- **Stack Qdrant** : `infra/vps_hostinger_config/docker-compose.qdrant.yml` — `qdrant` isolé, rejoint le réseau `web` via alias.
 
 > ⚠️ **Arborescence GitHub ≠ arborescence VPS.** Ce dossier `infra/vps_hostinger_config/` est la *source* du compose côté repo. Sur le VPS, le compose est copié sous `/opt/trader-ia/` et les builds pointent vers `../../services/yfinance-api` et `../../services/yf-enrichment-service` — autrement dit, sur le VPS il faut soit cloner ce repo dans `/opt/trader-ia/` et lancer `docker compose` depuis `/opt/trader-ia/infra/vps_hostinger_config/`, soit copier à la main le compose **et** les dossiers `services/yfinance-api/` + `services/yf-enrichment-service/` à côté (voir §3).
 
@@ -19,7 +18,6 @@ docker network create web
 docker network create traefik_proxy
 docker volume create traefik_data
 docker volume create n8n_data
-docker volume create qdrant_data
 docker volume create yfinance_data
 docker volume create runner_pydeps
 ```
@@ -30,7 +28,6 @@ docker volume create runner_pydeps
 /opt/
 ├── trader-ia/
 │   ├── docker-compose.yml              # symlink ou copie depuis vps_hostinger_config/
-│   ├── docker-compose.qdrant.yml
 │   ├── .env                            # jamais committé
 │   ├── n8n-task-runners.clean.json     # config runner (clean)
 │   ├── duckdb_home/                    # home DuckDB partagé runners
@@ -81,9 +78,6 @@ cp n8n-task-runners.json /opt/trader-ia/n8n-task-runners.clean.json
 # Build + up stack principale (les contextes ../../services/... résolvent dans le repo)
 docker compose build
 docker compose up -d
-
-# Up Qdrant
-docker compose -f docker-compose.qdrant.yml up -d
 ```
 
 ### 3.b Copie manuelle (legacy)
@@ -93,7 +87,6 @@ cd /opt/trader-ia
 
 # Copier la stack, les services Dockerfile et configurer
 cp /chemin/vers/repo/infra/vps_hostinger_config/docker-compose.yml .
-cp /chemin/vers/repo/infra/vps_hostinger_config/docker-compose.qdrant.yml .
 cp /chemin/vers/repo/infra/vps_hostinger_config/.env.example .env
 cp -r /chemin/vers/repo/services/yfinance-api .     # requis par le build yfinance-api
 cp -r /chemin/vers/repo/services/yf-enrichment-service .  # requis par le build yf-enrichment

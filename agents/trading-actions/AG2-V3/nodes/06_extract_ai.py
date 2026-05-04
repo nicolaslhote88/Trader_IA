@@ -202,7 +202,6 @@ def ensure_schema(con):
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_anomalies TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_output_ref TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS pass_pm BOOLEAN;")
-    con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS should_vectorize BOOLEAN;")
 
 
 # ---------------------------
@@ -343,9 +342,8 @@ with db_con() as con:
             quality = min(int(quality or 5), 3)
             reasoning = "[AUTO] APPROVE sans stop-loss => invalide. " + (reasoning or "")
 
-        # Compute pass_pm / should_vectorize (simple, deterministic)
+        # Compute pass_pm (simple, deterministic)
         pass_pm = (decision == "APPROVE") or (decision == "WATCH" and (quality or 0) >= 5)
-        should_vectorize = pass_pm  # you can loosen this later if you want WATCH always vectorized
 
         # Store raw AI output ref (keep short)
         ai_output_ref = d.get("ai_output_ref") or d.get("AI_OutputRef") or ""
@@ -376,7 +374,6 @@ with db_con() as con:
             "ai_anomalies": ai_anomalies,
             "ai_output_ref": ai_output_ref[:500],
             "pass_pm": bool(pass_pm),
-            "should_vectorize": bool(should_vectorize),
         }
 
         # ---------------------------
@@ -404,7 +401,7 @@ with db_con() as con:
                 # don't hard fail the whole run; attach error to item
                 upd["db_write_error"] = str(e)[:500]
 
-        # Push fields back to n8n item for downstream nodes (Sheets / Qdrant)
+        # Push fields back to n8n item for downstream nodes.
         dd = dict(d)
         dd.update({
             "ai_decision": upd["ai_decision"],
@@ -423,7 +420,6 @@ with db_con() as con:
             "ai_anomalies": upd["ai_anomalies"],
             "ai_output_ref": upd["ai_output_ref"],
             "pass_pm": upd["pass_pm"],
-            "should_vectorize": upd["should_vectorize"],
             "ai_parse_note": parse_note,
         })
 

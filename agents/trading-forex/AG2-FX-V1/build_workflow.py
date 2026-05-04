@@ -46,7 +46,6 @@ def build():
         node("08 Write Universe FX", "08_write_universe_fx.py", 1020, -20),
         node("09 Write Signals FX", "09_write_signals_fx.py", 1260, -20),
         node("10 Log Run FX", "10_log_run_fx.py", 1500, -20),
-        node("11 Build Vector Docs FX", "11_build_vector_docs_fx.py", 1740, -20),
     ]
     order = [n["name"] for n in nodes[2:]]
     conns = {

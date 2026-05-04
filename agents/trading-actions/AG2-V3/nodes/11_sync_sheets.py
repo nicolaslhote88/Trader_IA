@@ -68,8 +68,6 @@ FIELD_MAP = {
     "pass_ai": "Pass_AI",
     "pass_pm": "Pass_PM",
     "sig_hash": "Sig_JSON",
-    "vector_status": "vector_status",
-    "vectorized_at": "vectorizedAt",
     # H1 indicators
     "h1_sma20": "H1_SMA20",
     "h1_sma50": "H1_SMA50",
