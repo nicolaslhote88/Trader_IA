@@ -403,6 +403,8 @@ for r in universe_rows:
         "industry": str(r.get("industry") or "").strip(),
     }
 
+symbols = set(universe.keys())
+
 tech_map = {}
 for r in tech_rows:
     sym = str(r.get("symbol") or "").strip().upper()
