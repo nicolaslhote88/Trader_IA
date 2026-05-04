@@ -11,6 +11,13 @@ Dedicated Forex-only portfolio manager fork for three isolated LLM portfolios.
   - `ag1_fx_v1_gemini30_pro.duckdb`
 - Starts each ledger with 10,000 EUR, leverage 1, configurable via `cfg.portfolio_config.leverage_max`.
 - Enforces the FX risk checks before simulated fills.
+- Sends a compact `llm_brief` to the model instead of the raw AG2/AG4 payload. The
+  full `brief` is still kept in the workflow context for risk checks, fills,
+  conversions and snapshots.
+- The init node derives `llm_model` from the selected variant. Use
+  `AG1_FX_LLM_MODEL_OVERRIDE` only for an intentional one-off model override.
+- The compact news pack filters out top-news items without an FX directional hint
+  when usable FX-specific news is available.
 
 ## Cron (updated 2026-04-26)
 
