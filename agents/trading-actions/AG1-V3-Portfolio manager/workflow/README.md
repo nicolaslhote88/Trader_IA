@@ -20,6 +20,9 @@ This subfolder contains a GitHub-ready export pack for AG1 V3.
 - Node `.node.json` files are exported directly from the workflow JSON.
 - Code files (`.code.js`, `.code.py`) are extracted from n8n Code nodes.
 - `duckdb_writer.py` is copied from the parent AG1 pack because Node 9 references an external writer script.
+- Portfolio context and market-price enrichment nodes resolve both `/files/...` and
+  `/local-files/...` DuckDB mounts, then fall back to the default ledger path when
+  the incoming path is missing or unusable.
 
 ## n8n import
 

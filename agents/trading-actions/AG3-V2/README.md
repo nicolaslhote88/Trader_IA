@@ -47,5 +47,5 @@ python build_workflow.py > AG3-V2-workflow.json
 - This V2 intentionally avoids hard dependency on Boursorama page parsing.
 - No AG3 write-back to Google Sheets anymore.
 - `Split In Batches` wiring is explicit:
-  - output `main[0]` = loop branch (fetch/process/write)
-  - output `main[1]` = done branch (`Finalize Run`)
+  - output `main[0]` = done branch (`Finalize Run`)
+  - output `main[1]` = loop branch (fetch/process/write)

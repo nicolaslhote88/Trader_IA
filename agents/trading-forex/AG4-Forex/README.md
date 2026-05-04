@@ -5,6 +5,12 @@ deduplicates news before the LLM call, applies the AG4 geo/asset-class tagger to
 new items only, and writes actionable FX/Mixed items into
 `/files/duckdb/ag4_forex_v1.duckdb`.
 
+## Schedule
+
+Runs 4 times per weekday (`03:45`, `09:45`, `15:45`, `21:45`, Europe/Paris),
+staggered from AG4-V3 so both workflows do not compete for
+`ag4_forex_v1.duckdb`.
+
 ## Source activation
 
 All entries in `infra/config/sources/fx_sources.yaml` are set to `enabled: true`
