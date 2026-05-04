@@ -1,7 +1,7 @@
 ﻿# Ã‰tat des lieux fonctionnel â€” Trader_IA
 
 **DerniÃ¨re analyse exhaustive : 2026-03-02**
-**DerniÃ¨re mise Ã  jour partielle : 2026-04-24** (AG4 geo-tagging + workflow AG4-Forex + base `ag4_forex_v1` â€” cf Â§3.6 / Â§3.6bis / Â§5.5 / Â§5.5bis)
+**DerniÃ¨re mise Ã  jour partielle : 2026-05-04** (AG1-FX compact LLM brief, schedules AG4/AG4-Forex, AG4-FX digest, fallback DuckDB AG1-V3, wiring AG3-V2 â€” cf Â§3.3 / Â§3.3bis / Â§3.5 / Â§3.6 / Â§3.6bis / Â§3.6ter)
 **PÃ©rimÃ¨tre** : repository `Trader_IA` + configuration VPS `infra/vps_hostinger_config/docker-compose.yml`.
 **Objectif** : fournir une base d'entrÃ©e claire et opÃ©rationnelle pour un mode projet LLM.
 
@@ -24,6 +24,7 @@ Points structurants observÃ©s :
 - coexistence de versions V2/V3 dans les paths/environnements,
 - forte interdÃ©pendance AG1 â† AG2/AG3/AG4/YF,
 - ensemble AG1 en 3 modÃ¨les parallÃ¨les (GPT-5.2 / Grok-4.1 / Gemini-3), chacun avec sa DuckDB.
+- ensemble AG1-FX-V1 en 3 portefeuilles Forex-only parallÃ¨les (ChatGPT/Grok/Gemini), chacun avec sa DuckDB et un brief LLM compact.
 
 ## 2. Services dÃ©ployÃ©s sur le VPS
 
@@ -102,7 +103,32 @@ Points structurants observÃ©s :
   - upsert dans ledger AG1 DuckDB (`core.*` + `cfg.*`),
   - calcule snapshots + health post-run.
 - RAG utilisÃ© par agent :
-- Note : legacy branches Google Sheets conservÃ©es mais dÃ©sactivÃ©es dans variants exportÃ©s.
+- Notes :
+  - legacy branches Google Sheets conservÃ©es mais dÃ©sactivÃ©es dans variants exportÃ©s.
+  - les nodes de contexte portefeuille et d'enrichissement prix marchÃ© rÃ©solvent les chemins DuckDB `/files/...` et `/local-files/...`, puis retombent sur le ledger par dÃ©faut si le chemin entrant est absent ou inutilisable.
+
+### 3.3bis AG1-FX-V1 â€” Portfolio Manager Forex-only (3 variants modÃ¨les)
+
+- Fichiers :
+  - template : `agents/trading-forex/AG1-FX-V1-Portfolio manager/workflow/AG1_FX_workflow_template_v1.json`
+  - variants : `.../AG1_FX_workflow_chatgpt52_v1.json`, `...grok41_reasoning_v1.json`, `...gemini30_pro_v1.json`.
+- Triggers :
+  - `chatgpt52` : `30 9,14 * * 1-5`
+  - `grok41_reasoning` : `45 9,14 * * 1-5`
+  - `gemini30_pro` : `0 10,15 * * 1-5`
+- Sources :
+  - `ag2_fx_v1.duckdb` pour universe FX + signaux techniques,
+  - `ag4_fx_v1.duckdb` pour digest macro/news FX (`top_news`, `pair_focus`, `macro_regime`),
+  - ledger propre par modÃ¨le (`ag1_fx_v1_chatgpt52.duckdb`, `ag1_fx_v1_grok41_reasoning.duckdb`, `ag1_fx_v1_gemini30_pro.duckdb`).
+- RÃ´le mÃ©tier :
+  - gÃ¨re un portefeuille sandbox Forex-only de 10 000 EUR par modÃ¨le,
+  - envoie au LLM un `llm_brief` compact au lieu du payload brut AG2/AG4 complet,
+  - conserve le `brief` complet dans le contexte workflow pour les checks risque, conversions, fills et snapshots,
+  - filtre le pack `top_news` pour privilÃ©gier les news avec hint directionnel FX quand elles existent,
+  - dÃ©rive `llm_model` depuis le variant; `AG1_FX_LLM_MODEL_OVERRIDE` sert uniquement aux overrides ponctuels.
+- Garde-fous :
+  - leverage max, exposition par paire/devise, daily drawdown, kill switch,
+  - downstream parser + risk manager + simulate fills + ledger write aprÃ¨s chaque agent provider.
 
 ### 3.4 AG2-V3 â€” Analyse technique
 
@@ -143,12 +169,13 @@ Points structurants observÃ©s :
   4. scoring (quality/growth/valuation/health/consensus/risk),
   5. Ã©criture triage/consensus/metrics/snapshot,
   6. finalize run,
+- Note wiring n8n : le `Split In Batches` utilise `main[0]` comme branche done (`Finalize Run`) et `main[1]` comme branche loop (fetch/process/write).
 
 ### 3.6 AG4-V3 â€” Macro & News (+ geo-tagging depuis 2026-04-24)
 
 - Fichier : `agents/common/AG4-V3/AG4-V3-workflow.json`
 - Trigger :
-  - schedule `*/30 7-20 * * 1-5`
+  - schedule `45 1,6,10,18 * * 1-5` (4 runs par jour ouvrÃ©, Europe/Paris)
   - manuel.
 - Sources :
   - Google Sheets `Source_RSS`,
@@ -171,7 +198,7 @@ Points structurants observÃ©s :
 - Fichier : `agents/trading-forex/AG4-Forex/AG4-Forex-workflow.json`
 - Source de vÃ©ritÃ© : `agents/trading-forex/AG4-Forex/build_workflow.py` + `agents/trading-forex/AG4-Forex/nodes/*`.
 - Trigger :
-  - cadence Ã  fixer par Nicolas (proposÃ© : toutes les 30 min).
+  - schedule `45 3,9,15,21 * * 1-5` (4 runs par jour ouvrÃ©, Europe/Paris), dÃ©calÃ© d'AG4-V3 pour limiter les conflits DuckDB.
 - Sources :
   - `infra/config/sources/fx_sources.yaml` â€” liste dans l'ordre : ForexLive, DailyFX, FXStreet, Investing economic calendar, BIS, Fed, ECB, BoJ. Toutes les entrÃ©es sont dÃ©sormais `enabled: true` pour le passage sandbox complet; le loader AG4-Forex ne consomme toutefois que `type=rss`, donc `investing_econ_calendar` nÃ©cessite encore une branche API avant ingestion effective.
 - Pipeline :
@@ -184,7 +211,20 @@ Points structurants observÃ©s :
   7. `04_parse_llm_output.js` â€” parsing + sanitize identique,
   8. `05_write_fx_news_duckdb.py` â€” Ã©criture dans `ag4_forex_v1.fx_news_history` avec `origin='fx_channel'` (`dedupe_key` reste la garde finale cÃ´tÃ© DuckDB),
   9. `06_finalize_fx_run.py` â€” clÃ´ture `run_log`.
-- RÃ´le : alimenter une base FX isolÃ©e pour que le futur PM Forex dÃ©diÃ© (AG1_Forex, hors scope pour l'instant) puisse produire un brief pondÃ©rÃ© sans mÃ©lange avec les signaux actions.
+- RÃ´le : alimenter une base FX isolÃ©e (`ag4_forex_v1.duckdb`) consommÃ©e par AG4-FX-V1 pour produire le digest macro/news FX utilisÃ© par AG1-FX-V1.
+
+### 3.6ter AG4-FX-V1 â€” Digest macro/news FX pour AG1-FX
+
+- Fichier : `agents/trading-forex/AG4-FX-V1/workflow/AG4_FX_workflow_v1.json`
+- Trigger :
+  - schedule `15 9,14 * * 1-5` (09:15 et 14:15, Europe/Paris)
+  - manuel.
+- Sources :
+  - `ag4_v3.duckdb` pour news globales taguÃ©es `FX` ou `Mixed`,
+  - `ag4_forex_v1.duckdb` pour news canal FX, rÃ©gime macro et biais par paire.
+- Sortie :
+  - `ag4_fx_v1.duckdb`, table `main.fx_digest`, avec trois sections JSON : `top_news`, `pair_focus`, `macro_regime`.
+- RÃ´le : fournir Ã  AG1-FX-V1 un pack macro/news mutualisÃ©, dÃ©dupliquÃ© sur la fenÃªtre rÃ©cente, directement consommable par les trois PMs Forex.
 
 ### 3.7 AG4-SPE-V2 â€” News spÃ©cifiques par valeur
 
@@ -231,7 +271,8 @@ Points structurants observÃ©s :
 | Boursorama actualitÃ©s par valeur | News symboles | AG4-SPE-V2 |
 | Flux RSS (liste en Sheet `Source_RSS`) | News macro | AG4-V3 |
 | Flux FX dÃ©diÃ©s (ForexLive, DailyFX, FXStreet, BIS, Fed, ECB, BoJ â€” `infra/config/sources/fx_sources.yaml`) | News forex | AG4-Forex |
-| OpenAI API | LLM analyse news/agent + embeddings (tagging geo/asset-class inclus) | AG1-V3, AG4-V3, AG4-Forex, AG4-SPE-V2, vectorisation |
+| OpenAI API | LLM analyse news/agent + embeddings (tagging geo/asset-class inclus) | AG1-V3, AG1-FX, AG4-V3, AG4-Forex, AG4-SPE-V2, vectorisation |
+| xAI / Google Gemini APIs | LLM Portfolio Manager variants | AG1-V3, AG1-FX |
 | Google Sheets | Configuration/source universe/rss | AG0, AG2, AG3, AG4, AG4-SPE, dashboard fallback |
 
 ### 4.2 Sources internes (data products)
@@ -241,10 +282,12 @@ Points structurants observÃ©s :
 | `ag2_v3.duckdb` | AG2 | AG1-V3, dashboard, YF enrichment (universe) |
 | `ag3_v2.duckdb` | AG3 | AG1-V3, dashboard |
 | `ag4_v3.duckdb` | AG4 macro (avec tags geo/asset-class depuis 2026-04-24) | AG1-V3, dashboard |
-| `ag4_forex_v1.duckdb` | AG4-V3 (dual-write) + AG4-Forex (canaux dÃ©diÃ©s) | futur AG1_Forex ; requÃªtable par AG1-V3 via `ATTACH` read-only |
+| `ag4_forex_v1.duckdb` | AG4-V3 (dual-write) + AG4-Forex (canaux dÃ©diÃ©s) | AG4-FX-V1, dashboard Forex P&L/news |
+| `ag4_fx_v1.duckdb` | AG4-FX-V1 digest macro/news FX | AG1-FX-V1, dashboard |
 | `ag4_spe_v2.duckdb` | AG4-SPE | AG1-V3, dashboard |
 | `yf_enrichment_v1.duckdb` | YF enrichment | AG1-V3, dashboard |
 | `ag1_v3*.duckdb` (Ã—3 modÃ¨les) | AG1-V3 | dashboard, AG1-PF (selon config) |
+| `ag1_fx_v1*.duckdb` (Ã—3 modÃ¨les) | AG1-FX-V1 | dashboard Forex Trading |
 | `ag1_v2*.duckdb` | AG1-V2/AG1-PF | dashboard legacy + compat |
 
 ## 5. Bases de donnÃ©es gÃ©nÃ©rÃ©es et schÃ©mas
@@ -278,6 +321,22 @@ Tables `cfg` :
 
 RÃ´le :
 - modÃ¨le ledger complet exÃ©cution + audit + risque + snapshots portefeuille.
+
+### 5.2bis DuckDB AG1-FX-V1 ledger â€” `agents/trading-forex/AG1-FX-V1-Portfolio manager/sql/ag1_fx_v1_schema.sql`
+
+Schemas :
+- `core`
+- `cfg`
+
+Tables `core` :
+- `runs`, `orders`, `fills`, `position_lots`,
+- `portfolio_snapshot`, `cash_ledger`, `ai_signals`, `alerts`.
+
+Tables `cfg` :
+- `portfolio_config` (seeded avec capital 10 000 EUR, `leverage_max=1.0`, `max_pair_pct=0.20`, `max_currency_exposure_pct=0.50`, `max_daily_drawdown_pct=0.05`, `kill_switch_active=FALSE`, `universe_filter='forex_27'`).
+
+RÃ´le :
+- ledger exÃ©cution + audit + risque pour les trois PMs Forex-only (`chatgpt52`, `grok41_reasoning`, `gemini30_pro`).
 
 ### 5.3 DuckDB AG2-V3 â€” `agents/trading-actions/AG2-V3/sql/schema.sql`
 
@@ -358,6 +417,19 @@ Alimentation :
 - Ã©criture **primaire** par AG4-V3 (dual-write conditionnel depuis `nodes/14_write_fx_news_duckdb.py` quand `impact_asset_class âˆˆ {FX, Mixed}`) â€” `origin='global_base'`,
 - Ã©criture **secondaire** par AG4-Forex (sources FX dÃ©diÃ©es) â€” `origin='fx_channel'`.
 
+### 5.5ter DuckDB AG4-FX-V1 â€” `agents/trading-forex/AG4-FX-V1/sql/ag4_fx_v1_schema.sql`
+
+Base dÃ©diÃ©e `ag4_fx_v1.duckdb`, digest macro/news FX consommÃ© par AG1-FX-V1.
+
+Tables :
+- `fx_digest` â€” sections JSON `top_news`, `pair_focus`, `macro_regime` par `run_id`, avec `items_count`.
+- `run_log` â€” compteurs `news_global_pulled`, `news_fx_channel_pulled`, `news_after_dedupe`, `sections_written`, `errors`.
+
+Alimentation :
+- lecture de `ag4_v3.duckdb` pour news globales FX/Mixed,
+- lecture de `ag4_forex_v1.duckdb` pour news canal FX, rÃ©gime macro et biais paires,
+- Ã©criture des trois sections compactes dans `main.fx_digest`.
+
 ### 5.6 DuckDB AG4-SPE-V2 â€” `agents/trading-actions/AG4-SPE-V2/nodes/00_duckdb_prepare.py`
 
 Tables :
@@ -413,7 +485,11 @@ Variables/env lues :
 - `AG3_DUCKDB_PATH`,
 - `AG4_DUCKDB_PATH`,
 - `AG4_FOREX_DB_PATH` (ajoutÃ© 2026-04-24, pointant vers `ag4_forex_v1.duckdb`),
+- `AG4_FX_V1_DUCKDB_PATH` (digest `ag4_fx_v1.duckdb` pour AG1-FX),
 - `AG4_SPE_DUCKDB_PATH`,
+- `AG1_FX_V1_CHATGPT52_DUCKDB_PATH`,
+- `AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH`,
+- `AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH`,
 - `YF_ENRICH_DUCKDB_PATH`,
 - `YFINANCE_API_URL`,
 - `SHEET_ID`, credentials Google.
@@ -457,6 +533,7 @@ Variables d'environnement requises cÃ´tÃ© `trading-dashboard` :
 ### 6.2ter Page 8 â€” Forex Trading (AG1-FX)
 
 Vue dÃ©diÃ©e aux trois portefeuilles Forex-only AG1-FX-V1, chacun isolÃ© dans sa propre base DuckDB avec capital initial 10 000 EUR.
+Les dÃ©cisions AG1-FX sont produites Ã  partir d'un `llm_brief` compact (portfolio, macro, `pair_matrix`, `market_watch`) tandis que le workflow conserve le brief complet pour les contrÃ´les downstream.
 
 Source de donnÃ©es :
 - `ag1_fx_v1_chatgpt52.duckdb`, `ag1_fx_v1_grok41_reasoning.duckdb`, `ag1_fx_v1_gemini30_pro.duckdb` (`core.portfolio_snapshot`, `core.position_lots`, `core.orders`, `cfg.portfolio_config`).
