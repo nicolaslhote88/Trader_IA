@@ -56,7 +56,6 @@ VARIANTS = {
             "Agent #1 - Portfolio manager",
             "Information Extractor",
             "OpenAI Chat Model - GPT5.2",
-            "OpenAI Chat Model3",
             "news_web_x_scan (Grok)",
             "OpenAI Chat Model8",
             "Sticky Note11",
@@ -77,7 +76,6 @@ VARIANTS = {
         "branch_nodes": {
             "Agent #1 - Portfolio manager1",
             "Information Extractor1",
-            "OpenAI Chat Model7",
             "news_web_x_scan (Grok)1",
             "xAI Grok Chat Model",
             "Sticky Note2",
