@@ -383,9 +383,34 @@ def _build_fx_pair_sparkline(
             pass
         return str(value).strip()
 
-    decimals = 3 if str(pair).endswith("JPY") else 5
+    def price_decimals(value: float) -> int:
+        if str(pair).endswith("JPY"):
+            return 2
+        if value and abs(value) < 0.1:
+            return 5
+        if value and abs(value) < 2:
+            return 4
+        return 3
+
+    def y_axis_window(values: pd.Series) -> tuple[float, float]:
+        vals = pd.to_numeric(values, errors="coerce").dropna()
+        if vals.empty:
+            return 0.0, 1.0
+        y_min = float(vals.min())
+        y_max = float(vals.max())
+        mid = (y_min + y_max) / 2.0
+        span = y_max - y_min
+        min_span = max(abs(mid) * 0.003, 0.0005)
+        if span < min_span:
+            span = min_span
+            y_min = mid - span / 2.0
+            y_max = mid + span / 2.0
+        pad = max(span * 0.18, abs(mid) * 0.00035)
+        return y_min - pad, y_max + pad
+
     title_suffix = "n/a"
     profitable: bool | None = None
+    last_close = 0.0
 
     if hist is not None and not hist.empty:
         first_close = safe_float(hist["close"].iloc[0])
@@ -420,8 +445,8 @@ def _build_fx_pair_sparkline(
         fig = go.Figure()
         fig.update_layout(
             title=f"{title_text} | no history",
-            height=178,
-            margin=dict(t=34, b=8, l=8, r=8),
+            height=204,
+            margin=dict(t=34, b=26, l=42, r=8),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(visible=False),
@@ -440,6 +465,8 @@ def _build_fx_pair_sparkline(
         )
         return fig
 
+    decimals = price_decimals(last_close)
+    y_floor, y_ceiling = y_axis_window(hist["close"])
     line_color = "#4ea1ff"
     fill_color = "rgba(40,167,69,0.18)" if profitable else "rgba(220,53,69,0.16)"
 
@@ -447,10 +474,20 @@ def _build_fx_pair_sparkline(
     fig.add_trace(
         go.Scatter(
             x=hist["timestamp"],
+            y=[y_floor] * len(hist),
+            mode="lines",
+            line=dict(width=0),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=hist["timestamp"],
             y=hist["close"],
             mode="lines",
             line=dict(color=line_color, width=1.6),
-            fill="tozeroy",
+            fill="tonexty",
             fillcolor=fill_color,
             name=pair,
             hovertemplate=f"%{{x|%Y-%m-%d}}<br>{pair}: %{{y:.{decimals}f}}<extra></extra>",
@@ -476,15 +513,32 @@ def _build_fx_pair_sparkline(
 
     fig.update_layout(
         title=title_text,
-        height=178,
-        margin=dict(t=34, b=8, l=8, r=8),
+        height=204,
+        margin=dict(t=34, b=28, l=44, r=8),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         showlegend=False,
-        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
-        yaxis=dict(showgrid=False, ticks="", zeroline=False),
+        xaxis=dict(
+            showgrid=False,
+            showticklabels=True,
+            zeroline=False,
+            nticks=4,
+            tickformat="%d/%m",
+            tickfont=dict(size=10, color="rgba(230,230,230,0.75)"),
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.10)",
+            ticks="outside",
+            ticklen=3,
+            zeroline=False,
+            nticks=4,
+            tickformat=f".{decimals}f",
+            range=[y_floor, y_ceiling],
+            tickfont=dict(size=10, color="rgba(230,230,230,0.78)"),
+        ),
         hovermode="x unified",
-        title_font=dict(size=13),
+        title_font=dict(size=12),
     )
     return fig
 
