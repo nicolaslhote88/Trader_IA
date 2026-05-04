@@ -62,13 +62,13 @@ VARIANTS = {
         },
     },
     "grok41_reasoning": {
-        "workflow_name": "AG1 - Workflow général - Grok 4.1 Reasoning",
+        "workflow_name": "AG1 - Workflow général - Grok 4.3",
         "db_path": "/files/duckdb/ag1_v3_grok41_reasoning.duckdb",
         "run_defaults": {
             "strategy_version": "strategy_v3",
             "config_version": "config_v3",
             "prompt_version": "prompt_v3",
-            "model": "grok-4-1-fast-reasoning",
+            "model": "grok-4.3",
         },
         "agent_node": "Agent #1 - Portfolio manager1",
         "extractor_node": "Information Extractor1",
@@ -232,6 +232,7 @@ LAYOUT_OVERRIDES = {
                 "width": 896,
             },
             "xAI Grok Chat Model": {
+                "model": "grok-4.3",
                 "options": {
                     "timeout": 640000,
                 },
