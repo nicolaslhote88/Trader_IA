@@ -1272,7 +1272,7 @@ from app_modules.core import (
     truthy_series,
 )
 from app_modules.tables import render_interactive_table
-from app_modules.visualizations import render_portfolio_sparklines
+from app_modules.visualizations import render_fx_pair_sparklines, render_portfolio_sparklines
 
 # ============================================================
 # HELPERS GENERAUX (modules externes)
@@ -14509,7 +14509,7 @@ elif page == "Forex Trading (AG1-FX)":
         df_snap = df_snap.sort_values(["LLM", "as_of", "_snapshot_rank"]).drop(columns=["_snapshot_rank"])
 
     pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, df_open, df_closed)
-    tab_pairs, tab_pair_diag = st.tabs(["Vue paires suivies", "Diagnostic paires"])
+    tab_pairs, tab_sparklines, tab_pair_diag = st.tabs(["Vue paires suivies", "Sparklines paires", "Diagnostic paires"])
     with tab_pairs:
         st.subheader("Vue generale des paires suivies")
         if pair_overview.empty:
@@ -14559,6 +14559,19 @@ elif page == "Forex Trading (AG1-FX)":
                 if c in pair_overview.columns
             ]
             render_interactive_table(pair_overview[show_cols], key_suffix="ag1_fx_pair_overview", height=520)
+
+    with tab_sparklines:
+        st.subheader("Evolution des 27 paires FX")
+        st.caption(
+            "Sparklines 90 jours issues de yfinance-api, separees entre paires principales et autres cross. "
+            "La ligne pointillee marque le niveau de depart; la ligne bleue pointillee marque le dernier close."
+        )
+        render_fx_pair_sparklines(
+            pair_overview,
+            yfinance_api_url=YFINANCE_API_URL,
+            lookback_days=90,
+            columns_per_row=3,
+        )
 
     with tab_pair_diag:
         st.subheader("Diagnostic donnees paires")

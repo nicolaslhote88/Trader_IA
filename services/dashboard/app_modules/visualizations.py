@@ -41,6 +41,8 @@ FX_CURRENCY_CODES = {
     "KRW",
 }
 
+FX_MAJOR_PAIRS = ("EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "NZDUSD", "USDCAD")
+
 
 def _first_existing_column(df: pd.DataFrame, candidates: list[str]) -> str | None:
     for col in candidates:
@@ -364,6 +366,177 @@ def _build_position_sparkline(
         hovermode="x unified",
     )
     return fig
+
+
+def _build_fx_pair_sparkline(
+    pair: str,
+    hist: pd.DataFrame,
+    row: pd.Series | None,
+) -> go.Figure:
+    def clean_text(value: object) -> str:
+        if value is None:
+            return ""
+        try:
+            if pd.isna(value):
+                return ""
+        except Exception:
+            pass
+        return str(value).strip()
+
+    decimals = 3 if str(pair).endswith("JPY") else 5
+    title_suffix = "n/a"
+    profitable: bool | None = None
+
+    if hist is not None and not hist.empty:
+        first_close = safe_float(hist["close"].iloc[0])
+        last_close = safe_float(hist["close"].iloc[-1])
+        if first_close > 0 and last_close > 0:
+            ret_pct = (last_close / first_close - 1.0) * 100.0
+            title_suffix = f"{ret_pct:+.2f}%"
+            profitable = ret_pct >= 0
+    else:
+        last_close = safe_float(row.get("Prix")) if row is not None and "Prix" in row.index else 0.0
+
+    signal = clean_text(row.get("Signal")) if row is not None and "Signal" in row.index else ""
+    technique = clean_text(row.get("Technique")) if row is not None and "Technique" in row.index else ""
+    news_24h = safe_float(row.get("News 24h")) if row is not None and "News 24h" in row.index else 0.0
+    open_lots = safe_float(row.get("Lots ouverts")) if row is not None and "Lots ouverts" in row.index else 0.0
+
+    meta_bits = []
+    if signal and signal != "-":
+        meta_bits.append(signal)
+    elif technique and technique != "-":
+        meta_bits.append(technique)
+    if news_24h > 0:
+        meta_bits.append(f"news 24h: {int(news_24h)}")
+    if open_lots > 0:
+        meta_bits.append(f"lots: {int(open_lots)}")
+
+    title_text = f"{pair} | {title_suffix}"
+    if meta_bits:
+        title_text = f"{pair} - {' / '.join(meta_bits)} | {title_suffix}"
+
+    if hist is None or hist.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"{title_text} | no history",
+            height=178,
+            margin=dict(t=34, b=8, l=8, r=8),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[
+                dict(
+                    text="Data unavailable",
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    showarrow=False,
+                    font=dict(size=11, color="#999"),
+                )
+            ],
+        )
+        return fig
+
+    line_color = "#4ea1ff"
+    fill_color = "rgba(40,167,69,0.18)" if profitable else "rgba(220,53,69,0.16)"
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=hist["timestamp"],
+            y=hist["close"],
+            mode="lines",
+            line=dict(color=line_color, width=1.6),
+            fill="tozeroy",
+            fillcolor=fill_color,
+            name=pair,
+            hovertemplate=f"%{{x|%Y-%m-%d}}<br>{pair}: %{{y:.{decimals}f}}<extra></extra>",
+        )
+    )
+
+    first_close = safe_float(hist["close"].iloc[0])
+    last_close = safe_float(hist["close"].iloc[-1])
+    if first_close > 0:
+        fig.add_hline(
+            y=first_close,
+            line_dash="dot",
+            line_width=1,
+            line_color="rgba(200,200,200,0.55)",
+        )
+    if last_close > 0:
+        fig.add_hline(
+            y=last_close,
+            line_dash="dash",
+            line_width=1,
+            line_color="rgba(100,180,255,0.35)",
+        )
+
+    fig.update_layout(
+        title=title_text,
+        height=178,
+        margin=dict(t=34, b=8, l=8, r=8),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=False,
+        xaxis=dict(showgrid=False, showticklabels=False, zeroline=False),
+        yaxis=dict(showgrid=False, ticks="", zeroline=False),
+        hovermode="x unified",
+        title_font=dict(size=13),
+    )
+    return fig
+
+
+def render_fx_pair_sparklines(
+    pair_overview: pd.DataFrame,
+    *,
+    yfinance_api_url: str,
+    lookback_days: int = 90,
+    columns_per_row: int = 3,
+    major_pairs: tuple[str, ...] = FX_MAJOR_PAIRS,
+) -> None:
+    if pair_overview is None or pair_overview.empty:
+        st.caption("Aucune paire FX disponible pour les sparklines.")
+        return
+
+    pair_col = "Paire" if "Paire" in pair_overview.columns else "pair" if "pair" in pair_overview.columns else None
+    if pair_col is None:
+        st.caption("Colonne paire introuvable pour les sparklines.")
+        return
+
+    df = pair_overview.copy()
+    df["_pair"] = df[pair_col].fillna("").astype(str).str.upper().str.replace(r"[^A-Z]", "", regex=True).str[:6]
+    df = df[df["_pair"].map(lambda p: len(p) == 6 and p[:3] in FX_CURRENCY_CODES and p[3:] in FX_CURRENCY_CODES)].copy()
+    if df.empty:
+        st.caption("Aucune paire FX valide pour les sparklines.")
+        return
+
+    meta_by_pair = {str(row["_pair"]): row for _, row in df.drop_duplicates("_pair").iterrows()}
+    all_pairs = sorted(meta_by_pair.keys())
+    histories = _prefetch_histories(
+        symbols=tuple(all_pairs),
+        yfinance_api_url=yfinance_api_url,
+        interval="1d",
+        lookback_days=lookback_days,
+    )
+
+    major_set = set(major_pairs)
+    sections = [
+        ("Paires principales", [p for p in major_pairs if p in meta_by_pair]),
+        ("Autres paires", [p for p in all_pairs if p not in major_set]),
+    ]
+
+    for section_title, section_pairs in sections:
+        if not section_pairs:
+            continue
+        st.markdown(f"**{section_title}**")
+        grid_cols = st.columns(max(1, int(columns_per_row)))
+        for idx, pair in enumerate(section_pairs):
+            fig = _build_fx_pair_sparkline(pair, histories.get(pair, pd.DataFrame()), meta_by_pair.get(pair))
+            with grid_cols[idx % len(grid_cols)]:
+                st.plotly_chart(fig, use_container_width=True, key=f"fx_pair_spark_{section_title}_{pair}_{idx}")
 
 
 def render_portfolio_sparklines(

@@ -542,6 +542,7 @@ Source de donnÃ©es :
 
 Composantes UI :
 - 3 cartes KPI par LLM : equity, P&L total, leverage, lots ouverts, winrate, profit factor, ordres rejetÃ©s.
+- Onglet `Sparklines paires` : Ã©volution 90j des 27 paires FX via `yfinance-api`, avec sÃ©paration paires principales / autres cross.
 - Courbe equity superposÃ©e pour les 3 LLMs.
 - Matrice P&L net LLM x paire FX.
 - Distribution des trades clos.
