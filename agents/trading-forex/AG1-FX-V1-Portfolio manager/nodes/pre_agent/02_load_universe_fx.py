@@ -22,9 +22,9 @@ if not rows:
     fallback = [
         "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "NZDUSD", "USDCAD",
         "EURGBP", "EURJPY", "EURCHF", "EURAUD", "EURCAD", "EURNZD",
-        "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD",
-        "AUDJPY", "AUDNZD", "AUDCAD",
-        "NZDJPY", "NZDCAD", "CADJPY", "CHFJPY", "CADCHF", "CHFCAD", "JPYNZD",
+        "GBPJPY", "GBPCHF", "GBPAUD", "GBPCAD", "GBPNZD",
+        "AUDJPY", "AUDCHF", "AUDCAD", "AUDNZD",
+        "CADJPY", "CHFJPY", "NZDJPY", "NZDCHF", "NZDCAD",
     ]
     rows = [
         {

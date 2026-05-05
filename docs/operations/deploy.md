@@ -104,6 +104,34 @@ curl -I https://${SUBDOMAIN}.${DOMAIN_NAME}/
 curl http://localhost:8080/health          # yfinance-api (via le réseau web)
 ```
 
+### 3.d Activation IBKR en dry-run
+
+```bash
+cd /opt/trader-ia/infra/vps_hostinger_config
+
+# Dans .env, garder IBKR_DRY_RUN=true au demarrage.
+# Renseigner IBKR_ACCOUNT_ID si possible.
+docker compose up -d --build ibkr-gateway ibkr-broker n8n task-runners
+
+# Depuis la machine locale, ouvrir le tunnel vers le gateway sur le VPS.
+ssh -L 5000:localhost:5000 user@vps_ip
+
+# Puis navigateur local :
+# https://localhost:5000
+```
+
+Verification apres login IBKR :
+
+```bash
+docker compose exec ibkr-broker python - <<'PY'
+import json, urllib.request
+print(json.dumps(json.load(urllib.request.urlopen('http://localhost:8080/health')), indent=2))
+PY
+```
+
+Les nodes n8n 07b/11b restent sandbox-only tant que `IBKR_DRY_RUN=true` et
+`IBKR_SEND_DRY_RUN_TO_BROKER=false`.
+
 ## 4. Mises à jour
 
 ```bash
