@@ -541,14 +541,22 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
     wk["_technique"] = wk.get("Technique", pd.Series("Neutre", index=wk.index)).fillna("Neutre").astype(str)
     wk["_sources_state"] = wk.get("Sources", pd.Series("Calme", index=wk.index)).fillna("Calme").astype(str)
     wk["_state"] = wk.get("Etat general", pd.Series("-", index=wk.index)).fillna("-").astype(str)
+    wk["_score_plot"] = (
+        wk.apply(lambda row: float(row["_score"]) + _stable_jitter(str(row["Paire"]), "fx-score", amplitude=0.022), axis=1)
+        .clip(-1.0, 1.0)
+    )
+    wk["_pressure_plot"] = (
+        wk.apply(lambda row: float(row["_pressure"]) + _stable_jitter(str(row["Paire"]), "fx-pressure", amplitude=2.2), axis=1)
+        .clip(0.0, 102.0)
+    )
 
     color_map = {
-        "Fort haussier": "#16a34a",
-        "Haussier": "#65a30d",
+        "Fort haussier": "#00d084",
+        "Haussier": "#9acd32",
         "Neutre": "#64748b",
         "Tendu": "#d97706",
-        "Baissier": "#dc2626",
-        "Fort baissier": "#7f1d1d",
+        "Baissier": "#ff6b6b",
+        "Fort baissier": "#b00020",
     }
     symbol_map = {
         "Calme": "circle",
@@ -556,6 +564,8 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         "Actif": "square",
         "Alerte news": "triangle-up",
     }
+    technique_order = ["Fort haussier", "Haussier", "Neutre", "Tendu", "Baissier", "Fort baissier"]
+    source_order = ["Alerte news", "Actif", "Recent", "Calme"]
     custom_cols = [
         "Paire",
         "_state",
@@ -579,8 +589,8 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
 
     fig = px.scatter(
         wk.sort_values(["_high_impact", "_news_24h", "_open_lots"], ascending=[False, False, False]),
-        x="_score",
-        y="_pressure",
+        x="_score_plot",
+        y="_pressure_plot",
         color="_technique",
         symbol="_sources_state",
         size="_bubble",
@@ -588,13 +598,14 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         custom_data=custom_cols,
         color_discrete_map=color_map,
         symbol_map=symbol_map,
+        category_orders={"_technique": technique_order, "_sources_state": source_order},
         labels={
-            "_score": "Score technique AG2 (-1 baissier -> +1 haussier)",
-            "_pressure": "Pression news / sources AG4 (0-100)",
+            "_score_plot": "Score technique AG2 (-1 baissier -> +1 haussier)",
+            "_pressure_plot": "Pression news / sources AG4 (0-100)",
             "_technique": "Technique",
             "_sources_state": "Sources",
         },
-        title="Carte FX: technique x pression news/sources",
+        title=None,
     )
     hover_template = (
         "<b>%{customdata[0]}</b><br>"
@@ -608,9 +619,11 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         "Top sources: %{customdata[14]}<extra></extra>"
     )
     for trace in fig.data:
+        trace_name = str(getattr(trace, "name", "") or "")
+        is_strong = "Fort haussier" in trace_name or "Fort baissier" in trace_name
         trace.marker.opacity = 0.82
-        trace.marker.line.color = "rgba(255,255,255,0.72)"
-        trace.marker.line.width = 1.2
+        trace.marker.line.color = "rgba(255,255,255,0.92)" if is_strong else "rgba(255,255,255,0.56)"
+        trace.marker.line.width = 2.4 if is_strong else 1.1
         trace.hovertemplate = hover_template
         trace.textposition = "top center"
         trace.textfont = dict(size=10)
@@ -618,11 +631,19 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
     fig.add_vline(x=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
     fig.add_hline(y=35, line_dash="dot", line_color="#f59e0b")
     fig.update_xaxes(range=[-1.05, 1.05], dtick=0.25, zeroline=False)
-    fig.update_yaxes(range=[-3, 103], dtick=10)
+    fig.update_yaxes(range=[-4, 108], dtick=10)
     fig.update_layout(
         height=640,
-        margin=dict(l=10, r=10, t=44, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        margin=dict(l=10, r=10, t=86, b=10),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.08,
+            xanchor="left",
+            x=0,
+            traceorder="normal",
+            title_text="Technique, sources",
+        ),
     )
     return fig, wk
 
@@ -14143,6 +14164,60 @@ elif page == "Forex":
         df_closed["_fees_eur"] = pd.to_numeric(df_closed[fees_col], errors="coerce").fillna(0.0) if fees_col else 0.0
 
     pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, df_open, df_closed)
+    fx_llm_labels = [str(cfg.get("label", key)) for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()]
+    fx_llm_short = {
+        str(cfg.get("label", key)): str(cfg.get("short_label") or cfg.get("label", key))
+        for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
+    }
+    pair_llm_summary = pd.DataFrame(columns=["pair", "LLM", "open_lots", "open_sides", "pnl_closed_eur", "closed_lots"])
+
+    open_parts = []
+    if not df_open.empty and {"pair", "LLM"}.issubset(df_open.columns):
+        open_tmp = df_open.copy()
+        open_tmp["pair"] = open_tmp["pair"].fillna("").astype(str).str.upper()
+        open_tmp["LLM"] = open_tmp["LLM"].fillna("").astype(str)
+        if "side" not in open_tmp.columns:
+            open_tmp["side"] = ""
+        open_tmp = open_tmp[(open_tmp["pair"] != "") & (open_tmp["LLM"] != "")].copy()
+        if not open_tmp.empty:
+            open_parts.append(
+                open_tmp.groupby(["pair", "LLM"], as_index=False).agg(
+                    open_lots=("pair", "size"),
+                    open_sides=("side", lambda s: ", ".join(sorted({str(x).lower() for x in s.dropna() if str(x).strip()})) or "-"),
+                )
+            )
+    open_by_llm = open_parts[0] if open_parts else pd.DataFrame(columns=["pair", "LLM", "open_lots", "open_sides"])
+
+    if not df_closed.empty and {"pair", "LLM", "_pnl_eur"}.issubset(df_closed.columns):
+        closed_tmp = df_closed.copy()
+        closed_tmp["pair"] = closed_tmp["pair"].fillna("").astype(str).str.upper()
+        closed_tmp["LLM"] = closed_tmp["LLM"].fillna("").astype(str)
+        closed_tmp = closed_tmp[(closed_tmp["pair"] != "") & (closed_tmp["LLM"] != "")].copy()
+        closed_by_llm = closed_tmp.groupby(["pair", "LLM"], as_index=False).agg(
+            pnl_closed_eur=("_pnl_eur", "sum"),
+            closed_lots=("_pnl_eur", "size"),
+        )
+    else:
+        closed_by_llm = pd.DataFrame(columns=["pair", "LLM", "pnl_closed_eur", "closed_lots"])
+
+    pair_llm_summary = open_by_llm.merge(closed_by_llm, on=["pair", "LLM"], how="outer")
+    if not pair_llm_summary.empty:
+        pair_llm_summary["open_lots"] = pd.to_numeric(pair_llm_summary.get("open_lots"), errors="coerce").fillna(0).astype(int)
+        pair_llm_summary["closed_lots"] = pd.to_numeric(pair_llm_summary.get("closed_lots"), errors="coerce").fillna(0).astype(int)
+        pair_llm_summary["pnl_closed_eur"] = pd.to_numeric(pair_llm_summary.get("pnl_closed_eur"), errors="coerce").fillna(0.0)
+        pair_llm_summary["open_sides"] = pair_llm_summary.get("open_sides", pd.Series("-", index=pair_llm_summary.index)).fillna("-").astype(str)
+        pair_llm_summary["llm_short"] = pair_llm_summary["LLM"].map(fx_llm_short).fillna(pair_llm_summary["LLM"])
+        pair_llm_summary["Synthese LLM"] = pair_llm_summary.apply(
+            lambda r: (
+                f"{r['llm_short']}: {int(r['open_lots'])} open"
+                + (f" ({r['open_sides']})" if str(r["open_sides"]).strip("- ") else "")
+                + f", P&L {float(r['pnl_closed_eur']):+.2f}"
+            ),
+            axis=1,
+        )
+        pair_llm_display = pair_llm_summary.groupby("pair")["Synthese LLM"].apply(lambda s: " | ".join(s.astype(str))).to_dict()
+        if pair_overview is not None and not pair_overview.empty and "Paire" in pair_overview.columns:
+            pair_overview["Detail LLM"] = pair_overview["Paire"].astype(str).str.upper().map(pair_llm_display).fillna("-")
 
     tab_ind, tab_analysis, tab_perf, tab_ledger, tab_sources = st.tabs(
         ["Indicateurs", "Analyse paires", "Performance & P&L", "Positions & ordres", "Sources"]
@@ -14198,20 +14273,45 @@ elif page == "Forex":
             hot = pair_overview.sort_values(["High impact", "News 24h", "Lots ouverts", "Score"], ascending=[False, False, False, False], na_position="last")
             if not hot.empty and str(hot.iloc[0].get("Paire")) in pairs:
                 default_idx = pairs.index(str(hot.iloc[0].get("Paire")))
-            selected_pair = st.selectbox("Paire", pairs, index=default_idx, key="forex_unified_pair_select")
+            pair_col, llm_col = st.columns([1.4, 1.0])
+            with pair_col:
+                selected_pair = st.selectbox("Paire", pairs, index=default_idx, key="forex_unified_pair_select")
+            with llm_col:
+                selected_llm_scope = st.selectbox("Scope LLM", ["Tous les LLM"] + fx_llm_labels, index=0, key="forex_unified_llm_scope")
             row = pair_overview[pair_overview["Paire"].astype(str) == selected_pair].iloc[0]
+            selected_pair_llm = pair_llm_summary[pair_llm_summary["pair"].astype(str) == selected_pair].copy() if not pair_llm_summary.empty else pd.DataFrame()
+            if selected_llm_scope != "Tous les LLM" and not selected_pair_llm.empty:
+                selected_pair_llm = selected_pair_llm[selected_pair_llm["LLM"].astype(str) == selected_llm_scope].copy()
+            scope_open_lots = int(pd.to_numeric(selected_pair_llm.get("open_lots", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not selected_pair_llm.empty else 0
+            scope_closed_pnl = float(pd.to_numeric(selected_pair_llm.get("pnl_closed_eur", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum()) if not selected_pair_llm.empty else 0.0
+            scope_label = "tous LLM" if selected_llm_scope == "Tous les LLM" else selected_llm_scope
             a1, a2, a3, a4, a5 = st.columns(5)
             a1.metric("Etat", str(row.get("Etat general", "-")))
             a2.metric("Technique", str(row.get("Technique", "-")), delta=str(row.get("Signal", "-")))
             a3.metric("Score", safe_num(row.get("Score", pd.NA), 2))
             a4.metric("News 24h", int(row.get("News 24h") or 0), delta=f"High impact {int(row.get('High impact') or 0)}")
-            a5.metric("P&L clos", f"{safe_float(row.get('P&L clos EUR', 0.0)):+.2f} EUR")
+            a5.metric("P&L clos", f"{scope_closed_pnl:+.2f} EUR", delta=scope_label)
 
-            b1, b2, b3, b4 = st.columns(4)
+            b1, b2, b3, b4, b5 = st.columns(5)
             b1.metric("Ret 1D", f"{safe_num(row.get('Ret 1D %', pd.NA), 2)}%")
             b2.metric("Ret 5D", f"{safe_num(row.get('Ret 5D %', pd.NA), 2)}%")
             b3.metric("Ret 20D", f"{safe_num(row.get('Ret 20D %', pd.NA), 2)}%")
             b4.metric("RSI14", safe_num(row.get("RSI14", pd.NA), 1))
+            b5.metric("Lots ouverts", scope_open_lots, delta=scope_label)
+
+            if not selected_pair_llm.empty:
+                llm_detail_show = selected_pair_llm[["LLM", "open_lots", "open_sides", "pnl_closed_eur", "closed_lots"]].copy()
+                llm_detail_show = llm_detail_show.rename(
+                    columns={
+                        "open_lots": "Lots ouverts",
+                        "open_sides": "Sens ouverts",
+                        "pnl_closed_eur": "P&L clos EUR",
+                        "closed_lots": "Lots clos",
+                    }
+                )
+                render_interactive_table(llm_detail_show, key_suffix="forex_unified_pair_llm_detail", height=180)
+            else:
+                st.caption(f"Aucune exposition ou P&L clos AG1-FX pour {selected_pair} sur le scope `{scope_label}`.")
 
             st.markdown("#### Paires a surveiller en priorite")
             priority = pair_overview.copy()
@@ -14222,7 +14322,7 @@ elif page == "Forex":
                 + pd.to_numeric(priority.get("Score", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs()
             )
             priority = priority.sort_values("_priority", ascending=False).head(12)
-            keep = [c for c in ["Paire", "Etat general", "Technique", "Score", "Sources", "News 24h", "High impact", "Lots ouverts", "P&L clos EUR"] if c in priority.columns]
+            keep = [c for c in ["Paire", "Etat general", "Technique", "Score", "Sources", "News 24h", "High impact", "Lots ouverts", "LLM exposes", "Detail LLM", "P&L clos EUR"] if c in priority.columns]
             render_interactive_table(priority[keep], key_suffix="forex_unified_priority_pairs", height=330)
 
     with tab_perf:
@@ -14236,7 +14336,12 @@ elif page == "Forex":
             pnl_closed = float(closed_key["_pnl_eur"].sum()) if not closed_key.empty and "_pnl_eur" in closed_key.columns else 0.0
             winrate = float((closed_key["_pnl_eur"] > 0).mean() * 100.0) if not closed_key.empty and "_pnl_eur" in closed_key.columns else None
             with cols[idx]:
-                st.markdown(f"**{cfg['label']}**")
+                accent = str(cfg.get("accent") or "#888")
+                st.markdown(
+                    f"<div style='border-left:4px solid {accent};padding-left:8px;"
+                    f"font-weight:700;color:{accent};'>{cfg['label']}</div>",
+                    unsafe_allow_html=True,
+                )
                 st.metric("Equity", f"{equity:,.2f} EUR", f"{pnl_total:+,.2f} EUR")
                 st.caption(f"P&L clos periode: {pnl_closed:+,.2f} EUR")
                 st.caption(f"Lots clos: {len(closed_key)}")
@@ -14260,7 +14365,18 @@ elif page == "Forex":
             vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
             st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
 
-            fig_hist = px.histogram(matrix_src, x="_pnl_eur", color="LLM", barmode="overlay", nbins=30, labels={"_pnl_eur": "P&L EUR"})
+            color_map = {cfg["label"]: cfg["accent"] for cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.values()}
+            fig_hist = px.histogram(
+                matrix_src,
+                x="_pnl_eur",
+                color="LLM",
+                barmode="overlay",
+                nbins=30,
+                labels={"_pnl_eur": "P&L EUR"},
+                color_discrete_map=color_map,
+                category_orders={"LLM": fx_llm_labels},
+            )
+            fig_hist.update_traces(opacity=0.72)
             fig_hist.update_layout(height=300, margin=dict(l=10, r=10, t=20, b=10), xaxis_title="P&L EUR")
             st.plotly_chart(fig_hist, use_container_width=True, key="forex_unified_closed_distribution")
         else:
