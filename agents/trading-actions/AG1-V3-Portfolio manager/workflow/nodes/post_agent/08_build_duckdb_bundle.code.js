@@ -8,6 +8,14 @@ function toNum(v, dflt = null) {
   return Number.isFinite(n) ? n : dflt;
 }
 
+function pick(row, ...keys) {
+  for (const key of keys) {
+    const v = row?.[key];
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return null;
+}
+
 function clampText(v, max = 0) {
   const s = String(v ?? "").replace(/\s+/g, " ").trim();
   return max > 0 ? s.slice(0, max) : s;
@@ -57,9 +65,9 @@ function inferRiskStatus(cashPct, cashEUR) {
 function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, meta) {
   const positionsIn = Array.isArray(portfolioSummary?.positions) ? portfolioSummary.positions : [];
   const positionsValueInput = positionsIn.reduce((sum, row) => {
-    const marketValue = toNum(row?.MarketValue, null);
+    const marketValue = toNum(pick(row, "MarketValue", "marketValue", "value"), null);
     if (marketValue !== null) return sum + marketValue;
-    return sum + (toNum(row?.Quantity, 0) * toNum(row?.LastPrice, 0));
+    return sum + (toNum(pick(row, "Quantity", "quantity", "qty"), 0) * toNum(pick(row, "LastPrice", "lastPrice", "price"), 0));
   }, 0);
   const summaryCash = toNum(portfolioSummary?.cashEUR, null);
   const summaryTotal = toNum(portfolioSummary?.totalPortfolioValueEUR, null);
@@ -76,16 +84,16 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
   const posMap = new Map();
 
   for (const row of positionsIn) {
-    const symbol = normalizeSymbol(row?.Symbol);
-    const qty = toNum(row?.Quantity, 0);
+    const symbol = normalizeSymbol(pick(row, "Symbol", "symbol"));
+    const qty = toNum(pick(row, "Quantity", "quantity", "qty"), 0);
     if (!symbol || qty <= 0) continue;
     posMap.set(symbol, {
       symbol,
       qty,
-      avgCost: toNum(row?.AvgPrice, toNum(row?.LastPrice, 0) || 0),
-      lastPrice: toNum(row?.LastPrice, toNum(row?.AvgPrice, 0) || 0),
-      assetClass: String(row?.AssetClass || "EQUITY").trim().toUpperCase() || "EQUITY",
-      sector: clampText(row?.Sector || "UNKNOWN", 128) || "UNKNOWN",
+      avgCost: toNum(pick(row, "AvgPrice", "avgPrice"), toNum(pick(row, "LastPrice", "lastPrice", "price"), 0) || 0),
+      lastPrice: toNum(pick(row, "LastPrice", "lastPrice", "price"), toNum(pick(row, "AvgPrice", "avgPrice"), 0) || 0),
+      assetClass: String(pick(row, "AssetClass", "assetClass", "asset_class") || "EQUITY").trim().toUpperCase() || "EQUITY",
+      sector: clampText(pick(row, "Sector", "sector") || "UNKNOWN", 128) || "UNKNOWN",
     });
   }
 
@@ -225,9 +233,25 @@ const portfolioSummary = input.portfolioSummary || ctx.portfolioSummary || { pos
 const priceMap = {};
 if (Array.isArray(portfolioSummary.positions)) {
   portfolioSummary.positions.forEach((p) => {
-    const sym = String(p.Symbol ?? "").trim();
-    const px = Number(p.LastPrice);
+    const sym = String(pick(p, "Symbol", "symbol") ?? "").trim();
+    const px = Number(pick(p, "LastPrice", "lastPrice", "price"));
     if (sym && Number.isFinite(px) && px > 0) priceMap[sym] = px;
+  });
+}
+
+const instrumentMap = new Map();
+if (Array.isArray(portfolioSummary.positions)) {
+  portfolioSummary.positions.forEach((p) => {
+    const symbol = normalizeSymbol(pick(p, "Symbol", "symbol"));
+    if (!symbol || symbol === "CASH_EUR" || symbol === "__META__") return;
+    instrumentMap.set(symbol, {
+      symbol,
+      name: clampText(pick(p, "Name", "name") || symbol, 256),
+      asset_class: clampText(pick(p, "AssetClass", "assetClass", "asset_class") || "Equity", 64),
+      sector: clampText(pick(p, "Sector", "sector") || "", 128) || null,
+      industry: clampText(pick(p, "Industry", "industry") || "", 128) || null,
+      isin: clampText(pick(p, "ISIN", "isin") || "", 64) || null,
+    });
   });
 }
 
@@ -237,6 +261,16 @@ if (Array.isArray(agentDecision.actions)) {
     const sym = String(a.symbol_internal || a.symbol || "").trim();
     const lp = Number(a.entryPlan?.limitPrice);
     if (sym && !(sym in priceMap) && Number.isFinite(lp) && lp > 0) priceMap[sym] = lp;
+    if (sym && !instrumentMap.has(sym)) {
+      instrumentMap.set(sym, {
+        symbol: sym,
+        name: sym,
+        asset_class: clampText(a.assetClass || "Equity", 64),
+        sector: null,
+        industry: null,
+        isin: null,
+      });
+    }
   });
 }
 
@@ -340,6 +374,7 @@ const bundle = {
     };
   }),
   cash_ledger: [],
+  instruments: Array.from(instrumentMap.values()),
   market_prices: Object.entries(priceMap).map(([sym, px]) => ({ symbol: sym, close: px })),
   ai_signals,
   alerts,

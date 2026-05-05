@@ -27,7 +27,7 @@ Pourquoi maintenant : la base `ag4_forex_v1.duckdb` est en place depuis le 24/04
 | 25/04/2026 | **Livraison** | Spec complete d'abord (ce document), puis implementation. |
 | **26/04/2026** | **Cron AG2-FX (technique)** | **6x/jour** sur l'amplitude forex 24/5 (0h, 4h, 8h, 12h, 16h, 20h Paris, lun-ven). |
 | **26/04/2026** | **Cron AG4-FX (news)** | **2x/jour** dans la fenetre d'ouverture bourse FR 9h-17h30 (9h15 et 14h15 Paris, lun-ven). |
-| **26/04/2026** | **Cron AG1-FX (PM)** | **2x/jour** par LLM, **decales de 15 min entre LLMs** pour eviter les conflits de lecture concurrente DuckDB. |
+| **05/05/2026** | **Cron AG1-FX (PM)** | **5x/jour** par LLM (4h30/35/40, 8h30/35/40, 12h30/35/40, 16h30/35/40, 20h30/35/40 Paris), **decales de 5 min entre LLMs** pour eviter les conflits de lecture concurrente DuckDB. |
 
 ---
 
@@ -175,33 +175,33 @@ Les 5 bases vivent dans `/local-files/duckdb/` (volume `/local-files` deja monte
 |---|---|---|---|---|
 | **AG2-FX-V1** | `0 0,4,8,12,16,20 * * 1-5` | 0h, 4h, 8h, 12h, 16h, 20h | 6x/jour | Forex 24/5 -> couverture sessions Asie / Europe / US ; signaux techniques rafraichis toutes les 4h. |
 | **AG4-FX-V1** | `15 9,14 * * 1-5` | 9h15, 14h15 | 2x/jour | Fenetre ouverture bourse FR (9h-17h30) ; matin = post-ouverture EU + macro asiatique nuit, apres-midi = pre-ouverture US. |
-| **AG1-FX-V1 chatgpt52** | `30 9,14 * * 1-5` | 9h30, 14h30 | 2x/jour | Run apres AG2 (8h) + AG4 (9h15) le matin ; apres AG2 (12h) + AG4 (14h15) l'apres-midi. |
-| **AG1-FX-V1 grok41_reasoning** | `45 9,14 * * 1-5` | 9h45, 14h45 | 2x/jour | +15 min vs chatgpt52 pour etaler la charge runner et eviter conflits lecture concurrente DuckDB. |
-| **AG1-FX-V1 gemini30_pro** | `0 10,15 * * 1-5` | 10h00, 15h00 | 2x/jour | +30 min vs chatgpt52. Reste dans la fenetre d'ouverture bourse FR (9h-17h30). |
+| **AG1-FX-V1 chatgpt52** | `30 4,8,12,16,20 * * 1-5` | 4h30, 8h30, 12h30, 16h30, 20h30 | 5x/jour | Run environ 30 min apres les snapshots AG2-FX de 4h/8h/12h/16h/20h. |
+| **AG1-FX-V1 grok41_reasoning** | `35 4,8,12,16,20 * * 1-5` | 4h35, 8h35, 12h35, 16h35, 20h35 | 5x/jour | +5 min vs chatgpt52 pour etaler la charge runner et eviter conflits lecture concurrente DuckDB. |
+| **AG1-FX-V1 gemini30_pro** | `40 4,8,12,16,20 * * 1-5` | 4h40, 8h40, 12h40, 16h40, 20h40 | 5x/jour | +10 min vs chatgpt52, meme cadence AG2-FX. |
 | **AG1-FX-PF-V1 valuation** | `0 0 * * * 1-5` | toutes les heures | 24x/jour lun-ven | Mark-to-market horaire des 3 bases AG1-FX. Met a jour `core.portfolio_snapshot` sans decision LLM. |
 
 ### 4.2 Frise temporelle journee type (lun-ven)
 
 ```
-00h  04h  08h  09h15  09h30  09h45  10h00  12h  14h15  14h30  14h45  15h00  16h  20h
- |    |    |     |      |      |      |     |    |      |      |      |     |    |
- AG2  AG2  AG2   AG4    AG1A   AG1B   AG1C  AG2  AG4    AG1A   AG1B   AG1C  AG2  AG2
+00h  04h  04h30/35/40  08h  08h30/35/40  12h  12h30/35/40  16h  16h30/35/40  20h  20h30/35/40
+ |    |        |        |        |        |        |        |        |        |        |
+ AG2  AG2      AG1      AG2      AG1      AG2      AG1      AG2      AG1      AG2      AG1
  (technique 6x/j -- forex 24/5)        (PM matin)               (PM apres-midi)
 
 Legende :
 - AG2  = AG2-FX-V1 (technique, 6x/j, mutualise entre les 3 PMs)
 - AG4  = AG4-FX-V1 (news macro FX, 2x/j, mutualise entre les 3 PMs)
-- AG1A = chatgpt52    (run +15 min apres AG4)
-- AG1B = grok41       (run +30 min apres AG4)
-- AG1C = gemini30_pro (run +45 min apres AG4)
+- AG1A = chatgpt52    (:30 apres AG2)
+- AG1B = grok41       (:35, +5 min)
+- AG1C = gemini30_pro (:40, +10 min)
 ```
 
 ### 4.3 Garanties cherches
 
-1. **Pas de conflit DuckDB** : les 3 PMs lisent `ag2_fx_v1.duckdb` et `ag4_fx_v1.duckdb` en concurrence. Le decalage 15 min garantit que chaque LLM a son propre creneau de lecture, sans collision avec un autre PM ni avec AG4 (qui ecrit ces bases).
+1. **Pas de conflit DuckDB** : les 3 PMs lisent `ag2_fx_v1.duckdb` et `ag4_fx_v1.duckdb` en concurrence. Le decalage 5 min garantit que chaque LLM a son propre creneau de lecture, sans collision simultanee avec un autre PM.
 2. **Donnees fraiches** : AG2 tourne **avant** AG4, AG4 tourne **avant** AG1. La sequence garantit que chaque PM lit le dernier snapshot technique + le dernier digest macro.
-3. **Couverture forex 24/5** : AG2 capte les sessions Asie (4h, 8h Paris), Europe (8h, 12h, 16h Paris) et US (16h, 20h Paris). Les 6 runs/j permettent au PM, qui tourne lui en heures bourse FR, de toujours disposer d'un snapshot recent (max 4h d'age).
-4. **Cadence PM compatible discretion humaine** : 2 runs/j (matin + apres-midi) reste comparable au comportement d'un trader particulier ; pas de scalping algorithmique.
+3. **Couverture forex 24/5** : AG2 capte les sessions Asie (4h, 8h Paris), Europe (8h, 12h, 16h Paris) et US (16h, 20h Paris). Les 5 runs/j AG1-FX exploitent ces snapshots avec environ 30 minutes de latence.
+4. **Cadence PM compatible supervision** : 5 runs/j reste discret par rapport a un moteur intraday continu, mais couvre mieux les sessions FX qu'une cadence matin/apres-midi.
 
 ### 4.4 Source de verite
 
@@ -721,11 +721,11 @@ Pipeline de checks (un echec -> ordre rejete avec `rejection_reason`, pas crash)
 
 | Variant | LLM | Cron Paris | Cron expression |
 |---|---|---|---|
-| `chatgpt52` | `gpt-5.2-2025-12-11` | 9h30, 14h30 lun-ven | `30 9,14 * * 1-5` |
-| `grok41_reasoning` | `grok-4-1-fast-reasoning` | 9h45, 14h45 lun-ven | `45 9,14 * * 1-5` |
-| `gemini30_pro` | `models/gemini-3-pro-preview` | 10h00, 15h00 lun-ven | `0 10,15 * * 1-5` |
+| `chatgpt52` | `gpt-5.2-2025-12-11` | 4h30, 8h30, 12h30, 16h30, 20h30 lun-ven | `30 4,8,12,16,20 * * 1-5` |
+| `grok41_reasoning` | `grok-4-1-fast-reasoning` | 4h35, 8h35, 12h35, 16h35, 20h35 lun-ven | `35 4,8,12,16,20 * * 1-5` |
+| `gemini30_pro` | `models/gemini-3-pro-preview` | 4h40, 8h40, 12h40, 16h40, 20h40 lun-ven | `40 4,8,12,16,20 * * 1-5` |
 
-(Decalage 15 min entre LLMs pour eviter les conflits de lecture concurrente DuckDB sur les bases mutualisees `ag2_fx_v1.duckdb` et `ag4_fx_v1.duckdb`.)
+(Decalage 5 min entre LLMs pour eviter les conflits de lecture concurrente DuckDB sur les bases mutualisees `ag2_fx_v1.duckdb` et `ag4_fx_v1.duckdb`.)
 
 ---
 
@@ -804,7 +804,7 @@ Aucun nouveau secret : on reutilise les credentials n8n existants (`OpenAI`, `xA
 | **P1** | AG2-FX-V1 deploye. Activer cron **`0 0,4,8,12,16,20 * * 1-5`** (6x/j). Verifier 27 paires ecrites dans `technical_signals_fx` apres 1 run. | `SELECT count(DISTINCT pair) FROM technical_signals_fx WHERE run_id = (SELECT max(run_id) FROM run_log)` = 27. |
 | **P2** | AG4-FX-V1 deploye. Cron **`15 9,14 * * 1-5`** (2x/j, fenetre bourse FR). Verifier 3 sections (`top_news`, `pair_focus`, `macro_regime`) ecrites. | `SELECT section, items_count FROM fx_digest WHERE run_id = (SELECT max(run_id) FROM run_log)`. |
 | **P3** | AG1-FX-V1 chatgpt52 SEUL en activation manuelle (1 run test). Verifier que le brief assemble est coherent, que le prompt systeme est bien injecte, que la decision LLM est parsee, que le Risk Manager log les checks dans `core.alerts`. Aucune ecriture de `position_lots` permise tant que la review du run manuel n'est pas validee par Nicolas. | Run test sans crash + revue Nicolas OK. |
-| **P4** | Activation cron AG1-FX-V1 : chatgpt52 (`30 9,14 * * 1-5`) + grok41_reasoning (`45 9,14 * * 1-5`) + gemini30_pro (`0 10,15 * * 1-5`). | 3 runs reussis par variant pendant 5 jours ouvres. |
+| **P4** | Activation cron AG1-FX-V1 : chatgpt52 (`30 4,8,12,16,20 * * 1-5`) + grok41_reasoning (`35 4,8,12,16,20 * * 1-5`) + gemini30_pro (`40 4,8,12,16,20 * * 1-5`). | 5 runs reussis par variant pendant 5 jours ouvres. |
 | **P5** | Page dashboard "Forex Trading (AG1-FX)" deployee. | Page accessible, KPI coherents avec requetes manuelles SQL. |
 | **P6** (~4 semaines) | Revue de perf : si >=1 LLM depasse +3 % cumule sur 4 semaines avec drawdown < 5 % et winrate >= 50 %, candidat pour test broker live FX. | Decision Nicolas. |
 
@@ -844,7 +844,7 @@ A consigner pour la revue P6 (~4 semaines) :
 |---|---|---|
 | Capital | 50 000 EUR (heritage discontinu V1->V2) | 10 000 EUR par LLM, baseline propre |
 | Univers | actions US/EU + ETF + crypto + FX | 27 paires FX exclusivement |
-| Cron PM (AG1) | quotidien 7h Paris (1x/j) | 2x/j decales par LLM (9h30 / 9h45 / 10h, puis 14h30 / 14h45 / 15h) |
+| Cron PM (AG1) | quotidien 7h Paris (1x/j) | 5x/j decales par LLM (:30 / :35 / :40 apres AG2 a 4h, 8h, 12h, 16h, 20h) |
 | Cron technique (AG2) | 1x/j | **6x/j toutes les 4h** (forex 24/5) |
 | Cron news (AG4) | 1x/j | **2x/j fenetre bourse FR** (9h15, 14h15) |
 | Levier | NA (cash uniquement) | parametrable (default 1, peut monter a 5) |
@@ -861,3 +861,4 @@ A consigner pour la revue P6 (~4 semaines) :
 |---|---|---|---|
 | v1.0 | 2026-04-25 | Nicolas + Claude | Spec initiale ready-to-implement (Codex5.4). |
 | v1.1 | 2026-04-26 | Nicolas + Claude | Cron schedules ajustes : AG2 6x/j (forex 24/5), AG4 2x/j (bourse FR 9h-17h30), AG1 2x/j decales 15 min entre LLMs. Generation source-of-truth via `generate_model_variants.py` mise a jour, regeneration des 3 fichiers `AG1_FX_workflow_*_v1.json` confirmee. |
+| v1.2 | 2026-05-05 | Nicolas + Codex | AG1-FX passe a 5 runs/jour par LLM, decales de 5 min entre LLMs, alignes 30 min apres AG2-FX. |

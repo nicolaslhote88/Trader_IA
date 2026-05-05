@@ -12,19 +12,19 @@ VARIANTS = {
     "chatgpt52": {
         "model": "gpt-5.5",
         "provider": "openai",
-        "cron": "30 9,14 * * 1-5",
+        "cron": "30 4,8,12,16,20 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_chatgpt52.duckdb",
     },
     "grok41_reasoning": {
         "model": "grok-4.20-0309-reasoning",
         "provider": "grok",
-        "cron": "45 9,14 * * 1-5",
+        "cron": "35 4,8,12,16,20 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb",
     },
     "gemini30_pro": {
         "model": "models/gemini-3.1-pro-preview",
         "provider": "gemini",
-        "cron": "0 10,15 * * 1-5",
+        "cron": "40 4,8,12,16,20 * * 1-5",
         "db_path": "/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb",
     },
 }

@@ -3,6 +3,37 @@ import duckdb
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 db_path = ctx.get("db_path") or "/files/duckdb/ag1_fx_v1_chatgpt52.duckdb"
 fills = [f for f in (ctx.get("fills") or []) if str(f.get("side") or "").startswith("close_")]
+brief = ctx.get("brief") or {}
+prices = {r.get("pair"): r.get("last_close") for r in brief.get("technical_signals", []) if r.get("pair")}
+
+
+def quote_to_eur(pair):
+    quote = str(pair or "")[3:6].upper()
+    if quote == "EUR":
+        return 1.0
+
+    direct = prices.get(f"{quote}EUR")
+    if direct:
+        return float(direct)
+
+    inverse = prices.get(f"EUR{quote}")
+    if inverse:
+        return 1.0 / float(inverse)
+
+    eurusd = prices.get("EURUSD")
+    usd_eur = 1.0 / float(eurusd) if eurusd else 0.0
+    if quote == "USD":
+        return usd_eur or 1.0
+
+    quote_usd = prices.get(f"{quote}USD")
+    if quote_usd and usd_eur:
+        return float(quote_usd) * usd_eur
+
+    usd_quote = prices.get(f"USD{quote}")
+    if usd_quote and usd_eur:
+        return (1.0 / float(usd_quote)) * usd_eur
+
+    return 1.0
 
 closed = 0
 with duckdb.connect(db_path) as con:
@@ -21,6 +52,7 @@ with duckdb.connect(db_path) as con:
                 continue
             direction = 1 if side == "long" else -1
             pnl_quote = close_size * 100000 * (float(f.get("fill_price")) - float(open_price)) * direction
+            pnl_eur = pnl_quote * quote_to_eur(pair)
             con.execute(
                 """
                 UPDATE core.position_lots
@@ -28,7 +60,7 @@ with duckdb.connect(db_path) as con:
                     pnl_quote=?, pnl_eur=?, status='closed'
                 WHERE lot_id=?
                 """,
-                [ctx.get("run_id"), f.get("fill_price"), f.get("filled_at"), pnl_quote, pnl_quote, lot_id],
+                [ctx.get("run_id"), f.get("fill_price"), f.get("filled_at"), pnl_quote, pnl_eur, lot_id],
             )
             remaining -= close_size
             closed += 1
