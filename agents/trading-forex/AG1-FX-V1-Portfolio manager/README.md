@@ -18,6 +18,11 @@ Dedicated Forex-only portfolio manager fork for three isolated LLM portfolios.
   `AG1_FX_LLM_MODEL_OVERRIDE` only for an intentional one-off model override.
 - The compact news pack filters out top-news items without an FX directional hint
   when usable FX-specific news is available.
+- The IBKR execution node `nodes/post_agent/11b_ibkr_send_orders_fx.py` is
+  wired in the template and all variants between safety validation and fill
+  simulation. `IBKR_DRY_RUN=true` keeps the workflow sandbox-only by default;
+  set `IBKR_SEND_DRY_RUN_TO_BROKER=true` only to exercise the broker dry-run
+  endpoint.
 
 ## Cron (updated 2026-05-05)
 

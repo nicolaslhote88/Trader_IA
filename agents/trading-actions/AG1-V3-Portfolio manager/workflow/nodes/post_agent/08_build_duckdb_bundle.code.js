@@ -55,6 +55,27 @@ function normalizeSymbol(v) {
   return String(v ?? "").trim();
 }
 
+function orderLedgerId(order, runId, index) {
+  return String(order?.orderId || order?.order_id || order?.clientOrderId || `ORD_${runId}_${index}`).trim();
+}
+
+function brokerOrderId(order) {
+  if (order?.brokerOrderId) return order.brokerOrderId;
+  const raw = order?.ibkrResponse?.ibkr_response || order?.ibkrResponse?.details || order?.ibkrResponse;
+  if (Array.isArray(raw) && raw.length > 0) {
+    return raw[0]?.order_id || raw[0]?.orderId || raw[0]?.id || null;
+  }
+  return raw?.order_id || raw?.orderId || raw?.id || null;
+}
+
+function orderStatus(order) {
+  const ibkr = String(order?.ibkrStatus || "").toLowerCase();
+  if (ibkr === "submitted") return "SUBMITTED";
+  if (ibkr === "dry_run") return "PLANNED";
+  if (ibkr === "error" || ibkr === "not_sent") return "REJECTED";
+  return "PLANNED";
+}
+
 function inferRiskStatus(cashPct, cashEUR) {
   if (Number.isFinite(cashEUR) && cashEUR < -0.01) return "RISK_OFF";
   if (Number.isFinite(cashPct) && cashPct >= 0.8) return "DEFENSIVE";
@@ -350,15 +371,27 @@ const bundle = {
     warnings_json: warnings,
   },
   orders: ordersIn.map((o, i) => ({
-    order_id: `ORD_${run_id}_${i}`,
+    order_id: orderLedgerId(o, run_id, i),
     symbol: o.symbol,
     side: o.side,
     order_type: normalizeOrderType(o.orderType),
     qty: o.quantity,
     limit_price: o.limitPrice ?? null,
+    status: orderStatus(o),
+    broker: o.broker || (o.ibkrStatus ? "IBKR" : "SIM"),
+    broker_order_id: brokerOrderId(o),
+    rationale_json: {
+      action: o.action,
+      assetClass: o.assetClass,
+      clientOrderId: o.clientOrderId || null,
+      ibkrStatus: o.ibkrStatus || null,
+      ibkrResponse: o.ibkrResponse || null,
+      ibkrError: o.ibkrError || null,
+    },
   })),
   fills: ordersIn.map((o, i) => {
     const sym = String(o.symbol || "").trim();
+    const order_id = orderLedgerId(o, run_id, i);
     const orderType = normalizeOrderType(o.orderType);
     const px =
       (orderType === "LIMIT" && o.limitPrice) ? Number(o.limitPrice) :
@@ -366,11 +399,17 @@ const bundle = {
 
     return {
       fill_id: `FIL_${run_id}_${i}`,
-      order_id: `ORD_${run_id}_${i}`,
+      order_id,
       symbol: sym,
       side: o.side,
       qty: o.quantity,
       price: (Number.isFinite(px) && px > 0) ? px : 1.0,
+      raw_fill_json: {
+        source: o.ibkrStatus === "submitted" ? "simulated_after_ibkr_submit" : "simulated_sandbox",
+        clientOrderId: o.clientOrderId || null,
+        ibkrStatus: o.ibkrStatus || null,
+        ibkrResponse: o.ibkrResponse || null,
+      },
     };
   }),
   cash_ledger: [],

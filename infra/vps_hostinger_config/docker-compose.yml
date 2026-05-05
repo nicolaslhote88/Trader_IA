@@ -78,6 +78,9 @@ services:
       - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
+      - IBKR_BROKER_URL=http://ibkr-broker:8080
+      - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
+      - IBKR_SEND_DRY_RUN_TO_BROKER=${IBKR_SEND_DRY_RUN_TO_BROKER:-false}
       - EXECUTIONS_DATA_MAX_AGE=72
       - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
       - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
@@ -119,6 +122,9 @@ services:
       - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
+      - IBKR_BROKER_URL=http://ibkr-broker:8080
+      - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
+      - IBKR_SEND_DRY_RUN_TO_BROKER=${IBKR_SEND_DRY_RUN_TO_BROKER:-false}
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -182,6 +188,52 @@ services:
     restart: unless-stopped
     networks:
       - web
+
+  # ── IBKR Client Portal API Gateway ────────────────────────────────────────
+  # Lance le clientportal.gw d'IBKR. Expose le port 5000 en interne seulement.
+  # AUTHENTIFICATION INITIALE (manuelle, une seule fois) :
+  #   ssh -L 5000:localhost:5000 user@vps   → https://localhost:5000 dans navigateur
+  ibkr-gateway:
+    build:
+      context: ../../services/ibkr-gateway
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Port 5000 accessible uniquement depuis le réseau Docker interne (pas exposé publiquement)
+    expose:
+      - "5000"
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/demo >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── IBKR Broker microservice (FastAPI) ────────────────────────────────────
+  # Wrapper REST autour du CPAPI. Appelé par les nodes n8n pour envoyer les ordres.
+  # IBKR_DRY_RUN=true → log uniquement, aucun ordre réel envoyé (mode par défaut).
+  ibkr-broker:
+    build:
+      context: ../../services/ibkr-broker
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8080"
+    environment:
+      - IBKR_GATEWAY_URL=https://ibkr-gateway:5000
+      - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
+      - IBKR_SSL_VERIFY=false
+      - IBKR_ACCOUNT_ID=${IBKR_ACCOUNT_ID:-}
+    networks:
+      - web
+    depends_on:
+      - ibkr-gateway
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 networks:
   traefik_proxy:

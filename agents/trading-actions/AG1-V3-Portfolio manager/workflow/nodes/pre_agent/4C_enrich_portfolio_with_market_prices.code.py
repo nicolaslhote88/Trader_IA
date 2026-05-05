@@ -343,6 +343,88 @@ def load_position_overrides(db_path):
     return out, source
 
 
+def load_position_lifecycle(db_path):
+    """Best-effort lifecycle dates from executed BUY/SELL orders."""
+    out = {}
+    with db_con(db_path) as con:
+        if con is None or not table_exists(con, "core.orders"):
+            return out
+        if table_exists(con, "core.fills"):
+            rows = query_rows(
+                con,
+                """
+                WITH fills_by_order AS (
+                  SELECT
+                    order_id,
+                    SUM(CAST(qty AS DOUBLE)) AS exec_qty,
+                    SUM(CAST(qty AS DOUBLE) * CAST(price AS DOUBLE)) / NULLIF(SUM(CAST(qty AS DOUBLE)), 0) AS avg_price
+                  FROM core.fills
+                  GROUP BY order_id
+                )
+                SELECT
+                  UPPER(TRIM(o.symbol)) AS symbol,
+                  UPPER(TRIM(o.side)) AS side,
+                  epoch_ms(o.ts_created) AS ts_ms,
+                  COALESCE(CAST(f.exec_qty AS DOUBLE), CAST(o.qty AS DOUBLE)) AS qty,
+                  COALESCE(CAST(f.avg_price AS DOUBLE), CAST(o.limit_price AS DOUBLE)) AS price
+                FROM core.orders o
+                LEFT JOIN fills_by_order f ON f.order_id = o.order_id
+                WHERE UPPER(TRIM(o.side)) IN ('BUY', 'SELL')
+                ORDER BY o.ts_created ASC
+                """,
+            )
+        else:
+            rows = query_rows(
+                con,
+                """
+                SELECT
+                  UPPER(TRIM(symbol)) AS symbol,
+                  UPPER(TRIM(side)) AS side,
+                  epoch_ms(ts_created) AS ts_ms,
+                  CAST(qty AS DOUBLE) AS qty,
+                  CAST(limit_price AS DOUBLE) AS price
+                FROM core.orders
+                WHERE UPPER(TRIM(side)) IN ('BUY', 'SELL')
+                ORDER BY ts_created ASC
+                """,
+            )
+    for r in rows:
+        sym = norm_symbol(r.get("symbol"))
+        side = norm_text(r.get("side"))
+        qty = to_num(r.get("qty"), 0.0) or 0.0
+        ts = to_iso(r.get("ts_ms"), None)
+        if not sym or not ts or qty <= 0:
+            continue
+        rec = out.setdefault(
+            sym,
+            {
+                "openedAt": None,
+                "lastBuyAt": None,
+                "lastSellAt": None,
+                "buyQty": 0.0,
+                "buyNotional": 0.0,
+                "source": "core.orders",
+            },
+        )
+        if side == "BUY":
+            if rec["openedAt"] is None or parse_ts_key(ts) < parse_ts_key(rec["openedAt"]):
+                rec["openedAt"] = ts
+            if rec["lastBuyAt"] is None or parse_ts_key(ts) > parse_ts_key(rec["lastBuyAt"]):
+                rec["lastBuyAt"] = ts
+            rec["buyQty"] += qty
+            price = to_num(r.get("price"), None)
+            if price is not None:
+                rec["buyNotional"] += qty * price
+        elif side == "SELL":
+            if rec["lastSellAt"] is None or parse_ts_key(ts) > parse_ts_key(rec["lastSellAt"]):
+                rec["lastSellAt"] = ts
+    for rec in out.values():
+        rec["avgExecutedBuyPrice"] = round2(rec["buyNotional"] / rec["buyQty"]) if rec["buyQty"] > 0 else None
+        rec["buyQty"] = round2(rec["buyQty"])
+        rec.pop("buyNotional", None)
+    return out
+
+
 def load_instrument_overrides(db_path):
     out = {}
     with db_con(db_path) as con:
@@ -527,6 +609,50 @@ def compute_review_info(decision_ts, next_review_days):
         return None, None, None
 
 
+def days_since(ts):
+    if not ts:
+        return None
+    try:
+        s = str(ts).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return (datetime.now(timezone.utc).date() - dt.date()).days
+    except Exception:
+        return None
+
+
+def compute_horizon_info(opened_ts, decision_ts, horizon_days):
+    """Returns (base_label, base_date, horizon_date, horizon_status)."""
+    if horizon_days is None:
+        return None, None, None, None
+    base_ts = opened_ts or decision_ts
+    if not base_ts:
+        return None, None, None, None
+    try:
+        from datetime import timedelta
+        s = str(base_ts).strip()
+        if s.endswith("Z"):
+            s = s[:-1] + "+00:00"
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        horizon_dt = dt + timedelta(days=int(horizon_days))
+        today = datetime.now(timezone.utc).date()
+        delta = (horizon_dt.date() - today).days
+        if delta < 0:
+            status = f"OVERDUE+{abs(delta)}j"
+        elif delta == 0:
+            status = "AUJOURD_HUI"
+        else:
+            status = f"dans_{delta}j"
+        return ("open" if opened_ts else "decision"), str(dt.date()), str(horizon_dt.date()), status
+    except Exception:
+        return None, None, None, None
+
+
 def is_fx_symbol(symbol, asset_class=None):
     if str(symbol or "").upper().startswith("FX:") or str(symbol or "").upper().endswith("=X"):
         return True
@@ -565,12 +691,21 @@ def build_agent_brief(summary, positions, recent_ideas):
                 f"avg={fmt_num(p.get('avgPrice'))} last={fmt_num(p.get('lastPrice'))} "
                 f"value={fmt_num(p.get('marketValue'))} pnl={fmt_num(p.get('unrealizedPnL'))}"
             )
+            opened_at = p.get("openedAt")
+            holding_days = p.get("holdingDays")
             decision_date, review_date, review_status = compute_review_info(d.get("ts"), d.get("nextReviewDays"))
+            horizon_base, horizon_base_date, horizon_date, horizon_status = compute_horizon_info(opened_at, d.get("ts"), d.get("horizonDays"))
             review_info = ""
+            if opened_at:
+                review_info += f", openedAt={str(opened_at)[:10]}"
+                if holding_days is not None:
+                    review_info += f", heldDays={holding_days}"
             if decision_date:
-                review_info = f", decisionDt={decision_date}"
+                review_info += f", decisionDt={decision_date}"
             if review_date:
                 review_info += f", reviewDt={review_date}[{review_status}]"
+            if horizon_date:
+                review_info += f", horizonEnd={horizon_date}[{horizon_status};base={horizon_base}:{horizon_base_date}]"
             lines.append(
                 "  These IA: "
                 f"action={d.get('action') or 'n/a'}, signal={d.get('signal') or 'n/a'}, conf={fmt_num(d.get('confidence'), 0)}, "
@@ -672,6 +807,7 @@ db_path = str(db_probe_selected.get("path") or normalize_db_path(db_path_raw))
 
 position_overrides, override_source = load_position_overrides(db_path)
 instrument_overrides = load_instrument_overrides(db_path)
+position_lifecycle = load_position_lifecycle(db_path)
 
 base_rows = []
 if isinstance(portfolio_summary_in, dict) and isinstance(portfolio_summary_in.get("positions"), list):
@@ -706,7 +842,11 @@ for row in base_rows:
         row.get("AssetClass") or row.get("assetClass") or row.get("asset_class") or meta_ov.get("assetClass"),
         symbol,
     ) or normalize_asset_class(last_decision.get("assetClass"), symbol) or "EQUITY"
+    if is_fx_symbol(symbol, asset_class):
+        continue
     last_decision["assetClass"] = normalize_asset_class(last_decision.get("assetClass"), symbol) or asset_class
+    lifecycle = position_lifecycle.get(symbol, {})
+    opened_at = lifecycle.get("openedAt")
     name = str(row.get("Name") or row.get("name") or "").strip()
     if (is_unknown_text(name) or norm_symbol(name) == symbol) and not is_unknown_text(meta_ov.get("name")):
         name = str(meta_ov.get("name")).strip()
@@ -736,6 +876,9 @@ for row in base_rows:
             "marketValue": round2(market_value),
             "unrealizedPnL": round2(unrealized_pnl),
             "updatedAt": updated_at,
+            "openedAt": opened_at,
+            "holdingDays": days_since(opened_at),
+            "positionLifecycle": lifecycle if lifecycle else None,
             "lastDecision": last_decision,
             "executionMemory": exec_mem,
             # backward-compatible aliases used by prompt/tooling
@@ -768,6 +911,8 @@ if isinstance(recent_ideas_in, list):
             continue
         norm = normalize_recent_idea(idea)
         if not norm.get("symbol"):
+            continue
+        if is_fx_symbol(norm.get("symbol"), norm.get("assetClass")):
             continue
         recent_ideas.append(norm)
 recent_ideas.sort(key=lambda x: parse_ts_key(x.get("ts")), reverse=True)

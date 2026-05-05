@@ -1,7 +1,7 @@
 ﻿# Trader_IA
 
 Plateforme de trading assistÃ© par IA, orchestrÃ©e par n8n sur un VPS Hostinger.
-Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-4.1 / Gemini-3), trois **analystes spÃ©cialisÃ©s** (technique, fondamental, sentiment/news), un **Risk Manager** dÃ©terministe et un **Execution Trader** (sandbox aujourd'hui, broker live en prÃ©paration).
+Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-4.1 / Gemini-3), trois **analystes spÃ©cialisÃ©s** (technique, fondamental, sentiment/news), un **Risk Manager** dÃ©terministe et un **Execution Trader** (sandbox par defaut, IBKR pret en dry-run).
 
 ---
 
@@ -16,7 +16,7 @@ Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-
 | 5 | **Analyste Sentiment / News** | Sentiment de marchÃ©, news, transcripts | `AG4-V3/` (macro + geo-tagging), `AG4-SPE-V2/` (par valeur), `AG4-Forex/` (canaux FX dÃ©diÃ©s) |
 | 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exÃ©cution | `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` (nodes 7â†’10) |
 
-> Ã‰tat actuel : l'Execution Trader est en **sandbox interne** (fills fabriquÃ©s au prix thÃ©orique). Le branchement broker rÃ©el est la prochaine Ã©tape â€” voir `ANALYSE_SYSTEME_AVANT_AGENT6.md`.
+> Ã‰tat actuel : l'Execution Trader reste en **sandbox interne par defaut**. Le branchement IBKR est cable via `ibkr-gateway` + `ibkr-broker`, avec `IBKR_DRY_RUN=true` tant que le live n'est pas valide manuellement.
 
 ## 2. Stack technique
 
@@ -25,6 +25,7 @@ Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-
 - **yfinance-api** : service maison autour de `yfinance` (cache, cooldown par symbole, endpoints `/history`, `/quote`, `/options`, `/calendar`, `/fundamentals`)
 - **yf-enrichment** : enrichissement quotidien (volatilitÃ©, earnings, calendar)
 - **Streamlit** : dashboard opÃ©rationnel (`dashboard/`, `trading-dashboard` service)
+- **IBKR Client Portal API** : gateway + broker FastAPI pour l'execution actions/ETF/FX, actif en dry-run par defaut
 - **Traefik** : reverse proxy TLS (Let's Encrypt)
 
 Tout tourne dans Docker Compose â€” voir `vps_hostinger_config/`.
@@ -100,6 +101,7 @@ AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨l
 | Spec AG4 geo-tagging + AG4_Forex | `docs/specs/ag4_geo_tagging_and_forex_base_v1.md` |
 | Variables d'environnement | `docs/operations/env_vars.md` |
 | DÃ©ploiement VPS | `docs/operations/deploy.md` |
+| Execution IBKR | `docs/operations/ibkr_execution.md` |
 | Reconstruction du pack AG1 | `docs/dev/rebuild_pack.md` |
 | Historique des migrations | `docs/history/` |
 | README par agent | `AG*/README.md` ou `AG*/docs/GUIDE.md` |

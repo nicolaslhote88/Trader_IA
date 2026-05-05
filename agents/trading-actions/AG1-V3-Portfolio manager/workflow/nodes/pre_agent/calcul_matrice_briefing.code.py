@@ -596,24 +596,23 @@ def fmt_row(r):
     )
 
 
+def compact_symbol_list(rows, limit):
+    if not rows:
+        return "(aucun)"
+    return ", ".join(str(r.get("symbol") or "") for r in rows[:limit] if r.get("symbol")) or "(aucun)"
+
+
 enter_rows = [r for r in matrix_rows if r.get("matrix_action") == "Entrer / Renforcer"]
 watch_rows = [r for r in matrix_rows if r.get("matrix_action") == "Surveiller"]
 exit_rows = [r for r in matrix_rows if r.get("matrix_action") == "Reduire / Sortir"]
 
-TOP_ENTER = 30
-TOP_WATCH = 30
-TOP_EXIT = 25
+PACK_TOP_ENTER = 18
+PACK_TOP_WATCH = 8
+PACK_TOP_EXIT = 12
 
 brief_lines = []
 brief_lines.append("=== MATRICE AG2+AG3+AG4 (PREP AGENT #1) ===")
 brief_lines.append(f"GeneratedAt UTC: {datetime.now(timezone.utc).isoformat()}")
-brief_lines.append("")
-brief_lines.append("Legende:")
-brief_lines.append("- Risk (0-100): plus haut = plus risque.")
-brief_lines.append("- Reward (0-100): plus haut = potentiel plus attractif.")
-brief_lines.append("- R = Reward/Risk cape a 6 pour eviter les faux extremes.")
-brief_lines.append("- EV(R) = pWin*R - (1-pWin).")
-brief_lines.append("- Gates: DATA_QUALITY_LOW / EARNINGS_IMMINENT / LIQUIDITY_STRESS / RR_OUTLIER / INVALID_OPTIONS_STATE.")
 brief_lines.append("")
 brief_lines.append(
     f"Seuils dynamiques: Risk p60={risk_thr}, Reward p60={reward_thr}. "
@@ -625,25 +624,15 @@ brief_lines.append(
 )
 brief_lines.append(f"EV(R) moyen={avg_ev:.2f} | Prob.win moyenne={avg_pwin:.1f}%")
 brief_lines.append("")
-brief_lines.append("Lecture des quadrants:")
-brief_lines.append(f"- Q1 Priorite: Risk <= {risk_thr} et Reward >= {reward_thr} -> zone prioritaire (si gates ouverts).")
-brief_lines.append(f"- Q2 Speculatif: Risk > {risk_thr} et Reward >= {reward_thr} -> execution selective, taille reduite.")
-brief_lines.append(f"- Q3 Defensif: Risk <= {risk_thr} et Reward < {reward_thr} -> conservation / surveillance.")
-brief_lines.append(f"- Q4 Sortie: Risk > {risk_thr} et Reward < {reward_thr} -> derisquage prioritaire.")
+brief_lines.append(
+    "Selection structuree transmise dans opportunity_pack.rows "
+    f"({PACK_TOP_ENTER} Entrer, {PACK_TOP_WATCH} Surveiller, {PACK_TOP_EXIT} Reduire/Sortir)."
+)
+brief_lines.append(f"Top Entrer: {compact_symbol_list(enter_rows, 10)}")
+brief_lines.append(f"Top Surveiller: {compact_symbol_list(watch_rows, 8)}")
+brief_lines.append(f"Top Reduire/Sortir: {compact_symbol_list(exit_rows, 8)}")
 brief_lines.append("")
-brief_lines.append(f"TOP {TOP_ENTER} Entrer / Renforcer:")
-brief_lines.extend([fmt_row(r) for r in enter_rows[:TOP_ENTER]] or ["- (aucun candidat)"])
-brief_lines.append("")
-brief_lines.append(f"TOP {TOP_WATCH} Surveiller:")
-brief_lines.extend([fmt_row(r) for r in watch_rows[:TOP_WATCH]] or ["- (aucun)"])
-brief_lines.append("")
-brief_lines.append(f"TOP {TOP_EXIT} Reduire / Sortir:")
-brief_lines.extend([fmt_row(r) for r in exit_rows[:TOP_EXIT]] or ["- (aucun)"])
-brief_lines.append("")
-brief_lines.append("Regles d'usage pour Agent #1:")
-brief_lines.append("- Ne proposer OPEN/INCREASE que sur Entrer/Renforcer sans gate bloquant.")
-brief_lines.append("- Si EARNINGS_IMMINENT ou INVALID_OPTIONS_STATE: privilegier WATCH/HOLD ou taille reduite.")
-brief_lines.append("- Si RR_OUTLIER: considerer setup non fiable tant que stop/target non recalibres.")
+brief_lines.append("Regles d'usage: utiliser opportunity_pack.rows comme source detaillee; ne pas ouvrir si gates bloquantes ou cash/concentration insuffisants.")
 
 brief = "\n".join(brief_lines)
 
@@ -666,7 +655,13 @@ thresholds = {
 }
 
 pack_rows = []
-for r in matrix_rows[:200]:
+selected_rows = enter_rows[:PACK_TOP_ENTER] + watch_rows[:PACK_TOP_WATCH] + exit_rows[:PACK_TOP_EXIT]
+seen_pack_symbols = set()
+for r in selected_rows:
+    symbol_key = str(r.get("symbol") or "").strip().upper()
+    if not symbol_key or symbol_key in seen_pack_symbols:
+        continue
+    seen_pack_symbols.add(symbol_key)
     pack_rows.append(
         {
             "symbol": r["symbol"],
@@ -699,6 +694,12 @@ opportunity_pack = {
     "generatedAt": datetime.now(timezone.utc).isoformat(),
     "stats": stats,
     "thresholds": thresholds,
+    "selection": {
+        "enter": min(len(enter_rows), PACK_TOP_ENTER),
+        "watch": min(len(watch_rows), PACK_TOP_WATCH),
+        "exit": min(len(exit_rows), PACK_TOP_EXIT),
+        "rows": len(pack_rows),
+    },
     "rows": pack_rows,
 }
 
