@@ -9,7 +9,7 @@
 //   - adds clientOrderId / ibkrStatus / ibkrResponse on each real order
 //
 // Dry-run broker validation:
-//   SEND_DRY_RUN_TO_BROKER=true sends real validated workflow orders to
+//   IBKR_SEND_DRY_RUN_TO_BROKER=true sends validated workflow orders to
 //   ibkr-broker while IBKR_DRY_RUN=true still prevents live IBKR submission.
 //   FORCE_IBKR_CONNECTIVITY_TEST_ORDER is a canary and must stay false for
 //   normal model runs.
@@ -18,8 +18,7 @@ const BROKER_URL = $env.IBKR_BROKER_URL || "http://ibkr-broker:8080";
 const DRY_RUN = String($env.IBKR_DRY_RUN || "true").toLowerCase() !== "false";
 const N8N_CONTEXT = this;
 
-// Keep broker dry-run enabled for real-order validation runs.
-const SEND_DRY_RUN_TO_BROKER = true;
+const SEND_DRY_RUN_TO_BROKER = String($env.IBKR_SEND_DRY_RUN_TO_BROKER || "false").toLowerCase() === "true";
 const FORCE_IBKR_CONNECTIVITY_TEST_ORDER = false;
 
 function toNum(v, d = 0) {
