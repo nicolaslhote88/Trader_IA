@@ -102,7 +102,7 @@ class FxRates:
             return float(before[-1])
         return float(hist[0][1])
 
-    def quote_to_eur(self, quote: str, at_dt: datetime) -> float:
+    def quote_to_eur(self, quote: str, at_dt: datetime) -> float | None:
         quote = str(quote or "").upper().strip()
         if quote == "EUR":
             return 1.0
@@ -120,8 +120,8 @@ class FxRates:
         if quote == "USD":
             if usd_eur > 0:
                 return usd_eur
-            self.warnings.append(f"Missing EURUSD for {at_dt.date()}, using USD->EUR=1")
-            return 1.0
+            self.warnings.append(f"Missing EURUSD for {at_dt.date()}, cannot convert USD->EUR")
+            return None
 
         quote_usd = self._rate_on_or_before(f"{quote}USD", at_dt)
         if quote_usd and quote_usd > 0 and usd_eur > 0:
@@ -131,8 +131,8 @@ class FxRates:
         if usd_quote and usd_quote > 0 and usd_eur > 0:
             return (1.0 / usd_quote) * usd_eur
 
-        self.warnings.append(f"Missing quote->EUR conversion for {quote} on {at_dt.date()}, fallback=1")
-        return 1.0
+        self.warnings.append(f"Missing quote->EUR conversion for {quote} on {at_dt.date()}")
+        return None
 
 
 def iter_db_paths(args) -> list[str]:
@@ -194,8 +194,10 @@ def fix_db(db_path: str, rates: FxRates, dry_run: bool) -> dict[str, object]:
         ).fetchall()
 
         updated = 0
+        skipped_missing_rates = 0
         delta_eur = 0.0
         examples = []
+        skipped_examples = []
         for lot_id, pair, side, size_lots, open_price, close_price, close_at, old_pnl_quote, old_pnl_eur in rows:
             pair = str(pair or "").upper().strip()
             if len(pair) != 6:
@@ -206,6 +208,18 @@ def fix_db(db_path: str, rates: FxRates, dry_run: bool) -> dict[str, object]:
             direction = 1.0 if str(side or "").lower() == "long" else -1.0
             pnl_quote = to_float(size_lots) * 100000.0 * (to_float(close_price) - to_float(open_price)) * direction
             q2e = rates.quote_to_eur(pair[3:6], at_dt)
+            if q2e is None:
+                skipped_missing_rates += 1
+                if len(skipped_examples) < 8:
+                    skipped_examples.append(
+                        {
+                            "lot_id": lot_id,
+                            "pair": pair,
+                            "quote": pair[3:6],
+                            "close_date": str(at_dt.date()),
+                        }
+                    )
+                continue
             pnl_eur = pnl_quote * q2e
             old_eur = to_float(old_pnl_eur, 0.0)
             old_quote = to_float(old_pnl_quote, 0.0)
@@ -236,13 +250,18 @@ def fix_db(db_path: str, rates: FxRates, dry_run: bool) -> dict[str, object]:
                 )
         if not dry_run:
             con.execute("CHECKPOINT")
+        status = "dry_run" if dry_run else "updated"
+        if skipped_missing_rates:
+            status = "blocked_missing_rates" if dry_run else "partial_missing_rates"
         return {
             "db": db_path,
-            "status": "dry_run" if dry_run else "updated",
+            "status": status,
             "rows": len(rows),
             "updated": updated,
+            "skipped_missing_rates": skipped_missing_rates,
             "delta_eur": round(delta_eur, 4),
             "examples": examples,
+            "skipped_examples": skipped_examples,
         }
     finally:
         con.close()
@@ -260,6 +279,8 @@ def main() -> int:
     dry_run = not args.apply
     results = [fix_db(path, rates, dry_run=dry_run) for path in iter_db_paths(args)]
     print(json.dumps({"dry_run": dry_run, "results": results, "warnings": sorted(set(rates.warnings))}, indent=2, ensure_ascii=False))
+    if any(int(r.get("skipped_missing_rates") or 0) > 0 for r in results):
+        return 2
     return 0
 
 
