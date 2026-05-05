@@ -26,9 +26,44 @@ References IBKR utilisees :
 - `services/ibkr-gateway/` telecharge et lance `clientportal.gw`.
 - `services/ibkr-broker/` expose `/health`, `/orders/fx`, `/orders/equity`,
   `/fills`, `/positions` et `/auth/tickle`.
-- `infra/vps_hostinger_config/docker-compose.yml` declare les deux services et
-  injecte `IBKR_BROKER_URL`, `IBKR_DRY_RUN` et
-  `IBKR_SEND_DRY_RUN_TO_BROKER` dans `n8n` et `task-runners`.
+- Sur le VPS actuel, les deux services sont ajoutes au stack `/docker/yfinance`
+  via `docker-compose.override.yml`. Le fichier de reference a copier tel quel
+  est `infra/vps_hostinger_config/docker-compose.yfinance.ibkr.override.yml`.
+- `infra/vps_hostinger_config/docker-compose.yml` garde aussi la definition pour
+  un deploiement complet du repo, mais ce n'est pas le mode utilise sur le VPS.
+- Les nodes n8n lisent `IBKR_BROKER_URL`, `IBKR_DRY_RUN` et
+  `IBKR_SEND_DRY_RUN_TO_BROKER`. Sans variable explicite, ils restent en
+  dry-run et utilisent `http://ibkr-broker:8080`.
+
+## Deploiement VPS actuel
+
+Le VPS ne clone pas tout le repo dans `/opt/trader-ia`. Pour deploier depuis la
+machine locale, copier seulement les services utiles puis reconstruire le stack
+`yfinance`.
+
+```bash
+# Sur la machine locale, depuis la racine du repo
+scp -r services/ibkr-gateway services/ibkr-broker root@100.104.236.78:/opt/trader-ia/services/
+scp infra/vps_hostinger_config/docker-compose.yfinance.ibkr.override.yml root@100.104.236.78:/docker/yfinance/docker-compose.override.yml
+
+# Sur le VPS
+cd /docker/yfinance
+grep -q '^IBKR_DRY_RUN=' .env || echo 'IBKR_DRY_RUN=true' >> .env
+grep -q '^IBKR_SEND_DRY_RUN_TO_BROKER=' .env || echo 'IBKR_SEND_DRY_RUN_TO_BROKER=false' >> .env
+grep -q '^IBKR_ACCOUNT_ID=' .env || echo 'IBKR_ACCOUNT_ID=' >> .env
+docker compose config --quiet
+docker compose up -d --build ibkr-gateway ibkr-broker
+docker compose ps ibkr-gateway ibkr-broker
+curl -sS http://127.0.0.1:18080/health
+```
+
+Le gateway est publie uniquement sur `127.0.0.1:5000` du VPS. Pour le login
+IBKR depuis la machine locale :
+
+```bash
+ssh -L 5000:127.0.0.1:5000 root@100.104.236.78
+# puis ouvrir https://localhost:5000
+```
 
 ## Nodes n8n prets a inserer
 

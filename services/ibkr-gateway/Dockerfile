@@ -17,12 +17,11 @@ WORKDIR /root/clientportal
 
 # Télécharge le Client Portal Gateway depuis IBKR
 # Note : le lien stable est maintenu par IBKR — vérifier la version en cas de changement
-RUN apk add --no-cache curl unzip && \
+RUN apk add --no-cache bash curl unzip && \
     curl -fsSL "https://download2.interactivebrokers.com/portal/clientportal.gw.zip" -o portal.zip && \
     unzip -q portal.zip && \
     rm portal.zip && \
-    mv clientportal.gw/* . && \
-    rmdir clientportal.gw
+    chmod +x bin/run.sh
 
 # Copie la configuration
 COPY conf.yaml root/conf.yaml
@@ -30,4 +29,4 @@ COPY conf.yaml root/conf.yaml
 EXPOSE 5000
 
 # Lance le gateway en mode headless
-CMD ["bin/run.sh", "root/conf.yaml"]
+CMD ["/bin/bash", "/root/clientportal/bin/run.sh", "root/conf.yaml"]

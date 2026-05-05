@@ -195,7 +195,7 @@ async def health() -> dict:
             "authenticated": authenticated,
             "ibkr_status": status,
         }
-    except CPAPIError as exc:
+    except Exception as exc:
         return {
             "dry_run": DRY_RUN,
             "gateway_url": GATEWAY_URL,

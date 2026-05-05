@@ -1,19 +1,30 @@
-# IBKR Client Portal Gateway — configuration
-# Référence : https://interactivebrokers.github.io/cpwebapi/
-
+ip2loc: "US"
+proxyRemoteSsl: true
+proxyRemoteHost: "https://api.ibkr.com"
 listenPort: 5000
-
-# SSL auto-signé par défaut (le ibkr-broker service désactive la vérification)
-# Pour un vrai certificat : pointer vers les fichiers cert/key
-# sslCert: /root/certs/cert.pem
-# sslKey: /root/certs/key.pem
-
-# Autoriser les connexions depuis le réseau Docker interne (pas seulement localhost)
 listenSsl: true
-
-# Timeout de session (en secondes, max 24h)
-sessionTimeout: 86400
-
-# Logging
-logging:
-  level: INFO
+ccp: false
+svcEnvironment: "v1"
+sslCert: "vertx.jks"
+sslPwd: "mywebapi"
+authDelay: 3000
+portalBaseURL: ""
+serverOptions:
+  blockedThreadCheckInterval: 1000000
+  eventLoopPoolSize: 20
+  workerPoolSize: 20
+  maxWorkerExecuteTime: 100
+  internalBlockingPoolSize: 20
+cors:
+  origin.allowed: "*"
+  allowCredentials: false
+webApps:
+  - name: "demo"
+    index: "index.html"
+ips:
+  allow:
+    - 127.0.0.1
+    - 172.*
+    - 10.*
+    - 100.*
+  deny: []
