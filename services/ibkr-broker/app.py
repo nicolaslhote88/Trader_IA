@@ -144,6 +144,31 @@ def _dry_run_result(order_id: str, details: dict) -> dict:
     }
 
 
+def _reply_required_items(response: list[dict]) -> list[dict]:
+    """Return IBKR prompt/reply objects that still need human confirmation."""
+    return [
+        item for item in response
+        if isinstance(item, dict) and item.get("id") and not item.get("order_id")
+    ]
+
+
+def _reply_required_error(order_id: str, client_order_id: str, response: list[dict]) -> dict:
+    messages = []
+    for item in _reply_required_items(response):
+        raw_message = item.get("message") or item.get("text") or []
+        if isinstance(raw_message, list):
+            messages.extend(str(m) for m in raw_message)
+        elif raw_message:
+            messages.append(str(raw_message))
+    return {
+        "order_id": order_id,
+        "client_order_id": client_order_id,
+        "status": "needs_confirmation",
+        "error": "IBKR_ORDER_NEEDS_CONFIRMATION" + (f": {' | '.join(messages)}" if messages else ""),
+        "ibkr_response": response,
+    }
+
+
 async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
     """
     Résout le conid IBKR d'un symbole action.
@@ -283,9 +308,13 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
         client = get_client()
         try:
             ibkr_resp = await client.place_orders([ibkr_payload])
+            client_order_id = order.client_order_id or order.order_id
+            if _reply_required_items(ibkr_resp):
+                errors.append(_reply_required_error(order.order_id, client_order_id, ibkr_resp))
+                continue
             results.append({
                 "order_id": order.order_id,
-                "client_order_id": order.client_order_id or order.order_id,
+                "client_order_id": client_order_id,
                 "status": "submitted",
                 "ibkr_response": ibkr_resp,
                 "sent_at": now_iso(),
@@ -358,9 +387,13 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
 
         try:
             ibkr_resp = await client.place_orders([ibkr_payload])
+            client_order_id = order.client_order_id or order.order_id
+            if _reply_required_items(ibkr_resp):
+                errors.append(_reply_required_error(order.order_id, client_order_id, ibkr_resp))
+                continue
             results.append({
                 "order_id": order.order_id,
-                "client_order_id": order.client_order_id or order.order_id,
+                "client_order_id": client_order_id,
                 "status": "submitted",
                 "ibkr_response": ibkr_resp,
                 "sent_at": now_iso(),

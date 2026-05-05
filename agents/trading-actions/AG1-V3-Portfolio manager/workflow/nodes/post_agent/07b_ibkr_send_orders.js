@@ -242,6 +242,7 @@ return [{
       errors: ibkrErrors.length,
       brokerUrl: BROKER_URL,
       errorsDetail: ibkrErrors,
+      brokerResults: ibkrResults,
       dryRunBrokerResults: ibkrResults,
     },
   },
