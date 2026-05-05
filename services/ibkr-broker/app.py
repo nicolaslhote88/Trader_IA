@@ -321,7 +321,19 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
             else:
                 conid = await _resolve_stk_conid(client, symbol)
         except HTTPException as exc:
-            errors.append({"order_id": order.order_id, "error": exc.detail})
+            errors.append({
+                "order_id": order.order_id,
+                "client_order_id": order.client_order_id or order.order_id,
+                "error": exc.detail,
+            })
+            continue
+        except CPAPIError as exc:
+            logger.error("Equity contract resolution failed symbol=%s: %s", symbol, exc)
+            errors.append({
+                "order_id": order.order_id,
+                "client_order_id": order.client_order_id or order.order_id,
+                "error": str(exc),
+            })
             continue
 
         ibkr_payload = {
