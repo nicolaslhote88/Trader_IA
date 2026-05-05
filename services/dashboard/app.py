@@ -506,6 +506,127 @@ def _load_ag1_fx_pair_overview(
     return out, pd.DataFrame(diagnostics)
 
 
+def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFrame]:
+    if pair_overview is None or pair_overview.empty or "Paire" not in pair_overview.columns:
+        return None, pd.DataFrame()
+
+    wk = pair_overview.copy()
+    wk["Paire"] = wk["Paire"].fillna("").astype(str).str.upper()
+    wk = wk[wk["Paire"].str.len().eq(6)].copy()
+    if wk.empty:
+        return None, pd.DataFrame()
+
+    def _num_col(name: str, default: float = 0.0) -> pd.Series:
+        if name not in wk.columns:
+            return pd.Series(default, index=wk.index, dtype=float)
+        return pd.to_numeric(wk[name], errors="coerce").fillna(default)
+
+    wk["_score"] = _num_col("Score").clip(-1.0, 1.0)
+    wk["_news_24h"] = _num_col("News 24h")
+    wk["_news_period"] = _num_col("News periode")
+    wk["_high_impact"] = _num_col("High impact")
+    wk["_sources"] = _num_col("Nb sources")
+    wk["_open_lots"] = _num_col("Lots ouverts")
+    wk["_pnl"] = _num_col("P&L clos EUR")
+    wk["_rsi"] = _num_col("RSI14", default=float("nan"))
+    wk["_ret_5d"] = _num_col("Ret 5D %", default=float("nan"))
+    wk["_ret_20d"] = _num_col("Ret 20D %", default=float("nan"))
+    wk["_pressure"] = (
+        wk["_news_24h"] * 12.0
+        + wk["_high_impact"] * 28.0
+        + wk["_sources"] * 6.0
+        + wk["_news_period"].clip(upper=20.0) * 1.4
+    ).clip(0.0, 100.0)
+    wk["_bubble"] = (14.0 + wk["_open_lots"] * 10.0 + wk["_news_period"].clip(upper=30.0) * 1.2 + wk["_pnl"].abs().clip(upper=300.0) / 18.0).clip(12.0, 62.0)
+    wk["_technique"] = wk.get("Technique", pd.Series("Neutre", index=wk.index)).fillna("Neutre").astype(str)
+    wk["_sources_state"] = wk.get("Sources", pd.Series("Calme", index=wk.index)).fillna("Calme").astype(str)
+    wk["_state"] = wk.get("Etat general", pd.Series("-", index=wk.index)).fillna("-").astype(str)
+
+    color_map = {
+        "Fort haussier": "#16a34a",
+        "Haussier": "#65a30d",
+        "Neutre": "#64748b",
+        "Tendu": "#d97706",
+        "Baissier": "#dc2626",
+        "Fort baissier": "#7f1d1d",
+    }
+    symbol_map = {
+        "Calme": "circle",
+        "Recent": "diamond",
+        "Actif": "square",
+        "Alerte news": "triangle-up",
+    }
+    custom_cols = [
+        "Paire",
+        "_state",
+        "_technique",
+        "_sources_state",
+        "_score",
+        "_pressure",
+        "_news_24h",
+        "_high_impact",
+        "_sources",
+        "_open_lots",
+        "_pnl",
+        "_ret_5d",
+        "_ret_20d",
+        "_rsi",
+        "Top sources",
+    ]
+    for col in custom_cols:
+        if col not in wk.columns:
+            wk[col] = pd.NA
+
+    fig = px.scatter(
+        wk.sort_values(["_high_impact", "_news_24h", "_open_lots"], ascending=[False, False, False]),
+        x="_score",
+        y="_pressure",
+        color="_technique",
+        symbol="_sources_state",
+        size="_bubble",
+        text="Paire",
+        custom_data=custom_cols,
+        color_discrete_map=color_map,
+        symbol_map=symbol_map,
+        labels={
+            "_score": "Score technique AG2 (-1 baissier -> +1 haussier)",
+            "_pressure": "Pression news / sources AG4 (0-100)",
+            "_technique": "Technique",
+            "_sources_state": "Sources",
+        },
+        title="Carte FX: technique x pression news/sources",
+    )
+    hover_template = (
+        "<b>%{customdata[0]}</b><br>"
+        "Etat: %{customdata[1]}<br>"
+        "Technique: %{customdata[2]} | Sources: %{customdata[3]}<br>"
+        "Score technique: %{customdata[4]:+.2f}<br>"
+        "Pression news: %{customdata[5]:.0f}/100<br>"
+        "News 24h: %{customdata[6]:.0f} | High impact: %{customdata[7]:.0f} | Sources: %{customdata[8]:.0f}<br>"
+        "Lots ouverts: %{customdata[9]:.0f} | P&L clos: %{customdata[10]:+.2f} EUR<br>"
+        "Ret 5D / 20D: %{customdata[11]:+.2f}% / %{customdata[12]:+.2f}% | RSI14: %{customdata[13]:.1f}<br>"
+        "Top sources: %{customdata[14]}<extra></extra>"
+    )
+    for trace in fig.data:
+        trace.marker.opacity = 0.82
+        trace.marker.line.color = "rgba(255,255,255,0.72)"
+        trace.marker.line.width = 1.2
+        trace.hovertemplate = hover_template
+        trace.textposition = "top center"
+        trace.textfont = dict(size=10)
+
+    fig.add_vline(x=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
+    fig.add_hline(y=35, line_dash="dot", line_color="#f59e0b")
+    fig.update_xaxes(range=[-1.05, 1.05], dtick=0.25, zeroline=False)
+    fig.update_yaxes(range=[-3, 103], dtick=10)
+    fig.update_layout(
+        height=640,
+        margin=dict(l=10, r=10, t=44, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    return fig, wk
+
+
 DEFAULT_BENCHMARKS = {
     "CAC 40": {"ticker": "^FCHI"},
     "S&P 500": {"ticker": "^GSPC"},
@@ -8019,19 +8140,23 @@ def load_ag1_multi_portfolios() -> dict[str, dict[str, object]]:
 # ============================================================
 
 st.sidebar.title("TradingSim AI")
-page = st.sidebar.radio(
-    "Navigation",
-    [
-        "Dashboard Trading",
+NAV_GROUPS = {
+    "Commun": [
         "System Health (Monitoring)",
         "Vue consolidee Multi-Agents",
+        "Macro & News (AG4)",
+    ],
+    "Actions": [
+        "Dashboard Trading",
         "Analyse Technique V2",
         "Analyse Fondamentale V2",
-        "Macro & News (AG4)",
-        "Forex P&L (LLM x Paire)",
-        "Forex Trading (AG1-FX)",
     ],
-)
+    "Forex": [
+        "Forex",
+    ],
+}
+nav_group = st.sidebar.radio("Univers", list(NAV_GROUPS.keys()), horizontal=True, index=1)
+page = st.sidebar.radio("Page", NAV_GROUPS[nav_group])
 
 data_dict = load_data()
 if not data_dict:
@@ -9236,6 +9361,7 @@ if page == "Dashboard Trading":
                 f"Bascule details sur {cards_by_key[details_key]['label']}."
             )
 
+        df_realized_open = pd.DataFrame()
         if details_key:
             active_portfolio = ag1_multi[details_key]
             selected_portfolio_key = details_key
@@ -13859,6 +13985,361 @@ elif page == "Analyse Fondamentale V2":
                 run_df[keep].rename(columns={k: v for k, v in ren_map.items() if k in keep}),
                 key_suffix="funda_v2_runs",
             )
+
+
+# ============================================================
+# PAGE 7: FOREX
+# Page unifiee: indicateurs, analyse, portefeuille AG1-FX, P&L et sources.
+# ============================================================
+elif page == "Forex":
+    st.title("Forex")
+    st.caption("Paires FX suivies, signaux AG2-FX, pression news AG4-Forex et portefeuilles AG1-FX.")
+
+    today_utc = pd.Timestamp.now(tz="UTC").date()
+    c1, c2, c3 = st.columns([1.2, 1.2, 0.8])
+    with c1:
+        fx_start_date = st.date_input(
+            "Depuis",
+            value=pd.Timestamp("2026-04-24", tz="UTC").date(),
+            min_value=pd.Timestamp("2026-01-01").date(),
+            max_value=today_utc,
+            key="forex_unified_start",
+        )
+    with c2:
+        fx_end_date = st.date_input(
+            "Jusqu'au",
+            value=today_utc,
+            min_value=fx_start_date,
+            max_value=today_utc,
+            key="forex_unified_end",
+        )
+    with c3:
+        st.write("")
+        if st.button("Rafraichir", key="forex_unified_refresh"):
+            load_ag1_multi_portfolios.clear()
+            st.rerun()
+
+    start_ts = pd.Timestamp(fx_start_date, tz="UTC")
+    end_ts = pd.Timestamp(fx_end_date, tz="UTC") + pd.Timedelta(days=1)
+
+    snapshots = []
+    lots_open = []
+    lots_closed = []
+    orders = []
+    configs = []
+    fx_source_rows: list[dict[str, object]] = []
+
+    for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items():
+        db_path = str(cfg.get("db_path") or "")
+        source_row = {
+            "LLM": cfg.get("label", key),
+            "Base": os.path.basename(db_path) if db_path else "-",
+            "Statut": "absente",
+            "Snapshots": 0,
+            "Lots ouverts": 0,
+            "Lots clos periode": 0,
+            "Ordres periode": 0,
+            "Message": "",
+        }
+        if not db_path or not os.path.exists(db_path):
+            source_row["Message"] = f"Base introuvable: {db_path or '-'}"
+            fx_source_rows.append(source_row)
+            continue
+        conn = _duckdb_connect_readonly_retry(db_path)
+        if conn is None:
+            source_row["Statut"] = "erreur"
+            source_row["Message"] = "Connexion DuckDB impossible"
+            fx_source_rows.append(source_row)
+            continue
+        try:
+            snap = conn.execute(
+                """
+                SELECT *
+                FROM core.portfolio_snapshot
+                WHERE as_of >= ? AND as_of < ?
+                ORDER BY as_of
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            ).fetchdf()
+            if snap is not None and not snap.empty:
+                snap["llm_key"] = key
+                snap["LLM"] = cfg["label"]
+                snapshots.append(snap)
+
+            open_df = conn.execute(
+                "SELECT * FROM core.position_lots WHERE status='open' ORDER BY open_at DESC"
+            ).fetchdf()
+            if open_df is not None and not open_df.empty:
+                open_df["llm_key"] = key
+                open_df["LLM"] = cfg["label"]
+                lots_open.append(open_df)
+
+            closed_df = conn.execute(
+                """
+                SELECT *
+                FROM core.position_lots
+                WHERE status='closed' AND close_at >= ? AND close_at < ?
+                ORDER BY close_at DESC
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            ).fetchdf()
+            if closed_df is not None and not closed_df.empty:
+                closed_df["llm_key"] = key
+                closed_df["LLM"] = cfg["label"]
+                lots_closed.append(closed_df)
+
+            ord_df = conn.execute(
+                """
+                SELECT *
+                FROM core.orders
+                WHERE requested_at >= ? AND requested_at < ?
+                ORDER BY requested_at DESC
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            ).fetchdf()
+            if ord_df is not None and not ord_df.empty:
+                ord_df["llm_key"] = key
+                ord_df["LLM"] = cfg["label"]
+                orders.append(ord_df)
+
+            conf = conn.execute("SELECT * FROM cfg.portfolio_config WHERE config_key='default'").fetchdf()
+            if conf is not None and not conf.empty:
+                conf["llm_key"] = key
+                conf["LLM"] = cfg["label"]
+                configs.append(conf)
+
+            source_row["Statut"] = "ok"
+            source_row["Snapshots"] = int(len(snap)) if snap is not None else 0
+            source_row["Lots ouverts"] = int(len(open_df)) if open_df is not None else 0
+            source_row["Lots clos periode"] = int(len(closed_df)) if closed_df is not None else 0
+            source_row["Ordres periode"] = int(len(ord_df)) if ord_df is not None else 0
+            fx_source_rows.append(source_row)
+        except Exception as exc:
+            source_row["Statut"] = "erreur"
+            source_row["Message"] = str(exc)
+            fx_source_rows.append(source_row)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    df_snap = pd.concat(snapshots, ignore_index=True, sort=False) if snapshots else pd.DataFrame()
+    df_open = pd.concat(lots_open, ignore_index=True, sort=False) if lots_open else pd.DataFrame()
+    df_closed = pd.concat(lots_closed, ignore_index=True, sort=False) if lots_closed else pd.DataFrame()
+    df_orders = pd.concat(orders, ignore_index=True, sort=False) if orders else pd.DataFrame()
+    df_cfg = pd.concat(configs, ignore_index=True, sort=False) if configs else pd.DataFrame()
+
+    if not df_snap.empty:
+        df_snap["as_of"] = pd.to_datetime(df_snap["as_of"], errors="coerce", utc=True)
+        df_snap["snapshot_type"] = df_snap.apply(_classify_ag1_fx_snapshot, axis=1)
+        df_snap["_snapshot_rank"] = df_snap["snapshot_type"].map({"Run gestion portefeuille": 0, "Valorisation horaire": 1}).fillna(2)
+        df_snap = df_snap.sort_values(["LLM", "as_of", "_snapshot_rank"]).drop(columns=["_snapshot_rank"])
+
+    if not df_closed.empty:
+        pnl_col = _first_existing_column(df_closed, ["pnl_eur", "realizedpnl", "realized_pnl_eur"])
+        fees_col = _first_existing_column(df_closed, ["fees_eur", "fees"])
+        df_closed["_pnl_eur"] = pd.to_numeric(df_closed[pnl_col], errors="coerce").fillna(0.0) if pnl_col else 0.0
+        df_closed["_fees_eur"] = pd.to_numeric(df_closed[fees_col], errors="coerce").fillna(0.0) if fees_col else 0.0
+
+    pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, df_open, df_closed)
+
+    tab_ind, tab_analysis, tab_perf, tab_ledger, tab_sources = st.tabs(
+        ["Indicateurs", "Analyse paires", "Performance & P&L", "Positions & ordres", "Sources"]
+    )
+
+    with tab_ind:
+        st.subheader("Carte des 27 paires suivies")
+        if pair_overview.empty:
+            st.info("Aucune paire FX suivie disponible. Verifie AG2-FX pour l'univers/signaux et AG4-Forex pour les sources/news.")
+        else:
+            total_pairs = int(len(pair_overview))
+            alert_pairs = int((pair_overview.get("Sources", pd.Series(dtype=str)).astype(str) == "Alerte news").sum())
+            active_pairs = int((pd.to_numeric(pair_overview.get("News 24h", pd.Series(dtype=float)), errors="coerce").fillna(0.0) > 0).sum())
+            exposed_pairs = int((pd.to_numeric(pair_overview.get("Lots ouverts", pd.Series(dtype=float)), errors="coerce").fillna(0.0) > 0).sum())
+            avg_score = pd.to_numeric(pair_overview.get("Score", pd.Series(dtype=float)), errors="coerce").dropna()
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Paires suivies", total_pairs)
+            m2.metric("Alertes news", alert_pairs)
+            m3.metric("Actives 24h", active_pairs)
+            m4.metric("Paires exposees", exposed_pairs)
+            m5.metric("Score moyen", f"{avg_score.mean():+.2f}" if not avg_score.empty else "-")
+
+            fig_fx, _matrix_data = _build_fx_pair_signal_matrix(pair_overview)
+            if fig_fx is not None:
+                st.plotly_chart(fig_fx, use_container_width=True, key="forex_unified_signal_matrix")
+                st.caption(
+                    "X = direction/force technique AG2-FX. Y = pression news/sources AG4-Forex. "
+                    "Taille = activite/exposition/P&L; forme = etat des sources; couleur = etat technique."
+                )
+
+            show_cols = [
+                c for c in [
+                    "Paire", "Etat general", "Technique", "Signal", "Score", "Regime", "Ret 1D %",
+                    "Ret 5D %", "Ret 20D %", "RSI14", "Sources", "News 24h", "High impact",
+                    "Nb sources", "Top sources", "Lots ouverts", "LLM exposes", "P&L clos EUR", "Age tech h",
+                ] if c in pair_overview.columns
+            ]
+            render_interactive_table(pair_overview[show_cols], key_suffix="forex_unified_pair_overview", height=420)
+
+            with st.expander("Sparklines prix 90 jours", expanded=False):
+                if st.checkbox("Charger les sparklines", value=False, key="forex_unified_load_sparklines"):
+                    render_fx_pair_sparklines(pair_overview, yfinance_api_url=YFINANCE_API_URL, lookback_days=90, columns_per_row=3)
+                else:
+                    st.caption("Coche pour charger les historiques prix 90 jours.")
+
+    with tab_analysis:
+        st.subheader("Analyse par paire")
+        if pair_overview.empty:
+            st.caption("Aucune paire a analyser.")
+        else:
+            pairs = sorted(pair_overview["Paire"].dropna().astype(str).unique().tolist())
+            default_idx = 0
+            hot = pair_overview.sort_values(["High impact", "News 24h", "Lots ouverts", "Score"], ascending=[False, False, False, False], na_position="last")
+            if not hot.empty and str(hot.iloc[0].get("Paire")) in pairs:
+                default_idx = pairs.index(str(hot.iloc[0].get("Paire")))
+            selected_pair = st.selectbox("Paire", pairs, index=default_idx, key="forex_unified_pair_select")
+            row = pair_overview[pair_overview["Paire"].astype(str) == selected_pair].iloc[0]
+            a1, a2, a3, a4, a5 = st.columns(5)
+            a1.metric("Etat", str(row.get("Etat general", "-")))
+            a2.metric("Technique", str(row.get("Technique", "-")), delta=str(row.get("Signal", "-")))
+            a3.metric("Score", safe_num(row.get("Score", pd.NA), 2))
+            a4.metric("News 24h", int(row.get("News 24h") or 0), delta=f"High impact {int(row.get('High impact') or 0)}")
+            a5.metric("P&L clos", f"{safe_float(row.get('P&L clos EUR', 0.0)):+.2f} EUR")
+
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Ret 1D", f"{safe_num(row.get('Ret 1D %', pd.NA), 2)}%")
+            b2.metric("Ret 5D", f"{safe_num(row.get('Ret 5D %', pd.NA), 2)}%")
+            b3.metric("Ret 20D", f"{safe_num(row.get('Ret 20D %', pd.NA), 2)}%")
+            b4.metric("RSI14", safe_num(row.get("RSI14", pd.NA), 1))
+
+            st.markdown("#### Paires a surveiller en priorite")
+            priority = pair_overview.copy()
+            priority["_priority"] = (
+                pd.to_numeric(priority.get("High impact", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 4.0
+                + pd.to_numeric(priority.get("News 24h", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 1.8
+                + pd.to_numeric(priority.get("Lots ouverts", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 2.0
+                + pd.to_numeric(priority.get("Score", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs()
+            )
+            priority = priority.sort_values("_priority", ascending=False).head(12)
+            keep = [c for c in ["Paire", "Etat general", "Technique", "Score", "Sources", "News 24h", "High impact", "Lots ouverts", "P&L clos EUR"] if c in priority.columns]
+            render_interactive_table(priority[keep], key_suffix="forex_unified_priority_pairs", height=330)
+
+    with tab_perf:
+        st.subheader("Performance AG1-FX")
+        cols = st.columns(len(AG1_FX_MULTI_PORTFOLIO_CONFIG))
+        for idx, (key, cfg) in enumerate(AG1_FX_MULTI_PORTFOLIO_CONFIG.items()):
+            snap_key = df_snap[df_snap["llm_key"].astype(str) == key].tail(1) if not df_snap.empty and "llm_key" in df_snap.columns else pd.DataFrame()
+            closed_key = df_closed[df_closed["llm_key"].astype(str) == key] if not df_closed.empty and "llm_key" in df_closed.columns else pd.DataFrame()
+            equity = float(snap_key.iloc[0]["equity_eur"]) if not snap_key.empty and "equity_eur" in snap_key.columns else 10000.0
+            pnl_total = equity - 10000.0
+            pnl_closed = float(closed_key["_pnl_eur"].sum()) if not closed_key.empty and "_pnl_eur" in closed_key.columns else 0.0
+            winrate = float((closed_key["_pnl_eur"] > 0).mean() * 100.0) if not closed_key.empty and "_pnl_eur" in closed_key.columns else None
+            with cols[idx]:
+                st.markdown(f"**{cfg['label']}**")
+                st.metric("Equity", f"{equity:,.2f} EUR", f"{pnl_total:+,.2f} EUR")
+                st.caption(f"P&L clos periode: {pnl_closed:+,.2f} EUR")
+                st.caption(f"Lots clos: {len(closed_key)}")
+                st.caption(f"Winrate: {winrate:.1f}%" if winrate is not None else "Winrate: -")
+
+        if not df_snap.empty and {"as_of", "equity_eur", "LLM"}.issubset(df_snap.columns):
+            color_map = {cfg["label"]: cfg["accent"] for cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.values()}
+            hover_cols = [c for c in ["snapshot_type", "run_id", "pnl_total_eur", "open_lots_count", "leverage_effective"] if c in df_snap.columns]
+            fig_eq = px.line(df_snap.sort_values("as_of"), x="as_of", y="equity_eur", color="LLM", color_discrete_map=color_map, markers=True, hover_data=hover_cols)
+            fig_eq.add_hline(y=10000, line_dash="dot", line_color="#888")
+            fig_eq.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Equity EUR", xaxis_title="Date")
+            st.plotly_chart(fig_eq, use_container_width=True, key="forex_unified_equity_curve")
+        else:
+            st.info("Aucun snapshot AG1-FX disponible sur la periode.")
+
+        st.markdown("#### P&L net LLM x paire")
+        if not df_closed.empty and {"LLM", "pair", "_pnl_eur"}.issubset(df_closed.columns):
+            matrix_src = df_closed.copy()
+            matrix_src["pair"] = matrix_src["pair"].fillna("").astype(str).str.upper()
+            pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="_pnl_eur", aggfunc="sum", fill_value=0.0)
+            vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
+            st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
+
+            fig_hist = px.histogram(matrix_src, x="_pnl_eur", color="LLM", barmode="overlay", nbins=30, labels={"_pnl_eur": "P&L EUR"})
+            fig_hist.update_layout(height=300, margin=dict(l=10, r=10, t=20, b=10), xaxis_title="P&L EUR")
+            st.plotly_chart(fig_hist, use_container_width=True, key="forex_unified_closed_distribution")
+        else:
+            st.caption("Aucun trade clos sur la periode.")
+
+    with tab_ledger:
+        st.subheader("Positions ouvertes et ordres")
+        if not df_open.empty:
+            cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "open_at", "fees_eur", "stop_loss_price", "take_profit_price"] if c in df_open.columns]
+            render_interactive_table(df_open[cols_show], key_suffix="forex_unified_open_lots", height=300)
+        else:
+            st.caption("Aucun lot ouvert.")
+
+        st.markdown("#### Trades clos")
+        if not df_closed.empty:
+            cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "_pnl_eur", "_fees_eur"] if c in df_closed.columns]
+            closed_show = df_closed[cols_show].rename(columns={"_pnl_eur": "pnl_eur", "_fees_eur": "fees_eur"})
+            render_interactive_table(closed_show.head(80), key_suffix="forex_unified_closed_lots", height=360)
+        else:
+            st.caption("Aucun trade clos.")
+
+        st.markdown("#### Mises a jour portefeuille")
+        if not df_snap.empty:
+            update_cols = [c for c in ["as_of", "LLM", "snapshot_type", "run_id", "equity_eur", "pnl_total_eur", "open_lots_count", "leverage_effective"] if c in df_snap.columns]
+            updates_show = df_snap.sort_values("as_of", ascending=False)[update_cols].head(80)
+            render_interactive_table(updates_show, key_suffix="forex_unified_snapshot_updates", height=300)
+        else:
+            st.caption("Aucun snapshot de gestion ou de valorisation AG1-FX sur la periode.")
+
+        if not df_orders.empty:
+            st.markdown("#### Risk manager")
+            rej = df_orders[df_orders.get("status", pd.Series(dtype=str)).astype(str).str.lower() == "rejected"].copy()
+            r1, r2 = st.columns(2)
+            r1.metric("Ordres rejetes", len(rej))
+            active = df_cfg[df_cfg["kill_switch_active"] == True]["LLM"].tolist() if not df_cfg.empty and "kill_switch_active" in df_cfg.columns else []
+            r2.metric("Kill switches actifs", len(active), ", ".join(active) if active else None)
+            if not rej.empty and "rejection_reason" in rej.columns:
+                top = rej.groupby("rejection_reason", as_index=False).size().sort_values("size", ascending=False).head(10)
+                render_interactive_table(top.rename(columns={"rejection_reason": "Raison", "size": "Ordres"}), key_suffix="forex_unified_rejections", height=240)
+
+    with tab_sources:
+        st.subheader("Etat des sources Forex")
+        render_interactive_table(pd.DataFrame(fx_source_rows), key_suffix="forex_unified_source_status", height=240)
+        d1, d2, d3 = st.columns(3)
+        d1.metric("AG2-FX DB", "OK" if os.path.exists(AG2_FX_V1_DUCKDB_PATH) else "Absente")
+        d2.metric("AG4-Forex DB", "OK" if os.path.exists(AG4_FOREX_DUCKDB_PATH) else "Absente")
+        d3.metric("Paires chargees", len(pair_overview) if pair_overview is not None else 0)
+        if pair_diag is not None and not pair_diag.empty:
+            render_interactive_table(pair_diag, key_suffix="forex_unified_pair_diag", height=220)
+        elif pair_overview is not None and not pair_overview.empty:
+            st.caption("Aucun probleme de source detecte pour la vue paires.")
+
+        st.markdown("#### Coverage AG4-FX-V1")
+        if os.path.exists(AG4_FX_V1_DUCKDB_PATH):
+            conn = _duckdb_connect_readonly_retry(AG4_FX_V1_DUCKDB_PATH)
+            if conn is not None:
+                try:
+                    dig = conn.execute(
+                        """
+                        SELECT section, items_count, as_of
+                        FROM main.fx_digest
+                        WHERE run_id = (SELECT run_id FROM main.run_log ORDER BY finished_at DESC NULLS LAST, started_at DESC LIMIT 1)
+                        ORDER BY section
+                        """
+                    ).fetchdf()
+                    run = conn.execute("SELECT * FROM main.run_log ORDER BY finished_at DESC NULLS LAST, started_at DESC LIMIT 1").fetchdf()
+                    if run is not None and not run.empty:
+                        st.caption(f"Dernier run AG4-FX: {run.iloc[0].get('run_id')} | news dedupe: {run.iloc[0].get('news_after_dedupe')}")
+                    if dig is not None and not dig.empty:
+                        render_interactive_table(dig, key_suffix="forex_unified_ag4_fx_coverage", height=180)
+                except Exception as exc:
+                    st.caption(f"Coverage AG4-FX indisponible: {exc}")
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+        else:
+            st.caption(f"Base AG4-FX absente: {AG4_FX_V1_DUCKDB_PATH}")
 
 
 # ============================================================
