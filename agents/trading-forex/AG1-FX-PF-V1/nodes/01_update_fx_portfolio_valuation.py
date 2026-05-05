@@ -563,7 +563,7 @@ def update_one_portfolio(db_path_cfg, cfg, prices):
                     snapshot_id,
                     run_id,
                     now,
-                    cash,
+                    margin_free,
                     equity,
                     margin_used,
                     margin_free,

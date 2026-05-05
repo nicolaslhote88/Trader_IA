@@ -43,6 +43,7 @@ with duckdb.connect(db_path) as con:
     dd_total = equity / peak - 1.0
     lev = notional / equity if equity > 0 else 0.0
     margin_used = notional / max(1.0, float((brief.get("config") or {}).get("leverage_max") or 1))
+    margin_free = max(0.0, equity - margin_used)
     con.execute(
         """
         INSERT OR REPLACE INTO core.portfolio_snapshot (
@@ -53,8 +54,8 @@ with duckdb.connect(db_path) as con:
         """,
         [
             f"SNP_{ctx.get('run_id')}", ctx.get("run_id"), datetime.now(timezone.utc),
-            cash, equity, margin_used,
-            max(0.0, equity - margin_used), lev, len(lots),
+            margin_free, equity, margin_used,
+            margin_free, lev, len(lots),
             floating, pnl_total,
             min(0.0, pnl_total / 10000.0), dd_total, "AG1-FX-V1 snapshot",
         ],

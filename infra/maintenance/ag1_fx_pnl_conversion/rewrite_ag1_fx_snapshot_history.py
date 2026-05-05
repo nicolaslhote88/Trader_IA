@@ -318,7 +318,7 @@ def recompute_snapshot(
     return (
         {
             "snapshot_id": snapshot.get("snapshot_id"),
-            "cash_eur": cash_eur,
+            "cash_eur": margin_free,
             "equity_eur": equity,
             "margin_used_eur": margin_used,
             "margin_free_eur": margin_free,

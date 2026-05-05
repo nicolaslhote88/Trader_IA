@@ -185,22 +185,29 @@ for lot in lots:
 
 equity = initial + realized + floating - fees
 margin_used = notional / leverage_max
-margin_free = max(0.0, equity - margin_used)
+available_cash = max(0.0, equity - margin_used)
 leverage_effective = notional / equity if equity > 0 else 0.0
 day_start = to_float(day_row[0], equity) if day_row else equity
 peak = max(initial, equity, to_float(peak_row[0], initial) if peak_row else initial)
 drawdown_day = equity / day_start - 1.0 if day_start > 0 else 0.0
 drawdown_total = equity / peak - 1.0 if peak > 0 else 0.0
 latest_snapshot_equity = to_float(snap_rows[0].get("equity_eur"), equity) if snap_rows else equity
+max_daily_drawdown = to_float(cfg.get("max_daily_drawdown_pct"), 0.05)
+kill_switch_auto_reset = bool(cfg.get("kill_switch_active")) and min(0.0, drawdown_day) > -max_daily_drawdown
+if kill_switch_auto_reset:
+    cfg["kill_switch_active"] = False
 
 state = {
-    "cash_eur": cash,
+    "cash_eur": available_cash,
+    "available_cash_eur": available_cash,
+    "ledger_cash_eur": cash,
     "equity_eur": equity,
     "realized_pnl_eur": realized,
     "floating_pnl_eur": floating,
     "fees_eur": fees,
+    "gross_exposure_eur": notional,
     "margin_used_eur": margin_used,
-    "margin_free_eur": margin_free,
+    "margin_free_eur": available_cash,
     "open_lots": lots,
     "open_lots_count": len(lots),
     "leverage_effective": leverage_effective,
@@ -209,6 +216,7 @@ state = {
     "valuation_source": "live_recomputed_from_corrected_lots_and_latest_ag2",
     "latest_snapshot_equity_eur": latest_snapshot_equity,
     "latest_snapshot_delta_eur": equity - latest_snapshot_equity,
+    "kill_switch_auto_reset": kill_switch_auto_reset,
     "valuation_warnings": {
         "ag2_price_error": price_error,
         "missing_prices": sorted(set(missing_prices)),
@@ -219,8 +227,8 @@ state = {
 cfg["llm_model"] = ctx.get("llm_model") or cfg.get("llm_model") or "unset"
 with duckdb.connect(db_path) as con:
     con.execute(
-        "UPDATE cfg.portfolio_config SET llm_model = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'default'",
-        [cfg["llm_model"]],
+        "UPDATE cfg.portfolio_config SET llm_model = ?, kill_switch_active = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'default'",
+        [cfg["llm_model"], bool(cfg.get("kill_switch_active"))],
     )
 
 return [{"json": {**ctx, "config": cfg, "portfolio_state": state}}]
