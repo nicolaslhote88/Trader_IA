@@ -6,16 +6,21 @@
 // Contract with node 07:
 //   - reads input.orders (canonical AG1-V3 field)
 //   - keeps the same output shape for node 08
-//   - adds clientOrderId / ibkrStatus / ibkrResponse on each order
+//   - adds clientOrderId / ibkrStatus / ibkrResponse on each real order
 //
-// Dry-run behavior:
-//   IBKR_DRY_RUN=true keeps the workflow sandbox-only and does not call the
-//   broker by default. Set IBKR_SEND_DRY_RUN_TO_BROKER=true to exercise the
-//   ibkr-broker dry-run endpoint while still sending no live IBKR order.
+// Dry-run broker validation:
+//   SEND_DRY_RUN_TO_BROKER=true sends real validated workflow orders to
+//   ibkr-broker while IBKR_DRY_RUN=true still prevents live IBKR submission.
+//   FORCE_IBKR_CONNECTIVITY_TEST_ORDER is a canary and must stay false for
+//   normal model runs.
 
 const BROKER_URL = $env.IBKR_BROKER_URL || "http://ibkr-broker:8080";
 const DRY_RUN = String($env.IBKR_DRY_RUN || "true").toLowerCase() !== "false";
-const SEND_DRY_RUN_TO_BROKER = String($env.IBKR_SEND_DRY_RUN_TO_BROKER || "false").toLowerCase() === "true";
+const N8N_CONTEXT = this;
+
+// Keep broker dry-run enabled for real-order validation runs.
+const SEND_DRY_RUN_TO_BROKER = true;
+const FORCE_IBKR_CONNECTIVITY_TEST_ORDER = false;
 
 function toNum(v, d = 0) {
   const n = Number(v);
@@ -55,6 +60,50 @@ function brokerOrderId(result) {
   return raw?.order_id || raw?.orderId || raw?.id || null;
 }
 
+function orderKey(value) {
+  return String(value || "").trim();
+}
+
+async function postJson(url, payload) {
+  if (typeof fetch === "function") {
+    const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    });
+
+    const text = await response.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        data = { raw: text };
+      }
+    }
+
+    if (!response.ok) {
+      const message = data?.detail || data?.error || text || `HTTP ${response.status}`;
+      throw new Error(`HTTP ${response.status}: ${message}`);
+    }
+
+    return data;
+  }
+
+  if (N8N_CONTEXT?.helpers?.httpRequest) {
+    return await N8N_CONTEXT.helpers.httpRequest({
+      method: "POST",
+      url,
+      headers: { "Content-Type": "application/json" },
+      body: payload,
+      json: true,
+      timeout: 15000,
+    });
+  }
+
+  throw new Error("No HTTP client available in this n8n Code node");
+}
+
 const input = $json || {};
 const orders = Array.isArray(input.orders)
   ? input.orders
@@ -73,12 +122,34 @@ for (let i = 0; i < orders.length; i += 1) {
 let ibkrResults = [];
 let ibkrErrors = [];
 let brokerCalled = false;
+let connectivityTestInjected = false;
 
-const actionableOrders = orders.filter((o) => (
+let actionableOrders = orders.filter((o) => (
   !["HOLD", "WATCH"].includes(String(o.signal || o.action || "").toUpperCase())
   && o.riskCheckPassed !== false
   && toNum(o.quantity) > 0
 ));
+
+if (
+  DRY_RUN
+  && SEND_DRY_RUN_TO_BROKER
+  && FORCE_IBKR_CONNECTIVITY_TEST_ORDER
+  && actionableOrders.length === 0
+) {
+  connectivityTestInjected = true;
+  actionableOrders = [{
+    symbol: "AAPL",
+    side: "BUY",
+    quantity: 1,
+    orderId: `IBKR_CONNECTIVITY_TEST_${runId}`,
+    clientOrderId: deterministicClientOrderId(`${runId}|IBKR_CONNECTIVITY_TEST|AAPL|BUY|1`),
+    orderType: "MKT",
+    limitPrice: null,
+    signal: "OPEN",
+    riskCheckPassed: true,
+    _ibkrConnectivityTest: true,
+  }];
+}
 
 if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
   const payload = {
@@ -96,13 +167,7 @@ if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
 
   try {
     brokerCalled = true;
-    const response = await $http.request({
-      method: "POST",
-      url: `${BROKER_URL}/orders/equity`,
-      body: payload,
-      json: true,
-      timeout: 15000,
-    });
+    const response = await postJson(`${BROKER_URL}/orders/equity`, payload);
     ibkrResults = response.results || [];
     ibkrErrors = response.errors || [];
   } catch (err) {
@@ -110,12 +175,20 @@ if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
   }
 }
 
-const resultMap = Object.fromEntries(ibkrResults.map((r) => [r.order_id || r.client_order_id, r]));
-const errorMap = Object.fromEntries(ibkrErrors.filter((e) => e.order_id || e.client_order_id).map((e) => [e.order_id || e.client_order_id, e]));
+const resultMap = Object.fromEntries(
+  ibkrResults
+    .filter((r) => r?.order_id || r?.client_order_id)
+    .map((r) => [orderKey(r.order_id || r.client_order_id), r])
+);
+const errorMap = Object.fromEntries(
+  ibkrErrors
+    .filter((e) => e?.order_id || e?.client_order_id)
+    .map((e) => [orderKey(e.order_id || e.client_order_id), e])
+);
 
 for (const order of orders) {
-  const oid = order.orderId;
-  const cid = order.clientOrderId;
+  const oid = orderKey(order.orderId);
+  const cid = orderKey(order.clientOrderId);
   const result = resultMap[oid] || resultMap[cid];
   const error = errorMap[oid] || errorMap[cid];
 
@@ -161,12 +234,16 @@ return [{
     warnings,
     ibkrSendSummary: {
       dryRun: DRY_RUN,
+      sendDryRunToBroker: SEND_DRY_RUN_TO_BROKER,
+      forceConnectivityTestOrder: FORCE_IBKR_CONNECTIVITY_TEST_ORDER,
+      connectivityTestInjected,
       brokerCalled,
       ordersConsidered: actionableOrders.length,
       ordersSent: ibkrResults.length,
       errors: ibkrErrors.length,
       brokerUrl: BROKER_URL,
       errorsDetail: ibkrErrors,
+      dryRunBrokerResults: ibkrResults,
     },
   },
 }];
