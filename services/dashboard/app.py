@@ -8296,6 +8296,7 @@ NAV_GROUPS = {
         "Analyse Fondamentale V2",
     ],
     "Forex": [
+        "Dashboard Forex",
         "Forex",
     ],
 }
@@ -9174,6 +9175,453 @@ def _prepare_compare_card(portfolio_key: str, payload: dict[str, object], period
         "df_performance": perf_ts,
         "df_transactions_norm": tx_norm,
     }
+
+
+FX_COMPARE_WINNER_META = {
+    "ROI": {"key": "roi_pct", "higher_is_better": True},
+    "Equity": {"key": "total_val", "higher_is_better": True},
+    "MaxDD": {"key": "max_drawdown_pct", "higher_is_better": True},
+    "Winrate": {"key": "winrate_pct", "higher_is_better": True},
+}
+
+
+def _fx_side_arrow(side: object) -> str:
+    s = str(side or "").strip().lower()
+    if s in {"buy", "long"}:
+        return "long"
+    if s in {"sell", "short"}:
+        return "short"
+    return s or "-"
+
+
+def _fx_top_pair_rows_html(rows: list[dict[str, object]]) -> list[str]:
+    out: list[str] = []
+    for row in rows:
+        pair = html.escape(str(row.get("pair") or "N/A"))
+        pnl = safe_float(row.get("pnl_eur"))
+        lots = int(safe_float(row.get("lots", 0)))
+        pnl_txt = f"{pnl:+,.2f} EUR".replace(",", " ")
+        out.append(
+            f"&bull; <code>{pair}</code> "
+            f"<span style='color:{_signed_color(pnl)};font-weight:700;'>{html.escape(pnl_txt)}</span> "
+            f"<span style='color:#94a3b8;'>({lots} lot(s))</span>"
+        )
+    return out
+
+
+def _load_ag1_fx_dashboard_payloads() -> dict[str, dict[str, object]]:
+    payloads: dict[str, dict[str, object]] = {}
+    for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items():
+        db_path = str(cfg.get("db_path") or "").strip()
+        payload: dict[str, object] = {
+            "key": key,
+            "label": cfg.get("label", key),
+            "short_label": cfg.get("short_label", key),
+            "accent": cfg.get("accent", "#888"),
+            "db_path": db_path,
+            "status": "missing",
+            "error": "",
+            "df_snap": pd.DataFrame(),
+            "df_runs": pd.DataFrame(),
+            "df_open": pd.DataFrame(),
+            "df_closed": pd.DataFrame(),
+            "df_orders": pd.DataFrame(),
+            "df_cfg": pd.DataFrame(),
+            "df_alerts": pd.DataFrame(),
+            "df_ai_signals": pd.DataFrame(),
+            "summary": {},
+        }
+        payloads[key] = payload
+
+        if not db_path or not os.path.exists(db_path):
+            payload["error"] = f"Base introuvable: {db_path or '-'}"
+            continue
+
+        conn = _duckdb_connect_readonly_retry(db_path)
+        if conn is None:
+            payload["status"] = "error"
+            payload["error"] = "Connexion DuckDB impossible"
+            continue
+
+        try:
+            df_snap = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.portfolio_snapshot
+                ORDER BY as_of
+                """,
+            )
+            df_runs = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.runs
+                ORDER BY COALESCE(finished_at, started_at) DESC
+                """,
+            )
+            df_open = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.position_lots
+                WHERE LOWER(COALESCE(status, '')) = 'open'
+                ORDER BY open_at DESC
+                """,
+            )
+            df_closed = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.position_lots
+                WHERE LOWER(COALESCE(status, '')) = 'closed'
+                ORDER BY close_at DESC
+                """,
+            )
+            df_orders = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.orders
+                ORDER BY requested_at DESC
+                """,
+            )
+            df_cfg = _ag1_fetchdf(
+                conn,
+                "SELECT * FROM cfg.portfolio_config WHERE config_key='default'",
+            )
+            df_alerts = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.alerts
+                ORDER BY occurred_at DESC
+                """,
+            )
+            df_ai_signals = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.ai_signals
+                ORDER BY created_at DESC
+                """,
+            )
+
+            for df_obj in [df_snap, df_runs, df_open, df_closed, df_orders, df_cfg, df_alerts, df_ai_signals]:
+                if isinstance(df_obj, pd.DataFrame) and not df_obj.empty:
+                    df_obj["llm_key"] = key
+                    df_obj["LLM"] = cfg.get("label", key)
+
+            payload.update(
+                {
+                    "status": "ok",
+                    "df_snap": df_snap,
+                    "df_runs": df_runs,
+                    "df_open": df_open,
+                    "df_closed": df_closed,
+                    "df_orders": df_orders,
+                    "df_cfg": df_cfg,
+                    "df_alerts": df_alerts,
+                    "df_ai_signals": df_ai_signals,
+                }
+            )
+
+            init_cap = 10000.0
+            leverage_max = None
+            kill_switch_active = False
+            if df_cfg is not None and not df_cfg.empty:
+                init_cap = float(safe_float(df_cfg.iloc[0].get("initial_capital_eur", init_cap)) or init_cap)
+                leverage_max = float(safe_float(df_cfg.iloc[0].get("leverage_max", 0.0))) or None
+                kill_switch_active = bool(df_cfg.iloc[0].get("kill_switch_active", False))
+
+            latest_snap = df_snap.iloc[-1].to_dict() if df_snap is not None and not df_snap.empty else {}
+            latest_run = df_runs.iloc[0].to_dict() if df_runs is not None and not df_runs.empty else {}
+            equity = float(safe_float(latest_snap.get("equity_eur", init_cap))) if latest_snap else init_cap
+            cash = float(safe_float(latest_snap.get("cash_eur", init_cap))) if latest_snap else init_cap
+            margin_used = float(safe_float(latest_snap.get("margin_used_eur", 0.0))) if latest_snap else 0.0
+            pnl_total = (
+                float(safe_float(latest_snap.get("pnl_total_eur")))
+                if latest_snap and latest_snap.get("pnl_total_eur") is not None
+                else equity - init_cap
+            )
+
+            payload["summary"] = {
+                "init_cap": init_cap,
+                "total_val": equity,
+                "cash": cash,
+                "margin_used": margin_used,
+                "pnl_total": pnl_total,
+                "roi_pct": (pnl_total / init_cap * 100.0) if init_cap else 0.0,
+                "open_lots_count": int(safe_float(latest_snap.get("open_lots_count", len(df_open))) if latest_snap else len(df_open)),
+                "leverage_effective": latest_snap.get("leverage_effective"),
+                "leverage_max": leverage_max,
+                "drawdown_total_pct": latest_snap.get("drawdown_total_pct"),
+                "kill_switch_active": kill_switch_active,
+                "last_update": latest_snap.get("as_of") or latest_run.get("finished_at") or latest_run.get("started_at"),
+                "last_run_id": latest_snap.get("run_id") or latest_run.get("run_id"),
+                "last_run_ts": latest_run.get("finished_at") or latest_run.get("started_at") or latest_snap.get("as_of"),
+                "last_model": latest_run.get("llm_model") or cfg.get("label", key),
+                "orders_count": latest_run.get("orders_count"),
+                "fills_count": latest_run.get("fills_count"),
+                "rejected_orders_count": latest_run.get("rejected_orders_count"),
+                "errors": latest_run.get("errors"),
+            }
+        except Exception as exc:
+            payload["status"] = "error"
+            payload["error"] = str(exc)
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    return payloads
+
+
+def _fx_payload_performance_timeseries(payload: dict[str, object]) -> pd.DataFrame:
+    df_snap = payload.get("df_snap", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    cols = ["timestamp", "total_value", "cash_value", "equity_value", "invested_value"]
+    if df_snap is None or df_snap.empty:
+        return pd.DataFrame(columns=cols)
+
+    df = df_snap.copy()
+    if "as_of" not in df.columns:
+        return pd.DataFrame(columns=cols)
+    df["timestamp"] = pd.to_datetime(df["as_of"], errors="coerce", utc=True)
+    df = df.dropna(subset=["timestamp"]).sort_values("timestamp")
+    if df.empty:
+        return pd.DataFrame(columns=cols)
+
+    total = pd.to_numeric(df.get("equity_eur", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    cash = pd.to_numeric(df.get("cash_eur", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    margin = pd.to_numeric(df.get("margin_used_eur", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    out = pd.DataFrame(
+        {
+            "timestamp": df["timestamp"],
+            "total_value": total,
+            "cash_value": cash,
+            "equity_value": margin,
+            "invested_value": margin,
+        }
+    )
+    return out.dropna(subset=["total_value"]).sort_values("timestamp")
+
+
+def _fx_payload_closed_transactions(payload: dict[str, object]) -> pd.DataFrame:
+    df_closed = payload.get("df_closed", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    cols = ["timestamp", "symbol", "side", "quantity", "notional", "realized_pnl", "agent_label"]
+    if df_closed is None or df_closed.empty:
+        return pd.DataFrame(columns=cols)
+
+    df = df_closed.copy()
+    df["timestamp"] = pd.to_datetime(df.get("close_at"), errors="coerce", utc=True)
+    df["symbol"] = df.get("pair", pd.Series("", index=df.index)).fillna("").astype(str).str.upper()
+    df["side"] = df.get("side", pd.Series("", index=df.index)).fillna("").astype(str).str.upper()
+    df["quantity"] = pd.to_numeric(df.get("size_lots", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    if "notional_eur" in df.columns:
+        df["notional"] = pd.to_numeric(df["notional_eur"], errors="coerce").fillna(0.0)
+    else:
+        df["notional"] = 0.0
+    df["realized_pnl"] = pd.to_numeric(df.get("pnl_eur", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    df["agent_label"] = str(payload.get("label") or payload.get("key") or "FX")
+    return df[cols].sort_values("timestamp", na_position="last")
+
+
+def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], period_key: str, curve_mode: str) -> dict[str, object]:
+    cfg_summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+    label = str(payload.get("label") or portfolio_key)
+    accent = str(payload.get("accent") or "#888")
+    init_cap = float(safe_float(cfg_summary.get("init_cap", 10000.0)) or 10000.0)
+    total_val = float(safe_float(cfg_summary.get("total_val", init_cap)))
+    pnl_total = float(safe_float(cfg_summary.get("pnl_total", total_val - init_cap)))
+    roi_pct = float(safe_float(cfg_summary.get("roi_pct", (pnl_total / init_cap * 100.0) if init_cap else 0.0)))
+    cash = float(safe_float(cfg_summary.get("cash", 0.0)))
+    margin_used = float(safe_float(cfg_summary.get("margin_used", 0.0)))
+    exposure_pct = (margin_used / total_val * 100.0) if total_val > 0 else 0.0
+
+    perf_ts = _fx_payload_performance_timeseries(payload)
+    tx_norm = _fx_payload_closed_transactions(payload)
+    df_open = payload.get("df_open", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_closed = payload.get("df_closed", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_orders = payload.get("df_orders", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_alerts = payload.get("df_alerts", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_ai_signals = payload.get("df_ai_signals", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+
+    perf_period = _slice_timeseries_by_period(perf_ts, period_key)
+    ref_end = pd.to_datetime(perf_ts["timestamp"], errors="coerce", utc=True).max() if not perf_ts.empty else cfg_summary.get("last_update")
+    tx_period = _slice_events_by_period(tx_norm, period_key, ["timestamp"], ref_end)
+    orders_period = _slice_events_by_period(df_orders, period_key, ["requested_at"], ref_end)
+
+    period_delta_eur = None
+    roi_delta_pp = None
+    if perf_period is not None and not perf_period.empty and "total_value" in perf_period.columns:
+        start_total = float(safe_float(perf_period.iloc[0].get("total_value")))
+        end_total = float(safe_float(perf_period.iloc[-1].get("total_value")))
+        period_delta_eur = end_total - start_total
+        if init_cap > 0:
+            roi_delta_pp = roi_pct - ((start_total / init_cap - 1.0) * 100.0)
+
+    risk_cards = _compute_risk_scorecards(perf_period, tx_period)
+    underwater = _build_underwater_dataframe(perf_period)
+    current_dd = float(underwater["drawdown_pct"].iloc[-1]) if not underwater.empty else float(safe_float(cfg_summary.get("drawdown_total_pct", 0.0)))
+
+    closed_pnl = pd.to_numeric(tx_period.get("realized_pnl", pd.Series(dtype=float)), errors="coerce").fillna(0.0) if isinstance(tx_period, pd.DataFrame) else pd.Series(dtype=float)
+    winrate = float((closed_pnl > 0).mean() * 100.0) if len(closed_pnl) else None
+    gross_profit = float(closed_pnl[closed_pnl > 0].sum()) if len(closed_pnl) else 0.0
+    gross_loss = abs(float(closed_pnl[closed_pnl < 0].sum())) if len(closed_pnl) else 0.0
+    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else (float("inf") if gross_profit > 0 else None)
+
+    rejected_orders = 0
+    if isinstance(orders_period, pd.DataFrame) and not orders_period.empty and "status" in orders_period.columns:
+        rejected_orders = int((orders_period["status"].astype(str).str.lower() == "rejected").sum())
+
+    now_utc = pd.Timestamp.now(tz="UTC")
+    signals_24h = 0
+    if isinstance(df_ai_signals, pd.DataFrame) and not df_ai_signals.empty and "created_at" in df_ai_signals.columns:
+        sig_ts = pd.to_datetime(df_ai_signals["created_at"], errors="coerce", utc=True)
+        signals_24h = int((sig_ts >= now_utc - pd.Timedelta(hours=24)).sum())
+    alerts_24h = 0
+    critical_alerts = 0
+    if isinstance(df_alerts, pd.DataFrame) and not df_alerts.empty and "occurred_at" in df_alerts.columns:
+        alt = df_alerts.copy()
+        alt["occurred_at"] = pd.to_datetime(alt["occurred_at"], errors="coerce", utc=True)
+        alt = alt[alt["occurred_at"] >= now_utc - pd.Timedelta(hours=24)]
+        alerts_24h = int(len(alt))
+        if "severity" in alt.columns:
+            critical_alerts = int((alt["severity"].astype(str).str.upper() == "CRITICAL").sum())
+
+    open_pairs = 0
+    open_lots = 0
+    open_notional = 0.0
+    side_mix = "-"
+    if isinstance(df_open, pd.DataFrame) and not df_open.empty:
+        open_pairs = int(df_open.get("pair", pd.Series(dtype=str)).fillna("").astype(str).str.upper().nunique())
+        open_lots = int(len(df_open))
+        if "size_lots" in df_open.columns:
+            open_notional = float(pd.to_numeric(df_open["size_lots"], errors="coerce").fillna(0.0).sum())
+        if "side" in df_open.columns:
+            sides = sorted({_fx_side_arrow(x) for x in df_open["side"].dropna().tolist() if str(x).strip()})
+            side_mix = ", ".join(sides) if sides else "-"
+
+    top_pairs: list[dict[str, object]] = []
+    worst_pairs: list[dict[str, object]] = []
+    if isinstance(df_closed, pd.DataFrame) and not df_closed.empty and {"pair", "pnl_eur"}.issubset(df_closed.columns):
+        closed_work = df_closed.copy()
+        if "close_at" in closed_work.columns:
+            closed_work["close_at"] = pd.to_datetime(closed_work["close_at"], errors="coerce", utc=True)
+            days = COMPARE_PERIOD_DAYS.get(str(period_key), None)
+            if days is not None:
+                end_ts = pd.to_datetime(ref_end, errors="coerce", utc=True)
+                if pd.isna(end_ts):
+                    end_ts = closed_work["close_at"].max()
+                closed_work = closed_work[closed_work["close_at"] >= end_ts - pd.Timedelta(days=int(days))]
+        closed_work["pnl_eur"] = pd.to_numeric(closed_work["pnl_eur"], errors="coerce").fillna(0.0)
+        by_pair = closed_work.groupby("pair", as_index=False).agg(pnl_eur=("pnl_eur", "sum"), lots=("pair", "size"))
+        top_pairs = by_pair.sort_values("pnl_eur", ascending=False).head(3).to_dict("records")
+        worst_pairs = by_pair.sort_values("pnl_eur", ascending=True).head(3).to_dict("records")
+
+    status_level = "OK"
+    status_reasons: list[str] = []
+    if str(payload.get("status") or "").lower() != "ok":
+        status_level = "ERROR"
+        status_reasons.append(str(payload.get("error") or "Chargement DB KO"))
+    elif perf_ts.empty:
+        status_level = "WARN"
+        status_reasons.append("Aucun snapshot")
+    if bool(cfg_summary.get("kill_switch_active")):
+        status_level = "WARN" if status_level == "OK" else status_level
+        status_reasons.append("Kill switch actif")
+    if critical_alerts > 0:
+        status_level = "WARN" if status_level == "OK" else status_level
+        status_reasons.append(f"{critical_alerts} alerte(s) critiques")
+
+    curve_df = pd.DataFrame(columns=["timestamp", "display_value", "drawdown_pct"])
+    if isinstance(perf_period, pd.DataFrame) and not perf_period.empty:
+        tmp = perf_period.copy()
+        tmp["timestamp"] = pd.to_datetime(tmp["timestamp"], errors="coerce", utc=True)
+        tmp = tmp.dropna(subset=["timestamp"]).sort_values("timestamp")
+        if not tmp.empty:
+            tmp = tmp.merge(_build_underwater_dataframe(tmp), on="timestamp", how="left")
+            if curve_mode == "Normalise":
+                base = float(safe_float(tmp.iloc[0].get("total_value")))
+                tmp["display_value"] = (tmp["total_value"] / base * 100.0) if base > 0 else pd.NA
+            else:
+                tmp["display_value"] = tmp["total_value"]
+            curve_df = tmp[["timestamp", "display_value", "drawdown_pct"]].dropna(subset=["display_value"])
+
+    freshness_age_h = None
+    last_update = pd.to_datetime(cfg_summary.get("last_update"), errors="coerce", utc=True)
+    if pd.notna(last_update):
+        freshness_age_h = max(0.0, (pd.Timestamp.now(tz="UTC") - last_update).total_seconds() / 3600.0)
+    freshness_score = None
+    if freshness_age_h is not None:
+        freshness_score = int(max(0, min(100, 100 - max(0.0, freshness_age_h - 3.0) * 2.0 - critical_alerts * 15.0)))
+
+    agent_score_parts = [100.0 - min(60.0, rejected_orders * 12.0), 100.0 - min(60.0, critical_alerts * 25.0)]
+    if freshness_score is not None:
+        agent_score_parts.append(float(freshness_score))
+    operational_agent_score = sum(agent_score_parts) / len(agent_score_parts)
+
+    return {
+        "key": portfolio_key,
+        "label": label,
+        "short_label": str(payload.get("short_label") or portfolio_key),
+        "accent": accent,
+        "payload_status": str(payload.get("status") or ""),
+        "error": str(payload.get("error") or ""),
+        "status_level": status_level,
+        "status_reasons": status_reasons,
+        "init_cap": init_cap,
+        "total_val": total_val,
+        "cash": cash,
+        "margin_used": margin_used,
+        "pnl_total": pnl_total,
+        "roi_pct": roi_pct,
+        "period_delta_eur": period_delta_eur,
+        "roi_delta_pp": roi_delta_pp,
+        "current_drawdown_pct": current_dd,
+        "max_drawdown_pct": float(risk_cards.get("max_drawdown_pct", 0.0)),
+        "sharpe": risk_cards.get("sharpe"),
+        "winrate_pct": winrate,
+        "profit_factor": profit_factor,
+        "exposure_pct": exposure_pct,
+        "open_pairs": open_pairs,
+        "open_lots": open_lots,
+        "open_notional_lots": open_notional,
+        "side_mix": side_mix,
+        "leverage_effective": cfg_summary.get("leverage_effective"),
+        "leverage_max": cfg_summary.get("leverage_max"),
+        "signals_24h": signals_24h,
+        "alerts_24h": alerts_24h,
+        "critical_alerts_24h": critical_alerts,
+        "trades_period": int(len(tx_period)) if isinstance(tx_period, pd.DataFrame) else 0,
+        "orders_period": int(len(orders_period)) if isinstance(orders_period, pd.DataFrame) else 0,
+        "rejected_orders": rejected_orders,
+        "last_run_id": cfg_summary.get("last_run_id"),
+        "last_run_ts": cfg_summary.get("last_run_ts"),
+        "last_model": cfg_summary.get("last_model"),
+        "last_data_update": cfg_summary.get("last_update"),
+        "freshness_score": freshness_score,
+        "freshness_age_h": freshness_age_h,
+        "operational_agent_score": operational_agent_score,
+        "kill_switch_active": bool(cfg_summary.get("kill_switch_active")),
+        "top_pairs": top_pairs,
+        "worst_pairs": worst_pairs,
+        "curve_df": curve_df,
+        "df_performance": perf_ts,
+        "df_transactions_norm": tx_norm,
+    }
+
+
+def _concat_fx_payload_frames(payloads: dict[str, dict[str, object]], frame_key: str) -> pd.DataFrame:
+    frames = [
+        payload.get(frame_key, pd.DataFrame())
+        for payload in payloads.values()
+        if isinstance(payload.get(frame_key), pd.DataFrame) and not payload.get(frame_key).empty
+    ]
+    if not frames:
+        return pd.DataFrame()
+    return pd.concat(frames, ignore_index=True, sort=False)
 
 
 # ============================================================
@@ -14148,6 +14596,419 @@ elif page == "Analyse Fondamentale V2":
 # PAGE 7: FOREX
 # Page unifiee: indicateurs, analyse, portefeuille AG1-FX, P&L et sources.
 # ============================================================
+elif page == "Dashboard Forex":
+    st.title("Dashboard Forex")
+    st.caption("Vue comparative AG1-FX inspiree du Dashboard Trading actions : 3 LLM, performance, risque, activite et paires a surveiller.")
+
+    fx_payloads = _load_ag1_fx_dashboard_payloads()
+    compare_keys = [k for k in AG1_FX_MULTI_PORTFOLIO_CONFIG.keys() if k in fx_payloads]
+
+    ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
+    with ctrl_period:
+        fx_compare_period = st.radio(
+            "Periode",
+            options=["7j", "30j", "90j", "All"],
+            horizontal=True,
+            key="fx_dashboard_compare_period",
+            index=["7j", "30j", "90j", "All"].index(st.session_state.get("fx_dashboard_compare_period", "30j"))
+            if st.session_state.get("fx_dashboard_compare_period", "30j") in ["7j", "30j", "90j", "All"] else 1,
+        )
+    with ctrl_mode:
+        fx_curve_mode = st.radio(
+            "Affichage",
+            options=["EUR", "Normalise"],
+            horizontal=True,
+            key="fx_dashboard_curve_mode",
+            index=["EUR", "Normalise"].index(st.session_state.get("fx_dashboard_curve_mode", "EUR"))
+            if st.session_state.get("fx_dashboard_curve_mode", "EUR") in ["EUR", "Normalise"] else 0,
+        )
+    with ctrl_kpi:
+        fx_winner_kpi = st.selectbox(
+            "KPI winner / tri",
+            options=["ROI", "Equity", "MaxDD", "Winrate"],
+            index=["ROI", "Equity", "MaxDD", "Winrate"].index(st.session_state.get("fx_dashboard_winner_kpi", "ROI"))
+            if st.session_state.get("fx_dashboard_winner_kpi", "ROI") in ["ROI", "Equity", "MaxDD", "Winrate"] else 0,
+            key="fx_dashboard_winner_kpi",
+        )
+    with ctrl_bonus:
+        fx_show_dd = st.checkbox(
+            "Drawdown compare",
+            value=bool(st.session_state.get("fx_dashboard_show_dd", False)),
+            key="fx_dashboard_show_dd",
+        )
+    with ctrl_refresh:
+        st.write("")
+        st.write("")
+        if st.button("Rafraichir", key="fx_dashboard_refresh", use_container_width=True):
+            load_data.clear()
+            _prefetch_histories.clear()
+            st.rerun()
+
+    cards = [_prepare_fx_compare_card(key, fx_payloads.get(key, {}), fx_compare_period, fx_curve_mode) for key in compare_keys]
+    cards_by_key = {str(c.get("key")): c for c in cards}
+    available_keys = [k for k, p in fx_payloads.items() if str(p.get("status", "")).lower() == "ok"]
+
+    selected_fx_key = st.session_state.get("fx_dashboard_active_portfolio")
+    if selected_fx_key not in compare_keys:
+        selected_fx_key = available_keys[0] if available_keys else (compare_keys[0] if compare_keys else None)
+
+    winner_cfg = FX_COMPARE_WINNER_META.get(fx_winner_kpi, FX_COMPARE_WINNER_META["ROI"])
+    ranked = []
+    for c in cards:
+        val = c.get(winner_cfg.get("key"))
+        if val is None:
+            continue
+        try:
+            if pd.isna(val):
+                continue
+        except Exception:
+            pass
+        ranked.append((c.get("key"), float(safe_float(val))))
+    ranked = sorted(ranked, key=lambda row: row[1], reverse=bool(winner_cfg.get("higher_is_better", True)))
+    best_key = ranked[0][0] if ranked else None
+    worst_key = ranked[-1][0] if len(ranked) > 1 else None
+    if best_key == worst_key:
+        worst_key = None
+
+    curve_vals = []
+    for c in cards:
+        curve = c.get("curve_df")
+        if isinstance(curve, pd.DataFrame) and not curve.empty and "display_value" in curve.columns:
+            curve_vals.extend(pd.to_numeric(curve["display_value"], errors="coerce").dropna().astype(float).tolist())
+    curve_y_range = None
+    if curve_vals:
+        ymin, ymax = min(curve_vals), max(curve_vals)
+        pad = max(1.0, (ymax - ymin) * 0.08) if ymax != ymin else max(1.0, abs(ymin) * 0.02)
+        curve_y_range = (ymin - pad, ymax + pad)
+
+    status_colors = {"OK": "#16a34a", "WARN": "#d97706", "ERROR": "#dc2626"}
+    st.caption("Scoreboard AG1-FX : capital initial 10 000 EUR par LLM, bases dediees Forex-only.")
+
+    sb_cols = st.columns(3, gap="large")
+    for idx in range(3):
+        if idx >= len(compare_keys):
+            continue
+        key = compare_keys[idx]
+        c = cards_by_key.get(key, {})
+        is_focus = key == selected_fx_key
+        accent = str(c.get("accent") or "#888")
+        status_level = str(c.get("status_level") or "WARN").upper()
+        status_color = status_colors.get(status_level, "#6b7280")
+        badges = []
+        if key == best_key:
+            badges.append(f"<span style='padding:2px 8px;border-radius:999px;background:rgba(22,163,74,.12);color:#16a34a;border:1px solid rgba(22,163,74,.35);font-size:0.75rem;'>Best {html.escape(fx_winner_kpi)}</span>")
+        if key == worst_key:
+            badges.append(f"<span style='padding:2px 8px;border-radius:999px;background:rgba(220,38,38,.10);color:#dc2626;border:1px solid rgba(220,38,38,.30);font-size:0.75rem;'>Worst {html.escape(fx_winner_kpi)}</span>")
+
+        with sb_cols[idx]:
+            with st.container(border=True):
+                st.markdown(
+                    (
+                        "<div style='display:flex;justify-content:space-between;align-items:flex-start;gap:8px;'>"
+                        f"<div style='border-left:4px solid {accent};padding-left:8px;'>"
+                        f"<div style='font-weight:700;font-size:1rem;'>{html.escape(str(c.get('label') or key))}{' <span style=\"color:#94a3b8;\">[Focus]</span>' if is_focus else ''}</div>"
+                        f"<div style='margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;'>"
+                        f"<span style='padding:2px 8px;border-radius:999px;background:{status_color}22;color:{status_color};border:1px solid {status_color}55;font-size:0.75rem;font-weight:600;'>{status_level}</span>"
+                        + "".join(badges)
+                        + "</div></div></div>"
+                    ),
+                    unsafe_allow_html=True,
+                )
+
+                st.caption(
+                    f"Dernier run: {_short_run_id(c.get('last_run_id'))} | "
+                    f"{_fmt_paris_datetime(c.get('last_run_ts'), '%d/%m %H:%M')}"
+                )
+                st.caption(f"Model: {c.get('last_model') or 'N/A'}")
+                if c.get("status_reasons"):
+                    st.caption(" | ".join([str(x) for x in c.get("status_reasons", [])[:2]]))
+
+                k1, k2 = st.columns(2)
+                k1.metric("Equity", _fmt_currency(c.get("total_val"), 2), _fmt_delta_eur(c.get("period_delta_eur")))
+                k2.metric("P&L total", _fmt_currency(c.get("pnl_total"), 2), _fmt_delta_eur(c.get("period_delta_eur")))
+                k3, k4 = st.columns(2)
+                k3.metric("ROI", _fmt_pct(c.get("roi_pct"), 2), _fmt_delta_pp(c.get("roi_delta_pp")))
+                k4.metric("Winrate", _fmt_pct(c.get("winrate_pct"), 1) if c.get("winrate_pct") is not None else "N/A")
+                k5, k6 = st.columns(2)
+                k5.metric("Paires ouvertes", _fmt_number(c.get("open_pairs"), 0))
+                k6.metric("Score agent", _fmt_pct(c.get("operational_agent_score"), 0, "/100"))
+
+                st.caption(f"Equity curve ({fx_compare_period} | {'EUR' if fx_curve_mode == 'EUR' else 'Base 100'})")
+                st.plotly_chart(
+                    _build_mini_equity_curve(c, mode=fx_curve_mode, y_range=curve_y_range, show_drawdown_overlay=False),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key=f"fx_compare_mini_eq_{key}",
+                )
+
+                st.caption("Risque & exposition FX")
+                r1, r2 = st.columns(2)
+                r1.metric("DD courant", _fmt_pct(c.get("current_drawdown_pct"), 2))
+                r2.metric("MaxDD periode", _fmt_pct(c.get("max_drawdown_pct"), 2))
+                r3, r4 = st.columns(2)
+                r3.metric("Marge utilisee", _fmt_currency(c.get("margin_used"), 2))
+                r4.metric("Leverage", f"{safe_float(c.get('leverage_effective')):.2f}x" if c.get("leverage_effective") is not None else "N/A")
+                st.caption(
+                    f"Expo marge: {_fmt_pct(c.get('exposure_pct'), 1)} | "
+                    f"Leverage max: {safe_float(c.get('leverage_max')):.2f}x" if c.get("leverage_max") is not None else
+                    f"Expo marge: {_fmt_pct(c.get('exposure_pct'), 1)} | Leverage max: N/A"
+                )
+                st.progress(int(max(0, min(100, round(float(safe_float(c.get("exposure_pct", 0.0))))))))
+
+                st.caption("Activite / risk manager")
+                a1, a2 = st.columns(2)
+                a1.metric("Signaux 24h", _fmt_number(c.get("signals_24h"), 0))
+                a2.metric("Alertes 24h", _fmt_number(c.get("alerts_24h"), 0))
+                a3, a4 = st.columns(2)
+                a3.metric(f"Trades {fx_compare_period}", _fmt_number(c.get("trades_period"), 0))
+                a4.metric("Ordres rejetes", _fmt_number(c.get("rejected_orders"), 0))
+                pf = c.get("profit_factor")
+                pf_txt = "inf" if pf == float("inf") else (f"{float(pf):.2f}" if pf is not None and not pd.isna(pf) else "N/A")
+                st.caption(
+                    f"Profit factor: {pf_txt} | Side mix: {c.get('side_mix') or '-'} | "
+                    f"Freshness: {_fmt_pct(c.get('freshness_score'), 0, '/100') if c.get('freshness_score') is not None else 'N/A'}"
+                )
+
+                st.caption("Top / Worst paires")
+                tw1, tw2 = st.columns(2)
+                with tw1:
+                    st.caption("Top 3 P&L")
+                    top_html = _fx_top_pair_rows_html(c.get("top_pairs") or [])
+                    if top_html:
+                        for row_html in top_html:
+                            st.markdown(row_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("N/A")
+                with tw2:
+                    st.caption("Worst 3 P&L")
+                    worst_html = _fx_top_pair_rows_html(c.get("worst_pairs") or [])
+                    if worst_html:
+                        for row_html in worst_html:
+                            st.markdown(row_html, unsafe_allow_html=True)
+                    else:
+                        st.caption("N/A")
+
+                if st.button(
+                    "Focus",
+                    key=f"fx_dashboard_focus_{key}",
+                    use_container_width=True,
+                    type="primary" if is_focus else "secondary",
+                ):
+                    st.session_state["fx_dashboard_active_portfolio"] = key
+                    st.rerun()
+
+    if selected_fx_key:
+        st.session_state["fx_dashboard_active_portfolio"] = selected_fx_key
+
+    fig_cmp_eq, fig_cmp_dd = _build_compare_overlay_chart(cards, mode=fx_curve_mode, show_drawdown=fx_show_dd)
+    if fig_cmp_eq is not None:
+        st.plotly_chart(fig_cmp_eq, use_container_width=True, key="fx_dashboard_overlay_equity")
+    if fx_show_dd and fig_cmp_dd is not None:
+        st.plotly_chart(fig_cmp_dd, use_container_width=True, key="fx_dashboard_overlay_dd")
+
+    comp_rows = []
+    for c in cards:
+        comp_rows.append(
+            {
+                "Modele": c.get("label"),
+                "Statut": c.get("status_level"),
+                "Equity EUR": c.get("total_val"),
+                "P&L EUR": c.get("pnl_total"),
+                "ROI %": c.get("roi_pct"),
+                "MaxDD %": c.get("max_drawdown_pct"),
+                "Winrate %": c.get("winrate_pct"),
+                "Paires ouvertes": c.get("open_pairs"),
+                "Trades periode": c.get("trades_period"),
+                "Ordres rejetes": c.get("rejected_orders"),
+                "Score agent": c.get("operational_agent_score"),
+            }
+        )
+    with st.expander("Details chiffres comparatifs", expanded=False):
+        if comp_rows:
+            sort_col_map = {"ROI": "ROI %", "Equity": "Equity EUR", "MaxDD": "MaxDD %", "Winrate": "Winrate %"}
+            comp_df = pd.DataFrame(comp_rows)
+            sort_col = sort_col_map.get(fx_winner_kpi, "ROI %")
+            if sort_col in comp_df.columns:
+                comp_df = comp_df.sort_values(sort_col, ascending=False, na_position="last")
+            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aucun portefeuille FX charge.")
+
+    all_open = _concat_fx_payload_frames(fx_payloads, "df_open")
+    all_closed = _concat_fx_payload_frames(fx_payloads, "df_closed")
+    all_orders = _concat_fx_payload_frames(fx_payloads, "df_orders")
+    all_snap = _concat_fx_payload_frames(fx_payloads, "df_snap")
+
+    now_ts = pd.Timestamp.now(tz="UTC")
+    period_days = COMPARE_PERIOD_DAYS.get(str(fx_compare_period), None)
+    start_ts = (now_ts - pd.Timedelta(days=int(period_days))) if period_days is not None else pd.Timestamp("2026-01-01", tz="UTC")
+    end_ts = now_ts + pd.Timedelta(days=1)
+    pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, all_open, all_closed)
+
+    tab_pairs, tab_focus, tab_perf, tab_risk, tab_sources = st.tabs(
+        ["Radar paires", "Focus LLM", "Performance", "Risk manager", "Sources"]
+    )
+
+    with tab_pairs:
+        st.subheader("Paires FX a surveiller")
+        if pair_overview.empty:
+            st.info("Aucune paire FX exploitable. Verifie AG2-FX pour les signaux et AG4-Forex pour les news.")
+        else:
+            m1, m2, m3, m4, m5 = st.columns(5)
+            m1.metric("Paires suivies", len(pair_overview))
+            m2.metric("Alertes news", int((pair_overview.get("Sources", pd.Series(dtype=str)).astype(str) == "Alerte news").sum()))
+            m3.metric("Actives 24h", int((pd.to_numeric(pair_overview.get("News 24h", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()))
+            m4.metric("Paires exposees", int((pd.to_numeric(pair_overview.get("Lots ouverts", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()))
+            avg_score = pd.to_numeric(pair_overview.get("Score", pd.Series(dtype=float)), errors="coerce").dropna()
+            m5.metric("Score moyen", f"{avg_score.mean():+.2f}" if not avg_score.empty else "N/A")
+
+            fig_fx, _ = _build_fx_pair_signal_matrix(pair_overview)
+            if fig_fx is not None:
+                st.plotly_chart(fig_fx, use_container_width=True, key="fx_dashboard_signal_matrix")
+
+            priority = pair_overview.copy()
+            priority["_priority"] = (
+                pd.to_numeric(priority.get("High impact", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 4.0
+                + pd.to_numeric(priority.get("News 24h", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 1.8
+                + pd.to_numeric(priority.get("Lots ouverts", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 2.0
+                + pd.to_numeric(priority.get("Score", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs()
+            )
+            priority = priority.sort_values("_priority", ascending=False).head(15)
+            keep = [
+                c for c in [
+                    "Paire", "Etat general", "Technique", "Signal", "Score", "Sources", "News 24h",
+                    "High impact", "Lots ouverts", "LLM exposes", "P&L clos EUR", "Top sources",
+                ] if c in priority.columns
+            ]
+            render_interactive_table(priority[keep], key_suffix="fx_dashboard_priority_pairs", height=380)
+
+            st.markdown("#### Sparklines prix 90 jours")
+            render_fx_pair_sparklines(
+                pair_overview,
+                yfinance_api_url=YFINANCE_API_URL,
+                lookback_days=90,
+                columns_per_row=3,
+            )
+
+    with tab_focus:
+        focus_payload = fx_payloads.get(str(selected_fx_key), {}) if selected_fx_key else {}
+        focus_card = cards_by_key.get(str(selected_fx_key), {}) if selected_fx_key else {}
+        st.subheader(f"Focus LLM - {focus_card.get('label') or selected_fx_key or 'N/A'}")
+        if not focus_payload:
+            st.info("Aucun LLM FX selectionne.")
+        else:
+            fc1, fc2, fc3, fc4 = st.columns(4)
+            fc1.metric("Equity", _fmt_currency(focus_card.get("total_val"), 2))
+            fc2.metric("P&L", _fmt_currency(focus_card.get("pnl_total"), 2))
+            fc3.metric("Lots ouverts", _fmt_number(focus_card.get("open_lots"), 0))
+            fc4.metric("Ordres rejetes", _fmt_number(focus_card.get("rejected_orders"), 0))
+
+            df_open_focus = focus_payload.get("df_open", pd.DataFrame())
+            if isinstance(df_open_focus, pd.DataFrame) and not df_open_focus.empty:
+                st.markdown("#### Lots ouverts")
+                cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "open_at", "fees_eur", "stop_loss_price", "take_profit_price"] if c in df_open_focus.columns]
+                render_interactive_table(df_open_focus[cols_show], key_suffix="fx_dashboard_focus_open", height=260)
+            else:
+                st.caption("Aucun lot ouvert pour ce LLM.")
+
+            df_closed_focus = focus_payload.get("df_closed", pd.DataFrame())
+            if isinstance(df_closed_focus, pd.DataFrame) and not df_closed_focus.empty:
+                st.markdown("#### Derniers lots clos")
+                closed_show = df_closed_focus.copy()
+                if "close_at" in closed_show.columns:
+                    closed_show["close_at"] = pd.to_datetime(closed_show["close_at"], errors="coerce", utc=True)
+                    closed_show = closed_show.sort_values("close_at", ascending=False)
+                cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "pnl_eur", "fees_eur"] if c in closed_show.columns]
+                render_interactive_table(closed_show[cols_show].head(60), key_suffix="fx_dashboard_focus_closed", height=320)
+            else:
+                st.caption("Aucun lot clos pour ce LLM.")
+
+    with tab_perf:
+        st.subheader("Performance AG1-FX comparee")
+        if not all_snap.empty and {"as_of", "equity_eur", "LLM"}.issubset(all_snap.columns):
+            snap_plot = all_snap.copy()
+            snap_plot["as_of"] = pd.to_datetime(snap_plot["as_of"], errors="coerce", utc=True)
+            snap_plot = snap_plot.dropna(subset=["as_of"]).sort_values("as_of")
+            color_map = {cfg["label"]: cfg["accent"] for cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.values()}
+            fig_eq = px.line(
+                snap_plot,
+                x="as_of",
+                y="equity_eur",
+                color="LLM",
+                color_discrete_map=color_map,
+                markers=True,
+                hover_data=[c for c in ["run_id", "pnl_total_eur", "open_lots_count", "leverage_effective"] if c in snap_plot.columns],
+            )
+            fig_eq.add_hline(y=10000, line_dash="dot", line_color="#888")
+            fig_eq.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Equity EUR", xaxis_title="Date")
+            st.plotly_chart(fig_eq, use_container_width=True, key="fx_dashboard_equity_full")
+        else:
+            st.info("Aucun snapshot AG1-FX disponible.")
+
+        st.markdown("#### Matrice P&L net LLM x paire")
+        if not all_closed.empty and {"LLM", "pair", "pnl_eur"}.issubset(all_closed.columns):
+            matrix_src = all_closed.copy()
+            if "close_at" in matrix_src.columns and period_days is not None:
+                matrix_src["close_at"] = pd.to_datetime(matrix_src["close_at"], errors="coerce", utc=True)
+                matrix_src = matrix_src[matrix_src["close_at"] >= start_ts]
+            matrix_src["pair"] = matrix_src["pair"].fillna("").astype(str).str.upper()
+            matrix_src["pnl_eur"] = pd.to_numeric(matrix_src["pnl_eur"], errors="coerce").fillna(0.0)
+            pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="pnl_eur", aggfunc="sum", fill_value=0.0)
+            vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
+            st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
+        else:
+            st.caption("Aucun trade clos sur la periode.")
+
+    with tab_risk:
+        st.subheader("Risk manager Forex")
+        if not all_orders.empty:
+            orders_show = all_orders.copy()
+            if "requested_at" in orders_show.columns:
+                orders_show["requested_at"] = pd.to_datetime(orders_show["requested_at"], errors="coerce", utc=True)
+                if period_days is not None:
+                    orders_show = orders_show[orders_show["requested_at"] >= start_ts]
+            rejected = orders_show[orders_show.get("status", pd.Series(dtype=str)).astype(str).str.lower() == "rejected"].copy()
+            r1, r2, r3 = st.columns(3)
+            r1.metric("Ordres periode", len(orders_show))
+            r2.metric("Ordres rejetes", len(rejected))
+            active_kill = [
+                str(p.get("label") or k)
+                for k, p in fx_payloads.items()
+                if bool((p.get("summary") or {}).get("kill_switch_active"))
+            ]
+            r3.metric("Kill switches actifs", len(active_kill), ", ".join(active_kill) if active_kill else None)
+            if not rejected.empty and "rejection_reason" in rejected.columns:
+                top = rejected.groupby("rejection_reason", as_index=False).size().sort_values("size", ascending=False).head(10)
+                render_interactive_table(top.rename(columns={"rejection_reason": "Raison", "size": "Ordres"}), key_suffix="fx_dashboard_rejections", height=260)
+            keep = [c for c in ["LLM", "pair", "side", "order_type", "size_lots", "requested_at", "status", "rejection_reason", "leverage_used"] if c in orders_show.columns]
+            render_interactive_table(orders_show[keep].head(100), key_suffix="fx_dashboard_orders", height=360)
+        else:
+            st.caption("Aucun ordre AG1-FX disponible.")
+
+    with tab_sources:
+        st.subheader("Etat des sources")
+        source_rows = []
+        for key, payload in fx_payloads.items():
+            source_rows.append(
+                {
+                    "LLM": payload.get("label", key),
+                    "Base": os.path.basename(str(payload.get("db_path") or "")),
+                    "Statut": payload.get("status"),
+                    "Snapshots": len(payload.get("df_snap", pd.DataFrame())) if isinstance(payload.get("df_snap"), pd.DataFrame) else 0,
+                    "Lots ouverts": len(payload.get("df_open", pd.DataFrame())) if isinstance(payload.get("df_open"), pd.DataFrame) else 0,
+                    "Lots clos": len(payload.get("df_closed", pd.DataFrame())) if isinstance(payload.get("df_closed"), pd.DataFrame) else 0,
+                    "Ordres": len(payload.get("df_orders", pd.DataFrame())) if isinstance(payload.get("df_orders"), pd.DataFrame) else 0,
+                    "Message": payload.get("error", ""),
+                }
+            )
+        render_interactive_table(pd.DataFrame(source_rows), key_suffix="fx_dashboard_sources", height=240)
+        d1, d2, d3 = st.columns(3)
+        d1.metric("AG2-FX DB", "OK" if os.path.exists(AG2_FX_V1_DUCKDB_PATH) else "Absente")
+        d2.metric("AG4-Forex DB", "OK" if os.path.exists(AG4_FOREX_DUCKDB_PATH) else "Absente")
+        d3.metric("Paires chargees", len(pair_overview) if pair_overview is not None else 0)
+        if pair_diag is not None and not pair_diag.empty:
+            render_interactive_table(pair_diag, key_suffix="fx_dashboard_pair_diag", height=220)
+
 elif page == "Forex":
     st.title("Forex")
     st.caption("Paires FX suivies, signaux AG2-FX, pression news AG4-Forex et portefeuilles AG1-FX.")
