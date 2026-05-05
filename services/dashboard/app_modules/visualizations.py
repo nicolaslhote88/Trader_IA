@@ -372,6 +372,8 @@ def _build_fx_pair_sparkline(
     pair: str,
     hist: pd.DataFrame,
     row: pd.Series | None,
+    entry_levels: list[dict[str, object]] | None = None,
+    focus: bool = False,
 ) -> go.Figure:
     def clean_text(value: object) -> str:
         if value is None:
@@ -441,11 +443,13 @@ def _build_fx_pair_sparkline(
     if meta_bits:
         title_text = f"{pair} - {' / '.join(meta_bits)} | {title_suffix}"
 
+    entry_levels = entry_levels or []
+
     if hist is None or hist.empty:
         fig = go.Figure()
         fig.update_layout(
             title=f"{title_text} | no history",
-            height=204,
+            height=300 if focus else 204,
             margin=dict(t=34, b=26, l=42, r=8),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
@@ -466,7 +470,15 @@ def _build_fx_pair_sparkline(
         return fig
 
     decimals = price_decimals(last_close)
-    y_floor, y_ceiling = y_axis_window(hist["close"])
+    y_inputs = [hist["close"]]
+    entry_prices = []
+    for entry in entry_levels:
+        price = safe_float(entry.get("price"))
+        if price > 0:
+            entry_prices.append(price)
+    if entry_prices:
+        y_inputs.append(pd.Series(entry_prices))
+    y_floor, y_ceiling = y_axis_window(pd.concat(y_inputs, ignore_index=True))
     line_color = "#4ea1ff"
     fill_color = "rgba(40,167,69,0.18)" if profitable else "rgba(220,53,69,0.16)"
 
@@ -511,13 +523,41 @@ def _build_fx_pair_sparkline(
             line_color="rgba(100,180,255,0.35)",
         )
 
+    if entry_levels and len(hist) > 0:
+        x0 = hist["timestamp"].iloc[0]
+        x1 = hist["timestamp"].iloc[-1]
+        for entry in entry_levels:
+            price = safe_float(entry.get("price"))
+            if price <= 0:
+                continue
+            llm = clean_text(entry.get("llm")) or "LLM"
+            side = clean_text(entry.get("side")).lower()
+            lots = safe_float(entry.get("lots"))
+            color = clean_text(entry.get("color")) or "#f59e0b"
+            label_bits = [llm, "entry"]
+            if side:
+                label_bits.append(side)
+            if lots > 0:
+                label_bits.append(f"{lots:g} lot")
+            fig.add_trace(
+                go.Scatter(
+                    x=[x0, x1],
+                    y=[price, price],
+                    mode="lines",
+                    line=dict(color=color, width=2.2 if focus else 1.4, dash="dash"),
+                    name=" ".join(label_bits),
+                    hovertemplate=f"{llm}<br>Entry: %{{y:.{decimals}f}}<br>{side}<extra></extra>",
+                    showlegend=focus,
+                )
+            )
+
     fig.update_layout(
         title=title_text,
-        height=204,
-        margin=dict(t=34, b=28, l=44, r=8),
+        height=320 if focus else 204,
+        margin=dict(t=42 if focus else 34, b=32 if focus else 28, l=52 if focus else 44, r=12 if focus else 8),
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
+        showlegend=bool(focus and entry_levels),
         xaxis=dict(
             showgrid=False,
             showticklabels=True,
@@ -538,8 +578,10 @@ def _build_fx_pair_sparkline(
             tickfont=dict(size=10, color="rgba(230,230,230,0.78)"),
         ),
         hovermode="x unified",
-        title_font=dict(size=12),
+        title_font=dict(size=15 if focus else 12),
     )
+    if focus and entry_levels:
+        fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, title_text="Entrées ouvertes"))
     return fig
 
 
@@ -550,6 +592,9 @@ def render_fx_pair_sparklines(
     lookback_days: int = 90,
     columns_per_row: int = 3,
     major_pairs: tuple[str, ...] = FX_MAJOR_PAIRS,
+    selected_pairs: list[str] | tuple[str, ...] | None = None,
+    entry_levels_by_pair: dict[str, list[dict[str, object]]] | None = None,
+    focus: bool = False,
 ) -> None:
     if pair_overview is None or pair_overview.empty:
         st.caption("Aucune paire FX disponible pour les sparklines.")
@@ -569,12 +614,38 @@ def render_fx_pair_sparklines(
 
     meta_by_pair = {str(row["_pair"]): row for _, row in df.drop_duplicates("_pair").iterrows()}
     all_pairs = sorted(meta_by_pair.keys())
+    if selected_pairs:
+        selected_set = {
+            re.sub(r"[^A-Z]", "", str(pair or "").upper())[:6]
+            for pair in selected_pairs
+            if str(pair or "").strip()
+        }
+        all_pairs = [pair for pair in all_pairs if pair in selected_set]
+    if not all_pairs:
+        st.caption("Aucune paire FX valide dans la selection sparkline.")
+        return
+
     histories = _prefetch_histories(
         symbols=tuple(all_pairs),
         yfinance_api_url=yfinance_api_url,
         interval="1d",
         lookback_days=lookback_days,
     )
+    entry_levels_by_pair = entry_levels_by_pair or {}
+
+    if selected_pairs:
+        grid_cols = st.columns(max(1, int(columns_per_row)))
+        for idx, pair in enumerate(all_pairs):
+            fig = _build_fx_pair_sparkline(
+                pair,
+                histories.get(pair, pd.DataFrame()),
+                meta_by_pair.get(pair),
+                entry_levels=entry_levels_by_pair.get(pair, []),
+                focus=focus,
+            )
+            with grid_cols[idx % len(grid_cols)]:
+                st.plotly_chart(fig, use_container_width=True, key=f"fx_pair_spark_selected_{pair}_{idx}")
+        return
 
     major_set = set(major_pairs)
     sections = [
@@ -588,7 +659,13 @@ def render_fx_pair_sparklines(
         st.markdown(f"**{section_title}**")
         grid_cols = st.columns(max(1, int(columns_per_row)))
         for idx, pair in enumerate(section_pairs):
-            fig = _build_fx_pair_sparkline(pair, histories.get(pair, pd.DataFrame()), meta_by_pair.get(pair))
+            fig = _build_fx_pair_sparkline(
+                pair,
+                histories.get(pair, pd.DataFrame()),
+                meta_by_pair.get(pair),
+                entry_levels=entry_levels_by_pair.get(pair, []),
+                focus=False,
+            )
             with grid_cols[idx % len(grid_cols)]:
                 st.plotly_chart(fig, use_container_width=True, key=f"fx_pair_spark_{section_title}_{pair}_{idx}")
 

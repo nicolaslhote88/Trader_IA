@@ -14169,6 +14169,35 @@ elif page == "Forex":
         str(cfg.get("label", key)): str(cfg.get("short_label") or cfg.get("label", key))
         for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
     }
+    fx_llm_colors = {
+        str(cfg.get("label", key)): str(cfg.get("accent") or "#888")
+        for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
+    }
+    fx_entry_levels_by_pair: dict[str, list[dict[str, object]]] = {}
+    if not df_open.empty and {"pair", "LLM"}.issubset(df_open.columns):
+        entry_tmp = df_open.copy()
+        entry_tmp["pair"] = entry_tmp["pair"].fillna("").astype(str).str.upper()
+        entry_tmp["LLM"] = entry_tmp["LLM"].fillna("").astype(str)
+        if "open_price" in entry_tmp.columns:
+            entry_tmp["_entry_price"] = pd.to_numeric(entry_tmp["open_price"], errors="coerce").fillna(0.0)
+        else:
+            entry_tmp["_entry_price"] = 0.0
+        lot_col = _first_existing_column(entry_tmp, ["size_lots", "remaining_qty", "open_qty", "quantity"])
+        entry_tmp["_entry_lots"] = pd.to_numeric(entry_tmp[lot_col], errors="coerce").fillna(0.0) if lot_col else 0.0
+        if "side" not in entry_tmp.columns:
+            entry_tmp["side"] = ""
+        entry_tmp = entry_tmp[(entry_tmp["pair"] != "") & (entry_tmp["LLM"] != "") & (entry_tmp["_entry_price"] > 0)].copy()
+        for pair, grp in entry_tmp.groupby("pair"):
+            fx_entry_levels_by_pair[pair] = [
+                {
+                    "llm": str(row.get("LLM") or ""),
+                    "price": float(row.get("_entry_price") or 0.0),
+                    "side": str(row.get("side") or ""),
+                    "lots": float(row.get("_entry_lots") or 0.0),
+                    "color": fx_llm_colors.get(str(row.get("LLM") or ""), "#888"),
+                }
+                for _, row in grp.iterrows()
+            ]
     pair_llm_summary = pd.DataFrame(columns=["pair", "LLM", "open_lots", "open_sides", "pnl_closed_eur", "closed_lots"])
 
     open_parts = []
@@ -14242,10 +14271,74 @@ elif page == "Forex":
 
             fig_fx, _matrix_data = _build_fx_pair_signal_matrix(pair_overview)
             if fig_fx is not None:
-                st.plotly_chart(fig_fx, use_container_width=True, key="forex_unified_signal_matrix")
+                plot_selection = None
+                try:
+                    plot_selection = st.plotly_chart(
+                        fig_fx,
+                        use_container_width=True,
+                        key="forex_unified_signal_matrix",
+                        on_select="rerun",
+                        selection_mode=("points",),
+                    )
+                except TypeError:
+                    st.plotly_chart(fig_fx, use_container_width=True, key="forex_unified_signal_matrix_fallback")
+                clicked_pair = ""
+                try:
+                    points = ((plot_selection or {}).get("selection") or {}).get("points", [])
+                    if points:
+                        custom_data = points[0].get("customdata", [])
+                        if custom_data:
+                            clicked_pair = str(custom_data[0] or "").strip().upper()
+                except Exception:
+                    clicked_pair = ""
+                if clicked_pair:
+                    st.session_state["forex_indicator_selected_pair"] = clicked_pair
                 st.caption(
                     "X = direction/force technique AG2-FX. Y = pression news/sources AG4-Forex. "
-                    "Taille = activite/exposition/P&L; forme = etat des sources; couleur = etat technique."
+                    "Taille = activite/exposition/P&L; forme = etat des sources; couleur = etat technique. "
+                    "Cliquez un point pour filtrer les sparklines sur cette paire."
+                )
+
+            selected_indicator_pair = str(st.session_state.get("forex_indicator_selected_pair", "") or "").strip().upper()
+            if selected_indicator_pair and selected_indicator_pair not in set(pair_overview["Paire"].astype(str).str.upper()):
+                selected_indicator_pair = ""
+                st.session_state["forex_indicator_selected_pair"] = ""
+
+            st.markdown("#### Sparklines prix 90 jours")
+            if selected_indicator_pair:
+                s1, s2 = st.columns([3.2, 0.8])
+                with s1:
+                    st.caption(f"Filtre actif depuis la carte : `{selected_indicator_pair}`")
+                with s2:
+                    if st.button("Voir les 27", key="forex_indicator_clear_pair"):
+                        st.session_state["forex_indicator_selected_pair"] = ""
+                        st.rerun()
+                selected_entries = fx_entry_levels_by_pair.get(selected_indicator_pair, [])
+                if selected_entries:
+                    entry_rows = pd.DataFrame(selected_entries).rename(
+                        columns={"llm": "LLM", "price": "Point d'entree", "side": "Sens", "lots": "Lots", "color": "Couleur"}
+                    )
+                    render_interactive_table(entry_rows[["LLM", "Point d'entree", "Sens", "Lots"]], key_suffix="forex_indicator_selected_entries", height=160)
+                else:
+                    st.caption(f"`{selected_indicator_pair}` n'est pas en portefeuille AG1-FX ouvert actuellement.")
+                render_fx_pair_sparklines(
+                    pair_overview,
+                    yfinance_api_url=YFINANCE_API_URL,
+                    lookback_days=90,
+                    columns_per_row=1,
+                    selected_pairs=[selected_indicator_pair],
+                    entry_levels_by_pair=fx_entry_levels_by_pair,
+                    focus=True,
+                )
+            else:
+                st.caption("Vue complete des paires. Cliquez un point de la carte pour isoler une sparkline et voir les points d'entree LLM.")
+                render_fx_pair_sparklines(
+                    pair_overview,
+                    yfinance_api_url=YFINANCE_API_URL,
+                    lookback_days=90,
+                    columns_per_row=3,
+                    entry_levels_by_pair=fx_entry_levels_by_pair,
+                    focus=False,
                 )
 
             show_cols = [
@@ -14256,12 +14349,6 @@ elif page == "Forex":
                 ] if c in pair_overview.columns
             ]
             render_interactive_table(pair_overview[show_cols], key_suffix="forex_unified_pair_overview", height=420)
-
-            with st.expander("Sparklines prix 90 jours", expanded=False):
-                if st.checkbox("Charger les sparklines", value=False, key="forex_unified_load_sparklines"):
-                    render_fx_pair_sparklines(pair_overview, yfinance_api_url=YFINANCE_API_URL, lookback_days=90, columns_per_row=3)
-                else:
-                    st.caption("Coche pour charger les historiques prix 90 jours.")
 
     with tab_analysis:
         st.subheader("Analyse par paire")
