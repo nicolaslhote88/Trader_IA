@@ -123,7 +123,7 @@ class CPAPIClient:
         """
         account_id = await self.get_account_id()
         response = await self._post(
-            f"/v1/api/iserver/account/{account_id}/orders", orders
+            f"/v1/api/iserver/account/{account_id}/orders", {"orders": orders}
         )
         # IBKR peut retourner une liste de confirmations à valider
         results = response if isinstance(response, list) else [response]

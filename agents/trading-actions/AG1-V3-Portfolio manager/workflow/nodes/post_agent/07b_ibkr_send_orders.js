@@ -160,7 +160,7 @@ if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
       order_id: o.orderId,
       client_order_id: o.clientOrderId,
       order_type: normalizeOrderType(o.orderType),
-      limit_price: o.limitPrice || null,
+      limit_price: o.limitPrice ?? null,
     })),
     run_id: runId,
   };

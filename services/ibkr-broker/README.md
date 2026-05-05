@@ -89,8 +89,8 @@ docker compose up -d ibkr-broker
 ## Notes API IBKR
 
 Le broker envoie les ordres au format Web API actuel : `POST
-/v1/api/iserver/account/{accountId}/orders` avec un tableau JSON de tickets
-d'ordre. Les confirmations IBKR renvoyant un `id` sont confirmees via
+/v1/api/iserver/account/{accountId}/orders` avec un objet `{ "orders": [...] }`.
+Les confirmations IBKR renvoyant un `id` sont confirmees via
 `/v1/api/iserver/reply/{id}`.
 
 Reference : https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-doc/
