@@ -1,7 +1,7 @@
 services:
   yfinance-api:
     build:
-      context: /opt/trader-ia/services/yfinance-api
+      context: /docker/root/yfinance-api
       dockerfile: Dockerfile
     container_name: yfinance-api
     environment:
