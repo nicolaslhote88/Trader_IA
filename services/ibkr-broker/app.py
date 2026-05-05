@@ -169,6 +169,28 @@ def _reply_required_error(order_id: str, client_order_id: str, response: list[di
     }
 
 
+def _contract_exchanges(contract: dict) -> set[str]:
+    exchanges = {
+        str(contract.get("listingExchange") or "").upper(),
+        str(contract.get("exchange") or "").upper(),
+    }
+    all_exchanges = str(contract.get("allExchanges") or "")
+    exchanges.update(part.strip().upper() for part in all_exchanges.split(",") if part.strip())
+    for section in contract.get("sections") or []:
+        exchanges.add(str(section.get("exchange") or "").upper())
+    return {exchange for exchange in exchanges if exchange}
+
+
+def _position_qty_by_conid(positions: list[dict], conid: int) -> float:
+    for position in positions:
+        try:
+            if int(position.get("conid") or 0) == int(conid):
+                return float(position.get("position") or 0)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
 async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
     """
     Résout le conid IBKR d'un symbole action.
@@ -185,19 +207,17 @@ async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
     if not contracts:
         raise HTTPException(404, f"No IBKR contract found for {symbol}")
 
-    # Cherche l'exchange correspondant, sinon prend le premier
+    # Cherche l'exchange correspondant. Pour un symbole suffixe (ex: .PA),
+    # on refuse le fallback vers un autre marche afin d'eviter CRI.PA -> CRI US.
     best = None
     for c in contracts:
-        sections = c.get("sections") or []
-        for sec in sections:
-            if sec.get("exchange", "").upper() == exchange.upper():
-                best = {"conid": int(c["conid"]), "exchange": exchange}
-                break
-        if best:
+        if exchange.upper() in _contract_exchanges(c):
+            best = {"conid": int(c["conid"]), "exchange": exchange}
             break
 
     if not best:
-        # Prend le premier résultat (SMART routing)
+        if suffix:
+            raise HTTPException(404, f"No IBKR contract found for {symbol} on exchange {exchange}")
         first = contracts[0]
         best = {"conid": int(first["conid"]), "exchange": "SMART"}
 
@@ -364,6 +384,28 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                 "error": str(exc),
             })
             continue
+
+        if not DRY_RUN and ibkr_side == "SELL":
+            try:
+                held_qty = _position_qty_by_conid(await client.get_portfolio_positions(), conid)
+            except CPAPIError as exc:
+                logger.error("Equity position preflight failed symbol=%s: %s", symbol, exc)
+                errors.append({
+                    "order_id": order.order_id,
+                    "client_order_id": order.client_order_id or order.order_id,
+                    "error": f"IBKR_POSITION_PREFLIGHT_FAILED: {exc}",
+                })
+                continue
+            if held_qty < float(order.quantity):
+                errors.append({
+                    "order_id": order.order_id,
+                    "client_order_id": order.client_order_id or order.order_id,
+                    "error": (
+                        "IBKR_SELL_REJECTED_INSUFFICIENT_POSITION:"
+                        f"{symbol}:held={held_qty}:sell={order.quantity}"
+                    ),
+                })
+                continue
 
         ibkr_payload = {
             "conid": conid,
