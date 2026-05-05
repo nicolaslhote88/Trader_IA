@@ -4530,6 +4530,129 @@ def _canonicalize_asset_class_series(series: pd.Series) -> pd.Series:
     return series.map(_canonicalize_asset_class_label)
 
 
+METADATA_EMPTY_VALUES = {"", "nan", "nat", "none", "null", "n/a", "na", "-", "unknown", "indefini", "non defini"}
+
+
+def _metadata_missing_mask(series: pd.Series, *, numeric_is_missing: bool = True) -> pd.Series:
+    if series is None:
+        return pd.Series(dtype=bool)
+    s = series.fillna("").astype(str).str.strip()
+    mask = s.str.casefold().isin(METADATA_EMPTY_VALUES)
+    if numeric_is_missing:
+        mask = mask | s.str.fullmatch(r"\d+(?:[.,]\d+)?", na=False)
+    return mask
+
+
+def _metadata_source_frame(df: pd.DataFrame, source_name: str = "") -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    src = normalize_cols(df.copy())
+    if "symbol" not in src.columns:
+        return pd.DataFrame()
+    src["symbol"] = src["symbol"].fillna("").astype(str).str.strip().str.upper()
+    src = src[src["symbol"] != ""].copy()
+    if src.empty:
+        return pd.DataFrame()
+
+    out = pd.DataFrame({"symbol": src["symbol"]})
+    col_candidates = {
+        "name": ["name", "shortname", "short_name", "longname", "long_name"],
+        "sector": ["sector"],
+        "industry": ["industry"],
+        "assetclass": ["assetclass", "asset_class"],
+    }
+    for dst, candidates in col_candidates.items():
+        col = _first_existing_column(src, candidates)
+        out[dst] = src[col].fillna("").astype(str).str.strip() if col else ""
+
+    if "assetclass" in out.columns:
+        out["assetclass"] = _canonicalize_asset_class_series(out["assetclass"])
+    if _metadata_missing_mask(out["assetclass"]).all():
+        qt_col = _first_existing_column(src, ["quote_type", "quotetype"])
+        if qt_col:
+            qt = src[qt_col].fillna("").astype(str).str.strip().str.upper()
+            out["assetclass"] = qt.map(
+                {
+                    "ETF": "ETF",
+                    "MUTUALFUND": "Fund",
+                    "CRYPTOCURRENCY": "Crypto",
+                    "CURRENCY": "FX",
+                    "EQUITY": "Equity",
+                }
+            ).fillna("")
+
+    out["metadata_source"] = source_name
+    out = out.drop_duplicates(subset=["symbol"], keep="first")
+    return out
+
+
+def _fill_portfolio_metadata_from_ref(df: pd.DataFrame, ref: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or ref is None or ref.empty or "symbol" not in df.columns or "symbol" not in ref.columns:
+        return df
+    out = df.copy()
+    out["__symbol_norm"] = out["symbol"].fillna("").astype(str).str.strip().str.upper()
+    ref_use = ref.copy()
+    ref_use["symbol"] = ref_use["symbol"].fillna("").astype(str).str.strip().str.upper()
+    ref_use = ref_use.drop_duplicates(subset=["symbol"], keep="first")
+
+    for col in ["name", "sector", "industry", "assetclass"]:
+        if col not in out.columns:
+            out[col] = ""
+        if col not in ref_use.columns:
+            continue
+        value_map = pd.Series(ref_use[col].values, index=ref_use["symbol"]).to_dict()
+        fallback = out["__symbol_norm"].map(value_map).fillna("").astype(str).str.strip()
+        source_has_value = ~_metadata_missing_mask(fallback)
+        target_missing = _metadata_missing_mask(out[col])
+        mask = target_missing & source_has_value
+        if bool(mask.any()):
+            out.loc[mask, col] = fallback[mask]
+
+    return out.drop(columns=["__symbol_norm"], errors="ignore")
+
+
+def enrich_portfolio_metadata(
+    df_portfolio: pd.DataFrame,
+    universe_df: pd.DataFrame | None = None,
+    yf_enrichment_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    if df_portfolio is None or df_portfolio.empty:
+        return df_portfolio
+    out = df_portfolio.copy()
+    for col in ["name", "sector", "industry", "assetclass"]:
+        if col not in out.columns:
+            out[col] = ""
+
+    refs = [
+        _metadata_source_frame(universe_df, "universe"),
+        _metadata_source_frame(yf_enrichment_df, "yf_enrichment"),
+    ]
+    for ref in refs:
+        out = _fill_portfolio_metadata_from_ref(out, ref)
+
+    if "assetclass" in out.columns:
+        out["assetclass"] = _canonicalize_asset_class_series(out["assetclass"])
+    sym = out.get("symbol", pd.Series("", index=out.index)).fillna("").astype(str).str.strip().str.upper()
+    cash_mask = sym.eq("CASH_EUR")
+    if bool(cash_mask.any()):
+        out.loc[cash_mask, ["sector", "industry", "name", "assetclass"]] = "Cash"
+    return out
+
+
+def sanitize_allocation_metadata_labels(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    defaults = {"sector": "Unknown", "industry": "Unknown", "assetclass": "Unknown"}
+    for col, default in defaults.items():
+        if col not in out.columns:
+            out[col] = default
+        missing = _metadata_missing_mask(out[col])
+        if bool(missing.any()):
+            out.loc[missing, col] = default
+    return out
+
+
 def _normalize_utc_timestamp_series(values: object) -> pd.Series:
     ts = pd.to_datetime(values, errors="coerce", utc=True)
     if isinstance(ts, pd.Series):
@@ -8205,12 +8328,14 @@ ag1_fx_db_sigs = {
 df_univ = data_dict.get("Universe", pd.DataFrame()) if data_dict else pd.DataFrame()
 if df_univ is None or df_univ.empty:
     df_univ = load_universe_latest(DUCKDB_PATH, ag2_db_sig)
+df_yf_enrichment_latest = load_yf_enrichment_latest(YF_ENRICH_DUCKDB_PATH, yf_db_sig)
 # Portfolio source of truth is now DuckDB AG1.
 df_port = load_ag1_portfolio_latest(AG1_DUCKDB_PATH, ag1_db_sig)
 if df_port is None:
     df_port = pd.DataFrame()
 
 df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
+df_port = enrich_portfolio_metadata(df_port, df_univ, df_yf_enrichment_latest) if df_port is not None else pd.DataFrame()
 df_perf = pd.DataFrame()
 df_trans = pd.DataFrame()
 df_prices = pd.DataFrame()
@@ -9065,6 +9190,15 @@ if page == "Dashboard Trading":
     st.title("AI Trading Executor Dashboard")
 
     ag1_multi = load_ag1_multi_portfolios()
+    for _payload in ag1_multi.values():
+        if isinstance(_payload, dict):
+            _payload["df_portfolio"] = sanitize_allocation_metadata_labels(
+                enrich_portfolio_metadata(
+                    _payload.get("df_portfolio", pd.DataFrame()),
+                    df_univ,
+                    df_yf_enrichment_latest,
+                )
+            )
     compare_keys = [k for k in AG1_MULTI_PORTFOLIO_CONFIG.keys() if k in ag1_multi]
     available_keys = [
         k for k, p in ag1_multi.items()
@@ -9517,6 +9651,8 @@ if page == "Dashboard Trading":
                     df_clean[col] = ""
             if "assetclass" in df_clean.columns:
                 df_clean["assetclass"] = _canonicalize_asset_class_series(df_clean["assetclass"])
+            df_clean = enrich_portfolio_metadata(df_clean, df_univ, df_yf_enrichment_latest)
+            df_clean = sanitize_allocation_metadata_labels(df_clean)
 
             df_clean.loc[
                 df_clean["symbol"].astype(str).str.upper() == "CASH_EUR",

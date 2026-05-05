@@ -129,6 +129,18 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
           symbol VARCHAR NOT NULL,
           fetched_at TIMESTAMP,
 
+          metadata_ok BOOLEAN DEFAULT FALSE,
+          metadata_error VARCHAR,
+          name VARCHAR,
+          asset_class VARCHAR,
+          sector VARCHAR,
+          industry VARCHAR,
+          isin VARCHAR,
+          country VARCHAR,
+          quote_type VARCHAR,
+          metadata_source VARCHAR,
+          metadata_fetched_at TIMESTAMP,
+
           quote_ok BOOLEAN DEFAULT FALSE,
           quote_error VARCHAR,
           regular_market_price DOUBLE,
@@ -174,6 +186,21 @@ def init_schema(con: duckdb.DuckDBPyConnection) -> None:
         )
         """
     )
+    metadata_columns = {
+        "metadata_ok": "BOOLEAN DEFAULT FALSE",
+        "metadata_error": "VARCHAR",
+        "name": "VARCHAR",
+        "asset_class": "VARCHAR",
+        "sector": "VARCHAR",
+        "industry": "VARCHAR",
+        "isin": "VARCHAR",
+        "country": "VARCHAR",
+        "quote_type": "VARCHAR",
+        "metadata_source": "VARCHAR",
+        "metadata_fetched_at": "TIMESTAMP",
+    }
+    for col, ddl in metadata_columns.items():
+        con.execute(f"ALTER TABLE yf_symbol_enrichment_history ADD COLUMN IF NOT EXISTS {col} {ddl}")
     con.execute("CREATE INDEX IF NOT EXISTS idx_yf_enrich_symbol ON yf_symbol_enrichment_history(symbol)")
     con.execute("CREATE INDEX IF NOT EXISTS idx_yf_enrich_fetched ON yf_symbol_enrichment_history(fetched_at)")
     con.execute(
@@ -205,6 +232,18 @@ def normalize_asset_class(raw: Any, symbol: str) -> str:
     if s.startswith("FX:") or s.endswith("=X"):
         return "FX"
     return "EQUITY"
+
+
+def normalize_asset_class_from_metadata(raw: Any, symbol: str, quote_type: Any = None) -> str:
+    cls = normalize_asset_class(raw, symbol)
+    qt = to_text(quote_type).strip().upper()
+    if qt in {"ETF", "MUTUALFUND"}:
+        return "EQUITY"
+    if qt in {"CRYPTOCURRENCY"}:
+        return "CRYPTO"
+    if qt in {"CURRENCY"}:
+        return "FX"
+    return cls
 
 
 def load_symbols(ag2_db_path: str, symbols_csv: str, max_symbols: int) -> list[dict[str, str]]:
@@ -304,6 +343,38 @@ def fetch_quote_map(api_url: str, symbols: list[str], timeout_sec: float, chunk_
     return out
 
 
+def fetch_info(api_url: str, symbol: str, timeout_sec: float) -> dict:
+    try:
+        resp = requests.get(
+            f"{api_url}/info",
+            params={"symbol": symbol},
+            timeout=timeout_sec,
+        )
+        if resp.status_code != 200:
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "error": f"http_{resp.status_code}",
+                "fetchedAt": utcnow().isoformat(),
+            }
+        data = resp.json()
+        if not isinstance(data, dict):
+            return {
+                "ok": False,
+                "symbol": symbol,
+                "error": "INVALID_INFO_PAYLOAD",
+                "fetchedAt": utcnow().isoformat(),
+            }
+        return data
+    except Exception as exc:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "error": str(exc),
+            "fetchedAt": utcnow().isoformat(),
+        }
+
+
 def should_skip_options(
     con: duckdb.DuckDBPyConnection,
     symbol: str,
@@ -390,11 +461,20 @@ def fetch_calendar(api_url: str, symbol: str, timeout_sec: float) -> dict:
 def build_row(
     run_id: str,
     symbol: str,
+    asset_class: str,
+    info_row: dict,
     quote_row: dict,
     options_row: dict,
     calendar_row: dict,
 ) -> dict:
     now_ts = utcnow()
+
+    metadata_ok = bool(info_row.get("ok", False))
+    metadata_error = to_text(info_row.get("error", ""))
+    metadata_source = to_text(info_row.get("source", ""))
+    metadata_fetched_at = parse_ts(info_row.get("fetchedAt"))
+    quote_type = to_text(info_row.get("quoteType"))
+    asset_class = normalize_asset_class_from_metadata(asset_class, symbol, quote_type)
 
     quote_ok = bool(quote_row.get("ok", False))
     quote_error = to_text(quote_row.get("error", ""))
@@ -424,7 +504,7 @@ def build_row(
     if next_earnings_date is not None:
         days_to_earnings = (next_earnings_date - now_ts).total_seconds() / 86400.0
 
-    fetched_candidates = [x for x in [quote_fetched_at, options_fetched_at, calendar_fetched_at] if x is not None]
+    fetched_candidates = [x for x in [metadata_fetched_at, quote_fetched_at, options_fetched_at, calendar_fetched_at] if x is not None]
     fetched_at = max(fetched_candidates) if fetched_candidates else now_ts
 
     return {
@@ -432,6 +512,17 @@ def build_row(
         "run_id": run_id,
         "symbol": symbol,
         "fetched_at": fetched_at,
+        "metadata_ok": metadata_ok,
+        "metadata_error": metadata_error,
+        "name": to_text(info_row.get("shortName")),
+        "asset_class": asset_class,
+        "sector": to_text(info_row.get("sector")),
+        "industry": to_text(info_row.get("industry")),
+        "isin": to_text(info_row.get("isin")),
+        "country": to_text(info_row.get("country")),
+        "quote_type": quote_type,
+        "metadata_source": metadata_source,
+        "metadata_fetched_at": metadata_fetched_at,
         "quote_ok": quote_ok,
         "quote_error": quote_error,
         "regular_market_price": safe_float(quote_row.get("regularMarketPrice")),
@@ -549,6 +640,21 @@ def run_job(
             asset_class = normalize_asset_class(spec.get("asset_class"), sym)
             quote_row = quote_map.get(sym, {"ok": False, "symbol": sym, "error": "MISSING_QUOTE"})
             if asset_class == "FX":
+                info_row = {
+                    "ok": False,
+                    "symbol": sym,
+                    "error": "SKIPPED_FX",
+                    "source": "asset_class_policy",
+                    "fetchedAt": utcnow().isoformat(),
+                    "quoteType": "CURRENCY",
+                }
+            else:
+                info_row = fetch_info(
+                    api_url=yf_api_url,
+                    symbol=sym,
+                    timeout_sec=timeout_sec,
+                )
+            if asset_class == "FX":
                 skipped_ts = utcnow().isoformat()
                 options_row = {
                     "ok": False,
@@ -592,6 +698,8 @@ def run_job(
             row = build_row(
                 run_id=run_id,
                 symbol=sym,
+                asset_class=asset_class,
+                info_row=info_row,
                 quote_row=quote_row,
                 options_row=options_row,
                 calendar_row=calendar_row,
