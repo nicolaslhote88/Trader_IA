@@ -97,6 +97,8 @@ function compactLot(lot) {
     open_price: rounded(lot.open_price, num(meta.price_decimals, 5)),
     current_price: rounded(px, num(meta.price_decimals, 5)),
     pnl_pips: rounded(pnlPips, 1),
+    pnl_eur: rounded(lot.unrealized_pnl_eur, 2),
+    notional_eur: rounded(lot.notional_eur, 2),
     sl: lot.stop_loss_price == null ? null : rounded(lot.stop_loss_price, num(meta.price_decimals, 5)),
     tp: lot.take_profit_price == null ? null : rounded(lot.take_profit_price, num(meta.price_decimals, 5)),
   };
@@ -210,9 +212,14 @@ const llmBrief = {
   portfolio: {
     cash_eur: rounded(brief.portfolio_state.cash_eur, 2),
     equity_eur: rounded(brief.portfolio_state.equity_eur, 2),
+    realized_pnl_eur: rounded(brief.portfolio_state.realized_pnl_eur, 2),
+    floating_pnl_eur: rounded(brief.portfolio_state.floating_pnl_eur, 2),
+    fees_eur: rounded(brief.portfolio_state.fees_eur, 2),
     leverage_effective: rounded(brief.portfolio_state.leverage_effective, 3),
     drawdown_day_pct: pct(brief.portfolio_state.drawdown_day_pct, 3),
     drawdown_total_pct: pct(brief.portfolio_state.drawdown_total_pct, 3),
+    valuation_source: brief.portfolio_state.valuation_source || 'unknown',
+    valuation_warnings: brief.portfolio_state.valuation_warnings || {},
     open_lots: openLots.map(compactLot),
   },
   universe_pairs: brief.universe.pairs,
