@@ -19,17 +19,18 @@ Dedicated Forex-only portfolio manager fork for three isolated LLM portfolios.
 - The compact news pack filters out top-news items without an FX directional hint
   when usable FX-specific news is available.
 
-## Cron (updated 2026-04-26)
+## Cron (updated 2026-05-05)
 
-- `chatgpt52`: `30 9,14 * * 1-5` (09:30, 14:30)
-- `grok41_reasoning`: `45 9,14 * * 1-5` (09:45, 14:45)
-- `gemini30_pro`: `0 10,15 * * 1-5` (10:00, 15:00)
+- `chatgpt52`: `30 4,8,12,16,20 * * 1-5` (04:30, 08:30, 12:30, 16:30, 20:30)
+- `grok41_reasoning`: `35 4,8,12,16,20 * * 1-5` (04:35, 08:35, 12:35, 16:35, 20:35)
+- `gemini30_pro`: `40 4,8,12,16,20 * * 1-5` (04:40, 08:40, 12:40, 16:40, 20:40)
 - Portfolio valuation: `AG1-FX-PF-V1` runs `0 0 * * * 1-5` (hourly, Monday-Friday).
 
-All cron schedules use `Europe/Paris`. The 15-minute stagger between LLMs avoids
+All cron schedules use `Europe/Paris`. The 5-minute stagger between LLMs avoids
 DuckDB read-concurrency conflicts on the shared bases `ag2_fx_v1.duckdb` and
-`ag4_fx_v1.duckdb`. Each PM run is scheduled after AG2-FX (08:00 / 12:00) and
-AG4-FX (09:15 / 14:15) so it always reads the freshest technical + macro snapshot.
+`ag4_fx_v1.duckdb`. Each PM run is scheduled after AG2-FX
+(04:00 / 08:00 / 12:00 / 16:00 / 20:00) so it always reads a fresh technical
+snapshot, while AG4-FX keeps its 09:15 / 14:15 macro/news cadence.
 The hourly valuation workflow is separate from the PM workflows: it only refreshes
 `core.portfolio_snapshot` from current FX prices and never creates trade decisions.
 
