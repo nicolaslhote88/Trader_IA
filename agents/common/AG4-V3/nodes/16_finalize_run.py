@@ -29,7 +29,7 @@ NEG_WORDS = ["weak", "dovish", "cuts", "slowing", "recession", "downside", "miss
 
 
 @contextmanager
-def db_con(path=DB_PATH, retries=5, delay=0.3, read_only=False):
+def db_con(path=DB_PATH, retries=36, delay=10, read_only=False):
     con = None
     for attempt in range(retries):
         try:
@@ -37,7 +37,7 @@ def db_con(path=DB_PATH, retries=5, delay=0.3, read_only=False):
             break
         except Exception as e:
             if "lock" in str(e).lower() and attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
+                time.sleep(delay)
             else:
                 raise
     try:
