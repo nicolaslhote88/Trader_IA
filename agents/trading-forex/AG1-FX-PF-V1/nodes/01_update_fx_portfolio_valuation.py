@@ -310,13 +310,22 @@ def read_orders_waiting_for_ibkr_fill(con):
     ensure_broker_columns(con)
     cur = con.execute(
         """
-        SELECT order_id, client_order_id, run_id, pair, side, size_lots, order_type,
-               leverage_used, stop_loss_price, take_profit_price, risk_check_notes,
-               broker_order_id, lot_id_to_close, status, ibkr_status
-        FROM core.orders
-        WHERE COALESCE(broker, '') = 'IBKR'
-          AND COALESCE(status, '') IN ('submitted', 'pending')
-          AND COALESCE(ibkr_status, '') NOT IN ('filled', 'error')
+        SELECT o.order_id, o.client_order_id, o.run_id, o.pair, o.side, o.size_lots, o.order_type,
+               o.leverage_used, o.stop_loss_price, o.take_profit_price, o.risk_check_notes,
+               o.broker_order_id, o.lot_id_to_close, o.status, o.ibkr_status
+        FROM core.orders o
+        LEFT JOIN core.fills f ON f.order_id = o.order_id
+        WHERE COALESCE(o.broker, '') = 'IBKR'
+          AND (
+            (
+              COALESCE(o.status, '') IN ('submitted', 'pending')
+              AND COALESCE(o.ibkr_status, '') NOT IN ('filled', 'error')
+            )
+            OR (
+              COALESCE(o.status, '') = 'filled'
+              AND f.order_id IS NULL
+            )
+          )
         """
     )
     cols = [d[0] for d in cur.description]
@@ -543,6 +552,23 @@ def compact_letters(value):
     return "".join(ch for ch in str(value or "").upper() if ch.isalpha())
 
 
+def parse_ibkr_position_value(value):
+    text = to_text(value).upper().replace(",", "")
+    if not text:
+        return 0.0
+    mult = 1.0
+    if text.endswith("K"):
+        mult = 1000.0
+        text = text[:-1]
+    elif text.endswith("M"):
+        mult = 1000000.0
+        text = text[:-1]
+    try:
+        return float(text) * mult
+    except Exception:
+        return 0.0
+
+
 def ibkr_fx_pair(row, universe_pairs):
     text = " ".join(
         str(row.get(k) or "")
@@ -571,6 +597,25 @@ def db_units_by_pair(lots):
     return out
 
 
+def fx_units_from_recent_fills(fills_payload, universe_pairs):
+    latest = {}
+    for row in fills_payload or []:
+        if not isinstance(row, dict):
+            continue
+        asset = to_text(row.get("assetClass") or row.get("sec_type") or row.get("secType")).upper()
+        if asset not in {"CASH", "FX", "FOREX", "CURRENCY"}:
+            continue
+        pair = ibkr_fx_pair(row, universe_pairs)
+        if not pair:
+            continue
+        qty = parse_ibkr_position_value(row.get("position"))
+        ts = to_float(row.get("trade_time_r"), 0.0)
+        prev = latest.get(pair)
+        if prev is None or ts >= prev[0]:
+            latest[pair] = (ts, qty)
+    return {pair: qty for pair, (_, qty) in latest.items() if abs(qty) > 1e-9}
+
+
 def reconcile_ibkr_positions(con, cfg, lots, universe_pairs, run_id):
     summary = {
         "enabled": os.environ.get("IBKR_DRY_RUN", "true").lower() == "false",
@@ -587,6 +632,7 @@ def reconcile_ibkr_positions(con, cfg, lots, universe_pairs, run_id):
     try:
         health = fetch_broker_json(broker_url, "/health")
         positions = fetch_broker_json(broker_url, "/positions")
+        fills_payload = fetch_broker_json(broker_url, "/fills")
         summary["health"] = health
         if not health.get("authenticated"):
             summary["reasons"].append("IBKR_BROKER_NOT_AUTHENTICATED")
@@ -600,9 +646,13 @@ def reconcile_ibkr_positions(con, cfg, lots, universe_pairs, run_id):
             pair = ibkr_fx_pair(row, universe_pairs)
             if pair:
                 ibkr_units[pair] = ibkr_units.get(pair, 0.0) + qty
+        fill_units = fx_units_from_recent_fills(fills_payload, universe_pairs)
+        for pair, qty in fill_units.items():
+            ibkr_units[pair] = qty
         db_units = db_units_by_pair(lots)
         summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
         summary["ibkr_units_by_pair"] = {k: round(v, 4) for k, v in sorted(ibkr_units.items()) if abs(v) > 1e-9}
+        summary["ibkr_units_source"] = "positions_plus_recent_fills"
         for pair in sorted(set(db_units) | set(ibkr_units)):
             delta = ibkr_units.get(pair, 0.0) - db_units.get(pair, 0.0)
             if abs(delta) > 1.0:

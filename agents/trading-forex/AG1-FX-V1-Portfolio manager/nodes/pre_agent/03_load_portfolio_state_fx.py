@@ -170,6 +170,42 @@ def ibkr_units_by_pair(positions, universe_pairs):
     return out, rows
 
 
+def parse_ibkr_position_value(value):
+    text = to_text(value).upper().replace(",", "")
+    if not text:
+        return 0.0
+    mult = 1.0
+    if text.endswith("K"):
+        mult = 1000.0
+        text = text[:-1]
+    elif text.endswith("M"):
+        mult = 1000000.0
+        text = text[:-1]
+    try:
+        return float(text) * mult
+    except Exception:
+        return 0.0
+
+
+def fx_units_from_recent_fills(fills_payload, universe_pairs):
+    latest = {}
+    for row in fills_payload or []:
+        if not isinstance(row, dict):
+            continue
+        asset = to_text(row.get("assetClass") or row.get("sec_type") or row.get("secType")).upper()
+        if asset not in {"CASH", "FX", "FOREX", "CURRENCY"}:
+            continue
+        pair = ibkr_fx_pair(row, universe_pairs)
+        if not pair:
+            continue
+        qty = parse_ibkr_position_value(row.get("position"))
+        ts = to_float(row.get("trade_time_r"), 0.0)
+        prev = latest.get(pair)
+        if prev is None or ts >= prev[0]:
+            latest[pair] = (ts, qty)
+    return {pair: qty for pair, (_, qty) in latest.items() if abs(qty) > 1e-9}
+
+
 def reconcile_ibkr_state(lots, cfg):
     summary = {
         "enabled": not ibkr_dry_run,
@@ -188,6 +224,7 @@ def reconcile_ibkr_state(lots, cfg):
     try:
         health = get_broker_json("/health")
         positions = get_broker_json("/positions")
+        fills_payload = get_broker_json("/fills")
         summary["health"] = health
         accounts = paper_account_ids(positions)
         summary["paper_account_guard"]["detected_accounts"] = accounts
@@ -200,8 +237,12 @@ def reconcile_ibkr_state(lots, cfg):
         universe_pairs = sorted({str(r.get("pair") or "").upper() for r in ctx.get("universe_fx", []) if r.get("pair")})
         db_units = db_units_by_pair(lots)
         ibkr_units, fx_rows = ibkr_units_by_pair(positions, universe_pairs)
+        fill_units = fx_units_from_recent_fills(fills_payload, universe_pairs)
+        for pair, qty in fill_units.items():
+            ibkr_units[pair] = qty
         summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
         summary["ibkr_units_by_pair"] = {k: round(v, 4) for k, v in sorted(ibkr_units.items()) if abs(v) > 1e-9}
+        summary["ibkr_units_source"] = "positions_plus_recent_fills"
         summary["ibkr_fx_positions_count"] = len(fx_rows)
         all_pairs = sorted(set(db_units) | set(ibkr_units))
         for pair in all_pairs:
