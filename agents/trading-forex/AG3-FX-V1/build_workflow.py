@@ -55,6 +55,7 @@ def build() -> dict:
     for a, b in zip(order, order[1:]):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
     return {
+        "id": "LKYPNuSv_7HZp928wIAn5",
         "name": "AG3-FX-V1 - Forex Fundamental Analyst",
         "nodes": nodes,
         "connections": conns,

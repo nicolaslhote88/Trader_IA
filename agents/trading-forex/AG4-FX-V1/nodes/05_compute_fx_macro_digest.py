@@ -19,6 +19,29 @@ def safe_float(v, default=0.0):
         return default
 
 
+def parse_dt(value):
+    text = str(value or "").strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.replace(tzinfo=timezone.utc)
+        except Exception:
+            pass
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def age_hours(row, as_of_dt):
+    published = parse_dt(row.get("published_at"))
+    if not published or not as_of_dt:
+        return None
+    return (as_of_dt - published).total_seconds() / 3600.0
+
+
 def event_weight(row):
     mag = str(row.get("impact_magnitude") or "").strip().lower()
     mag_weight = {"high": 3.0, "medium": 2.0, "low": 1.0}.get(mag, 1.0)
@@ -32,6 +55,23 @@ def event_weight(row):
         urgency = {"immediate": 1.0, "today": 0.75, "this_week": 0.45, "low": 0.2}.get(urgency_label, 0.2)
     urgency_weight = 0.85 + min(max(urgency, 0.0), 1.0) * 0.3
     return mag_weight * score_weight * confidence_weight * urgency_weight
+
+
+def recency_weight(row, as_of_dt):
+    age = age_hours(row, as_of_dt)
+    if age is None:
+        return 0.70
+    if age < 0:
+        return 0.50
+    if age <= 6:
+        return 1.0
+    if age <= 24:
+        return 0.80
+    if age <= 48:
+        return 0.55
+    if age <= 96:
+        return 0.35
+    return 0.15
 
 
 def bias_for_pair(pair, bull, bear, hint=""):
@@ -121,6 +161,7 @@ def macro_from_news(news, as_of):
 
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 as_of = ctx.get("as_of") or datetime.now(timezone.utc).isoformat()
+as_of_dt = parse_dt(as_of) or datetime.now(timezone.utc)
 news = ctx.get("deduped_news") or []
 
 top_items = []
@@ -139,7 +180,10 @@ for n in news:
     pairs = split_csv(n.get("impact_fx_pairs"))
     bull = split_csv(n.get("currencies_bullish"))
     bear = split_csv(n.get("currencies_bearish"))
-    weight = event_weight(n)
+    age = age_hours(n, as_of_dt)
+    recent_24h = age is None or (0 <= age <= 24)
+    urgent_4h = age is not None and 0 <= age <= 4
+    weight = event_weight(n) * recency_weight(n, as_of_dt)
     pair_weight = weight / max(math.sqrt(max(len(pairs), 1)), 1.0)
     add_currency_votes(currency_scores, bull, bear, weight)
     top_items.append(
@@ -161,14 +205,15 @@ for n in news:
         if len(pair) != 6:
             continue
         pf = pair_focus[pair]
-        pf["news_count_24h"] += 1
+        if recent_24h:
+            pf["news_count_24h"] += 1
         pf["evidence_weight"] += pair_weight
         bias = bias_for_pair(pair, bull, bear, n.get("fx_directional_hint"))
         if bias != "mixed":
             pf["bias_scores"][bias] += pair_weight
         if len(pf["top_drivers"]) < 5 and n.get("title"):
             pf["top_drivers"].append(n.get("title"))
-        if str(n.get("impact_magnitude") or "").lower() == "high":
+        if str(n.get("impact_magnitude") or "").lower() == "high" and urgent_4h:
             pf["urgent_event_within_4h"] = True
 
 for pr in ctx.get("fx_pairs") or []:

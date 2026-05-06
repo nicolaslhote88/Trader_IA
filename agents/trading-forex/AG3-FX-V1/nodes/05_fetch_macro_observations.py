@@ -21,7 +21,7 @@ FRED_SERIES = {
 }
 CURRENCY_COUNTRY = {
     "USD": "USA",
-    "EUR": "EUU",
+    "EUR": "EMU",
     "JPY": "JPN",
     "GBP": "GBR",
     "CHF": "CHE",
@@ -29,7 +29,14 @@ CURRENCY_COUNTRY = {
     "CAD": "CAN",
     "NZD": "NZL",
 }
+CURRENCY_COUNTRY_FALLBACKS = {
+    "EUR": ["EMU", "EUU"],
+}
 WORLDBANK_SERIES = {
+    # World Bank does not expose central-bank policy rates consistently. This
+    # proxy keeps AG3 from dropping the monetary component entirely when FRED or
+    # official central-bank APIs are unavailable.
+    "policy_rate": ("FR.INR.LEND", True, 0.7),
     "real_yield": ("FR.INR.RINR", True, 1.0),
     "inflation": ("FP.CPI.TOTL.ZG", False, 0.8),
     "growth": ("NY.GDP.MKTP.KD.ZG", True, 0.8),
@@ -149,22 +156,36 @@ def observation(currency, factor, source, series_id, value, previous, status, hi
 
 
 def worldbank_record(currency, factor, indicator, higher_is_bullish, weight):
-    country = CURRENCY_COUNTRY[currency]
-    obs = worldbank_observations(country, indicator)
+    countries = CURRENCY_COUNTRY_FALLBACKS.get(currency) or [CURRENCY_COUNTRY[currency]]
+    obs = []
+    country_used = countries[0]
+    for country in countries:
+        obs = worldbank_observations(country, indicator)
+        country_used = country
+        if obs:
+            break
     latest = obs[0] if obs else None
     previous = obs[1] if len(obs) > 1 else None
     norm = zscore_normalized(obs, higher_is_bullish=higher_is_bullish)
+    status = "MISSING"
+    if latest:
+        try:
+            year = int(str(latest.get("date") or "")[:4])
+            current_year = int(str(as_of)[:4])
+            status = "STALE" if year < current_year - 3 else "OK"
+        except Exception:
+            status = "OK"
     rec = observation(
         currency,
         factor,
-        "WorldBank",
-        indicator,
+        "WorldBankProxy" if factor == "policy_rate" else "WorldBank",
+        f"{country_used}:{indicator}",
         latest.get("value") if latest else None,
         previous.get("value") if previous else None,
-        "OK" if latest else "MISSING",
+        status,
         higher_is_bullish,
         weight,
-        normalized_override=norm,
+        normalized_override=norm if status == "OK" else None,
     )
     rec["observation_date"] = f"{latest.get('date')}-12-31" if latest else None
     return rec

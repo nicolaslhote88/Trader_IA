@@ -45,7 +45,13 @@ def build():
     }
     for a, b in zip(order, order[1:]):
         conns[a] = {"main": [[{"node": b, "type": "main", "index": 0}]]}
-    return {"name": "AG4-FX-V1 - Digest macro Forex", "nodes": nodes, "connections": conns, "settings": {"timezone": "Europe/Paris"}}
+    return {
+        "id": "E-EUeEvEqI93vhw7Jr6BG",
+        "name": "AG4-FX-V1 - Digest macro Forex",
+        "nodes": nodes,
+        "connections": conns,
+        "settings": {"timezone": "Europe/Paris"},
+    }
 
 
 if __name__ == "__main__":
