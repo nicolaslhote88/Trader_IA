@@ -1,4 +1,5 @@
 import os
+import re
 from datetime import datetime, timezone
 
 FEE_BPS = 0.5
@@ -16,6 +17,21 @@ open_lots = {
     for l in ((brief.get("portfolio_state") or {}).get("open_lots") or [])
     if l.get("lot_id")
 }
+
+
+def normalize_timestamp(value):
+    if value is None or value == "":
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    text = str(value).strip()
+    if re.match(r"^\d{8}-\d{2}:\d{2}:\d{2}$", text):
+        return f"{text[0:4]}-{text[4:6]}-{text[6:8]} {text[9:17]}"
+    if "T" in text:
+        text = text.replace("T", " ")
+    if text.endswith("Z"):
+        text = text[:-1].strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text):
+        return text
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def valid_close_order(order):
@@ -63,8 +79,7 @@ def fill_from_ibkr(order):
         fees_eur = 0.0
     fill_id = raw.get("execution_id") or raw.get("execId") or raw.get("id") or f"FIL_{order['order_id']}"
     filled_at = raw.get("trade_time") or raw.get("tradeTime") or raw.get("time") or order.get("ibkr_filled_at")
-    if not filled_at:
-        filled_at = datetime.now(timezone.utc).isoformat()
+    filled_at = normalize_timestamp(filled_at)
     return {
         "fill_id": f"IBKR_{fill_id}",
         "order_id": order["order_id"],
@@ -104,7 +119,7 @@ if dry_run:
             "fill_size_lots": float(o.get("size_lots") or 0),
             "fees_eur": fees_eur,
             "swap_eur": 0.0,
-            "filled_at": datetime.now(timezone.utc).isoformat(),
+            "filled_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "fill_source": "simulated_yfinance",
             "lot_id_to_close": o.get("lot_id_to_close") or "",
         })

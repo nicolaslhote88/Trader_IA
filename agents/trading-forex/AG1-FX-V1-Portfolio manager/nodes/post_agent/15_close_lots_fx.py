@@ -1,4 +1,6 @@
 import duckdb
+import re
+from datetime import datetime, timezone
 
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 db_path = ctx.get("db_path") or "/files/duckdb/ag1_fx_v1_chatgpt52.duckdb"
@@ -6,6 +8,21 @@ fills = [f for f in (ctx.get("fills") or []) if str(f.get("side") or "").startsw
 orders_by_id = {o.get("order_id"): o for o in (ctx.get("executable_orders") or [])}
 brief = ctx.get("brief") or {}
 prices = {r.get("pair"): r.get("last_close") for r in brief.get("technical_signals", []) if r.get("pair")}
+
+
+def normalize_timestamp(value):
+    if value is None or value == "":
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    text = str(value).strip()
+    if re.match(r"^\d{8}-\d{2}:\d{2}:\d{2}$", text):
+        return f"{text[0:4]}-{text[4:6]}-{text[6:8]} {text[9:17]}"
+    if "T" in text:
+        text = text.replace("T", " ")
+    if text.endswith("Z"):
+        text = text[:-1].strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text):
+        return text
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def quote_to_eur(pair):
@@ -40,6 +57,8 @@ closed = 0
 close_errors = []
 with duckdb.connect(db_path) as con:
     for f in fills:
+        filled_at = normalize_timestamp(f.get("filled_at"))
+        f["filled_at"] = filled_at
         order = orders_by_id.get(f.get("order_id")) or {}
         target_lot_id = order.get("lot_id_to_close") or f.get("lot_id_to_close")
         if not target_lot_id:
@@ -97,7 +116,7 @@ with duckdb.connect(db_path) as con:
                     pnl_quote=?, pnl_eur=?, status='closed'
                 WHERE lot_id=?
                 """,
-                [ctx.get("run_id"), f.get("fill_price"), f.get("filled_at"), pnl_quote, pnl_eur, lot_id],
+                [ctx.get("run_id"), f.get("fill_price"), filled_at, pnl_quote, pnl_eur, lot_id],
             )
         else:
             con.execute(
@@ -122,7 +141,7 @@ with duckdb.connect(db_path) as con:
                     open_price,
                     open_at,
                     f.get("fill_price"),
-                    f.get("filled_at"),
+                    filled_at,
                     pnl_quote,
                     pnl_eur,
                     f.get("fees_eur") or 0,

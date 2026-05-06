@@ -57,6 +57,21 @@ def to_bool(v, default=False):
     return s in {"1", "true", "yes", "y", "on"}
 
 
+def normalize_timestamp(value):
+    if value is None or value == "":
+        return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    text = str(value).strip()
+    if re.match(r"^\d{8}-\d{2}:\d{2}:\d{2}$", text):
+        return f"{text[0:4]}-{text[4:6]}-{text[6:8]} {text[9:17]}"
+    if "T" in text:
+        text = text.replace("T", " ")
+    if text.endswith("Z"):
+        text = text[:-1].strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}", text):
+        return text
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+
 def parse_paths(v):
     if v is None:
         return []
@@ -344,7 +359,7 @@ def parse_broker_fill(order, fill):
         "fill_size_lots": size_units / 100000.0,
         "fees_eur": fees_eur,
         "swap_eur": 0.0,
-        "filled_at": fill.get("trade_time") or fill.get("tradeTime") or fill.get("time") or datetime.now(timezone.utc).isoformat(),
+        "filled_at": normalize_timestamp(fill.get("trade_time") or fill.get("tradeTime") or fill.get("time")),
         "fill_source": "ibkr_confirmed_pf_reconcile",
         "raw": fill,
     }
