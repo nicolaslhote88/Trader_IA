@@ -55,10 +55,17 @@ Garanties ajoutees :
   DuckDB ouverts avec `/positions` IBKR. Une divergence active le kill switch et
   bloque les ouvertures.
 - Global lock AG1-FX : empeche deux runs PM simultanes contre le meme compte.
+- Le validateur `11 Validate Enforce Safety FX` bloque deterministiquement tout
+  nouvel ordre dont le compact pack indique `trade_permission=NO_NEW_POSITION`.
+- Le meme validateur limite les ouvertures `REDUCED_SIZE_ONLY` a
+  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` de l'equity, par defaut `0.10`, avant
+  l'envoi broker.
 - En `IBKR_DRY_RUN=false`, `12_simulate_fills_fx.py` ne cree plus de fill simule.
   Il ne persiste que les fills confirmes par IBKR.
 - Les ordres envoyes mais sans fill immediat restent `submitted`; le workflow PF
   importe ensuite les fills confirmes depuis `/fills`.
+- Les rejets IBKR explicites sont classes en `broker_error` et ne generent ni
+  fill simule ni retry automatique.
 - `core.reconciliation_log` conserve les controles IBKR/DuckDB.
 
 ## Deploiement VPS

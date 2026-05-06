@@ -3,6 +3,12 @@ function num(v, d = 0) {
   return Number.isFinite(n) ? n : d;
 }
 
+function envNum(name, fallback) {
+  const env = typeof $env !== 'undefined' ? $env : {};
+  const n = Number(env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 function pairMeta(brief, pair) {
   return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };
 }
@@ -68,6 +74,38 @@ function closeSideForLot(lot) {
   return '';
 }
 
+function llmDecisionProfile(ctx, pair) {
+  const p = String(pair || '').toUpperCase();
+  const compact = ctx.llm_brief || {};
+  const rows = [
+    ...(compact.market_watch || []),
+    ...(compact.pair_matrix || []),
+  ];
+  const row = rows.find((x) => String(x?.pair || '').toUpperCase() === p);
+  return row?.decision || {};
+}
+
+function applySizeCap(order, sizeCapPct, equity, px, quoteToEurRate, reason) {
+  const capNotionalEur = Math.max(0, equity * sizeCapPct);
+  if (capNotionalEur <= 0 || order.notional_eur <= capNotionalEur + 1e-9) {
+    return;
+  }
+  const denom = Math.max(1, 100000 * px * quoteToEurRate);
+  const cappedLots = capNotionalEur / denom;
+  order.risk_size_adjustment = {
+    reason,
+    requested_size_lots: order.size_lots,
+    requested_notional_eur: order.notional_eur,
+    capped_size_lots: cappedLots,
+    capped_notional_eur: capNotionalEur,
+    cap_pct_equity: sizeCapPct,
+  };
+  order.size_lots = cappedLots;
+  order.notional_quote = Math.abs(cappedLots * 100000 * px);
+  order.notional_eur = Math.abs(order.notional_quote * quoteToEurRate);
+  order.risk_check_notes = `${order.risk_check_notes || ''} [Risk sizing: capped to ${(sizeCapPct * 100).toFixed(1)}% equity for ${reason}.]`.trim();
+}
+
 const j = $json || {};
 const brief = j.brief || {};
 const cfg = brief.config || {};
@@ -80,6 +118,7 @@ const leverageMax = Math.max(0.01, num(cfg.leverage_max, 1));
 const maxPairPct = num(limits.max_pair_pct, 0.20);
 const maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);
 const maxDd = num(limits.max_daily_drawdown_pct, 0.05);
+const reducedSizeMaxPairPct = Math.min(maxPairPct, envNum('AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT', 0.10));
 const openLots = portfolio.open_lots || [];
 const projected = [];
 const orders = [];
@@ -158,17 +197,31 @@ for (const d of decisions) {
     continue;
   }
   const meta = pairMeta(brief, pair);
+  const quoteToEurRate = quoteToEur(brief, meta.quote_ccy);
+  const profile = action.startsWith('open_') ? llmDecisionProfile(j, pair) : {};
+  const tradePermission = String(profile.trade_permission || 'ALLOW').toUpperCase();
+  const effectivePairPct = tradePermission === 'REDUCED_SIZE_ONLY' ? reducedSizeMaxPairPct : maxPairPct;
+  if (action.startsWith('open_')) {
+    base.trade_permission = tradePermission;
+    base.decision_alignment = profile.decision_alignment || '';
+    base.preferred_action = profile.preferred_action || '';
+  }
   let sizeLots = num(d.size_lots, 0);
   if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {
-    const targetEur = equity * Math.min(maxPairPct, num(d.size_pct_equity));
-    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEur(brief, meta.quote_ccy));
+    const targetEur = equity * Math.min(effectivePairPct, num(d.size_pct_equity));
+    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEurRate);
   }
   base.size_lots = sizeLots;
   base.notional_quote = Math.abs(sizeLots * 100000 * px);
-  base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));
+  base.notional_eur = Math.abs(base.notional_quote * quoteToEurRate);
 
   if (action.startsWith('open_')) {
-    if (sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
+    if (tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
+    if (!base.rejection_reason && sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
+    if (!base.rejection_reason && tradePermission === 'REDUCED_SIZE_ONLY') {
+      applySizeCap(base, reducedSizeMaxPairPct, equity, px, quoteToEurRate, 'REDUCED_SIZE_ONLY');
+      sizeLots = base.size_lots;
+    }
     const pairExisting = openLots.filter((l) => l.pair === pair).reduce((s, l) => s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, pair) || num(l.open_price)) * quoteToEur(brief, meta.quote_ccy)), 0);
     if (!base.rejection_reason && (pairExisting + base.notional_eur) / equity > maxPairPct) base.rejection_reason = 'MAX_PAIR_EXPOSURE';
     const totalNotional = openLots.reduce((s, l) => {

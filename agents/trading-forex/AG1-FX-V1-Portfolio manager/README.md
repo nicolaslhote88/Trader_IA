@@ -46,6 +46,12 @@ a separate broker account or a broker-side portfolio namespace.
   prevents overlapping PM runs against the single broker account.
 - Node `12_simulate_fills_fx.py` still simulates fills in dry-run. In paper/live
   mode it writes only confirmed IBKR fills and never invents a simulated fill.
+- Node `11_validate_enforce_safety_fx.js` treats compact-pack
+  `trade_permission=NO_NEW_POSITION` as a hard broker-blocking rejection
+  (`TRADE_PERMISSION_NO_NEW_POSITION`), regardless of the LLM rationale.
+- Node `11_validate_enforce_safety_fx.js` caps `REDUCED_SIZE_ONLY` openings to
+  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` of equity, default `0.10`. Oversized LLM
+  requests are resized before pair, leverage, margin and currency checks.
 - Node `17_log_run_fx.py` releases the global lock at the end of the run.
 - `AG1-FX-PF-V1 - Hourly Portfolio Valuation` reconciles the GPT ledger hourly,
   imports confirmed fills for submitted orders, and writes
@@ -79,6 +85,16 @@ The generated workflows use real LangChain agent nodes for all three variants:
 OpenAI (`chatgpt52`), xAI Grok (`grok41_reasoning`) and Google Gemini
 (`gemini30_pro`). The downstream parser, risk manager, broker sender, fill
 handler and ledger writes are wired after each provider-specific agent merge.
+
+Post-agent safety is deterministic and takes precedence over the model output:
+
+- `NO_NEW_POSITION` from `llm_brief.pair_matrix[].decision` or
+  `llm_brief.market_watch[].decision` rejects new opens before IBKR.
+- `REDUCED_SIZE_ONLY` permits only reduced opens and caps notional exposure to
+  10% of equity by default, configurable with
+  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT`.
+- Existing portfolio, pair, currency, leverage, margin, SL/TP-side and
+  reconciliation gates still run after the compact-pack permission gate.
 
 ## Local Replay
 

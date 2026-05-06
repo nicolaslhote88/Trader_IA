@@ -10,6 +10,9 @@ compte IBKR paper unique. Les variantes Grok et Gemini restent versionnees mais
 desactivees pour eviter que plusieurs sources generent des ordres sur le meme
 portefeuille IBKR. Les bases DuckDB AG1-FX sont reconciliees avec IBKR avant les
 runs PM et toutes les heures via `AG1-FX-PF-V1`.
+Le validateur AG1-FX bloque maintenant les ouvertures `NO_NEW_POSITION` et
+ramene les ouvertures `REDUCED_SIZE_ONLY` a un cap reduit configurable avant
+tout envoi IBKR.
 
 ---
 
