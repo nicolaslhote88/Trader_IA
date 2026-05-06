@@ -14,6 +14,8 @@ Endpoints exposés à n8n :
   POST /orders/equity           → envoyer ordres actions/ETF
   GET  /fills                   → fills récents
   GET  /positions               → positions actuelles
+  GET  /account/summary         → synthèse compte IBKR
+  GET  /account/ledger          → cash balances réelles par devise
   POST /auth/tickle             → keepalive manuel
 """
 
@@ -282,6 +284,26 @@ async def get_positions() -> list[dict]:
         raise HTTPException(502, str(exc)) from exc
 
 
+@app.get("/account/summary")
+async def get_account_summary() -> dict:
+    """Retourne le résumé de compte IBKR."""
+    client = get_client()
+    try:
+        return await client.get_account_summary()
+    except CPAPIError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/account/ledger")
+async def get_account_ledger() -> dict:
+    """Retourne les cash balances réelles par devise depuis IBKR."""
+    client = get_client()
+    try:
+        return await client.get_account_ledger()
+    except CPAPIError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
 # ─── Market Data ─────────────────────────────────────────────────────────────
 
 def _num(value: Any) -> float | None:
@@ -462,6 +484,9 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
             "quantity": quantity,
             "tif": "DAY",
             "cOID": order.client_order_id or order.order_id,
+            # Explicitly mark AG1-FX orders as speculative spot-FX trades, not
+            # cash-conversion tickets. IBKR conversion orders use isCcyConv=true.
+            "isCcyConv": False,
         }
         if ibkr_payload["orderType"] == "LMT" and order.limit_price:
             ibkr_payload["price"] = order.limit_price

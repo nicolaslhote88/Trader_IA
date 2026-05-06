@@ -23,6 +23,10 @@ DEFAULT_YFINANCE_API_BASE = "http://yfinance-api:8080"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 5
 DEFAULT_MAX_PRICE_WORKERS = 8
 DEFAULT_BROKER_URL = "http://ibkr-broker:8080"
+RECONCILE_CASH_BALANCES = os.environ.get("IBKR_RECONCILE_CASH_BALANCES", "true").lower() != "false"
+BLOCK_ON_CASH_DIVERGENCE = os.environ.get("IBKR_BLOCK_ON_CASH_DIVERGENCE", "false").lower() == "true"
+CASH_RECON_THRESHOLD_UNITS = float(os.environ.get("IBKR_CASH_RECON_THRESHOLD_UNITS", "5") or 5)
+PORTFOLIO_BASE_CCY = os.environ.get("AG1_FX_PORTFOLIO_BASE_CCY", "EUR").upper()
 
 VARIANT_BY_DB = {
     "ag1_fx_v1_chatgpt52.duckdb": "chatgpt52",
@@ -644,6 +648,10 @@ def compact_letters(value):
 
 
 def parse_ibkr_position_value(value):
+    return parse_number_value(value)
+
+
+def parse_number_value(value):
     text = to_text(value).upper().replace(",", "")
     if not text:
         return 0.0
@@ -688,6 +696,92 @@ def db_units_by_pair(lots):
     return out
 
 
+def db_cash_effect_by_currency(lots):
+    out = {}
+
+    def add(ccy, value):
+        if ccy:
+            out[ccy] = out.get(ccy, 0.0) + value
+
+    for lot in lots or []:
+        pair = to_text(lot.get("pair")).upper()
+        if len(pair) != 6:
+            continue
+        units = to_float(lot.get("size_lots"), 0.0) * 100000.0
+        px = to_float(lot.get("open_price"), 0.0)
+        if units <= 0 or px <= 0:
+            continue
+        sign = -1.0 if to_text(lot.get("side")).lower() == "short" else 1.0
+        add(pair[:3], sign * units)
+        add(pair[3:6], -sign * units * px)
+    return out
+
+
+def iter_ledger_rows(payload):
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict):
+                yield "", row
+        return
+    if not isinstance(payload, dict):
+        return
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            yield to_text(key), value
+        elif isinstance(value, list):
+            for row in value:
+                if isinstance(row, dict):
+                    yield to_text(key), row
+
+
+def cash_balances_from_ledger(payload):
+    balances = {}
+    raw_rows = []
+    for key, row in iter_ledger_rows(payload):
+        ccy = to_text(row.get("currency") or row.get("ccy") or key).upper()
+        if not ccy or ccy == "BASE":
+            continue
+        value = None
+        for field in ("cashbalance", "cashBalance", "settledcash", "settledCash", "totalcash", "totalCash"):
+            if row.get(field) not in (None, ""):
+                value = parse_number_value(row.get(field))
+                break
+        if value is None:
+            continue
+        balances[ccy] = balances.get(ccy, 0.0) + value
+        raw_rows.append({k: row.get(k) for k in ("currency", "cashbalance", "settledcash", "totalcash") if k in row})
+    return balances, raw_rows[:20]
+
+
+def cash_balance_reconciliation(lots, cfg, ledger_payload):
+    db_effects = db_cash_effect_by_currency(lots)
+    ibkr_cash, raw_rows = cash_balances_from_ledger(ledger_payload)
+    initial = to_float(cfg.get("initial_capital_eur"), 10000.0)
+    deltas = {}
+    base_delta = None
+    for ccy in sorted(set(db_effects) | set(ibkr_cash)):
+        broker = ibkr_cash.get(ccy, 0.0)
+        expected_effect = db_effects.get(ccy, 0.0)
+        if ccy == PORTFOLIO_BASE_CCY:
+            base_delta = round(broker - (initial + expected_effect), 4)
+            continue
+        delta = broker - expected_effect
+        if abs(delta) > CASH_RECON_THRESHOLD_UNITS:
+            deltas[ccy] = round(delta, 4)
+    return {
+        "enabled": RECONCILE_CASH_BALANCES,
+        "blocking": BLOCK_ON_CASH_DIVERGENCE,
+        "threshold_units": CASH_RECON_THRESHOLD_UNITS,
+        "base_currency": PORTFOLIO_BASE_CCY,
+        "db_cash_effect_by_currency": {k: round(v, 4) for k, v in sorted(db_effects.items()) if abs(v) > 1e-9},
+        "ibkr_cash_by_currency": {k: round(v, 4) for k, v in sorted(ibkr_cash.items()) if abs(v) > 1e-9},
+        "currency_deltas": deltas,
+        "base_currency_delta_info": base_delta,
+        "raw_rows_sample": raw_rows,
+        "ok": not bool(deltas),
+    }
+
+
 def fx_units_from_recent_fills(fills_payload, universe_pairs):
     latest = {}
     for row in fills_payload or []:
@@ -715,6 +809,7 @@ def reconcile_ibkr_positions(con, cfg, lots, universe_pairs, run_id):
         "reasons": [],
         "db_units_by_pair": {},
         "ibkr_units_by_pair": {},
+        "cash_balances": {"enabled": RECONCILE_CASH_BALANCES},
         "deltas": {},
     }
     if not summary["enabled"]:
@@ -750,6 +845,22 @@ def reconcile_ibkr_positions(con, cfg, lots, universe_pairs, run_id):
                 summary["deltas"][pair] = round(delta, 4)
         if summary["deltas"]:
             summary["reasons"].append("IBKR_DUCKDB_POSITION_DIVERGENCE")
+        if RECONCILE_CASH_BALANCES:
+            try:
+                ledger_payload = fetch_broker_json(broker_url, "/account/ledger")
+                cash_summary = cash_balance_reconciliation(lots, cfg, ledger_payload)
+                summary["cash_balances"] = cash_summary
+                if cash_summary.get("currency_deltas") and BLOCK_ON_CASH_DIVERGENCE:
+                    summary["reasons"].append("IBKR_DUCKDB_CASH_BALANCE_DIVERGENCE")
+            except Exception as ledger_exc:
+                summary["cash_balances"] = {
+                    "enabled": True,
+                    "ok": False,
+                    "blocking": BLOCK_ON_CASH_DIVERGENCE,
+                    "error": str(ledger_exc),
+                }
+                if BLOCK_ON_CASH_DIVERGENCE:
+                    summary["reasons"].append(f"IBKR_LEDGER_RECONCILIATION_FAILED:{ledger_exc}")
     except Exception as exc:
         summary["reasons"].append(f"IBKR_RECONCILIATION_FAILED:{exc}")
     if summary["reasons"]:

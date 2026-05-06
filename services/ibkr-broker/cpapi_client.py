@@ -89,6 +89,10 @@ class CPAPIClient:
         account_id = await self.get_account_id()
         return await self._get(f"/v1/api/portfolio/{account_id}/summary")
 
+    async def get_account_ledger(self) -> dict:
+        account_id = await self.get_account_id()
+        return await self._get(f"/v1/api/portfolio/{account_id}/ledger")
+
     # ──────────────────────────────────────────────────────────────────────────
     # Résolution de contrats
     # ──────────────────────────────────────────────────────────────────────────

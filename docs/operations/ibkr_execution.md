@@ -24,16 +24,36 @@ References IBKR utilisees :
 
 - `services/ibkr-gateway/` telecharge et lance `clientportal.gw`.
 - `services/ibkr-broker/` expose `/health`, `/orders/fx`, `/orders/equity`,
-  `/fills`, `/positions` et `/auth/tickle`.
+  `/fills`, `/positions`, `/account/summary`, `/account/ledger` et
+  `/auth/tickle`.
 - Sur le VPS actuel, les deux services sont integres directement dans le stack
   `/docker/yfinance`. Le fichier de reference a copier comme compose principal
   est `infra/vps_hostinger_config/docker-compose.yfinance.yml`.
 - `infra/vps_hostinger_config/docker-compose.yml` garde aussi la definition pour
   un deploiement complet du repo, mais ce n'est pas le mode utilise sur le VPS.
 - Les nodes n8n lisent `IBKR_BROKER_URL`, `IBKR_DRY_RUN`,
-  `IBKR_SEND_DRY_RUN_TO_BROKER`, `IBKR_REQUIRE_PAPER_ACCOUNT` et
-  `IBKR_PAPER_ACCOUNT_PREFIXES`. Sans variable explicite, ils restent en
-  dry-run et utilisent `http://ibkr-broker:8080`.
+  `IBKR_SEND_DRY_RUN_TO_BROKER`, `IBKR_REQUIRE_PAPER_ACCOUNT`,
+  `IBKR_PAPER_ACCOUNT_PREFIXES`, `IBKR_RECONCILE_CASH_BALANCES`,
+  `IBKR_BLOCK_ON_CASH_DIVERGENCE`, `IBKR_CASH_RECON_THRESHOLD_UNITS` et
+  `AG1_FX_PORTFOLIO_BASE_CCY`. Sans variable explicite, ils restent en dry-run,
+  utilisent `http://ibkr-broker:8080`, auditent les balances cash et ne bloquent
+  que sur divergence de positions.
+
+## Intention FX IBKR
+
+Les ordres AG1-FX sont des **trades Forex spot speculatifs**, pas de simples
+conversions de devise. Le broker envoie les tickets FX sur les contrats CASH
+IBKR avec une quantite exprimee en devise de base :
+
+- `open_short` / `close_long` deviennent `SELL` sur la devise de base.
+- `open_long` / `close_short` deviennent `BUY` sur la devise de base.
+- Le payload CPAPI contient explicitement `isCcyConv=false`.
+
+Ainsi un short `EURCHF` est traite comme une vente d'EUR contre CHF, avec une
+exposition short EUR / long CHF dans les balances reelles IBKR. Les controles de
+reconciliation ne doivent donc pas se limiter aux lignes de positions FX
+virtuelles : ils consultent aussi `/account/ledger`, qui expose les cash balances
+par devise.
 
 ## Production Paper Forex (2026-05-06)
 
@@ -54,6 +74,10 @@ Garanties ajoutees :
 - Pre-run reconciliation dans `03_load_portfolio_state_fx.py` : compare les lots
   DuckDB ouverts avec `/positions` IBKR. Une divergence active le kill switch et
   bloque les ouvertures.
+- Reconciliation des balances cash IBKR via `/account/ledger` dans le pre-run
+  AG1-FX et dans `AG1-FX-PF-V1`. Par defaut, elle audite les ecarts de devises
+  non base dans `core.reconciliation_log`. Pour transformer un ecart cash en
+  blocage dur, definir `IBKR_BLOCK_ON_CASH_DIVERGENCE=true`.
 - Global lock AG1-FX : empeche deux runs PM simultanes contre le meme compte.
 - Le validateur `11 Validate Enforce Safety FX` bloque deterministiquement tout
   nouvel ordre dont le compact pack indique `trade_permission=NO_NEW_POSITION`.
@@ -94,6 +118,10 @@ grep -q '^IBKR_SEND_DRY_RUN_TO_BROKER=' .env || echo 'IBKR_SEND_DRY_RUN_TO_BROKE
 grep -q '^IBKR_ACCOUNT_ID=' .env || echo 'IBKR_ACCOUNT_ID=' >> .env
 grep -q '^IBKR_REQUIRE_PAPER_ACCOUNT=' .env || echo 'IBKR_REQUIRE_PAPER_ACCOUNT=true' >> .env
 grep -q '^IBKR_PAPER_ACCOUNT_PREFIXES=' .env || echo 'IBKR_PAPER_ACCOUNT_PREFIXES=DU' >> .env
+grep -q '^IBKR_RECONCILE_CASH_BALANCES=' .env || echo 'IBKR_RECONCILE_CASH_BALANCES=true' >> .env
+grep -q '^IBKR_BLOCK_ON_CASH_DIVERGENCE=' .env || echo 'IBKR_BLOCK_ON_CASH_DIVERGENCE=false' >> .env
+grep -q '^IBKR_CASH_RECON_THRESHOLD_UNITS=' .env || echo 'IBKR_CASH_RECON_THRESHOLD_UNITS=5' >> .env
+grep -q '^AG1_FX_PORTFOLIO_BASE_CCY=' .env || echo 'AG1_FX_PORTFOLIO_BASE_CCY=EUR' >> .env
 docker compose config --quiet
 docker compose up -d --build yfinance-api yf-enrichment ibkr-gateway ibkr-broker
 docker compose ps yfinance-api yf-enrichment ibkr-gateway ibkr-broker
@@ -156,6 +184,8 @@ Paper production Forex :
 7. Controler les couts avec `core.fill_costs`: une ligne par fill, avec
    `commission_source` commencant par `ibkr_` en paper/live. `simulated_bps`
    doit uniquement apparaitre lorsque `IBKR_DRY_RUN=true`.
+8. Controler `payload_json.cash_balances` dans `core.reconciliation_log` :
+   `currency_deltas` doit rester vide hors petits arrondis de devise.
 
 En paper/live, si un appel broker echoue, les nodes marquent l'ordre en erreur
 et ne creent pas de fill simule pour cet ordre.

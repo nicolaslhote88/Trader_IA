@@ -8,8 +8,10 @@ Le systeme combine des **Portfolio Managers LLM**, trois **analystes specialises
 Etat Forex au 2026-05-06 : seul le workflow AG1-FX GPT-5.2 est publie contre le
 compte IBKR paper unique. Les variantes Grok et Gemini restent versionnees mais
 desactivees pour eviter que plusieurs sources generent des ordres sur le meme
-portefeuille IBKR. Les bases DuckDB AG1-FX sont reconciliees avec IBKR avant les
-runs PM et toutes les heures via `AG1-FX-PF-V1`.
+portefeuille IBKR. Les ordres FX sont explicites comme trades spot
+speculatifs (`isCcyConv=false`), pas comme conversions de devise. Les bases
+DuckDB AG1-FX sont reconciliees avec les positions et les cash balances IBKR
+avant les runs PM et toutes les heures via `AG1-FX-PF-V1`.
 Le validateur AG1-FX bloque maintenant les ouvertures `NO_NEW_POSITION` et
 ramene les ouvertures `REDUCED_SIZE_ONLY` a un cap reduit configurable avant
 tout envoi IBKR.

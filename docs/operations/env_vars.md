@@ -34,6 +34,10 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_GATEWAY_URL` | URL interne du broker vers Client Portal Gateway. Definie dans compose : `https://ibkr-gateway:5000`. |
 | `IBKR_REQUIRE_PAPER_ACCOUNT` | `true` en production Forex paper : bloque l'envoi si le compte detecte ne correspond pas a un compte paper attendu. |
 | `IBKR_PAPER_ACCOUNT_PREFIXES` | Prefixes autorises pour le garde-fou paper, par defaut `DU`. |
+| `IBKR_RECONCILE_CASH_BALANCES` | `true` par defaut. Compare les cash balances IBKR `/account/ledger` aux effets cash attendus des lots FX DuckDB. |
+| `IBKR_BLOCK_ON_CASH_DIVERGENCE` | `false` par defaut. Si `true`, une divergence cash non-base au-dessus du seuil bloque les nouveaux ordres comme une divergence de position. |
+| `IBKR_CASH_RECON_THRESHOLD_UNITS` | Seuil absolu par devise pour signaler une divergence de cash balance, par defaut `5` unites de devise. |
+| `AG1_FX_PORTFOLIO_BASE_CCY` | Devise de base du portefeuille FX pour la reconciliation cash, par defaut `EUR`. |
 | `IBKR_FILL_CONFIRM_SECONDS` | Temps maximal de polling des fills apres soumission d'ordres FX. |
 | `IBKR_FILL_POLL_INTERVAL_SECONDS` | Intervalle de polling `/fills` pendant la fenetre de confirmation. |
 | `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` | Cap d'exposition par ordre pour les ouvertures AG1-FX marquees `REDUCED_SIZE_ONLY`. Defaut `0.10`, toujours borne par `max_pair_pct`. |
