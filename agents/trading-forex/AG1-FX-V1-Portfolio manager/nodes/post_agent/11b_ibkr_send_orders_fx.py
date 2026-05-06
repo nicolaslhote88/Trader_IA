@@ -48,6 +48,28 @@ def broker_order_id(result):
     return None
 
 
+def broker_result_error(result):
+    raw = result.get("ibkr_response") or result.get("details") or result
+    rows = raw if isinstance(raw, list) else [raw] if isinstance(raw, dict) else []
+    messages = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        for field in ("error", "message", "warning", "text"):
+            value = row.get(field)
+            if isinstance(value, list):
+                messages.extend(str(v) for v in value if str(v).strip())
+            elif value:
+                messages.append(str(value))
+        action = str(row.get("action") or "").lower()
+        status = str(row.get("status") or "").lower()
+        if "reject" in action or "rejected" in status or row.get("error"):
+            return " | ".join(messages) or action or status or "IBKR_ORDER_REJECTED"
+    if result.get("error"):
+        return str(result.get("error"))
+    return ""
+
+
 def normalize_order_type(value):
     text = str(value or "MKT").strip().upper()
     if text == "MARKET":
@@ -251,16 +273,29 @@ for order in executable_orders:
     error = error_map.get(oid) or error_map.get(cid)
 
     if result:
+        result_error = broker_result_error(result)
+        result_broker_order_id = broker_order_id(result)
         order["ibkr_status"] = result.get("status", "unknown")
         order["ibkr_response"] = result
         order["broker"] = "IBKR"
-        order["broker_order_id"] = broker_order_id(result)
+        order["broker_order_id"] = result_broker_order_id
         fill = matched_fills.get(str(oid or "")) or matched_fills.get(str(cid or ""))
-        if fill:
+        if result_error:
+            order["ibkr_status"] = "error"
+            order["ibkr_error"] = result_error
+            if not DRY_RUN:
+                order["status"] = "broker_error"
+                order["rejection_reason"] = "IBKR_BROKER_ERROR"
+        elif fill:
             order["status"] = "filled"
             order["ibkr_status"] = "filled"
             order["ibkr_fill"] = fill
             order["ibkr_filled_at"] = fill.get("trade_time") or fill.get("tradeTime") or fill.get("time")
+        elif not DRY_RUN and not result_broker_order_id:
+            order["ibkr_status"] = "error"
+            order["ibkr_error"] = "IBKR_SUBMISSION_WITHOUT_ORDER_ID"
+            order["status"] = "broker_error"
+            order["rejection_reason"] = "IBKR_BROKER_ERROR"
         elif not DRY_RUN:
             order["status"] = "submitted"
     elif error:
