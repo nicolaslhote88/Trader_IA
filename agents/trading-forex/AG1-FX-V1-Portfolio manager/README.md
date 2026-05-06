@@ -46,6 +46,11 @@ a separate broker account or a broker-side portfolio namespace.
   prevents overlapping PM runs against the single broker account.
 - Node `12_simulate_fills_fx.py` still simulates fills in dry-run. In paper/live
   mode it writes only confirmed IBKR fills and never invents a simulated fill.
+- In dry-run, fees remain synthetic (`FEE_BPS = 0.5`) and are tagged
+  `simulated_bps`. In paper/live, `fees_eur` comes from IBKR fill commission
+  fields when available. Each fill also writes `core.fill_costs` with raw
+  commission amount, currency, broker execution id, source tag and raw broker
+  JSON for audit/statistics.
 - Node `11_validate_enforce_safety_fx.js` treats compact-pack
   `trade_permission=NO_NEW_POSITION` as a hard broker-blocking rejection
   (`TRADE_PERMISSION_NO_NEW_POSITION`), regardless of the LLM rationale.

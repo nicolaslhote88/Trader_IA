@@ -344,7 +344,93 @@ def broker_fill_for_order(order, fill_map):
     return None
 
 
-def parse_broker_fill(order, fill):
+def ibkr_commission_fields(fill, prices):
+    amount = None
+    amount_field = ""
+    for field in ("commission", "ibCommission", "ib_commission", "commission_amount", "fees_eur", "fee"):
+        if fill.get(field) not in (None, ""):
+            amount = to_float(fill.get(field), 0.0)
+            amount_field = field
+            break
+    ccy = ""
+    for field in ("commissionCurrency", "commission_currency", "commission_ccy", "ibCommissionCurrency", "feeCurrency"):
+        if fill.get(field) not in (None, ""):
+            ccy = to_text(fill.get(field)).upper()
+            break
+    if amount is None:
+        return {
+            "fee_amount": 0.0,
+            "fee_ccy": "",
+            "fees_eur": 0.0,
+            "fee_source": "ibkr_commission_missing",
+        }
+    if not ccy:
+        ccy = "EUR"
+        source = f"ibkr_{amount_field}_assumed_eur_no_ccy"
+    elif ccy == "EUR":
+        source = f"ibkr_{amount_field}_reported_eur"
+    else:
+        source = f"ibkr_{amount_field}_converted_{ccy}_to_eur"
+    return {
+        "fee_amount": abs(amount),
+        "fee_ccy": ccy,
+        "fees_eur": abs(amount) * quote_to_eur(ccy, prices),
+        "fee_source": source,
+    }
+
+
+def ensure_fill_costs_table(con):
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS core.fill_costs (
+            fill_id             VARCHAR PRIMARY KEY,
+            order_id            VARCHAR NOT NULL,
+            pair                VARCHAR NOT NULL,
+            broker              VARCHAR,
+            broker_execution_id VARCHAR,
+            commission_amount   DOUBLE NOT NULL DEFAULT 0,
+            commission_ccy      VARCHAR,
+            commission_eur      DOUBLE NOT NULL DEFAULT 0,
+            commission_source   VARCHAR,
+            raw_json            VARCHAR,
+            recorded_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS idx_fill_costs_order ON core.fill_costs(order_id)")
+
+
+def write_fill_cost(con, fill):
+    fee_amount = fill.get("fee_amount")
+    if fee_amount is None:
+        fee_amount = fill.get("fees_eur") or 0
+    raw_json = fill.get("raw_fill_json") or ""
+    if isinstance(raw_json, (dict, list)):
+        raw_json = json.dumps(raw_json, ensure_ascii=False)
+    con.execute(
+        """
+        INSERT OR REPLACE INTO core.fill_costs (
+          fill_id, order_id, pair, broker, broker_execution_id,
+          commission_amount, commission_ccy, commission_eur,
+          commission_source, raw_json, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        [
+            fill.get("fill_id"),
+            fill.get("order_id"),
+            fill.get("pair"),
+            fill.get("broker") or "IBKR",
+            fill.get("broker_execution_id") or "",
+            fee_amount,
+            fill.get("fee_ccy") or ("EUR" if fee_amount else ""),
+            fill.get("fees_eur") or 0,
+            fill.get("fee_source") or fill.get("fill_source") or "",
+            raw_json,
+        ],
+    )
+
+
+def parse_broker_fill(order, fill, prices):
     price = fill.get("price") or fill.get("avgPrice") or fill.get("avg_price")
     size = fill.get("size") or fill.get("quantity") or fill.get("shares") or fill.get("filledQuantity")
     try:
@@ -354,10 +440,7 @@ def parse_broker_fill(order, fill):
         return None
     if price <= 0 or size_units <= 0:
         return None
-    try:
-        fees_eur = abs(float(str(fill.get("commission") or 0).replace(",", "")))
-    except Exception:
-        fees_eur = 0.0
+    fee = ibkr_commission_fields(fill, prices)
     execution_id = to_text(fill.get("execution_id") or fill.get("execId") or fill.get("id")) or f"{order.get('order_id')}_IBKR"
     return {
         "fill_id": f"IBKR_{execution_id}",
@@ -366,10 +449,16 @@ def parse_broker_fill(order, fill):
         "side": order.get("side"),
         "fill_price": price,
         "fill_size_lots": size_units / 100000.0,
-        "fees_eur": fees_eur,
+        "fees_eur": fee["fees_eur"],
+        "fee_amount": fee["fee_amount"],
+        "fee_ccy": fee["fee_ccy"],
+        "fee_source": fee["fee_source"],
+        "broker": "IBKR",
+        "broker_execution_id": execution_id,
         "swap_eur": 0.0,
         "filled_at": normalize_timestamp(fill.get("trade_time") or fill.get("tradeTime") or fill.get("time")),
         "fill_source": "ibkr_confirmed_pf_reconcile",
+        "raw_fill_json": json.dumps(fill, ensure_ascii=False),
         "raw": fill,
     }
 
@@ -489,6 +578,7 @@ def apply_close_fill(con, order, fill, prices):
 def import_ibkr_confirmed_fills(con, cfg, prices):
     if os.environ.get("IBKR_DRY_RUN", "true").lower() != "false":
         return {"enabled": False, "imported_fills": 0, "opened_lots": 0, "closed_lots": 0, "errors": []}
+    ensure_fill_costs_table(con)
     orders = read_orders_waiting_for_ibkr_fill(con)
     if not orders:
         return {"enabled": True, "orders_waiting": 0, "imported_fills": 0, "opened_lots": 0, "closed_lots": 0, "errors": []}
@@ -504,7 +594,7 @@ def import_ibkr_confirmed_fills(con, cfg, prices):
         raw_fill = broker_fill_for_order(order, fill_map)
         if not raw_fill:
             continue
-        fill = parse_broker_fill(order, raw_fill)
+        fill = parse_broker_fill(order, raw_fill, prices)
         if not fill:
             errors.append(f"UNPARSABLE_FILL:{order.get('order_id')}")
             continue
@@ -526,6 +616,7 @@ def import_ibkr_confirmed_fills(con, cfg, prices):
                 fill["fill_source"],
             ],
         )
+        write_fill_cost(con, fill)
         con.execute(
             """
             UPDATE core.orders

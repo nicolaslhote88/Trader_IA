@@ -15,6 +15,9 @@ Hourly mark-to-market and broker reconciliation workflow for AG1-FX.
 - Writes a fresh `core.portfolio_snapshot` row in the target AG1-FX ledger.
 - Imports confirmed IBKR fills for orders left in `submitted` state by the PM
   workflow.
+- Imports IBKR commission data for those fills into both `core.fills.fees_eur`
+  and the audit table `core.fill_costs`, preserving the raw broker payload used
+  for fee attribution.
 - Compares DuckDB open lots with current IBKR positions and writes
   `core.reconciliation_log`.
 - Sets `cfg.portfolio_config.kill_switch_active=true` and blocks new orders when

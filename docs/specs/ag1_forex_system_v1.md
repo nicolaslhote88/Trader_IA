@@ -504,6 +504,27 @@ CREATE TABLE IF NOT EXISTS core.fills (
 );
 
 -- ----------------------------------------------------------------------
+-- core.fill_costs
+-- Detail audit des couts broker par fill. En dry-run, source = simulated_bps.
+-- En paper/live, source = ibkr_* et raw_json conserve le payload /fills.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS core.fill_costs (
+    fill_id             VARCHAR PRIMARY KEY,
+    order_id            VARCHAR NOT NULL,
+    pair                VARCHAR NOT NULL,
+    broker              VARCHAR,
+    broker_execution_id VARCHAR,
+    commission_amount   DOUBLE NOT NULL DEFAULT 0,
+    commission_ccy      VARCHAR,
+    commission_eur      DOUBLE NOT NULL DEFAULT 0,
+    commission_source   VARCHAR,
+    raw_json            VARCHAR,
+    recorded_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_fill_costs_order ON core.fill_costs(order_id);
+
+-- ----------------------------------------------------------------------
 -- core.position_lots (FX adapte)
 -- ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS core.position_lots (
@@ -716,8 +737,9 @@ Pipeline de checks (un echec -> ordre rejete avec `rejection_reason`, pas crash)
 ### 7.8 Simulation des fills
 
 `12_simulate_fills_fx.py` :
-- Pour chaque ordre `pending` : prix de fill = mid-price du dernier `technical_signals_fx.last_close` + slippage 1 pip.
-- `fees_eur` = `0.5 * notional_eur / 10000` (= ~0.005 % du notional, ordre de grandeur retail FX). **A calibrer.** Ce calcul doit etre visible dans le code (variable `FEE_BPS = 0.5`).
+- En `IBKR_DRY_RUN=true`, pour chaque ordre `pending` : prix de fill = mid-price du dernier `technical_signals_fx.last_close` + slippage 1 pip.
+- En dry-run uniquement, `fees_eur` = `0.5 * notional_eur / 10000` (= ~0.005 % du notional, ordre de grandeur retail FX). Ce calcul reste visible dans le code (`FEE_BPS = 0.5`) et la source est tracee `simulated_bps`.
+- En `IBKR_DRY_RUN=false`, aucun fill simule n'est cree. Les fills doivent venir d'IBKR; `fees_eur` est derive des champs de commission IBKR, et `core.fill_costs` conserve montant brut, devise, source et JSON broker.
 - `swap_eur` = 0 si ferme le jour meme, sinon preleve en `19_overnight_swap.py` (hors v1, a laisser en TODO).
 
 ### 7.9 Generation des variants 3 LLMs (v1.1)

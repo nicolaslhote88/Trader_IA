@@ -1,3 +1,4 @@
+import json
 import os
 import re
 from datetime import datetime, timezone
@@ -57,6 +58,78 @@ def valid_close_order(order):
     return True
 
 
+def to_float(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return default
+        text = str(value).replace(",", "").strip()
+        if not text:
+            return default
+        n = float(text)
+        return n if n == n and abs(n) != float("inf") else default
+    except Exception:
+        return default
+
+
+def quote_to_eur(ccy):
+    ccy = str(ccy or "").upper().strip()
+    if ccy == "EUR":
+        return 1.0
+    direct = to_float(prices.get(f"{ccy}EUR"), 0.0)
+    if direct > 0:
+        return direct
+    inverse = to_float(prices.get(f"EUR{ccy}"), 0.0)
+    if inverse > 0:
+        return 1.0 / inverse
+    if ccy == "USD":
+        eurusd = to_float(prices.get("EURUSD"), 0.0)
+        return 1.0 / eurusd if eurusd > 0 else 1.0
+    ccy_usd = to_float(prices.get(f"{ccy}USD"), 0.0)
+    usd_ccy = to_float(prices.get(f"USD{ccy}"), 0.0)
+    eurusd = to_float(prices.get("EURUSD"), 0.0)
+    usd_eur = 1.0 / eurusd if eurusd > 0 else 0.0
+    if ccy_usd > 0 and usd_eur > 0:
+        return ccy_usd * usd_eur
+    if usd_ccy > 0 and usd_eur > 0:
+        return (1.0 / usd_ccy) * usd_eur
+    return 1.0
+
+
+def ibkr_commission_fields(raw):
+    amount = None
+    amount_field = ""
+    for field in ("commission", "ibCommission", "ib_commission", "commission_amount", "fees_eur", "fee"):
+        if raw.get(field) not in (None, ""):
+            amount = to_float(raw.get(field), 0.0)
+            amount_field = field
+            break
+    ccy = ""
+    for field in ("commissionCurrency", "commission_currency", "commission_ccy", "ibCommissionCurrency", "feeCurrency"):
+        if raw.get(field) not in (None, ""):
+            ccy = str(raw.get(field)).upper().strip()
+            break
+    if amount is None:
+        return {
+            "fee_amount": 0.0,
+            "fee_ccy": "",
+            "fees_eur": 0.0,
+            "fee_source": "ibkr_commission_missing",
+        }
+    if not ccy:
+        ccy = "EUR"
+        source = f"ibkr_{amount_field}_assumed_eur_no_ccy"
+    elif ccy == "EUR":
+        source = f"ibkr_{amount_field}_reported_eur"
+    else:
+        source = f"ibkr_{amount_field}_converted_{ccy}_to_eur"
+    return {
+        "fee_amount": abs(amount),
+        "fee_ccy": ccy,
+        "fees_eur": abs(amount) * quote_to_eur(ccy),
+        "fee_source": source,
+    }
+
+
 def fill_from_ibkr(order):
     raw = order.get("ibkr_fill") or {}
     if not isinstance(raw, dict):
@@ -72,11 +145,7 @@ def fill_from_ibkr(order):
     if price <= 0 or size_units <= 0:
         return None
     size_lots = size_units / LOT_UNITS
-    commission = raw.get("commission") or raw.get("commission_eur") or raw.get("fees_eur") or 0
-    try:
-        fees_eur = abs(float(str(commission).replace(",", "")))
-    except Exception:
-        fees_eur = 0.0
+    fee = ibkr_commission_fields(raw)
     fill_id = raw.get("execution_id") or raw.get("execId") or raw.get("id") or f"FIL_{order['order_id']}"
     filled_at = raw.get("trade_time") or raw.get("tradeTime") or raw.get("time") or order.get("ibkr_filled_at")
     filled_at = normalize_timestamp(filled_at)
@@ -87,7 +156,13 @@ def fill_from_ibkr(order):
         "side": order.get("side"),
         "fill_price": price,
         "fill_size_lots": size_lots,
-        "fees_eur": fees_eur,
+        "fees_eur": fee["fees_eur"],
+        "fee_amount": fee["fee_amount"],
+        "fee_ccy": fee["fee_ccy"],
+        "fee_source": fee["fee_source"],
+        "broker": "IBKR",
+        "broker_execution_id": str(fill_id),
+        "raw_fill_json": json.dumps(raw, ensure_ascii=False),
         "swap_eur": 0.0,
         "filled_at": filled_at,
         "fill_source": "ibkr_confirmed",
@@ -118,6 +193,12 @@ if dry_run:
             "fill_price": fill_price,
             "fill_size_lots": float(o.get("size_lots") or 0),
             "fees_eur": fees_eur,
+            "fee_amount": fees_eur,
+            "fee_ccy": "EUR",
+            "fee_source": "simulated_bps",
+            "broker": "SIM",
+            "broker_execution_id": "",
+            "raw_fill_json": "",
             "swap_eur": 0.0,
             "filled_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "fill_source": "simulated_yfinance",

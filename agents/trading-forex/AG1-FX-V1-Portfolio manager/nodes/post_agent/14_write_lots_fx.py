@@ -1,4 +1,5 @@
 import duckdb
+import json
 import re
 from datetime import datetime, timezone
 
@@ -23,8 +24,60 @@ def normalize_timestamp(value):
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def ensure_fill_costs_table(con):
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS core.fill_costs (
+            fill_id             VARCHAR PRIMARY KEY,
+            order_id            VARCHAR NOT NULL,
+            pair                VARCHAR NOT NULL,
+            broker              VARCHAR,
+            broker_execution_id VARCHAR,
+            commission_amount   DOUBLE NOT NULL DEFAULT 0,
+            commission_ccy      VARCHAR,
+            commission_eur      DOUBLE NOT NULL DEFAULT 0,
+            commission_source   VARCHAR,
+            raw_json            VARCHAR,
+            recorded_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    con.execute("CREATE INDEX IF NOT EXISTS idx_fill_costs_order ON core.fill_costs(order_id)")
+
+
+def write_fill_cost(con, fill):
+    fee_amount = fill.get("fee_amount")
+    if fee_amount is None:
+        fee_amount = fill.get("fees_eur") or 0
+    raw_json = fill.get("raw_fill_json") or ""
+    if isinstance(raw_json, (dict, list)):
+        raw_json = json.dumps(raw_json, ensure_ascii=False)
+    con.execute(
+        """
+        INSERT OR REPLACE INTO core.fill_costs (
+          fill_id, order_id, pair, broker, broker_execution_id,
+          commission_amount, commission_ccy, commission_eur,
+          commission_source, raw_json, recorded_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        [
+            fill.get("fill_id"),
+            fill.get("order_id"),
+            fill.get("pair"),
+            fill.get("broker") or ("IBKR" if str(fill.get("fill_source") or "").startswith("ibkr_") else "SIM"),
+            fill.get("broker_execution_id") or "",
+            fee_amount,
+            fill.get("fee_ccy") or ("EUR" if fee_amount else ""),
+            fill.get("fees_eur") or 0,
+            fill.get("fee_source") or fill.get("fill_source") or "",
+            raw_json,
+        ],
+    )
+
+
 opened = 0
 with duckdb.connect(db_path) as con:
+    ensure_fill_costs_table(con)
     for f in fills:
         filled_at = normalize_timestamp(f.get("filled_at"))
         f["filled_at"] = filled_at
@@ -36,6 +89,7 @@ with duckdb.connect(db_path) as con:
                 f.get("swap_eur"), filled_at, f.get("fill_source"),
             ],
         )
+        write_fill_cost(con, f)
         con.execute("UPDATE core.orders SET status='filled' WHERE order_id=?", [f.get("order_id")])
         order = orders_by_id.get(f.get("order_id")) or {}
         if f.get("side") in {"buy_base", "sell_base"}:

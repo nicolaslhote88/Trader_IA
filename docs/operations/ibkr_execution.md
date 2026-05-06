@@ -62,6 +62,12 @@ Garanties ajoutees :
   l'envoi broker.
 - En `IBKR_DRY_RUN=false`, `12_simulate_fills_fx.py` ne cree plus de fill simule.
   Il ne persiste que les fills confirmes par IBKR.
+- Les frais ne sont plus modelises en paper/live : `core.fills.fees_eur` est
+  alimente depuis les champs de commission IBKR quand ils sont fournis par
+  `/fills`. La table `core.fill_costs` conserve en plus le montant brut, la
+  devise, l'identifiant d'execution broker, la source du champ et le JSON brut.
+  Si IBKR fournit une commission sans devise, elle est tracee comme
+  `ibkr_commission_assumed_eur_no_ccy` afin que les stats restent auditables.
 - Les ordres envoyes mais sans fill immediat restent `submitted`; le workflow PF
   importe ensuite les fills confirmes depuis `/fills`.
 - Les rejets IBKR explicites sont classes en `broker_error` et ne generent ni
@@ -147,6 +153,9 @@ Paper production Forex :
 5. Lancer un run AG1-FX GPT seulement si la reconciliation est `OK`.
 6. Surveiller `core.orders.status`: `submitted` signifie ordre envoye en attente
    de fill IBKR; `filled` signifie fill confirme.
+7. Controler les couts avec `core.fill_costs`: une ligne par fill, avec
+   `commission_source` commencant par `ibkr_` en paper/live. `simulated_bps`
+   doit uniquement apparaitre lorsque `IBKR_DRY_RUN=true`.
 
 En paper/live, si un appel broker echoue, les nodes marquent l'ordre en erreur
 et ne creent pas de fill simule pour cet ordre.
