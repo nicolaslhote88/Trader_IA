@@ -31,7 +31,8 @@ FACTOR_TO_COMPONENT = {
     "external_balance": "external_balance_score",
 }
 SAFE_HAVENS = {"USD", "JPY", "CHF"}
-CYCLICALS = {"AUD", "NZD", "CAD"}
+CYCLICALS = {"AUD", "NZD"}
+OIL_LINKED = {"CAD"}
 
 
 def clamp(v, lo=-1.0, hi=1.0):
@@ -73,6 +74,47 @@ def parse_bias_value(value):
     return 0.0
 
 
+def signed_label_score(label, pair, raw_score):
+    pair = str(pair or "").upper()
+    base, quote = pair[:3], pair[3:]
+    text = str(label or "").strip().lower()
+    magnitude = abs(to_float(raw_score, 0.0))
+    if magnitude <= 0:
+        magnitude = 0.35
+    magnitude = min(1.0, magnitude)
+
+    signs = {}
+    bullish = "bullish" in text or text in {"buy_base", "long_base", "buy", "long"}
+    bearish = "bearish" in text or text in {"sell_base", "short_base", "sell", "short"}
+
+    for ccy in currencies:
+        c = ccy.lower()
+        if c not in text:
+            continue
+        if bullish:
+            signs[ccy] = 1.0
+        elif bearish:
+            signs[ccy] = -1.0
+
+    if not signs and base and quote:
+        if text in {"buy_base", "long_base", "bullish", "buy", "long"}:
+            signs[base] = 1.0
+            signs[quote] = -1.0
+        elif text in {"sell_base", "short_base", "bearish", "sell", "short"}:
+            signs[base] = -1.0
+            signs[quote] = 1.0
+
+    # When AG4 names only one side of a pair, infer a smaller opposite vote for
+    # the other side. This keeps pair-specific news directional in degraded mode
+    # without pretending it is a full independent macro observation.
+    if base in signs and quote and quote not in signs:
+        signs[quote] = -0.65 * signs[base]
+    if quote in signs and base and base not in signs:
+        signs[base] = -0.65 * signs[quote]
+
+    return {ccy: clamp(sign * magnitude) for ccy, sign in signs.items()}
+
+
 def macro_biases():
     raw = macro_regime.get("biases") or macro_regime.get("currency_biases") or {}
     out = {ccy: 0.0 for ccy in currencies}
@@ -90,20 +132,12 @@ def pair_focus_votes():
         pair = str(pair or "").upper()
         if len(pair) != 6 or not isinstance(focus, dict):
             continue
-        base, quote = pair[:3], pair[3:]
         confidence = max(0.1, min(1.0, to_float(focus.get("confidence"), 0.35)))
-        score = to_float(focus.get("bias_news_score"), 0.0)
-        label = str(focus.get("bias_news") or focus.get("bias") or "").upper()
-        if not score:
-            if label in {"BUY_BASE", "BULLISH", "LONG_BASE"}:
-                score = 0.35
-            elif label in {"SELL_BASE", "BEARISH", "SHORT_BASE"}:
-                score = -0.35
-        score = clamp(score) * confidence
-        if base in votes:
-            votes[base].append(score)
-        if quote in votes:
-            votes[quote].append(-score)
+        label = focus.get("bias_news") or focus.get("bias") or ""
+        signed = signed_label_score(label, pair, focus.get("bias_news_score"))
+        for ccy, score in signed.items():
+            if ccy in votes:
+                votes[ccy].append(score * confidence)
     return {ccy: avg(vals) for ccy, vals in votes.items()}
 
 
@@ -112,6 +146,8 @@ def regime_score(ccy):
     if "risk-off" in label or "risk_off" in label or "stress" in label:
         if ccy in SAFE_HAVENS:
             return 0.35
+        if ccy in OIL_LINKED:
+            return 0.05
         if ccy in CYCLICALS:
             return -0.30
         return -0.08
@@ -124,8 +160,9 @@ def regime_score(ccy):
     return 0.0
 
 
+OBSERVABLE_FACTORS = {"policy_rate", "real_yield", "inflation", "growth", "labor", "external_balance"}
 grouped = {ccy: {} for ccy in currencies}
-missing = {ccy: set(FACTOR_TO_COMPONENT.keys()) for ccy in currencies}
+missing = {ccy: set(OBSERVABLE_FACTORS) for ccy in currencies}
 stale = {ccy: set() for ccy in currencies}
 
 for obs in observations:
@@ -153,10 +190,14 @@ for ccy in currencies:
         "growth_score": avg(grouped[ccy].get("growth_score", [])),
         "labor_score": avg(grouped[ccy].get("labor_score", [])),
         "external_balance_score": avg(grouped[ccy].get("external_balance_score", [])),
-        "risk_regime_score": clamp(0.55 * regime_score(ccy) + 0.25 * regime_bias.get(ccy, 0.0) + 0.20 * news_votes.get(ccy, 0.0)),
+        "risk_regime_score": clamp(0.35 * regime_score(ccy) + 0.35 * regime_bias.get(ccy, 0.0) + 0.30 * news_votes.get(ccy, 0.0)),
     }
-    news_bias_score = clamp(0.60 * news_votes.get(ccy, 0.0) + 0.40 * regime_bias.get(ccy, 0.0))
-    composite = clamp(sum(components[k] * w for k, w in WEIGHTS.items()))
+    news_bias_score = clamp(0.70 * news_votes.get(ccy, 0.0) + 0.30 * regime_bias.get(ccy, 0.0))
+    model_composite = clamp(sum(components[k] * w for k, w in WEIGHTS.items()))
+    if macro_data_degraded:
+        composite = clamp(0.55 * news_bias_score + 0.45 * components["risk_regime_score"])
+    else:
+        composite = clamp(0.85 * model_composite + 0.15 * news_bias_score)
     ok_components = sum(1 for k in components if abs(components[k]) > 0.00001 and k != "risk_regime_score")
     mapped_components = 6 - len(missing[ccy])
     data_quality = max(0.10, min(1.0, (mapped_components / 6.0) * 0.75 + 0.25 * (1.0 if macro_news else 0.0)))

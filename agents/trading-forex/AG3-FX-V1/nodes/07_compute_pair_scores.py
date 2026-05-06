@@ -10,6 +10,7 @@ technical = ctx.get("technical_signals") or []
 macro_news = ctx.get("macro_news") or {}
 pair_focus = macro_news.get("pair_focus") or {}
 macro_regime = macro_news.get("macro_regime") or {}
+macro_data_degraded = bool(ctx.get("macro_data_degraded"))
 currency_scores = {str(x.get("currency") or "").upper(): x for x in (ctx.get("currency_scores") or [])}
 tech_by_pair = {str(x.get("pair") or "").upper(): x for x in technical}
 
@@ -32,15 +33,43 @@ def to_float(v, default=0.0):
         return default
 
 
+def direct_pair_news_score(pair, label, raw_score):
+    pair = str(pair or "").upper()
+    base, quote = pair[:3], pair[3:]
+    text = str(label or "").strip().lower()
+    magnitude = abs(to_float(raw_score, 0.0))
+    if magnitude <= 0:
+        magnitude = 0.35
+    magnitude = min(1.0, magnitude)
+
+    if text in {"buy_base", "long_base", "bullish", "buy", "long"}:
+        return magnitude
+    if text in {"sell_base", "short_base", "bearish", "sell", "short"}:
+        return -magnitude
+
+    if base.lower() in text:
+        if "bullish" in text:
+            return magnitude
+        if "bearish" in text:
+            return -magnitude
+    if quote.lower() in text:
+        if "bullish" in text:
+            return -magnitude
+        if "bearish" in text:
+            return magnitude
+    return 0.0
+
+
 def pair_news(pair):
     f = pair_focus.get(pair) or {}
     label = str(f.get("bias_news") or f.get("bias") or "unknown")
     conf = to_float(f.get("confidence"), 0.0)
     urgent = bool(f.get("urgent_event_within_4h"))
+    score = direct_pair_news_score(pair, label, f.get("bias_news_score"))
     drivers = f.get("top_drivers") or []
     if not isinstance(drivers, list):
         drivers = [str(drivers)]
-    return label, conf, urgent, drivers
+    return label, conf, urgent, score, drivers
 
 
 def directional_bias(pressure):
@@ -82,11 +111,13 @@ for row in universe:
     quote_rec = currency_scores.get(quote, {})
     base_score = clamp(base_rec.get("composite_score"))
     quote_score = clamp(quote_rec.get("composite_score"))
-    pair_pressure = clamp(base_score - quote_score)
+    relative_pressure = clamp(base_score - quote_score)
+    tech = tech_by_pair.get(pair) or {}
+    news_label, news_conf, urgent, direct_news_score, news_drivers = pair_news(pair)
+    direct_weight = 0.25 if macro_data_degraded else 0.15
+    pair_pressure = clamp((1.0 - direct_weight) * relative_pressure + direct_weight * direct_news_score)
     pair_score = pair_pressure
     bias = directional_bias(pair_pressure)
-    tech = tech_by_pair.get(pair) or {}
-    news_label, news_conf, urgent, news_drivers = pair_news(pair)
     confidence = min(
         to_float(base_rec.get("confidence"), 0.25),
         to_float(quote_rec.get("confidence"), 0.25),
@@ -95,6 +126,8 @@ for row in universe:
         confidence = min(0.95, confidence * 0.75 + news_conf * 0.25)
     if urgent:
         confidence = max(confidence, min(0.80, news_conf + 0.10))
+    if macro_data_degraded:
+        confidence = min(confidence, 0.45)
     data_quality = min(
         to_float(base_rec.get("data_quality_score"), 0.1),
         to_float(quote_rec.get("data_quality_score"), 0.1),
