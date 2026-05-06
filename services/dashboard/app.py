@@ -9004,26 +9004,27 @@ def _build_compare_overlay_chart(cards: list[dict[str, object]], mode: str = "EU
             has_dd = True
 
     if has_eq:
+        axis_unit = "EUR" if str(mode).upper() in {"EUR", "€"} else "base 100"
         fig_eq.update_layout(
             height=260,
-            margin=dict(t=36, b=20, l=20, r=20),
+            margin=dict(t=58, b=20, l=20, r=20),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="EUR" if str(mode).upper() in {"EUR", "€"} else "Base 100"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            title=f"Equity curves comparees ({'EUR' if str(mode).upper() in {'EUR', '€'} else 'normalise base 100'})",
+            legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0.0, xanchor="left"),
+            title=dict(text=f"Courbes d'equity comparees par modele ({axis_unit})", x=0.0, xanchor="left"),
         )
     if has_dd:
         fig_dd.update_layout(
             height=210,
-            margin=dict(t=36, b=20, l=20, r=20),
+            margin=dict(t=58, b=20, l=20, r=20),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="Drawdown %"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02),
-            title="Drawdown compare",
+            legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0.0, xanchor="left"),
+            title=dict(text="Drawdown compare par modele", x=0.0, xanchor="left"),
         )
     return (fig_eq if has_eq else None), (fig_dd if has_dd else None)
 
