@@ -9657,12 +9657,14 @@ def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], per
     fee_coverage_pct = None
     fee_sources_missing = 0
     fee_sources_assumed = 0
+    fee_sources_inferred = 0
     if isinstance(costs_period, pd.DataFrame) and not costs_period.empty:
         fee_rows_period = int(len(costs_period))
         fees_period = float(pd.to_numeric(costs_period.get("commission_eur", pd.Series(0.0, index=costs_period.index)), errors="coerce").fillna(0.0).sum())
         src = costs_period.get("commission_source", pd.Series("", index=costs_period.index)).fillna("").astype(str).str.lower()
         fee_sources_missing = int((src.eq("") | src.str.contains("missing", regex=False)).sum())
-        fee_sources_assumed = int(src.str.contains("assumed_eur_no_ccy", regex=False).sum())
+        fee_sources_assumed = int((src.str.contains("fallback_eur_no_ccy", regex=False) | src.str.contains("assumed_eur_no_ccy", regex=False)).sum())
+        fee_sources_inferred = int((src.str.contains("inferred_", regex=False) & src.str.contains("_quote_no_ccy", regex=False)).sum())
     elif isinstance(fills_period, pd.DataFrame) and not fills_period.empty:
         fees_period = float(pd.to_numeric(fills_period.get("fees_eur", pd.Series(0.0, index=fills_period.index)), errors="coerce").fillna(0.0).sum())
     fills_period_count = int(len(fills_period)) if isinstance(fills_period, pd.DataFrame) and not fills_period.empty else 0
@@ -9796,6 +9798,7 @@ def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], per
         "fee_coverage_pct": fee_coverage_pct,
         "fee_sources_missing": fee_sources_missing,
         "fee_sources_assumed": fee_sources_assumed,
+        "fee_sources_inferred": fee_sources_inferred,
         "exposure_pct": exposure_pct,
         "open_pairs": open_pairs,
         "open_lots": open_lots,
@@ -14943,10 +14946,11 @@ elif page == "Dashboard Forex":
                     f"Fees: {_fmt_currency(c.get('fees_period'), 2)} | "
                     f"Coverage: {_fmt_pct(c.get('fee_coverage_pct'), 0) if c.get('fee_coverage_pct') is not None else 'N/A'}"
                 )
-                if safe_float(c.get("fee_sources_missing")) > 0 or safe_float(c.get("fee_sources_assumed")) > 0:
+                if safe_float(c.get("fee_sources_missing")) > 0 or safe_float(c.get("fee_sources_assumed")) > 0 or safe_float(c.get("fee_sources_inferred")) > 0:
                     st.caption(
                         f"Audit fees: missing={int(safe_float(c.get('fee_sources_missing')))} | "
-                        f"devise presumee={int(safe_float(c.get('fee_sources_assumed')))}"
+                        f"devise inferee={int(safe_float(c.get('fee_sources_inferred')))} | "
+                        f"devise fallback EUR={int(safe_float(c.get('fee_sources_assumed')))}"
                     )
                 k3, k4 = st.columns(2)
                 k3.metric("ROI", _fmt_pct(c.get("roi_pct"), 2), _fmt_delta_pp(c.get("roi_delta_pp")))
@@ -16700,12 +16704,14 @@ elif page == "Forex Trading (AG1-FX)":
 
     missing_costs = 0
     assumed_ccy_costs = 0
+    inferred_ccy_costs = 0
     simulated_costs = 0
     ibkr_costs = 0
     if not df_costs.empty and "_commission_source" in df_costs.columns:
         source_series = df_costs["_commission_source"].fillna("").astype(str).str.lower()
         missing_costs = int((source_series.eq("") | source_series.str.contains("missing", regex=False)).sum())
-        assumed_ccy_costs = int(source_series.str.contains("assumed_eur_no_ccy", regex=False).sum())
+        assumed_ccy_costs = int((source_series.str.contains("fallback_eur_no_ccy", regex=False) | source_series.str.contains("assumed_eur_no_ccy", regex=False)).sum())
+        inferred_ccy_costs = int((source_series.str.contains("inferred_", regex=False) & source_series.str.contains("_quote_no_ccy", regex=False)).sum())
         simulated_costs = int(source_series.str.contains("simulated_bps", regex=False).sum())
         ibkr_costs = int(source_series.str.startswith("ibkr_").sum())
 
@@ -16720,8 +16726,10 @@ elif page == "Forex Trading (AG1-FX)":
         st.warning(f"{fills_count - cost_rows_count} fill(s) n'ont pas encore de ligne `core.fill_costs` associee.")
     if missing_costs > 0:
         st.warning(f"{missing_costs} cout(s) ont une commission IBKR manquante ou une source vide.")
+    if inferred_ccy_costs > 0:
+        st.info(f"{inferred_ccy_costs} commission(s) IBKR sans devise explicite ont ete converties depuis la devise de cotation FX.")
     if assumed_ccy_costs > 0:
-        st.info(f"{assumed_ccy_costs} commission(s) IBKR n'indiquent pas la devise; elles sont tracees en EUR presume.")
+        st.warning(f"{assumed_ccy_costs} commission(s) IBKR n'indiquent pas la devise et n'ont pas pu etre inferees; fallback EUR.")
     if simulated_costs > 0:
         st.info(f"{simulated_costs} cout(s) proviennent encore du mode dry-run `simulated_bps` sur la periode affichee.")
 

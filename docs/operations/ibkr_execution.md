@@ -90,8 +90,11 @@ Garanties ajoutees :
   alimente depuis les champs de commission IBKR quand ils sont fournis par
   `/fills`. La table `core.fill_costs` conserve en plus le montant brut, la
   devise, l'identifiant d'execution broker, la source du champ et le JSON brut.
-  Si IBKR fournit une commission sans devise, elle est tracee comme
-  `ibkr_commission_assumed_eur_no_ccy` afin que les stats restent auditables.
+  Si IBKR fournit une commission FX sans devise explicite, la devise est inferee
+  depuis la devise de cotation du contrat CASH (`EUR.JPY` -> JPY,
+  `EUR.CHF` -> CHF), puis convertie en EUR. La source est tracee comme
+  `ibkr_commission_inferred_<CCY>_quote_no_ccy`. Un fallback EUR n'est utilise
+  que si la paire ne peut pas etre identifiee.
 - Les ordres envoyes mais sans fill immediat restent `submitted`; le workflow PF
   importe ensuite les fills confirmes depuis `/fills`.
 - Les rejets IBKR explicites sont classes en `broker_error` et ne generent ni

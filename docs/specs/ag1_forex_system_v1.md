@@ -739,7 +739,7 @@ Pipeline de checks (un echec -> ordre rejete avec `rejection_reason`, pas crash)
 `12_simulate_fills_fx.py` :
 - En `IBKR_DRY_RUN=true`, pour chaque ordre `pending` : prix de fill = mid-price du dernier `technical_signals_fx.last_close` + slippage 1 pip.
 - En dry-run uniquement, `fees_eur` = `0.5 * notional_eur / 10000` (= ~0.005 % du notional, ordre de grandeur retail FX). Ce calcul reste visible dans le code (`FEE_BPS = 0.5`) et la source est tracee `simulated_bps`.
-- En `IBKR_DRY_RUN=false`, aucun fill simule n'est cree. Les fills doivent venir d'IBKR; `fees_eur` est derive des champs de commission IBKR, et `core.fill_costs` conserve montant brut, devise, source et JSON broker.
+- En `IBKR_DRY_RUN=false`, aucun fill simule n'est cree. Les fills doivent venir d'IBKR; `fees_eur` est derive des champs de commission IBKR, et `core.fill_costs` conserve montant brut, devise, source et JSON broker. Si IBKR omet la devise sur un fill FX CASH, la devise de commission est inferee depuis la cotation de la paire (`EUR.JPY` -> JPY, `EUR.CHF` -> CHF), puis convertie en EUR.
 - `swap_eur` = 0 si ferme le jour meme, sinon preleve en `19_overnight_swap.py` (hors v1, a laisser en TODO).
 
 ### 7.9 Generation des variants 3 LLMs (v1.1)

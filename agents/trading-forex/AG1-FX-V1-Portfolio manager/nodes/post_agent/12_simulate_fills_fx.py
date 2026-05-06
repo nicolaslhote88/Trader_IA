@@ -95,18 +95,38 @@ def quote_to_eur(ccy):
     return 1.0
 
 
-def ibkr_commission_fields(raw):
+def raw_fx_pair(raw, fallback_pair=""):
+    text = str(
+        raw.get("contract_description_1")
+        or raw.get("contractDesc")
+        or raw.get("description")
+        or fallback_pair
+        or ""
+    ).upper()
+    letters = "".join(ch for ch in text if ch.isalpha())
+    if len(letters) >= 6:
+        return letters[:6]
+    return "".join(ch for ch in str(fallback_pair or "").upper() if ch.isalpha())[:6]
+
+
+def infer_ibkr_commission_ccy(raw, pair):
+    for field in ("commissionCurrency", "commission_currency", "commission_ccy", "ibCommissionCurrency", "feeCurrency"):
+        if raw.get(field) not in (None, ""):
+            return str(raw.get(field)).upper().strip(), "reported"
+    fx_pair = raw_fx_pair(raw, pair)
+    asset = str(raw.get("sec_type") or raw.get("secType") or raw.get("assetClass") or "").upper()
+    if len(fx_pair) == 6 and asset in {"", "CASH", "FX", "FOREX", "CURRENCY"}:
+        return fx_pair[3:6], "inferred_quote"
+    return "", "missing"
+
+
+def ibkr_commission_fields(raw, pair=""):
     amount = None
     amount_field = ""
     for field in ("commission", "ibCommission", "ib_commission", "commission_amount", "fees_eur", "fee"):
         if raw.get(field) not in (None, ""):
             amount = to_float(raw.get(field), 0.0)
             amount_field = field
-            break
-    ccy = ""
-    for field in ("commissionCurrency", "commission_currency", "commission_ccy", "ibCommissionCurrency", "feeCurrency"):
-        if raw.get(field) not in (None, ""):
-            ccy = str(raw.get(field)).upper().strip()
             break
     if amount is None:
         return {
@@ -115,9 +135,12 @@ def ibkr_commission_fields(raw):
             "fees_eur": 0.0,
             "fee_source": "ibkr_commission_missing",
         }
-    if not ccy:
+    ccy, ccy_source = infer_ibkr_commission_ccy(raw, pair)
+    if ccy_source == "inferred_quote":
+        source = f"ibkr_{amount_field}_inferred_{ccy}_quote_no_ccy"
+    elif not ccy:
         ccy = "EUR"
-        source = f"ibkr_{amount_field}_assumed_eur_no_ccy"
+        source = f"ibkr_{amount_field}_fallback_eur_no_ccy"
     elif ccy == "EUR":
         source = f"ibkr_{amount_field}_reported_eur"
     else:
@@ -145,7 +168,7 @@ def fill_from_ibkr(order):
     if price <= 0 or size_units <= 0:
         return None
     size_lots = size_units / LOT_UNITS
-    fee = ibkr_commission_fields(raw)
+    fee = ibkr_commission_fields(raw, pair)
     fill_id = raw.get("execution_id") or raw.get("execId") or raw.get("id") or f"FIL_{order['order_id']}"
     filled_at = raw.get("trade_time") or raw.get("tradeTime") or raw.get("time") or order.get("ibkr_filled_at")
     filled_at = normalize_timestamp(filled_at)
