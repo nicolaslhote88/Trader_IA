@@ -123,6 +123,15 @@ function compactTech(row, detail = false) {
     ret20d_pct: pct(row.ret_20d, 2),
     atr_pips: pip > 0 ? rounded(num(row.atr14) / pip, 1) : 0,
   };
+  if (row.ibkr_mid != null || row.ibkr_market_data_source) {
+    out.market_px = {
+      source: row.ibkr_market_data_source || 'unknown',
+      bid: row.ibkr_bid == null ? null : rounded(row.ibkr_bid, decimals),
+      ask: row.ibkr_ask == null ? null : rounded(row.ibkr_ask, decimals),
+      mid: row.ibkr_mid == null ? null : rounded(row.ibkr_mid, decimals),
+      spread_bps: row.ibkr_spread_pct == null ? null : rounded(num(row.ibkr_spread_pct) * 10000, 2),
+    };
+  }
   if (detail) {
     out.sma20_gap_pct = num(row.sma20) ? pct((num(row.last_close) / num(row.sma20)) - 1, 2) : 0;
     out.sma50_gap_pct = num(row.sma50) ? pct((num(row.last_close) / num(row.sma50)) - 1, 2) : 0;
@@ -221,6 +230,10 @@ function compactFundamental(pair) {
     drivers: (f?.drivers || []).slice(0, 3).map((x) => truncate(x, 120)),
     invalidators: (f?.invalidators || []).slice(0, 3).map((x) => truncate(x, 120)),
     data_quality: rounded(f?.data_quality?.score, 2),
+    macro_degraded: Boolean(f?.data_quality?.macro_data_degraded),
+    missing_factors: (f?.data_quality?.missing_factors || []).slice(0, 4),
+    stale_factors: (f?.data_quality?.stale_factors || []).slice(0, 4),
+    conflict_score: rounded(f?.fundamental?.pair_conflict_score, 2),
   };
 }
 

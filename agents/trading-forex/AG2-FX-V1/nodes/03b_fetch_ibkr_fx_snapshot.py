@@ -21,13 +21,12 @@ if not items:
 
 first = items[0].get("json", {}) or {}
 enabled = bool(first.get("ibkr_marketdata_enabled", True))
-dry_run = bool(first.get("dry_run")) or os.getenv("AG1_FX_DRY_RUN") == "1"
 broker_url = str(first.get("ibkr_broker_url") or os.getenv("IBKR_BROKER_URL") or "http://ibkr-broker:8080").rstrip("/")
 pairs = sorted({str((it.get("json", {}) or {}).get("pair") or "").upper() for it in items if (it.get("json", {}) or {}).get("pair")})
 
 quotes = {}
 errors = []
-if enabled and not dry_run and pairs:
+if enabled and pairs:
     try:
         params = urlencode({"pairs": ",".join(pairs)})
         req = Request(f"{broker_url}/marketdata/fx/snapshot?{params}", headers={"Accept": "application/json"})

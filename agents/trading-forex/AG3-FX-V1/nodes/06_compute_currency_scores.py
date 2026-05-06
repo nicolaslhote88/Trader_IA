@@ -199,8 +199,15 @@ for ccy in currencies:
     else:
         composite = clamp(0.85 * model_composite + 0.15 * news_bias_score)
     ok_components = sum(1 for k in components if abs(components[k]) > 0.00001 and k != "risk_regime_score")
-    mapped_components = 6 - len(missing[ccy])
-    data_quality = max(0.10, min(1.0, (mapped_components / 6.0) * 0.75 + 0.25 * (1.0 if macro_news else 0.0)))
+    usable_components = sum(
+        1
+        for factor, component in FACTOR_TO_COMPONENT.items()
+        if component in grouped[ccy] and grouped[ccy].get(component)
+    )
+    data_quality = max(0.10, min(1.0, (usable_components / 6.0) * 0.75 + 0.25 * (1.0 if macro_news else 0.0)))
+    critical_missing = bool({"policy_rate", "real_yield"} & (missing[ccy] | stale[ccy]))
+    if critical_missing:
+        data_quality = min(data_quality, 0.65)
     if macro_data_degraded:
         data_quality = min(data_quality, 0.55)
     confidence = max(0.20, min(0.90, 0.30 + 0.45 * data_quality + 0.15 * abs(composite) + 0.10 * min(1.0, ok_components / 6.0)))

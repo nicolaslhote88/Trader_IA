@@ -266,13 +266,56 @@ for ccy in currencies:
             observations.append(observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]))
 
 ok_count = sum(1 for x in observations if x.get("data_status") == "OK")
-macro_data_degraded = ok_count < max(3, len(currencies) * 3)
+status_by_currency = {ccy: {} for ccy in currencies}
+for row in observations:
+    ccy = str(row.get("currency") or "").upper()
+    factor = str(row.get("factor") or "")
+    if ccy in status_by_currency and factor:
+        status_by_currency[ccy][factor] = str(row.get("data_status") or "").upper()
+
+critical_factors = {"policy_rate", "real_yield"}
+critical_ok_count = sum(
+    1
+    for ccy in currencies
+    for factor in critical_factors
+    if status_by_currency.get(ccy, {}).get(factor) == "OK"
+)
+currency_ok_count = sum(
+    1
+    for ccy in currencies
+    if sum(1 for status in status_by_currency.get(ccy, {}).values() if status == "OK") >= 4
+)
+critical_coverage = critical_ok_count / max(1, len(currencies) * len(critical_factors))
+currency_coverage = currency_ok_count / max(1, len(currencies))
+macro_data_degraded = (
+    ok_count < max(3, len(currencies) * 3)
+    or critical_coverage < 0.50
+    or currency_coverage < 0.75
+)
+macro_quality = {
+    "ok_count": ok_count,
+    "total_observations": len(observations),
+    "critical_ok_count": critical_ok_count,
+    "critical_total": len(currencies) * len(critical_factors),
+    "critical_coverage": critical_coverage,
+    "currency_ok_count": currency_ok_count,
+    "currency_total": len(currencies),
+    "currency_coverage": currency_coverage,
+    "degraded_reasons": [],
+}
+if ok_count < max(3, len(currencies) * 3):
+    macro_quality["degraded_reasons"].append("LOW_TOTAL_MACRO_COVERAGE")
+if critical_coverage < 0.50:
+    macro_quality["degraded_reasons"].append("LOW_POLICY_RATE_REAL_YIELD_COVERAGE")
+if currency_coverage < 0.75:
+    macro_quality["degraded_reasons"].append("LOW_CURRENCY_FACTOR_COVERAGE")
 
 return [{
     "json": {
         **ctx,
         "macro_observations": observations,
         "macro_observation_ok_count": ok_count,
+        "macro_quality": macro_quality,
         "macro_fetch_errors": fetch_errors,
         "macro_data_degraded": macro_data_degraded,
     }

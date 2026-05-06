@@ -42,6 +42,8 @@ for pair, score in sorted(pair_scores.items()):
         "stale_factors": sorted(set(base_stale + quote_stale)),
         "target_status": target.get("target_status"),
         "macro_data_degraded": bool(ctx.get("macro_data_degraded")),
+        "macro_quality": ctx.get("macro_quality") or {},
+        "pair_conflict_score": num(score.get("pair_conflict_score")),
         "macro_fetch_errors": (ctx.get("macro_fetch_errors") or [])[:5],
     }
     payload = {
@@ -58,6 +60,8 @@ for pair, score in sorted(pair_scores.items()):
             "base_score": num(score.get("base_score")),
             "quote_score": num(score.get("quote_score")),
             "pair_pressure": num(score.get("pair_pressure")),
+            "news_direct_score": num(score.get("news_direct_score")),
+            "pair_conflict_score": num(score.get("pair_conflict_score")),
         },
         "equilibrium": {
             "spot": num(target.get("spot")),
@@ -76,6 +80,8 @@ for pair, score in sorted(pair_scores.items()):
             "score": num(score.get("data_quality_score")),
             "missing_factors": caveats["missing_factors"],
             "stale_factors": caveats["stale_factors"],
+            "macro_data_degraded": caveats["macro_data_degraded"],
+            "macro_quality": caveats["macro_quality"],
         },
     }
     summaries.append({

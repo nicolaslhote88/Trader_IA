@@ -80,6 +80,33 @@ def directional_bias(pressure):
     return "NEUTRAL"
 
 
+def sign(v):
+    n = to_float(v, 0.0)
+    if n > 0.08:
+        return 1
+    if n < -0.08:
+        return -1
+    return 0
+
+
+def conflict_score(base_score, quote_score, relative_pressure, direct_news_score):
+    same_side = 0.0
+    if sign(base_score) and sign(base_score) == sign(quote_score):
+        same_side = min(abs(to_float(base_score)), abs(to_float(quote_score)), 1.0)
+    directional = 0.0
+    if abs(to_float(relative_pressure)) > 0.15 and abs(to_float(direct_news_score)) > 0.15:
+        if sign(relative_pressure) and sign(relative_pressure) != sign(direct_news_score):
+            directional = min(abs(to_float(relative_pressure)), abs(to_float(direct_news_score)), 1.0)
+    return clamp(max(same_side, directional), 0.0, 1.0)
+
+
+def macro_currency_bias(ccy):
+    raw = macro_regime.get("biases") or macro_regime.get("currency_biases") or {}
+    if isinstance(raw, dict):
+        return clamp(raw.get(ccy))
+    return 0.0
+
+
 def invalidators(pair, base, quote, bias):
     if bias == "BUY_BASE":
         return [
@@ -116,6 +143,13 @@ for row in universe:
     news_label, news_conf, urgent, direct_news_score, news_drivers = pair_news(pair)
     direct_weight = 0.25 if macro_data_degraded else 0.15
     pair_pressure = clamp((1.0 - direct_weight) * relative_pressure + direct_weight * direct_news_score)
+    pair_conflict_score = conflict_score(base_score, quote_score, relative_pressure, direct_news_score)
+    base_macro_bias = macro_currency_bias(base)
+    quote_macro_bias = macro_currency_bias(quote)
+    if sign(base_macro_bias) and sign(base_macro_bias) == sign(quote_macro_bias):
+        pair_conflict_score = max(pair_conflict_score, min(abs(base_macro_bias), abs(quote_macro_bias), 1.0))
+    if pair_conflict_score >= 0.10:
+        pair_pressure = clamp(pair_pressure * (1.0 - min(0.35, pair_conflict_score)))
     pair_score = pair_pressure
     bias = directional_bias(pair_pressure)
     confidence = min(
@@ -128,6 +162,8 @@ for row in universe:
         confidence = max(confidence, min(0.80, news_conf + 0.10))
     if macro_data_degraded:
         confidence = min(confidence, 0.45)
+    if pair_conflict_score >= 0.10:
+        confidence = max(0.20, confidence * (1.0 - min(0.30, pair_conflict_score)))
     data_quality = min(
         to_float(base_rec.get("data_quality_score"), 0.1),
         to_float(quote_rec.get("data_quality_score"), 0.1),
@@ -138,6 +174,10 @@ for row in universe:
         if text:
             drivers.extend([x.strip() for x in str(text).split(";") if x.strip()])
     drivers.extend([str(x) for x in news_drivers if str(x).strip()])
+    if pair_conflict_score >= 0.10:
+        drivers.append(
+            f"{base}/{quote} has conflicting or same-direction currency support; size cautiously"
+        )
     if not drivers:
         drivers = [f"{base}/{quote} relative fundamental pressure is neutral"]
     pairs.append({
@@ -159,6 +199,8 @@ for row in universe:
         "macro_regime": str(macro_regime.get("market_regime") or macro_regime.get("regime") or "Unknown"),
         "news_bias": news_label,
         "news_confidence": news_conf,
+        "news_direct_score": direct_news_score,
+        "pair_conflict_score": pair_conflict_score,
         "rationale": json.dumps(drivers[:6], ensure_ascii=False),
         "invalidators": json.dumps(invalidators(pair, base, quote, bias), ensure_ascii=False),
     })
