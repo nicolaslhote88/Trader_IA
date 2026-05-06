@@ -56,7 +56,8 @@ for row in pair_scores:
         shift_pct = pressure_norm * max_shift * confidence_factor
         target_mid = spot * (1.0 + shift_pct)
         atr_pct = atr14 / spot if atr14 and atr14 > 0 else 0.01
-        band_width_pct = max(1.5 * atr_pct, 0.01)
+        ibkr_spread_pct = to_float(tech.get("ibkr_spread_pct"), 0.0)
+        band_width_pct = max(1.5 * atr_pct, 0.01, 4.0 * ibkr_spread_pct)
         band_width_pct *= 1.0 + (1.0 - max(0.0, min(1.0, data_quality)))
         if urgent:
             band_width_pct *= 1.5

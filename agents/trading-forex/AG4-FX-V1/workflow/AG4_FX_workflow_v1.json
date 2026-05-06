@@ -7,7 +7,7 @@
           "interval": [
             {
               "field": "cronExpression",
-              "expression": "15 9,14 * * 1-5"
+              "expression": "10 0,4,8,12,16,20 * * 1-5"
             }
           ]
         }
@@ -34,7 +34,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const runId = `AG4FXD_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    lookback_hours: Number($env.AG4_FX_LOOKBACK_HOURS || 96),\n    db_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    ag4_v3_path: $env.AG4_DUCKDB_PATH || '/files/duckdb/ag4_v3.duckdb',\n    ag4_forex_path: $env.AG4_FOREX_DUCKDB_PATH || '/files/duckdb/ag4_forex_v1.duckdb',\n  },\n}];\n"
+        "jsCode": "const runId = `AG4FXD_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    lookback_hours: Number($env.AG4_FX_LOOKBACK_HOURS || 96),\n    db_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    ag4_v3_path: $env.AG4_DUCKDB_PATH || '/files/duckdb/ag4_v3.duckdb',\n    ag4_forex_path: $env.AG4_FOREX_DUCKDB_PATH || '/files/duckdb/ag4_forex_v1.duckdb',\n    official_sources_enabled: String($env.AG4_FX_OFFICIAL_SOURCES_ENABLED || 'true').toLowerCase() !== 'false',\n  },\n}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -76,12 +76,26 @@
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import hashlib\n\n\ndef key_for(row):\n    raw = str(row.get(\"dedupe_key\") or \"\").strip()\n    if raw:\n        return raw\n    title = \" \".join(str(row.get(\"title\") or \"\").lower().split())\n    day = str(row.get(\"published_at\") or \"\")[:10]\n    return hashlib.sha1(f\"{title}|{day}\".encode(\"utf-8\")).hexdigest()\n\n\ndef impact_weight(row):\n    mag = str(row.get(\"impact_magnitude\") or \"\").lower()\n    base = {\"high\": 3, \"medium\": 2, \"low\": 1}.get(mag, 1)\n    pairs = [p for p in str(row.get(\"impact_fx_pairs\") or \"\").replace(\";\", \",\").split(\",\") if p.strip()]\n    return base * 10 + min(len(pairs), 8)\n\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nseen = {}\nfor row in (ctx.get(\"global_news\") or []) + (ctx.get(\"fx_channel_news\") or []):\n    k = key_for(row)\n    row = dict(row)\n    row[\"dedupe_key\"] = k\n    old = seen.get(k)\n    if old is None or impact_weight(row) > impact_weight(old):\n        seen[k] = row\n\nitems = sorted(seen.values(), key=lambda r: (impact_weight(r), str(r.get(\"published_at\") or \"\")), reverse=True)[:30]\nreturn [{\"json\": {**ctx, \"deduped_news\": items, \"news_after_dedupe\": len(items)}}]\n"
+        "pythonCode": "import hashlib\nimport re\nimport xml.etree.ElementTree as ET\nfrom datetime import datetime, timezone\nfrom email.utils import parsedate_to_datetime\nfrom urllib.request import Request, urlopen\n\nCURRENCIES = (\"USD\", \"EUR\", \"JPY\", \"GBP\", \"CHF\", \"AUD\", \"CAD\", \"NZD\")\nPAIRS = [\n    \"EURUSD\", \"GBPUSD\", \"USDJPY\", \"USDCHF\", \"AUDUSD\", \"NZDUSD\", \"USDCAD\",\n    \"EURGBP\", \"EURJPY\", \"EURCHF\", \"EURAUD\", \"EURCAD\", \"EURNZD\",\n    \"GBPJPY\", \"GBPCHF\", \"GBPAUD\", \"GBPCAD\",\n    \"AUDJPY\", \"AUDNZD\", \"AUDCAD\",\n    \"NZDJPY\", \"NZDCAD\", \"CADJPY\", \"CHFJPY\", \"CADCHF\", \"CHFCAD\", \"JPYNZD\",\n]\nSOURCES = [\n    {\"id\": \"fed_monetary\", \"url\": \"https://www.federalreserve.gov/feeds/press_monetary.xml\", \"currency\": \"USD\", \"tier\": \"S\"},\n    {\"id\": \"ecb_press\", \"url\": \"https://www.ecb.europa.eu/rss/press.html\", \"currency\": \"EUR\", \"tier\": \"S\"},\n    {\"id\": \"boj_whatsnew\", \"url\": \"https://www.boj.or.jp/en/rss/whatsnew.xml\", \"currency\": \"JPY\", \"tier\": \"S\"},\n    {\"id\": \"boe_news\", \"url\": \"https://www.bankofengland.co.uk/rss/news\", \"currency\": \"GBP\", \"tier\": \"S\"},\n    {\"id\": \"bis_press\", \"url\": \"https://www.bis.org/doclist/all_pressrels.rss\", \"currency\": \"\", \"tier\": \"S\"},\n]\nHIGH_TERMS = (\"rate\", \"monetary\", \"policy\", \"inflation\", \"cpi\", \"minutes\", \"statement\", \"decision\", \"intervention\")\n\n\ndef text_of(node, names):\n    for name in names:\n        child = node.find(name)\n        if child is not None and child.text:\n            return child.text.strip()\n    for child in list(node):\n        tag = child.tag.split(\"}\", 1)[-1].lower()\n        if tag in {n.lower() for n in names} and child.text:\n            return child.text.strip()\n    return \"\"\n\n\ndef parse_dt(value):\n    text = str(value or \"\").strip()\n    if not text:\n        return datetime.now(timezone.utc).isoformat()\n    try:\n        dt = parsedate_to_datetime(text)\n    except Exception:\n        try:\n            dt = datetime.fromisoformat(text.replace(\"Z\", \"+00:00\"))\n        except Exception:\n            dt = datetime.now(timezone.utc)\n    if dt.tzinfo is None:\n        dt = dt.replace(tzinfo=timezone.utc)\n    return dt.astimezone(timezone.utc).isoformat()\n\n\ndef impacted_pairs(currency):\n    if not currency:\n        return [\"EURUSD\", \"USDJPY\", \"GBPUSD\", \"AUDUSD\", \"NZDUSD\", \"USDCAD\", \"USDCHF\"]\n    return [p for p in PAIRS if currency in (p[:3], p[3:])]\n\n\ndef classify(source, title, snippet):\n    ccy = source.get(\"currency\") or \"\"\n    body = f\"{title} {snippet}\".lower()\n    impact = \"High\" if any(t in body for t in HIGH_TERMS) else \"Medium\"\n    bull, bear = [], []\n    hint = \"\"\n    if ccy:\n        if any(t in body for t in (\"hawkish\", \"hike\", \"higher rate\", \"inflation\", \"tightening\")):\n            bull = [ccy]\n            hint = f\"{ccy} potentially bullish if official communication is hawkish.\"\n        elif any(t in body for t in (\"dovish\", \"cut\", \"lower rate\", \"easing\", \"slowdown\")):\n            bear = [ccy]\n            hint = f\"{ccy} potentially bearish if official communication is dovish.\"\n    return impact, bull, bear, hint\n\n\ndef fetch_source(src, limit=12):\n    req = Request(src[\"url\"], headers={\"User-Agent\": \"Trader-IA/AG4-FX-V1\"})\n    with urlopen(req, timeout=10) as resp:\n        root = ET.fromstring(resp.read())\n    items = root.findall(\".//item\") or root.findall(\".//{http://www.w3.org/2005/Atom}entry\")\n    if not items:\n        items = [node for node in root.iter() if node.tag.split(\"}\", 1)[-1].lower() in (\"item\", \"entry\")]\n    out = []\n    for item in items[:limit]:\n        title = text_of(item, [\"title\"])\n        snippet = re.sub(r\"<[^>]+>\", \" \", text_of(item, [\"description\", \"summary\", \"content\"]))\n        published = parse_dt(text_of(item, [\"pubDate\", \"published\", \"updated\"]))\n        if not title:\n            continue\n        impact, bull, bear, hint = classify(src, title, snippet)\n        key = hashlib.sha1(f\"{src['id']}|{title}|{published[:10]}\".encode(\"utf-8\")).hexdigest()\n        out.append({\n            \"dedupe_key\": key,\n            \"published_at\": published,\n            \"title\": title,\n            \"source\": src[\"id\"],\n            \"snippet\": snippet[:1200],\n            \"impact_magnitude\": impact,\n            \"impact_fx_pairs\": \",\".join(impacted_pairs(src.get(\"currency\"))),\n            \"currencies_bullish\": \",\".join(bull),\n            \"currencies_bearish\": \",\".join(bear),\n            \"fx_directional_hint\": hint,\n            \"regime\": \"CentralBankWatch\",\n            \"confidence\": \"0.65\" if src.get(\"tier\") == \"S\" else \"0.50\",\n            \"impact_score\": \"7\" if impact == \"High\" else \"5\",\n            \"urgency\": \"today\",\n            \"origin\": \"official_source\",\n        })\n    return out\n\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nenabled = str(ctx.get(\"official_sources_enabled\", \"true\")).lower() != \"false\"\nitems = []\nerrors = []\nif enabled:\n    for src in SOURCES:\n        try:\n            items.extend(fetch_source(src))\n        except Exception as exc:\n            errors.append(f\"{src['id']}: {exc}\")\n\nreturn [{\"json\": {**ctx, \"official_news\": items, \"official_news_pulled\": len(items), \"official_news_errors\": errors}}]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
         60,
+        -20
+      ],
+      "id": "03b-pull-official-fx-sources",
+      "name": "03b Pull Official FX Sources"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import hashlib\n\n\ndef key_for(row):\n    raw = str(row.get(\"dedupe_key\") or \"\").strip()\n    if raw:\n        return raw\n    title = \" \".join(str(row.get(\"title\") or \"\").lower().split())\n    day = str(row.get(\"published_at\") or \"\")[:10]\n    return hashlib.sha1(f\"{title}|{day}\".encode(\"utf-8\")).hexdigest()\n\n\ndef impact_weight(row):\n    mag = str(row.get(\"impact_magnitude\") or \"\").lower()\n    base = {\"high\": 3, \"medium\": 2, \"low\": 1}.get(mag, 1)\n    pairs = [p for p in str(row.get(\"impact_fx_pairs\") or \"\").replace(\";\", \",\").split(\",\") if p.strip()]\n    return base * 10 + min(len(pairs), 8)\n\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nseen = {}\nfor row in (ctx.get(\"global_news\") or []) + (ctx.get(\"fx_channel_news\") or []) + (ctx.get(\"official_news\") or []):\n    k = key_for(row)\n    row = dict(row)\n    row[\"dedupe_key\"] = k\n    old = seen.get(k)\n    if old is None or impact_weight(row) > impact_weight(old):\n        seen[k] = row\n\nitems = sorted(seen.values(), key=lambda r: (impact_weight(r), str(r.get(\"published_at\") or \"\")), reverse=True)[:30]\nreturn [{\"json\": {**ctx, \"deduped_news\": items, \"news_after_dedupe\": len(items)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
         -20
       ],
       "id": "04-dedupe-and-score",
@@ -95,7 +109,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        300,
+        540,
         -20
       ],
       "id": "05-compute-fx-macro-digest",
@@ -109,7 +123,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        540,
+        780,
         -20
       ],
       "id": "06-write-digest-fx",
@@ -118,12 +132,12 @@
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag4_fx_v1.duckdb\"\n\nwith duckdb.connect(db_path) as con:\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.run_log (\n          run_id VARCHAR PRIMARY KEY,\n          started_at TIMESTAMP,\n          finished_at TIMESTAMP,\n          news_global_pulled INTEGER,\n          news_fx_channel_pulled INTEGER,\n          news_after_dedupe INTEGER,\n          sections_written INTEGER,\n          errors INTEGER,\n          notes VARCHAR\n        )\n        \"\"\"\n    )\n    errors = int(bool(ctx.get(\"global_error\"))) + int(bool(ctx.get(\"fx_channel_error\")))\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO main.run_log VALUES (\n          ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?\n        )\n        \"\"\",\n        [\n            ctx.get(\"run_id\"),\n            int(ctx.get(\"news_global_pulled\") or 0),\n            int(ctx.get(\"news_fx_channel_pulled\") or 0),\n            int(ctx.get(\"news_after_dedupe\") or 0),\n            int(ctx.get(\"sections_written\") or 0),\n            errors,\n            \"AG4-FX-V1 digest completed\",\n        ],\n    )\n\nreturn [{\"json\": {\"run_id\": ctx.get(\"run_id\"), \"sections_written\": ctx.get(\"sections_written\"), \"errors\": errors}}]\n"
+        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag4_fx_v1.duckdb\"\n\nwith duckdb.connect(db_path) as con:\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.run_log (\n          run_id VARCHAR PRIMARY KEY,\n          started_at TIMESTAMP,\n          finished_at TIMESTAMP,\n          news_global_pulled INTEGER,\n          news_fx_channel_pulled INTEGER,\n          news_after_dedupe INTEGER,\n          sections_written INTEGER,\n          errors INTEGER,\n          notes VARCHAR\n        )\n        \"\"\"\n    )\n    errors = int(bool(ctx.get(\"global_error\"))) + int(bool(ctx.get(\"fx_channel_error\"))) + len(ctx.get(\"official_news_errors\") or [])\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO main.run_log VALUES (\n          ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?\n        )\n        \"\"\",\n        [\n            ctx.get(\"run_id\"),\n            int(ctx.get(\"news_global_pulled\") or 0),\n            int(ctx.get(\"news_fx_channel_pulled\") or 0),\n            int(ctx.get(\"news_after_dedupe\") or 0),\n            int(ctx.get(\"sections_written\") or 0),\n            errors,\n            f\"AG4-FX-V1 digest completed; official_news={int(ctx.get('official_news_pulled') or 0)}\",\n        ],\n    )\n\nreturn [{\"json\": {\"run_id\": ctx.get(\"run_id\"), \"sections_written\": ctx.get(\"sections_written\"), \"errors\": errors}}]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        780,
+        1020,
         -20
       ],
       "id": "07-log-run-fx",
@@ -176,6 +190,17 @@
       ]
     },
     "03 Pull FX Channel News": {
+      "main": [
+        [
+          {
+            "node": "03b Pull Official FX Sources",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03b Pull Official FX Sources": {
       "main": [
         [
           {

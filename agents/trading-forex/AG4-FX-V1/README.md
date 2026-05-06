@@ -6,11 +6,12 @@ Macro/news digest agent dedicated to the AG1-FX-V1 Forex sandbox.
 
 - Reads global AG4 news from `ag4_v3.duckdb` where `impact_asset_class` contains `FX` or `Mixed`.
 - Reads FX-channel news, macro regime and pair bias from `ag4_forex_v1.duckdb`.
+- Pulls official central-bank/BIS RSS feeds when `AG4_FX_OFFICIAL_SOURCES_ENABLED` is not `false`.
 - Deduplicates the last 24 hours and writes three payload sections to `ag4_fx_v1.duckdb`: `top_news`, `pair_focus`, `macro_regime`.
 
 ## Cron
 
-`15 9,14 * * 1-5` in `Europe/Paris` (2x/day at 09:15 and 14:15, inside the Paris stock exchange open window 09:00–17:30). Updated 2026-04-26.
+`10 0,4,8,12,16,20 * * 1-5` in `Europe/Paris` (6x/day, 10 minutes after AG2-FX and 10 minutes before AG3-FX). Updated 2026-05-06.
 
 ## Local replay
 

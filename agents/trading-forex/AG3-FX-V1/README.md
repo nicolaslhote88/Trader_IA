@@ -13,6 +13,8 @@ FX pair.
 - `/files/duckdb/ag4_fx_v1.duckdb`
   - latest `main.fx_digest` sections: `top_news`, `pair_focus`, `macro_regime`
 - Optional external macro observations through FRED when `FRED_API_KEY` is set.
+- Public World Bank macro observations for real yields, inflation, growth, labor and external balance where no FRED mapping is configured.
+- AG2-FX IBKR snapshot fields, when available, for live spot/spread-aware equilibrium bands.
 
 If external macro data is unavailable, AG3-FX still emits one row per active pair
 using AG4-FX macro/news proxies plus AG2-FX spot/ATR. In that mode targets are

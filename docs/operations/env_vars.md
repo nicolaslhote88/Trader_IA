@@ -32,6 +32,8 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_ACCOUNT_ID` | Compte IBKR cible. Laisser vide pour auto-detection, mais le fixer est recommande avant le live. |
 | `IBKR_BROKER_URL` | URL interne n8n/runners vers le broker. Definie dans compose : `http://ibkr-broker:8080`. |
 | `IBKR_GATEWAY_URL` | URL interne du broker vers Client Portal Gateway. Definie dans compose : `https://ibkr-gateway:5000`. |
+| `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
+| `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |
 
 Voir aussi `docs/operations/ibkr_execution.md`.
 
@@ -78,6 +80,7 @@ Définies dans `infra/vps_hostinger_config/docker-compose.yml` pour `n8n`, `task
 - `AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb`
 - `AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb`
 - `AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb`
+- `AG3_FX_V1_DUCKDB_PATH=/files/duckdb/ag3_fx_v1.duckdb`
 - `AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb`
 - `AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py`
 - `AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql`

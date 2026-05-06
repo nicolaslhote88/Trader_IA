@@ -19,6 +19,23 @@ FRED_SERIES = {
         "labor": ("UNRATE", False, 0.8),
     },
 }
+CURRENCY_COUNTRY = {
+    "USD": "USA",
+    "EUR": "EUU",
+    "JPY": "JPN",
+    "GBP": "GBR",
+    "CHF": "CHE",
+    "AUD": "AUS",
+    "CAD": "CAN",
+    "NZD": "NZL",
+}
+WORLDBANK_SERIES = {
+    "real_yield": ("FR.INR.RINR", True, 1.0),
+    "inflation": ("FP.CPI.TOTL.ZG", False, 0.8),
+    "growth": ("NY.GDP.MKTP.KD.ZG", True, 0.8),
+    "labor": ("SL.UEM.TOTL.ZS", False, 0.6),
+    "external_balance": ("BN.CAB.XOKA.GD.ZS", True, 0.5),
+}
 
 FACTOR_DEFAULTS = {
     "policy_rate": {"source": "FRED", "higher_is_bullish": True, "weight": 1.0},
@@ -65,7 +82,42 @@ def fred_observations(series_id):
     return out
 
 
-def observation(currency, factor, source, series_id, value, previous, status, higher_is_bullish=True, weight=1.0):
+def worldbank_observations(country, indicator):
+    params = {"format": "json", "per_page": 20}
+    url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?" + urlencode(params)
+    with urlopen(url, timeout=timeout) as resp:
+        payload = json.loads(resp.read().decode("utf-8"))
+    rows = payload[1] if isinstance(payload, list) and len(payload) > 1 else []
+    out = []
+    for row in rows:
+        value = row.get("value")
+        if value is None:
+            continue
+        try:
+            out.append({"date": str(row.get("date") or ""), "value": float(value)})
+        except Exception:
+            continue
+    return out
+
+
+def zscore_normalized(obs, higher_is_bullish=True):
+    values = [x["value"] for x in obs if x.get("value") is not None]
+    if len(values) < 4:
+        return None
+    latest = values[0]
+    sample = values[:10]
+    mean = sum(sample) / len(sample)
+    var = sum((x - mean) ** 2 for x in sample) / len(sample)
+    sd = math.sqrt(var)
+    if sd <= 0:
+        return 0.0
+    z = (latest - mean) / sd
+    if not higher_is_bullish:
+        z *= -1
+    return clamp(z / 2.0)
+
+
+def observation(currency, factor, source, series_id, value, previous, status, higher_is_bullish=True, weight=1.0, normalized_override=None):
     delta_1m = value - previous if value is not None and previous is not None else None
     raw = None
     if delta_1m is not None:
@@ -73,7 +125,7 @@ def observation(currency, factor, source, series_id, value, previous, status, hi
         raw = delta_1m / scale
         if not higher_is_bullish:
             raw *= -1
-    normalized = clamp((raw or 0.0) * 6.0) if status == "OK" else None
+    normalized = normalized_override if normalized_override is not None else (clamp((raw or 0.0) * 6.0) if status == "OK" else None)
     return {
         "observation_id": f"{run_id}_{currency}_{factor}",
         "run_id": run_id,
@@ -96,6 +148,28 @@ def observation(currency, factor, source, series_id, value, previous, status, hi
     }
 
 
+def worldbank_record(currency, factor, indicator, higher_is_bullish, weight):
+    country = CURRENCY_COUNTRY[currency]
+    obs = worldbank_observations(country, indicator)
+    latest = obs[0] if obs else None
+    previous = obs[1] if len(obs) > 1 else None
+    norm = zscore_normalized(obs, higher_is_bullish=higher_is_bullish)
+    rec = observation(
+        currency,
+        factor,
+        "WorldBank",
+        indicator,
+        latest.get("value") if latest else None,
+        previous.get("value") if previous else None,
+        "OK" if latest else "MISSING",
+        higher_is_bullish,
+        weight,
+        normalized_override=norm,
+    )
+    rec["observation_date"] = f"{latest.get('date')}-12-31" if latest else None
+    return rec
+
+
 observations = []
 fetch_errors = []
 
@@ -108,27 +182,40 @@ for ccy in currencies:
                 obs = fred_observations(series_id)
                 latest = obs[0] if obs else None
                 previous = obs[1] if len(obs) > 1 else None
-                rec = observation(
-                    ccy,
-                    factor,
-                    meta["source"],
-                    series_id,
-                    latest.get("value") if latest else None,
-                    previous.get("value") if previous else None,
-                    "OK" if latest else "MISSING",
-                    higher_is_bullish,
-                    weight,
-                )
-                rec["observation_date"] = latest.get("date") if latest else None
+                if latest:
+                    rec = observation(
+                        ccy,
+                        factor,
+                        meta["source"],
+                        series_id,
+                        latest.get("value"),
+                        previous.get("value") if previous else None,
+                        "OK",
+                        higher_is_bullish,
+                        weight,
+                    )
+                    rec["observation_date"] = latest.get("date")
+                elif factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
+                    indicator, wb_higher_is_bullish, wb_weight = WORLDBANK_SERIES[factor]
+                    rec = worldbank_record(ccy, factor, indicator, wb_higher_is_bullish, wb_weight)
+                else:
+                    rec = observation(ccy, factor, meta["source"], series_id, None, None, "MISSING", higher_is_bullish, weight)
                 observations.append(rec)
             except Exception as exc:
                 fetch_errors.append(f"{ccy}.{factor}.{series_id}: {exc}")
                 observations.append(observation(ccy, factor, meta["source"], series_id, None, None, "ERROR", meta["higher_is_bullish"], meta["weight"]))
+        elif factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
+            indicator, higher_is_bullish, weight = WORLDBANK_SERIES[factor]
+            try:
+                observations.append(worldbank_record(ccy, factor, indicator, higher_is_bullish, weight))
+            except Exception as exc:
+                fetch_errors.append(f"{ccy}.{factor}.{indicator}: {exc}")
+                observations.append(observation(ccy, factor, "WorldBank", indicator, None, None, "ERROR", higher_is_bullish, weight))
         else:
             observations.append(observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]))
 
 ok_count = sum(1 for x in observations if x.get("data_status") == "OK")
-macro_data_degraded = ok_count < max(3, len(currencies))
+macro_data_degraded = ok_count < max(3, len(currencies) * 3)
 
 return [{
     "json": {

@@ -19,7 +19,7 @@ def impact_weight(row):
 
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 seen = {}
-for row in (ctx.get("global_news") or []) + (ctx.get("fx_channel_news") or []):
+for row in (ctx.get("global_news") or []) + (ctx.get("fx_channel_news") or []) + (ctx.get("official_news") or []):
     k = key_for(row)
     row = dict(row)
     row["dedupe_key"] = k

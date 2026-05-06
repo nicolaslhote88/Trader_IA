@@ -39,13 +39,14 @@ def build():
         node("01 Init Config FX", "01_init_config_fx.js", -660, -20, "javaScript"),
         node("02 Load FX Universe", "02_load_fx_universe.py", -420, -20),
         node("03 Fetch YFinance FX", "03_fetch_yfinance_fx.py", -180, -20),
-        node("04 Compute Indicators FX", "04_compute_indicators_fx.py", 60, -20),
-        node("05 Compute Levels FX", "05_compute_levels_fx.py", 300, -20),
-        node("06 Compute Regime FX", "06_compute_regime_fx.py", 540, -20),
-        node("07 Score Signal FX", "07_score_signal_fx.py", 780, -20),
-        node("08 Write Universe FX", "08_write_universe_fx.py", 1020, -20),
-        node("09 Write Signals FX", "09_write_signals_fx.py", 1260, -20),
-        node("10 Log Run FX", "10_log_run_fx.py", 1500, -20),
+        node("03b Fetch IBKR FX Snapshot", "03b_fetch_ibkr_fx_snapshot.py", 60, -20),
+        node("04 Compute Indicators FX", "04_compute_indicators_fx.py", 300, -20),
+        node("05 Compute Levels FX", "05_compute_levels_fx.py", 540, -20),
+        node("06 Compute Regime FX", "06_compute_regime_fx.py", 780, -20),
+        node("07 Score Signal FX", "07_score_signal_fx.py", 1020, -20),
+        node("08 Write Universe FX", "08_write_universe_fx.py", 1260, -20),
+        node("09 Write Signals FX", "09_write_signals_fx.py", 1500, -20),
+        node("10 Log Run FX", "10_log_run_fx.py", 1740, -20),
     ]
     order = [n["name"] for n in nodes[2:]]
     conns = {

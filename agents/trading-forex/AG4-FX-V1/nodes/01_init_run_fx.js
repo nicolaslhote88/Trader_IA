@@ -8,5 +8,6 @@ return [{
     db_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',
     ag4_v3_path: $env.AG4_DUCKDB_PATH || '/files/duckdb/ag4_v3.duckdb',
     ag4_forex_path: $env.AG4_FOREX_DUCKDB_PATH || '/files/duckdb/ag4_forex_v1.duckdb',
+    official_sources_enabled: String($env.AG4_FX_OFFICIAL_SOURCES_ENABLED || 'true').toLowerCase() !== 'false',
   },
 }];

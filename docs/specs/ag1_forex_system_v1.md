@@ -174,7 +174,8 @@ Les 5 bases vivent dans `/local-files/duckdb/` (volume `/local-files` deja monte
 | Workflow | Cron expression | Heures Paris | Frequence | Justification |
 |---|---|---|---|---|
 | **AG2-FX-V1** | `0 0,4,8,12,16,20 * * 1-5` | 0h, 4h, 8h, 12h, 16h, 20h | 6x/jour | Forex 24/5 -> couverture sessions Asie / Europe / US ; signaux techniques rafraichis toutes les 4h. |
-| **AG4-FX-V1** | `15 9,14 * * 1-5` | 9h15, 14h15 | 2x/jour | Fenetre ouverture bourse FR (9h-17h30) ; matin = post-ouverture EU + macro asiatique nuit, apres-midi = pre-ouverture US. |
+| **AG4-FX-V1** | `10 0,4,8,12,16,20 * * 1-5` | 0h10, 4h10, 8h10, 12h10, 16h10, 20h10 | 6x/jour | Digest news/macro rafraichi juste apres AG2-FX, avec sources officielles banques centrales/BIS. |
+| **AG3-FX-V1** | `20 4,8,12,16,20 * * 1-5` | 4h20, 8h20, 12h20, 16h20, 20h20 | 5x/jour | Score fondamental/equilibre apres AG2-FX et AG4-FX pour alimenter AG1. |
 | **AG1-FX-V1 chatgpt52** | `30 4,8,12,16,20 * * 1-5` | 4h30, 8h30, 12h30, 16h30, 20h30 | 5x/jour | Run environ 30 min apres les snapshots AG2-FX de 4h/8h/12h/16h/20h. |
 | **AG1-FX-V1 grok41_reasoning** | `35 4,8,12,16,20 * * 1-5` | 4h35, 8h35, 12h35, 16h35, 20h35 | 5x/jour | +5 min vs chatgpt52 pour etaler la charge runner et eviter conflits lecture concurrente DuckDB. |
 | **AG1-FX-V1 gemini30_pro** | `40 4,8,12,16,20 * * 1-5` | 4h40, 8h40, 12h40, 16h40, 20h40 | 5x/jour | +10 min vs chatgpt52, meme cadence AG2-FX. |
@@ -183,14 +184,15 @@ Les 5 bases vivent dans `/local-files/duckdb/` (volume `/local-files` deja monte
 ### 4.2 Frise temporelle journee type (lun-ven)
 
 ```
-00h  04h  04h30/35/40  08h  08h30/35/40  12h  12h30/35/40  16h  16h30/35/40  20h  20h30/35/40
- |    |        |        |        |        |        |        |        |        |        |
- AG2  AG2      AG1      AG2      AG1      AG2      AG1      AG2      AG1      AG2      AG1
- (technique 6x/j -- forex 24/5)        (PM matin)               (PM apres-midi)
+00h00 00h10   04h00 04h10 04h20 04h30/35/40   08h00 08h10 08h20 08h30/35/40   ...
+  |     |       |     |     |       |            |     |     |       |
+ AG2   AG4     AG2   AG4   AG3     AG1          AG2   AG4   AG3     AG1
+ (AG2 -> AG4 -> AG3 -> AG1, sequence fraiche toutes les 4h hors run AG1 de minuit)
 
 Legende :
-- AG2  = AG2-FX-V1 (technique, 6x/j, mutualise entre les 3 PMs)
-- AG4  = AG4-FX-V1 (news macro FX, 2x/j, mutualise entre les 3 PMs)
+- AG2  = AG2-FX-V1 (technique + snapshot IBKR, 6x/j, mutualise entre les 3 PMs)
+- AG4  = AG4-FX-V1 (news macro FX + sources officielles, 6x/j, mutualise entre les 3 PMs)
+- AG3  = AG3-FX-V1 (fondamental/equilibre, 5x/j, package AG1)
 - AG1A = chatgpt52    (:30 apres AG2)
 - AG1B = grok41       (:35, +5 min)
 - AG1C = gemini30_pro (:40, +10 min)
@@ -198,8 +200,8 @@ Legende :
 
 ### 4.3 Garanties cherches
 
-1. **Pas de conflit DuckDB** : les 3 PMs lisent `ag2_fx_v1.duckdb` et `ag4_fx_v1.duckdb` en concurrence. Le decalage 5 min garantit que chaque LLM a son propre creneau de lecture, sans collision simultanee avec un autre PM.
-2. **Donnees fraiches** : AG2 tourne **avant** AG4, AG4 tourne **avant** AG1. La sequence garantit que chaque PM lit le dernier snapshot technique + le dernier digest macro.
+1. **Pas de conflit DuckDB** : les 3 PMs lisent `ag2_fx_v1.duckdb`, `ag3_fx_v1.duckdb` et `ag4_fx_v1.duckdb` en concurrence. Le decalage 5 min garantit que chaque LLM a son propre creneau de lecture, sans collision simultanee avec un autre PM.
+2. **Donnees fraiches** : AG2 tourne **avant** AG4, AG4 tourne **avant** AG3, AG3 tourne **avant** AG1. La sequence garantit que chaque PM lit le dernier snapshot technique, le dernier digest macro et le dernier package fondamental/equilibre.
 3. **Couverture forex 24/5** : AG2 capte les sessions Asie (4h, 8h Paris), Europe (8h, 12h, 16h Paris) et US (16h, 20h Paris). Les 5 runs/j AG1-FX exploitent ces snapshots avec environ 30 minutes de latence.
 4. **Cadence PM compatible supervision** : 5 runs/j reste discret par rapport a un moteur intraday continu, mais couvre mieux les sessions FX qu'une cadence matin/apres-midi.
 
@@ -207,7 +209,7 @@ Legende :
 
 Le fichier `agents/trading-forex/AG1-FX-V1-Portfolio manager/generate_model_variants.py` est la **source de verite** des cron AG1. Il regenere les 3 fichiers `AG1_FX_workflow_*_v1.json` a partir du template. Les cron des 3 fichiers ne doivent jamais etre edites a la main.
 
-Pour AG2-FX-V1 et AG4-FX-V1, le cron est defini directement dans le node `Schedule Trigger` de chaque workflow JSON (un seul fichier par agent).
+Pour AG2-FX-V1, AG3-FX-V1 et AG4-FX-V1, le cron est defini directement dans le node `Schedule Trigger` de chaque workflow JSON (un seul fichier par agent).
 
 Pour AG1-FX-PF-V1, le cron horaire est defini dans `agents/trading-forex/AG1-FX-PF-V1/build_workflow.py`, qui genere `AG1-FX-PF-V1-workflow.json`.
 
