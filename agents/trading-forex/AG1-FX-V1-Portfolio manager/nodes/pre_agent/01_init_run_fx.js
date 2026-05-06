@@ -21,6 +21,7 @@ return [{
     db_path: dbPathByVariant[variant] || dbPathByVariant[DEFAULT_VARIANT],
     ag2_fx_path: $env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',
     ag4_fx_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',
+    ag3_fx_path: $env.AG3_FX_V1_DUCKDB_PATH || '/files/duckdb/ag3_fx_v1.duckdb',
     schema_path: $env.AG1_FX_V1_LEDGER_SCHEMA_PATH || '/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql',
     dry_run: String($env.AG1_FX_DRY_RUN || '').toLowerCase() === '1',
   },

@@ -38,6 +38,7 @@ const MAX_LLM_DRIVERS = envNum('AG1_FX_LLM_PAIR_DRIVERS_MAX', 2);
 const universeRows = j.universe_fx || [];
 const technicalRows = j.technical_signals || [];
 const macroNews = j.macro_news || { top_news: [], pair_focus: {}, macro_regime: {} };
+const fundamentalFx = j.fundamental_fx || {};
 const pairFocus = macroNews.pair_focus || {};
 const openLots = (j.portfolio_state || {}).open_lots || [];
 const openPairs = new Set(openLots.map((x) => x.pair).filter(Boolean));
@@ -60,6 +61,7 @@ const brief = {
   },
   technical_signals: technicalRows,
   macro_news: macroNews,
+  fundamental_fx: fundamentalFx,
   limits: {
     max_pair_pct: Number(cfg.max_pair_pct || cfg.max_pos_pct || 0.20),
     max_currency_exposure_pct: Number(cfg.max_currency_exposure_pct || 0.50),
@@ -204,6 +206,24 @@ const topNews = topNewsSource
     hint: truncate(n.fx_directional_hint, 220),
   }));
 
+function compactFundamental(pair) {
+  const f = fundamentalFx[pair] || {};
+  const decimals = num(pairMeta(pair).price_decimals, String(pair || '').endsWith('JPY') ? 3 : 5);
+  return {
+    bias: f?.fundamental?.directional_bias || 'unknown',
+    score: rounded(f?.fundamental?.score, 2),
+    confidence: rounded(f?.fundamental?.confidence, 2),
+    equilibrium_mid: rounded(f?.equilibrium?.target_mid, decimals),
+    equilibrium_low: rounded(f?.equilibrium?.target_low, decimals),
+    equilibrium_high: rounded(f?.equilibrium?.target_high, decimals),
+    mispricing_pct: pct(f?.equilibrium?.mispricing_pct, 2),
+    horizon_days: f?.equilibrium?.target_horizon_days || null,
+    drivers: (f?.drivers || []).slice(0, 3).map((x) => truncate(x, 120)),
+    invalidators: (f?.invalidators || []).slice(0, 3).map((x) => truncate(x, 120)),
+    data_quality: rounded(f?.data_quality?.score, 2),
+  };
+}
+
 const regime = macroNews.macro_regime || {};
 const llmBrief = {
   run: brief.run,
@@ -242,9 +262,15 @@ const llmBrief = {
   briefing_notes: [
     'pair_matrix is a compact scan of all eligible pairs.',
     'market_watch contains the highest-priority/open pairs with extra technical and news context.',
-    'Use only universe_pairs. Prefer no trade when macro and technicals conflict.',
+    'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
   ],
 };
+
+if (Object.keys(fundamentalFx).length > 0) {
+  llmBrief.fundamental = {
+    by_pair: Object.fromEntries(selectedPairs.map((pair) => [pair, compactFundamental(pair)])),
+  };
+}
 
 const fullBriefChars = JSON.stringify(brief, null, 2).length;
 const llmBriefJson = JSON.stringify(llmBrief);

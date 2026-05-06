@@ -1,0 +1,326 @@
+{
+  "name": "AG3-FX-V1 - Forex Fundamental Analyst",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "20 4,8,12,16,20 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -1140,
+        -120
+      ],
+      "id": "schedule",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1140,
+        80
+      ],
+      "id": "manual",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "jsCode": "const runId = `AG3FX_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    workflow_version: 'AG3-FX-V1',\n    db_path: $env.AG3_FX_V1_DUCKDB_PATH || '/files/duckdb/ag3_fx_v1.duckdb',\n    ag2_fx_path: $env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',\n    ag4_fx_path: $env.AG4_FX_V1_DUCKDB_PATH || '/files/duckdb/ag4_fx_v1.duckdb',\n    schema_path: $env.AG3_FX_V1_SCHEMA_PATH || '/files/AG3-FX-V1-EXPORT/sql/ag3_fx_v1_schema.sql',\n    fred_api_key: $env.FRED_API_KEY || '',\n    macro_fetch_timeout_seconds: Number($env.AG3_FX_MACRO_FETCH_TIMEOUT_SECONDS || 8),\n    max_equilibrium_shift_pct: Number($env.AG3_FX_MAX_EQUILIBRIUM_SHIFT_PCT || 0.06),\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -900,
+        -20
+      ],
+      "id": "01-init-run-fx",
+      "name": "01 Init Run FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag2_fx_path\") or \"/files/duckdb/ag2_fx_v1.duckdb\"\nrows = []\n\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            rows = con.execute(\n                \"\"\"\n                SELECT pair, symbol_yf, base_ccy, quote_ccy, pip_size, price_decimals, liquidity_tier, enabled\n                FROM main.universe_fx\n                WHERE enabled = TRUE\n                ORDER BY pair\n                \"\"\"\n            ).fetchdf().to_dict(\"records\")\n    except Exception as exc:\n        ctx[\"universe_error\"] = str(exc)\n\nif not rows:\n    fallback = [\n        \"EURUSD\", \"GBPUSD\", \"USDJPY\", \"USDCHF\", \"AUDUSD\", \"NZDUSD\", \"USDCAD\",\n        \"EURGBP\", \"EURJPY\", \"EURCHF\", \"EURAUD\", \"EURCAD\", \"EURNZD\",\n        \"GBPJPY\", \"GBPCHF\", \"GBPAUD\", \"GBPCAD\",\n        \"AUDJPY\", \"AUDNZD\", \"AUDCAD\",\n        \"NZDJPY\", \"NZDCAD\", \"CADJPY\", \"CHFJPY\", \"CADCHF\", \"CHFCAD\", \"JPYNZD\",\n    ]\n    rows = [\n        {\n            \"pair\": p,\n            \"symbol_yf\": f\"{p}=X\",\n            \"base_ccy\": p[:3],\n            \"quote_ccy\": p[3:],\n            \"pip_size\": 0.01 if p.endswith(\"JPY\") else 0.0001,\n            \"price_decimals\": 3 if p.endswith(\"JPY\") else 5,\n            \"liquidity_tier\": \"major\" if p in {\"EURUSD\", \"GBPUSD\", \"USDJPY\", \"USDCHF\", \"AUDUSD\", \"NZDUSD\", \"USDCAD\"} else \"cross\",\n            \"enabled\": True,\n        }\n        for p in fallback\n    ]\n    ctx[\"universe_fallback_used\"] = True\n\ncurrencies = sorted({str(r.get(\"base_ccy\") or \"\") for r in rows} | {str(r.get(\"quote_ccy\") or \"\") for r in rows})\ncurrencies = [c for c in currencies if c]\n\nreturn [{\"json\": {**ctx, \"universe_fx\": rows, \"currencies\": currencies, \"pairs_total\": len(rows)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -660,
+        -20
+      ],
+      "id": "02-load-universe-fx",
+      "name": "02 Load Universe FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag2_fx_path\") or \"/files/duckdb/ag2_fx_v1.duckdb\"\nrows = []\nlatest_ag2_run_id = \"\"\n\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            row = con.execute(\n                \"\"\"\n                SELECT run_id\n                FROM main.run_log\n                ORDER BY finished_at DESC NULLS LAST, started_at DESC NULLS LAST\n                LIMIT 1\n                \"\"\"\n            ).fetchone()\n            latest_ag2_run_id = row[0] if row else \"\"\n            if latest_ag2_run_id:\n                rows = con.execute(\n                    \"\"\"\n                    SELECT *\n                    FROM main.technical_signals_fx\n                    WHERE run_id = ?\n                    ORDER BY pair\n                    \"\"\",\n                    [latest_ag2_run_id],\n                ).fetchdf().to_dict(\"records\")\n    except Exception as exc:\n        ctx[\"technical_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"technical_signals\": rows, \"latest_ag2_run_id\": latest_ag2_run_id}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        -20
+      ],
+      "id": "03-load-latest-technical-fx",
+      "name": "03 Load Latest Technical FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport os\nimport duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\npath = ctx.get(\"ag4_fx_path\") or \"/files/duckdb/ag4_fx_v1.duckdb\"\npayload = {\"top_news\": [], \"pair_focus\": {}, \"macro_regime\": {}}\nlatest_ag4_run_id = \"\"\n\nif os.path.exists(path):\n    try:\n        with duckdb.connect(path, read_only=True) as con:\n            row = con.execute(\n                \"\"\"\n                SELECT run_id\n                FROM main.run_log\n                ORDER BY finished_at DESC NULLS LAST, started_at DESC NULLS LAST\n                LIMIT 1\n                \"\"\"\n            ).fetchone()\n            latest_ag4_run_id = row[0] if row else \"\"\n            if latest_ag4_run_id:\n                df = con.execute(\n                    \"\"\"\n                    SELECT section, payload\n                    FROM main.fx_digest\n                    WHERE run_id = ?\n                    \"\"\",\n                    [latest_ag4_run_id],\n                ).fetchdf()\n                for rec in df.to_dict(\"records\"):\n                    section = rec.get(\"section\")\n                    obj = json.loads(rec.get(\"payload\") or \"{}\")\n                    if section == \"top_news\":\n                        payload[\"top_news\"] = obj.get(\"items\") or []\n                    elif section == \"pair_focus\":\n                        payload[\"pair_focus\"] = obj.get(\"pairs\") or {}\n                    elif section == \"macro_regime\":\n                        payload[\"macro_regime\"] = obj\n    except Exception as exc:\n        ctx[\"macro_news_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"macro_news\": payload, \"latest_ag4_run_id\": latest_ag4_run_id}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -180,
+        -20
+      ],
+      "id": "04-load-macro-news-fx",
+      "name": "04 Load Macro News FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport math\nimport os\nfrom datetime import datetime, timezone\nfrom urllib.parse import urlencode\nfrom urllib.request import urlopen\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nrun_id = ctx.get(\"run_id\") or \"\"\nas_of = ctx.get(\"as_of\") or datetime.now(timezone.utc).isoformat()\nfred_key = ctx.get(\"fred_api_key\") or os.getenv(\"FRED_API_KEY\") or \"\"\ntimeout = max(2, int(ctx.get(\"macro_fetch_timeout_seconds\") or 8))\ncurrencies = ctx.get(\"currencies\") or [\"USD\", \"EUR\", \"JPY\", \"GBP\", \"CHF\", \"AUD\", \"CAD\", \"NZD\"]\n\nFRED_SERIES = {\n    \"USD\": {\n        \"policy_rate\": (\"FEDFUNDS\", True, 1.0),\n        \"inflation\": (\"CPIAUCSL\", False, 0.8),\n        \"labor\": (\"UNRATE\", False, 0.8),\n    },\n}\n\nFACTOR_DEFAULTS = {\n    \"policy_rate\": {\"source\": \"FRED\", \"higher_is_bullish\": True, \"weight\": 1.0},\n    \"real_yield\": {\"source\": \"FRED\", \"higher_is_bullish\": True, \"weight\": 1.0},\n    \"inflation\": {\"source\": \"FRED\", \"higher_is_bullish\": False, \"weight\": 0.8},\n    \"growth\": {\"source\": \"FRED\", \"higher_is_bullish\": True, \"weight\": 0.8},\n    \"labor\": {\"source\": \"FRED\", \"higher_is_bullish\": False, \"weight\": 0.6},\n    \"external_balance\": {\"source\": \"WorldBank\", \"higher_is_bullish\": True, \"weight\": 0.5},\n}\n\n\ndef clamp(v, lo=-1.0, hi=1.0):\n    try:\n        n = float(v)\n        if not math.isfinite(n):\n            return None\n        return max(lo, min(hi, n))\n    except Exception:\n        return None\n\n\ndef fred_observations(series_id):\n    if not fred_key:\n        return []\n    params = {\n        \"series_id\": series_id,\n        \"api_key\": fred_key,\n        \"file_type\": \"json\",\n        \"sort_order\": \"desc\",\n        \"limit\": 18,\n    }\n    url = \"https://api.stlouisfed.org/fred/series/observations?\" + urlencode(params)\n    with urlopen(url, timeout=timeout) as resp:\n        payload = json.loads(resp.read().decode(\"utf-8\"))\n    out = []\n    for row in payload.get(\"observations\") or []:\n        value = row.get(\"value\")\n        if value in (None, \".\"):\n            continue\n        try:\n            out.append({\"date\": row.get(\"date\"), \"value\": float(value)})\n        except Exception:\n            continue\n    return out\n\n\ndef observation(currency, factor, source, series_id, value, previous, status, higher_is_bullish=True, weight=1.0):\n    delta_1m = value - previous if value is not None and previous is not None else None\n    raw = None\n    if delta_1m is not None:\n        scale = max(abs(previous or 0.0), 1.0)\n        raw = delta_1m / scale\n        if not higher_is_bullish:\n            raw *= -1\n    normalized = clamp((raw or 0.0) * 6.0) if status == \"OK\" else None\n    return {\n        \"observation_id\": f\"{run_id}_{currency}_{factor}\",\n        \"run_id\": run_id,\n        \"currency\": currency,\n        \"factor\": factor,\n        \"source\": source,\n        \"series_id\": series_id,\n        \"observation_date\": None,\n        \"value\": value,\n        \"previous_value\": previous,\n        \"delta_1m\": delta_1m,\n        \"delta_3m\": None,\n        \"delta_12m\": None,\n        \"zscore\": None,\n        \"normalized_score\": normalized,\n        \"weight\": weight,\n        \"higher_is_bullish\": bool(higher_is_bullish),\n        \"data_status\": status,\n        \"fetched_at\": as_of,\n    }\n\n\nobservations = []\nfetch_errors = []\n\nfor ccy in currencies:\n    configured = FRED_SERIES.get(ccy, {})\n    for factor, meta in FACTOR_DEFAULTS.items():\n        if factor in configured:\n            series_id, higher_is_bullish, weight = configured[factor]\n            try:\n                obs = fred_observations(series_id)\n                latest = obs[0] if obs else None\n                previous = obs[1] if len(obs) > 1 else None\n                rec = observation(\n                    ccy,\n                    factor,\n                    meta[\"source\"],\n                    series_id,\n                    latest.get(\"value\") if latest else None,\n                    previous.get(\"value\") if previous else None,\n                    \"OK\" if latest else \"MISSING\",\n                    higher_is_bullish,\n                    weight,\n                )\n                rec[\"observation_date\"] = latest.get(\"date\") if latest else None\n                observations.append(rec)\n            except Exception as exc:\n                fetch_errors.append(f\"{ccy}.{factor}.{series_id}: {exc}\")\n                observations.append(observation(ccy, factor, meta[\"source\"], series_id, None, None, \"ERROR\", meta[\"higher_is_bullish\"], meta[\"weight\"]))\n        else:\n            observations.append(observation(ccy, factor, meta[\"source\"], None, None, None, \"NOT_MAPPED\", meta[\"higher_is_bullish\"], meta[\"weight\"]))\n\nok_count = sum(1 for x in observations if x.get(\"data_status\") == \"OK\")\nmacro_data_degraded = ok_count < max(3, len(currencies))\n\nreturn [{\n    \"json\": {\n        **ctx,\n        \"macro_observations\": observations,\n        \"macro_observation_ok_count\": ok_count,\n        \"macro_fetch_errors\": fetch_errors,\n        \"macro_data_degraded\": macro_data_degraded,\n    }\n}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        -20
+      ],
+      "id": "05-fetch-macro-observations",
+      "name": "05 Fetch Macro Observations"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport math\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nrun_id = ctx.get(\"run_id\") or \"\"\nas_of = ctx.get(\"as_of\") or datetime.now(timezone.utc).isoformat()\ncurrencies = ctx.get(\"currencies\") or [\"USD\", \"EUR\", \"JPY\", \"GBP\", \"CHF\", \"AUD\", \"CAD\", \"NZD\"]\nmacro_news = ctx.get(\"macro_news\") or {}\nmacro_regime = macro_news.get(\"macro_regime\") or {}\npair_focus = macro_news.get(\"pair_focus\") or {}\nobservations = ctx.get(\"macro_observations\") or []\nmacro_data_degraded = bool(ctx.get(\"macro_data_degraded\"))\n\nWEIGHTS = {\n    \"monetary_score\": 0.30,\n    \"real_yield_score\": 0.20,\n    \"inflation_score\": 0.10,\n    \"growth_score\": 0.15,\n    \"labor_score\": 0.05,\n    \"external_balance_score\": 0.10,\n    \"risk_regime_score\": 0.10,\n}\nFACTOR_TO_COMPONENT = {\n    \"policy_rate\": \"monetary_score\",\n    \"central_bank_bias\": \"monetary_score\",\n    \"real_yield\": \"real_yield_score\",\n    \"inflation\": \"inflation_score\",\n    \"growth\": \"growth_score\",\n    \"labor\": \"labor_score\",\n    \"external_balance\": \"external_balance_score\",\n}\nSAFE_HAVENS = {\"USD\", \"JPY\", \"CHF\"}\nCYCLICALS = {\"AUD\", \"NZD\", \"CAD\"}\n\n\ndef clamp(v, lo=-1.0, hi=1.0):\n    try:\n        n = float(v)\n        if not math.isfinite(n):\n            return 0.0\n        return max(lo, min(hi, n))\n    except Exception:\n        return 0.0\n\n\ndef to_float(v, default=0.0):\n    try:\n        n = float(v)\n        return n if math.isfinite(n) else default\n    except Exception:\n        return default\n\n\ndef avg(values):\n    clean = [to_float(x) for x in values if x is not None]\n    return clamp(sum(clean) / len(clean)) if clean else 0.0\n\n\ndef parse_bias_value(value):\n    if isinstance(value, (int, float)):\n        return clamp(value)\n    if isinstance(value, dict):\n        for key in (\"score\", \"bias_score\", \"value\"):\n            if key in value:\n                return clamp(value.get(key))\n        value = value.get(\"bias\") or value.get(\"direction\") or value.get(\"label\") or \"\"\n    text = str(value or \"\").lower()\n    if any(x in text for x in (\"strong_bull\", \"very bullish\", \"bullish\")):\n        return 0.45\n    if any(x in text for x in (\"strong_bear\", \"very bearish\", \"bearish\")):\n        return -0.45\n    return 0.0\n\n\ndef macro_biases():\n    raw = macro_regime.get(\"biases\") or macro_regime.get(\"currency_biases\") or {}\n    out = {ccy: 0.0 for ccy in currencies}\n    if isinstance(raw, dict):\n        for ccy, value in raw.items():\n            key = str(ccy or \"\").upper()\n            if key in out:\n                out[key] = parse_bias_value(value)\n    return out\n\n\ndef pair_focus_votes():\n    votes = {ccy: [] for ccy in currencies}\n    for pair, focus in (pair_focus or {}).items():\n        pair = str(pair or \"\").upper()\n        if len(pair) != 6 or not isinstance(focus, dict):\n            continue\n        base, quote = pair[:3], pair[3:]\n        confidence = max(0.1, min(1.0, to_float(focus.get(\"confidence\"), 0.35)))\n        score = to_float(focus.get(\"bias_news_score\"), 0.0)\n        label = str(focus.get(\"bias_news\") or focus.get(\"bias\") or \"\").upper()\n        if not score:\n            if label in {\"BUY_BASE\", \"BULLISH\", \"LONG_BASE\"}:\n                score = 0.35\n            elif label in {\"SELL_BASE\", \"BEARISH\", \"SHORT_BASE\"}:\n                score = -0.35\n        score = clamp(score) * confidence\n        if base in votes:\n            votes[base].append(score)\n        if quote in votes:\n            votes[quote].append(-score)\n    return {ccy: avg(vals) for ccy, vals in votes.items()}\n\n\ndef regime_score(ccy):\n    label = str(macro_regime.get(\"market_regime\") or macro_regime.get(\"regime\") or \"\").lower()\n    if \"risk-off\" in label or \"risk_off\" in label or \"stress\" in label:\n        if ccy in SAFE_HAVENS:\n            return 0.35\n        if ccy in CYCLICALS:\n            return -0.30\n        return -0.08\n    if \"risk-on\" in label or \"risk_on\" in label:\n        if ccy in SAFE_HAVENS:\n            return -0.25\n        if ccy in CYCLICALS:\n            return 0.30\n        return 0.08\n    return 0.0\n\n\ngrouped = {ccy: {} for ccy in currencies}\nmissing = {ccy: set(FACTOR_TO_COMPONENT.keys()) for ccy in currencies}\nstale = {ccy: set() for ccy in currencies}\n\nfor obs in observations:\n    ccy = str(obs.get(\"currency\") or \"\").upper()\n    factor = str(obs.get(\"factor\") or \"\")\n    component = FACTOR_TO_COMPONENT.get(factor)\n    if ccy not in grouped or not component:\n        continue\n    status = str(obs.get(\"data_status\") or \"\").upper()\n    if status == \"OK\":\n        grouped[ccy].setdefault(component, []).append(obs.get(\"normalized_score\"))\n        missing[ccy].discard(factor)\n    elif status in {\"STALE\", \"ERROR\"}:\n        stale[ccy].add(factor)\n\nregime_bias = macro_biases()\nnews_votes = pair_focus_votes()\nscores = []\n\nfor ccy in currencies:\n    components = {\n        \"monetary_score\": avg(grouped[ccy].get(\"monetary_score\", [])),\n        \"real_yield_score\": avg(grouped[ccy].get(\"real_yield_score\", [])),\n        \"inflation_score\": avg(grouped[ccy].get(\"inflation_score\", [])),\n        \"growth_score\": avg(grouped[ccy].get(\"growth_score\", [])),\n        \"labor_score\": avg(grouped[ccy].get(\"labor_score\", [])),\n        \"external_balance_score\": avg(grouped[ccy].get(\"external_balance_score\", [])),\n        \"risk_regime_score\": clamp(0.55 * regime_score(ccy) + 0.25 * regime_bias.get(ccy, 0.0) + 0.20 * news_votes.get(ccy, 0.0)),\n    }\n    news_bias_score = clamp(0.60 * news_votes.get(ccy, 0.0) + 0.40 * regime_bias.get(ccy, 0.0))\n    composite = clamp(sum(components[k] * w for k, w in WEIGHTS.items()))\n    ok_components = sum(1 for k in components if abs(components[k]) > 0.00001 and k != \"risk_regime_score\")\n    mapped_components = 6 - len(missing[ccy])\n    data_quality = max(0.10, min(1.0, (mapped_components / 6.0) * 0.75 + 0.25 * (1.0 if macro_news else 0.0)))\n    if macro_data_degraded:\n        data_quality = min(data_quality, 0.55)\n    confidence = max(0.20, min(0.90, 0.30 + 0.45 * data_quality + 0.15 * abs(composite) + 0.10 * min(1.0, ok_components / 6.0)))\n    if macro_data_degraded:\n        confidence = min(confidence, 0.45)\n    rationale_bits = []\n    if components[\"risk_regime_score\"] > 0.10:\n        rationale_bits.append(f\"{ccy} supported by current risk/news regime\")\n    elif components[\"risk_regime_score\"] < -0.10:\n        rationale_bits.append(f\"{ccy} pressured by current risk/news regime\")\n    if abs(news_bias_score) > 0.10:\n        rationale_bits.append(f\"{ccy} news proxy {'bullish' if news_bias_score > 0 else 'bearish'}\")\n    if not rationale_bits:\n        rationale_bits.append(f\"{ccy} fundamental inputs mostly neutral or unavailable\")\n\n    scores.append({\n        \"score_id\": f\"{run_id}_{ccy}\",\n        \"run_id\": run_id,\n        \"currency\": ccy,\n        \"as_of\": as_of,\n        **components,\n        \"news_bias_score\": news_bias_score,\n        \"composite_score\": composite,\n        \"confidence\": confidence,\n        \"data_quality_score\": data_quality,\n        \"missing_factors\": json.dumps(sorted(missing[ccy])),\n        \"stale_factors\": json.dumps(sorted(stale[ccy])),\n        \"rationale\": \"; \".join(rationale_bits),\n    })\n\nreturn [{\"json\": {**ctx, \"currency_scores\": scores, \"currencies_scored\": len(scores)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        300,
+        -20
+      ],
+      "id": "06-compute-currency-scores",
+      "name": "06 Compute Currency Scores"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport math\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nrun_id = ctx.get(\"run_id\") or \"\"\nas_of = ctx.get(\"as_of\") or datetime.now(timezone.utc).isoformat()\nuniverse = ctx.get(\"universe_fx\") or []\ntechnical = ctx.get(\"technical_signals\") or []\nmacro_news = ctx.get(\"macro_news\") or {}\npair_focus = macro_news.get(\"pair_focus\") or {}\nmacro_regime = macro_news.get(\"macro_regime\") or {}\ncurrency_scores = {str(x.get(\"currency\") or \"\").upper(): x for x in (ctx.get(\"currency_scores\") or [])}\ntech_by_pair = {str(x.get(\"pair\") or \"\").upper(): x for x in technical}\n\n\ndef clamp(v, lo=-1.0, hi=1.0):\n    try:\n        n = float(v)\n        if not math.isfinite(n):\n            return 0.0\n        return max(lo, min(hi, n))\n    except Exception:\n        return 0.0\n\n\ndef to_float(v, default=0.0):\n    try:\n        n = float(v)\n        return n if math.isfinite(n) else default\n    except Exception:\n        return default\n\n\ndef pair_news(pair):\n    f = pair_focus.get(pair) or {}\n    label = str(f.get(\"bias_news\") or f.get(\"bias\") or \"unknown\")\n    conf = to_float(f.get(\"confidence\"), 0.0)\n    urgent = bool(f.get(\"urgent_event_within_4h\"))\n    drivers = f.get(\"top_drivers\") or []\n    if not isinstance(drivers, list):\n        drivers = [str(drivers)]\n    return label, conf, urgent, drivers\n\n\ndef directional_bias(pressure):\n    if pressure >= 0.25:\n        return \"BUY_BASE\"\n    if pressure <= -0.25:\n        return \"SELL_BASE\"\n    return \"NEUTRAL\"\n\n\ndef invalidators(pair, base, quote, bias):\n    if bias == \"BUY_BASE\":\n        return [\n            f\"{base} dovish repricing or weak growth surprise\",\n            f\"{quote} hawkish repricing or positive inflation surprise\",\n            f\"Fresh AG4-FX urgent event reversing {pair} macro direction\",\n        ]\n    if bias == \"SELL_BASE\":\n        return [\n            f\"{base} hawkish repricing or positive inflation surprise\",\n            f\"{quote} dovish repricing or weak growth surprise\",\n            f\"Fresh AG4-FX urgent event reversing {pair} macro direction\",\n        ]\n    return [\n        \"Clear central-bank repricing on either currency\",\n        \"Urgent macro/news event creating directional asymmetry\",\n        \"Large risk-regime shift not reflected in current digest\",\n    ]\n\n\npairs = []\nfor row in universe:\n    pair = str(row.get(\"pair\") or \"\").upper()\n    base = str(row.get(\"base_ccy\") or pair[:3]).upper()\n    quote = str(row.get(\"quote_ccy\") or pair[3:]).upper()\n    if not pair or len(pair) != 6:\n        continue\n    base_rec = currency_scores.get(base, {})\n    quote_rec = currency_scores.get(quote, {})\n    base_score = clamp(base_rec.get(\"composite_score\"))\n    quote_score = clamp(quote_rec.get(\"composite_score\"))\n    pair_pressure = clamp(base_score - quote_score)\n    pair_score = pair_pressure\n    bias = directional_bias(pair_pressure)\n    tech = tech_by_pair.get(pair) or {}\n    news_label, news_conf, urgent, news_drivers = pair_news(pair)\n    confidence = min(\n        to_float(base_rec.get(\"confidence\"), 0.25),\n        to_float(quote_rec.get(\"confidence\"), 0.25),\n    )\n    if news_conf:\n        confidence = min(0.95, confidence * 0.75 + news_conf * 0.25)\n    if urgent:\n        confidence = max(confidence, min(0.80, news_conf + 0.10))\n    data_quality = min(\n        to_float(base_rec.get(\"data_quality_score\"), 0.1),\n        to_float(quote_rec.get(\"data_quality_score\"), 0.1),\n    )\n    drivers = []\n    for rec in (base_rec, quote_rec):\n        text = rec.get(\"rationale\")\n        if text:\n            drivers.extend([x.strip() for x in str(text).split(\";\") if x.strip()])\n    drivers.extend([str(x) for x in news_drivers if str(x).strip()])\n    if not drivers:\n        drivers = [f\"{base}/{quote} relative fundamental pressure is neutral\"]\n    pairs.append({\n        \"score_id\": f\"{run_id}_{pair}\",\n        \"run_id\": run_id,\n        \"pair\": pair,\n        \"symbol_yf\": row.get(\"symbol_yf\") or f\"{pair}=X\",\n        \"base_ccy\": base,\n        \"quote_ccy\": quote,\n        \"as_of\": as_of,\n        \"spot\": to_float(tech.get(\"last_close\"), None),\n        \"base_score\": base_score,\n        \"quote_score\": quote_score,\n        \"pair_pressure\": pair_pressure,\n        \"pair_score\": pair_score,\n        \"directional_bias\": bias,\n        \"confidence\": confidence,\n        \"data_quality_score\": data_quality,\n        \"macro_regime\": str(macro_regime.get(\"market_regime\") or macro_regime.get(\"regime\") or \"Unknown\"),\n        \"news_bias\": news_label,\n        \"news_confidence\": news_conf,\n        \"rationale\": json.dumps(drivers[:6], ensure_ascii=False),\n        \"invalidators\": json.dumps(invalidators(pair, base, quote, bias), ensure_ascii=False),\n    })\n\nreturn [{\"json\": {**ctx, \"pair_fundamental_scores\": pairs, \"pairs_scored\": len(pairs)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        540,
+        -20
+      ],
+      "id": "07-compute-pair-scores",
+      "name": "07 Compute Pair Scores"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import math\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nrun_id = ctx.get(\"run_id\") or \"\"\nas_of = ctx.get(\"as_of\") or datetime.now(timezone.utc).isoformat()\nmax_shift = float(ctx.get(\"max_equilibrium_shift_pct\") or 0.06)\ntechnical = {str(x.get(\"pair\") or \"\").upper(): x for x in (ctx.get(\"technical_signals\") or [])}\npair_focus = ((ctx.get(\"macro_news\") or {}).get(\"pair_focus\") or {})\nmacro_data_degraded = bool(ctx.get(\"macro_data_degraded\"))\npair_scores = ctx.get(\"pair_fundamental_scores\") or []\n\n\ndef clamp(v, lo=-1.0, hi=1.0):\n    try:\n        n = float(v)\n        if not math.isfinite(n):\n            return 0.0\n        return max(lo, min(hi, n))\n    except Exception:\n        return 0.0\n\n\ndef to_float(v, default=0.0):\n    try:\n        if v is None:\n            return default\n        n = float(v)\n        return n if math.isfinite(n) else default\n    except Exception:\n        return default\n\n\ntargets = []\nfor row in pair_scores:\n    pair = str(row.get(\"pair\") or \"\").upper()\n    tech = technical.get(pair) or {}\n    spot = to_float(row.get(\"spot\"), 0.0) or to_float(tech.get(\"last_close\"), 0.0)\n    atr14 = to_float(tech.get(\"atr14\"), 0.0)\n    confidence = to_float(row.get(\"confidence\"), 0.25)\n    data_quality = to_float(row.get(\"data_quality_score\"), 0.25)\n    pressure_norm = clamp(row.get(\"pair_pressure\"))\n    confidence_factor = max(0.25, min(1.0, confidence))\n    urgent = bool((pair_focus.get(pair) or {}).get(\"urgent_event_within_4h\"))\n\n    if spot <= 0:\n        target_mid = None\n        target_low = None\n        target_high = None\n        shift_pct = 0.0\n        band_width_pct = None\n        atr_pct = None\n        mispricing_pct = None\n        status = \"NO_SPOT\"\n    else:\n        shift_pct = pressure_norm * max_shift * confidence_factor\n        target_mid = spot * (1.0 + shift_pct)\n        atr_pct = atr14 / spot if atr14 and atr14 > 0 else 0.01\n        band_width_pct = max(1.5 * atr_pct, 0.01)\n        band_width_pct *= 1.0 + (1.0 - max(0.0, min(1.0, data_quality)))\n        if urgent:\n            band_width_pct *= 1.5\n        target_low = target_mid * (1.0 - band_width_pct)\n        target_high = target_mid * (1.0 + band_width_pct)\n        mispricing_pct = (spot - target_mid) / target_mid if target_mid else None\n        status = \"DEGRADED_MACRO_DATA\" if macro_data_degraded else \"OK\"\n\n    targets.append({\n        \"target_id\": f\"{run_id}_{pair}\",\n        \"run_id\": run_id,\n        \"pair\": pair,\n        \"symbol_yf\": row.get(\"symbol_yf\") or f\"{pair}=X\",\n        \"as_of\": as_of,\n        \"spot\": spot or None,\n        \"equilibrium_target_mid\": target_mid,\n        \"equilibrium_target_low\": target_low,\n        \"equilibrium_target_high\": target_high,\n        \"equilibrium_shift_pct\": shift_pct,\n        \"equilibrium_band_width_pct\": band_width_pct,\n        \"mispricing_pct\": mispricing_pct,\n        \"atr_20d_pct\": atr_pct,\n        \"target_horizon_days\": 5 if urgent else 20,\n        \"target_status\": status,\n        \"method\": \"macro_relative_pressure_v1\",\n        \"confidence\": confidence,\n        \"data_quality_score\": data_quality,\n    })\n\nreturn [{\"json\": {**ctx, \"equilibrium_targets\": targets, \"target_rows\": len(targets)}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        -20
+      ],
+      "id": "08-compute-equilibrium-targets",
+      "name": "08 Compute Equilibrium Targets"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\nrun_id = ctx.get(\"run_id\") or \"\"\nas_of = ctx.get(\"as_of\") or datetime.now(timezone.utc).isoformat()\npair_scores = {str(x.get(\"pair\") or \"\").upper(): x for x in (ctx.get(\"pair_fundamental_scores\") or [])}\ntargets = {str(x.get(\"pair\") or \"\").upper(): x for x in (ctx.get(\"equilibrium_targets\") or [])}\ncurrency_scores = {str(x.get(\"currency\") or \"\").upper(): x for x in (ctx.get(\"currency_scores\") or [])}\n\n\ndef parse_json_list(value):\n    if isinstance(value, list):\n        return value\n    try:\n        obj = json.loads(value or \"[]\")\n        return obj if isinstance(obj, list) else []\n    except Exception:\n        return []\n\n\ndef num(value):\n    try:\n        return None if value is None else float(value)\n    except Exception:\n        return None\n\n\nsummaries = []\nfor pair, score in sorted(pair_scores.items()):\n    target = targets.get(pair) or {}\n    base = str(score.get(\"base_ccy\") or pair[:3]).upper()\n    quote = str(score.get(\"quote_ccy\") or pair[3:]).upper()\n    drivers = parse_json_list(score.get(\"rationale\"))[:6]\n    invalidators = parse_json_list(score.get(\"invalidators\"))[:6]\n    base_missing = parse_json_list((currency_scores.get(base) or {}).get(\"missing_factors\"))\n    quote_missing = parse_json_list((currency_scores.get(quote) or {}).get(\"missing_factors\"))\n    base_stale = parse_json_list((currency_scores.get(base) or {}).get(\"stale_factors\"))\n    quote_stale = parse_json_list((currency_scores.get(quote) or {}).get(\"stale_factors\"))\n    caveats = {\n        \"missing_factors\": sorted(set(base_missing + quote_missing)),\n        \"stale_factors\": sorted(set(base_stale + quote_stale)),\n        \"target_status\": target.get(\"target_status\"),\n        \"macro_data_degraded\": bool(ctx.get(\"macro_data_degraded\")),\n        \"macro_fetch_errors\": (ctx.get(\"macro_fetch_errors\") or [])[:5],\n    }\n    payload = {\n        \"schema_version\": \"AG3_FX_V1\",\n        \"pair\": pair,\n        \"symbol_yf\": score.get(\"symbol_yf\") or target.get(\"symbol_yf\") or f\"{pair}=X\",\n        \"as_of\": as_of,\n        \"fundamental\": {\n            \"directional_bias\": score.get(\"directional_bias\") or \"NEUTRAL\",\n            \"score\": num(score.get(\"pair_score\")),\n            \"confidence\": num(score.get(\"confidence\")),\n            \"base_ccy\": base,\n            \"quote_ccy\": quote,\n            \"base_score\": num(score.get(\"base_score\")),\n            \"quote_score\": num(score.get(\"quote_score\")),\n            \"pair_pressure\": num(score.get(\"pair_pressure\")),\n        },\n        \"equilibrium\": {\n            \"spot\": num(target.get(\"spot\")),\n            \"target_mid\": num(target.get(\"equilibrium_target_mid\")),\n            \"target_low\": num(target.get(\"equilibrium_target_low\")),\n            \"target_high\": num(target.get(\"equilibrium_target_high\")),\n            \"band_width_pct\": num(target.get(\"equilibrium_band_width_pct\")),\n            \"mispricing_pct\": num(target.get(\"mispricing_pct\")),\n            \"target_horizon_days\": int(target.get(\"target_horizon_days\") or 20),\n            \"status\": target.get(\"target_status\") or \"UNKNOWN\",\n            \"method\": target.get(\"method\") or \"macro_relative_pressure_v1\",\n        },\n        \"drivers\": drivers,\n        \"invalidators\": invalidators,\n        \"data_quality\": {\n            \"score\": num(score.get(\"data_quality_score\")),\n            \"missing_factors\": caveats[\"missing_factors\"],\n            \"stale_factors\": caveats[\"stale_factors\"],\n        },\n    }\n    summaries.append({\n        \"summary_id\": f\"{run_id}_{pair}\",\n        \"run_id\": run_id,\n        \"pair\": pair,\n        \"symbol_yf\": payload[\"symbol_yf\"],\n        \"as_of\": as_of,\n        \"directional_bias\": payload[\"fundamental\"][\"directional_bias\"],\n        \"score\": payload[\"fundamental\"][\"score\"],\n        \"confidence\": payload[\"fundamental\"][\"confidence\"],\n        \"spot\": payload[\"equilibrium\"][\"spot\"],\n        \"equilibrium_target_mid\": payload[\"equilibrium\"][\"target_mid\"],\n        \"equilibrium_target_low\": payload[\"equilibrium\"][\"target_low\"],\n        \"equilibrium_target_high\": payload[\"equilibrium\"][\"target_high\"],\n        \"mispricing_pct\": payload[\"equilibrium\"][\"mispricing_pct\"],\n        \"target_horizon_days\": payload[\"equilibrium\"][\"target_horizon_days\"],\n        \"drivers_json\": json.dumps(drivers, ensure_ascii=False),\n        \"invalidators_json\": json.dumps(invalidators, ensure_ascii=False),\n        \"data_caveats_json\": json.dumps(caveats, ensure_ascii=False),\n        \"payload_json\": json.dumps(payload, ensure_ascii=False),\n    })\n\nreturn [{\"json\": {**ctx, \"ag1_summary\": summaries}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1020,
+        -20
+      ],
+      "id": "09-build-ag1-summary",
+      "name": "09 Build AG1 Summary"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag3_fx_v1.duckdb\"\n\nSCHEMA_SQL = \"\"\"\nCREATE SCHEMA IF NOT EXISTS main;\nCREATE TABLE IF NOT EXISTS main.run_log (\n    run_id VARCHAR PRIMARY KEY, started_at TIMESTAMP, finished_at TIMESTAMP, status VARCHAR,\n    pairs_total INTEGER, pairs_scored INTEGER, currencies_scored INTEGER, macro_observations INTEGER,\n    target_rows INTEGER, errors INTEGER, notes VARCHAR, workflow_version VARCHAR,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\nCREATE TABLE IF NOT EXISTS main.fx_macro_observations (\n    observation_id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, currency VARCHAR NOT NULL,\n    factor VARCHAR NOT NULL, source VARCHAR NOT NULL, series_id VARCHAR, observation_date DATE,\n    value DOUBLE, previous_value DOUBLE, delta_1m DOUBLE, delta_3m DOUBLE, delta_12m DOUBLE,\n    zscore DOUBLE, normalized_score DOUBLE, weight DOUBLE, higher_is_bullish BOOLEAN,\n    data_status VARCHAR, fetched_at TIMESTAMP, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\nCREATE TABLE IF NOT EXISTS main.fx_currency_scores (\n    score_id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, currency VARCHAR NOT NULL,\n    as_of TIMESTAMP NOT NULL, monetary_score DOUBLE, real_yield_score DOUBLE,\n    inflation_score DOUBLE, growth_score DOUBLE, labor_score DOUBLE,\n    external_balance_score DOUBLE, risk_regime_score DOUBLE, news_bias_score DOUBLE,\n    composite_score DOUBLE, confidence DOUBLE, data_quality_score DOUBLE,\n    missing_factors VARCHAR, stale_factors VARCHAR, rationale VARCHAR,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\nCREATE TABLE IF NOT EXISTS main.fx_pair_fundamental_scores (\n    score_id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, pair VARCHAR NOT NULL,\n    symbol_yf VARCHAR, base_ccy VARCHAR NOT NULL, quote_ccy VARCHAR NOT NULL,\n    as_of TIMESTAMP NOT NULL, spot DOUBLE, base_score DOUBLE, quote_score DOUBLE,\n    pair_pressure DOUBLE, pair_score DOUBLE, directional_bias VARCHAR, confidence DOUBLE,\n    data_quality_score DOUBLE, macro_regime VARCHAR, news_bias VARCHAR, news_confidence DOUBLE,\n    rationale VARCHAR, invalidators VARCHAR, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\nCREATE TABLE IF NOT EXISTS main.fx_equilibrium_targets (\n    target_id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, pair VARCHAR NOT NULL,\n    symbol_yf VARCHAR, as_of TIMESTAMP NOT NULL, spot DOUBLE, equilibrium_target_mid DOUBLE,\n    equilibrium_target_low DOUBLE, equilibrium_target_high DOUBLE, equilibrium_shift_pct DOUBLE,\n    equilibrium_band_width_pct DOUBLE, mispricing_pct DOUBLE, atr_20d_pct DOUBLE,\n    target_horizon_days INTEGER, target_status VARCHAR, method VARCHAR, confidence DOUBLE,\n    data_quality_score DOUBLE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\nCREATE TABLE IF NOT EXISTS main.fx_ag1_summary (\n    summary_id VARCHAR PRIMARY KEY, run_id VARCHAR NOT NULL, pair VARCHAR NOT NULL,\n    symbol_yf VARCHAR, as_of TIMESTAMP NOT NULL, directional_bias VARCHAR, score DOUBLE,\n    confidence DOUBLE, spot DOUBLE, equilibrium_target_mid DOUBLE, equilibrium_target_low DOUBLE,\n    equilibrium_target_high DOUBLE, mispricing_pct DOUBLE, target_horizon_days INTEGER,\n    drivers_json VARCHAR, invalidators_json VARCHAR, data_caveats_json VARCHAR,\n    payload_json VARCHAR, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,\n    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\nCREATE OR REPLACE VIEW main.v_latest_currency_scores AS\nSELECT * EXCLUDE(rn) FROM (\n    SELECT t.*, ROW_NUMBER() OVER (PARTITION BY currency ORDER BY as_of DESC, created_at DESC) rn\n    FROM main.fx_currency_scores t\n) WHERE rn = 1;\nCREATE OR REPLACE VIEW main.v_latest_pair_fundamentals AS\nSELECT * EXCLUDE(rn) FROM (\n    SELECT t.*, ROW_NUMBER() OVER (PARTITION BY pair ORDER BY as_of DESC, created_at DESC) rn\n    FROM main.fx_pair_fundamental_scores t\n) WHERE rn = 1;\nCREATE OR REPLACE VIEW main.v_ag3_fx_ag1_summary AS\nSELECT * EXCLUDE(rn) FROM (\n    SELECT s.*, ROW_NUMBER() OVER (PARTITION BY pair ORDER BY as_of DESC, created_at DESC) rn\n    FROM main.fx_ag1_summary s\n) WHERE rn = 1;\n\"\"\"\n\n\ndef split_sql(text):\n    buff, out, sq, dq = [], [], False, False\n    for ch in text:\n        if ch == \"'\" and not dq:\n            sq = not sq\n        elif ch == '\"' and not sq:\n            dq = not dq\n        if ch == \";\" and not sq and not dq:\n            stmt = \"\".join(buff).strip()\n            if stmt:\n                out.append(stmt)\n            buff = []\n        else:\n            buff.append(ch)\n    stmt = \"\".join(buff).strip()\n    if stmt:\n        out.append(stmt)\n    return out\n\n\ndef insert_many(con, table, cols, rows):\n    if not rows:\n        return 0\n    placeholders = \", \".join([\"?\"] * len(cols))\n    sql = f\"INSERT OR REPLACE INTO {table} ({', '.join(cols)}) VALUES ({placeholders})\"\n    con.executemany(sql, [[r.get(c) for c in cols] for r in rows])\n    return len(rows)\n\n\nwith duckdb.connect(db_path) as con:\n    for stmt in split_sql(SCHEMA_SQL):\n        con.execute(stmt)\n\n    obs_cols = [\n        \"observation_id\", \"run_id\", \"currency\", \"factor\", \"source\", \"series_id\",\n        \"observation_date\", \"value\", \"previous_value\", \"delta_1m\", \"delta_3m\",\n        \"delta_12m\", \"zscore\", \"normalized_score\", \"weight\", \"higher_is_bullish\",\n        \"data_status\", \"fetched_at\",\n    ]\n    ccy_cols = [\n        \"score_id\", \"run_id\", \"currency\", \"as_of\", \"monetary_score\", \"real_yield_score\",\n        \"inflation_score\", \"growth_score\", \"labor_score\", \"external_balance_score\",\n        \"risk_regime_score\", \"news_bias_score\", \"composite_score\", \"confidence\",\n        \"data_quality_score\", \"missing_factors\", \"stale_factors\", \"rationale\",\n    ]\n    pair_cols = [\n        \"score_id\", \"run_id\", \"pair\", \"symbol_yf\", \"base_ccy\", \"quote_ccy\", \"as_of\",\n        \"spot\", \"base_score\", \"quote_score\", \"pair_pressure\", \"pair_score\",\n        \"directional_bias\", \"confidence\", \"data_quality_score\", \"macro_regime\",\n        \"news_bias\", \"news_confidence\", \"rationale\", \"invalidators\",\n    ]\n    target_cols = [\n        \"target_id\", \"run_id\", \"pair\", \"symbol_yf\", \"as_of\", \"spot\",\n        \"equilibrium_target_mid\", \"equilibrium_target_low\", \"equilibrium_target_high\",\n        \"equilibrium_shift_pct\", \"equilibrium_band_width_pct\", \"mispricing_pct\",\n        \"atr_20d_pct\", \"target_horizon_days\", \"target_status\", \"method\",\n        \"confidence\", \"data_quality_score\",\n    ]\n    summary_cols = [\n        \"summary_id\", \"run_id\", \"pair\", \"symbol_yf\", \"as_of\", \"directional_bias\",\n        \"score\", \"confidence\", \"spot\", \"equilibrium_target_mid\",\n        \"equilibrium_target_low\", \"equilibrium_target_high\", \"mispricing_pct\",\n        \"target_horizon_days\", \"drivers_json\", \"invalidators_json\",\n        \"data_caveats_json\", \"payload_json\",\n    ]\n\n    written = {\n        \"macro_observations\": insert_many(con, \"main.fx_macro_observations\", obs_cols, ctx.get(\"macro_observations\") or []),\n        \"currency_scores\": insert_many(con, \"main.fx_currency_scores\", ccy_cols, ctx.get(\"currency_scores\") or []),\n        \"pair_scores\": insert_many(con, \"main.fx_pair_fundamental_scores\", pair_cols, ctx.get(\"pair_fundamental_scores\") or []),\n        \"equilibrium_targets\": insert_many(con, \"main.fx_equilibrium_targets\", target_cols, ctx.get(\"equilibrium_targets\") or []),\n        \"ag1_summary\": insert_many(con, \"main.fx_ag1_summary\", summary_cols, ctx.get(\"ag1_summary\") or []),\n    }\n    try:\n        con.execute(\"CHECKPOINT\")\n    except Exception:\n        pass\n\nreturn [{\"json\": {**ctx, \"duckdb_written\": written}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1260,
+        -20
+      ],
+      "id": "10-write-duckdb-fx",
+      "name": "10 Write DuckDB FX"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"db_path\") or \"/files/duckdb/ag3_fx_v1.duckdb\"\n\nerrors = 0\nfor key in (\"universe_error\", \"technical_error\", \"macro_news_error\"):\n    errors += int(bool(ctx.get(key)))\nerrors += len(ctx.get(\"macro_fetch_errors\") or [])\n\nnotes = \"AG3-FX-V1 completed\"\nif ctx.get(\"macro_data_degraded\"):\n    notes += \" with DEGRADED_MACRO_DATA\"\n\nwith duckdb.connect(db_path) as con:\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS main.run_log (\n            run_id VARCHAR PRIMARY KEY,\n            started_at TIMESTAMP,\n            finished_at TIMESTAMP,\n            status VARCHAR,\n            pairs_total INTEGER,\n            pairs_scored INTEGER,\n            currencies_scored INTEGER,\n            macro_observations INTEGER,\n            target_rows INTEGER,\n            errors INTEGER,\n            notes VARCHAR,\n            workflow_version VARCHAR,\n            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n        )\n        \"\"\"\n    )\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO main.run_log VALUES (\n            ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP\n        )\n        \"\"\",\n        [\n            ctx.get(\"run_id\"),\n            \"DEGRADED\" if ctx.get(\"macro_data_degraded\") else \"OK\",\n            int(ctx.get(\"pairs_total\") or len(ctx.get(\"universe_fx\") or [])),\n            int(ctx.get(\"pairs_scored\") or len(ctx.get(\"pair_fundamental_scores\") or [])),\n            int(ctx.get(\"currencies_scored\") or len(ctx.get(\"currency_scores\") or [])),\n            int(len(ctx.get(\"macro_observations\") or [])),\n            int(ctx.get(\"target_rows\") or len(ctx.get(\"equilibrium_targets\") or [])),\n            int(errors),\n            notes,\n            ctx.get(\"workflow_version\") or \"AG3-FX-V1\",\n        ],\n    )\n\nreturn [{\n    \"json\": {\n        \"run_id\": ctx.get(\"run_id\"),\n        \"status\": \"DEGRADED\" if ctx.get(\"macro_data_degraded\") else \"OK\",\n        \"pairs_scored\": int(ctx.get(\"pairs_scored\") or 0),\n        \"target_rows\": int(ctx.get(\"target_rows\") or 0),\n        \"errors\": int(errors),\n    }\n}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1500,
+        -20
+      ],
+      "id": "11-log-run-fx",
+      "name": "11 Log Run FX"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01 Init Run FX": {
+      "main": [
+        [
+          {
+            "node": "02 Load Universe FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Load Universe FX": {
+      "main": [
+        [
+          {
+            "node": "03 Load Latest Technical FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Load Latest Technical FX": {
+      "main": [
+        [
+          {
+            "node": "04 Load Macro News FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 Load Macro News FX": {
+      "main": [
+        [
+          {
+            "node": "05 Fetch Macro Observations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 Fetch Macro Observations": {
+      "main": [
+        [
+          {
+            "node": "06 Compute Currency Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 Compute Currency Scores": {
+      "main": [
+        [
+          {
+            "node": "07 Compute Pair Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 Compute Pair Scores": {
+      "main": [
+        [
+          {
+            "node": "08 Compute Equilibrium Targets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 Compute Equilibrium Targets": {
+      "main": [
+        [
+          {
+            "node": "09 Build AG1 Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "09 Build AG1 Summary": {
+      "main": [
+        [
+          {
+            "node": "10 Write DuckDB FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 Write DuckDB FX": {
+      "main": [
+        [
+          {
+            "node": "11 Log Run FX",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Europe/Paris"
+  }
+}
