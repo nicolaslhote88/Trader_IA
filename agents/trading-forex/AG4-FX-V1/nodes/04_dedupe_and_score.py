@@ -14,7 +14,12 @@ def impact_weight(row):
     mag = str(row.get("impact_magnitude") or "").lower()
     base = {"high": 3, "medium": 2, "low": 1}.get(mag, 1)
     pairs = [p for p in str(row.get("impact_fx_pairs") or "").replace(";", ",").split(",") if p.strip()]
-    return base * 10 + min(len(pairs), 8)
+    bull = [x for x in str(row.get("currencies_bullish") or "").replace(";", ",").split(",") if x.strip()]
+    bear = [x for x in str(row.get("currencies_bearish") or "").replace(";", ",").split(",") if x.strip()]
+    hint = str(row.get("fx_directional_hint") or "").strip()
+    signal_bonus = 8 if (bull or bear or hint) else 0
+    neutral_penalty = -8 if str(row.get("origin") or "") == "official_source" and not signal_bonus else 0
+    return base * 10 + min(len(pairs), 8) + signal_bonus + neutral_penalty
 
 
 ctx = (_items or [{"json": {}}])[0].get("json", {})

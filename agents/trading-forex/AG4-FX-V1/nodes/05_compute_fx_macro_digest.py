@@ -54,7 +54,18 @@ def event_weight(row):
         urgency_label = str(row.get("urgency") or "").strip().lower()
         urgency = {"immediate": 1.0, "today": 0.75, "this_week": 0.45, "low": 0.2}.get(urgency_label, 0.2)
     urgency_weight = 0.85 + min(max(urgency, 0.0), 1.0) * 0.3
-    return mag_weight * score_weight * confidence_weight * urgency_weight
+    weight = mag_weight * score_weight * confidence_weight * urgency_weight
+    if str(row.get("origin") or "") == "official_source" and not has_directional_signal(row):
+        weight *= 0.30
+    return weight
+
+
+def has_directional_signal(row):
+    return bool(
+        split_csv(row.get("currencies_bullish"))
+        or split_csv(row.get("currencies_bearish"))
+        or str(row.get("fx_directional_hint") or "").strip()
+    )
 
 
 def recency_weight(row, as_of_dt):
@@ -128,10 +139,11 @@ def macro_from_news(news, as_of):
         weight = event_weight(row)
         total_weight += weight
         regime = str(row.get("regime") or row.get("market_regime") or "").strip()
-        if regime:
+        directional = has_directional_signal(row)
+        if regime and (directional or str(row.get("origin") or "") != "official_source"):
             regime_scores[regime] += weight
         add_currency_votes(currency_scores, split_csv(row.get("currencies_bullish")), split_csv(row.get("currencies_bearish")), weight)
-        if len(drivers) < 5 and row.get("title"):
+        if len(drivers) < 5 and row.get("title") and (directional or str(row.get("origin") or "") != "official_source"):
             drivers.append(str(row.get("title")))
 
     if regime_scores:
@@ -181,6 +193,7 @@ for n in news:
     bull = split_csv(n.get("currencies_bullish"))
     bear = split_csv(n.get("currencies_bearish"))
     age = age_hours(n, as_of_dt)
+    directional = has_directional_signal(n)
     recent_24h = age is None or (0 <= age <= 24)
     urgent_4h = age is not None and 0 <= age <= 4
     weight = event_weight(n) * recency_weight(n, as_of_dt)
@@ -205,15 +218,15 @@ for n in news:
         if len(pair) != 6:
             continue
         pf = pair_focus[pair]
-        if recent_24h:
+        if recent_24h and (directional or str(n.get("origin") or "") != "official_source"):
             pf["news_count_24h"] += 1
         pf["evidence_weight"] += pair_weight
         bias = bias_for_pair(pair, bull, bear, n.get("fx_directional_hint"))
         if bias != "mixed":
             pf["bias_scores"][bias] += pair_weight
-        if len(pf["top_drivers"]) < 5 and n.get("title"):
+        if len(pf["top_drivers"]) < 5 and n.get("title") and (directional or str(n.get("origin") or "") != "official_source"):
             pf["top_drivers"].append(n.get("title"))
-        if str(n.get("impact_magnitude") or "").lower() == "high" and urgent_4h:
+        if str(n.get("impact_magnitude") or "").lower() == "high" and urgent_4h and directional:
             pf["urgent_event_within_4h"] = True
 
 for pr in ctx.get("fx_pairs") or []:

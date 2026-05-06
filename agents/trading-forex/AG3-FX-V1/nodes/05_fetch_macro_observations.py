@@ -32,6 +32,7 @@ CURRENCY_COUNTRY = {
 CURRENCY_COUNTRY_FALLBACKS = {
     "EUR": ["EMU", "EUU"],
 }
+EUR_MEMBER_PROXY_COUNTRIES = ["DEU", "FRA", "ITA", "ESP", "NLD"]
 WORLDBANK_SERIES = {
     # World Bank does not expose central-bank policy rates consistently. This
     # proxy keeps AG3 from dropping the monetary component entirely when FRED or
@@ -92,8 +93,16 @@ def fred_observations(series_id):
 def worldbank_observations(country, indicator):
     params = {"format": "json", "per_page": 20}
     url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?" + urlencode(params)
-    with urlopen(url, timeout=timeout) as resp:
-        payload = json.loads(resp.read().decode("utf-8"))
+    last_exc = None
+    for _ in range(2):
+        try:
+            with urlopen(url, timeout=timeout) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            break
+        except Exception as exc:
+            last_exc = exc
+    else:
+        raise last_exc
     rows = payload[1] if isinstance(payload, list) and len(payload) > 1 else []
     out = []
     for row in rows:
@@ -105,6 +114,22 @@ def worldbank_observations(country, indicator):
         except Exception:
             continue
     return out
+
+
+def worldbank_member_proxy_observations(countries, indicator, min_members=3):
+    by_year = {}
+    for country in countries:
+        try:
+            for row in worldbank_observations(country, indicator):
+                year = str(row.get("date") or "")
+                by_year.setdefault(year, []).append(row["value"])
+        except Exception:
+            continue
+    out = []
+    for year, values in by_year.items():
+        if len(values) >= min_members:
+            out.append({"date": year, "value": sum(values) / len(values)})
+    return sorted(out, key=lambda x: str(x.get("date") or ""), reverse=True)
 
 
 def zscore_normalized(obs, higher_is_bullish=True):
@@ -164,6 +189,10 @@ def worldbank_record(currency, factor, indicator, higher_is_bullish, weight):
         country_used = country
         if obs:
             break
+    if not obs and currency == "EUR":
+        obs = worldbank_member_proxy_observations(EUR_MEMBER_PROXY_COUNTRIES, indicator)
+        if obs:
+            country_used = "EUR_PROXY_DEU_FRA_ITA_ESP_NLD"
     latest = obs[0] if obs else None
     previous = obs[1] if len(obs) > 1 else None
     norm = zscore_normalized(obs, higher_is_bullish=higher_is_bullish)
@@ -231,7 +260,8 @@ for ccy in currencies:
                 observations.append(worldbank_record(ccy, factor, indicator, higher_is_bullish, weight))
             except Exception as exc:
                 fetch_errors.append(f"{ccy}.{factor}.{indicator}: {exc}")
-                observations.append(observation(ccy, factor, "WorldBank", indicator, None, None, "ERROR", higher_is_bullish, weight))
+                source = "WorldBankProxy" if factor == "policy_rate" else "WorldBank"
+                observations.append(observation(ccy, factor, source, indicator, None, None, "ERROR", higher_is_bullish, weight))
         else:
             observations.append(observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]))
 

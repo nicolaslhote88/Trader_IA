@@ -21,6 +21,8 @@ SOURCES = [
     {"id": "bis_press", "url": "https://www.bis.org/doclist/all_pressrels.rss", "currency": "", "tier": "S"},
 ]
 HIGH_TERMS = ("rate", "monetary", "policy", "inflation", "cpi", "minutes", "statement", "decision", "intervention")
+DIRECTIONAL_BULL_TERMS = ("hawkish", "hike", "higher rate", "inflation", "tightening")
+DIRECTIONAL_BEAR_TERMS = ("dovish", "cut", "lower rate", "easing", "slowdown")
 
 
 def text_of(node, names):
@@ -38,14 +40,14 @@ def text_of(node, names):
 def parse_dt(value):
     text = str(value or "").strip()
     if not text:
-        return datetime.now(timezone.utc).isoformat()
+        return None
     try:
         dt = parsedate_to_datetime(text)
     except Exception:
         try:
             dt = datetime.fromisoformat(text.replace("Z", "+00:00"))
         except Exception:
-            dt = datetime.now(timezone.utc)
+            return None
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc).isoformat()
@@ -60,16 +62,17 @@ def impacted_pairs(currency):
 def classify(source, title, snippet):
     ccy = source.get("currency") or ""
     body = f"{title} {snippet}".lower()
-    impact = "High" if any(t in body for t in HIGH_TERMS) else "Medium"
+    has_macro_term = any(t in body for t in HIGH_TERMS)
     bull, bear = [], []
     hint = ""
     if ccy:
-        if any(t in body for t in ("hawkish", "hike", "higher rate", "inflation", "tightening")):
+        if any(t in body for t in DIRECTIONAL_BULL_TERMS):
             bull = [ccy]
             hint = f"{ccy} potentially bullish if official communication is hawkish."
-        elif any(t in body for t in ("dovish", "cut", "lower rate", "easing", "slowdown")):
+        elif any(t in body for t in DIRECTIONAL_BEAR_TERMS):
             bear = [ccy]
             hint = f"{ccy} potentially bearish if official communication is dovish."
+    impact = "High" if (bull or bear) else ("Medium" if has_macro_term else "Low")
     return impact, bull, bear, hint
 
 
@@ -85,10 +88,13 @@ def fetch_source(src, limit=12):
         title = text_of(item, ["title"])
         snippet = re.sub(r"<[^>]+>", " ", text_of(item, ["description", "summary", "content"]))
         published = parse_dt(text_of(item, ["pubDate", "published", "updated"]))
-        if not title:
+        if not title or not published:
             continue
         impact, bull, bear, hint = classify(src, title, snippet)
+        if not src.get("currency") and not (bull or bear or hint):
+            continue
         key = hashlib.sha1(f"{src['id']}|{title}|{published[:10]}".encode("utf-8")).hexdigest()
+        directional = bool(bull or bear or hint)
         out.append({
             "dedupe_key": key,
             "published_at": published,
@@ -101,9 +107,9 @@ def fetch_source(src, limit=12):
             "currencies_bearish": ",".join(bear),
             "fx_directional_hint": hint,
             "regime": "CentralBankWatch",
-            "confidence": "0.65" if src.get("tier") == "S" else "0.50",
-            "impact_score": "7" if impact == "High" else "5",
-            "urgency": "today",
+            "confidence": "0.65" if directional and src.get("tier") == "S" else "0.45",
+            "impact_score": "7" if impact == "High" else ("4" if impact == "Medium" else "2"),
+            "urgency": "today" if directional else "this_week",
             "origin": "official_source",
         })
     return out
