@@ -536,12 +536,13 @@ Vue dÃ©diÃ©e aux trois portefeuilles Forex-only AG1-FX-V1, chacun isolÃ© d
 Les dÃ©cisions AG1-FX sont produites Ã  partir d'un `llm_brief` compact (portfolio, macro, `pair_matrix`, `market_watch`) tandis que le workflow conserve le brief complet pour les contrÃ´les downstream.
 
 Source de donnÃ©es :
-- `ag1_fx_v1_chatgpt52.duckdb`, `ag1_fx_v1_grok41_reasoning.duckdb`, `ag1_fx_v1_gemini30_pro.duckdb` (`core.portfolio_snapshot`, `core.position_lots`, `core.orders`, `cfg.portfolio_config`).
+- `ag1_fx_v1_chatgpt52.duckdb`, `ag1_fx_v1_grok41_reasoning.duckdb`, `ag1_fx_v1_gemini30_pro.duckdb` (`core.portfolio_snapshot`, `core.position_lots`, `core.orders`, `core.fills`, `core.fill_costs`, `cfg.portfolio_config`).
 - `ag2_fx_v1.duckdb` pour les derniers prix/signaux techniques FX.
 - `ag4_fx_v1.duckdb` pour la couverture digest macro FX.
 
 Composantes UI :
 - 3 cartes KPI par LLM : equity, P&L total, leverage, lots ouverts, winrate, profit factor, ordres rejetÃ©s.
+- Scoreboard de performance nette : P&L realise brut, frais d'execution, P&L net, couverture `core.fill_costs`, sources de commission IBKR/simulees/manquantes.
 - Onglet `Sparklines paires` : Ã©volution 90j des 27 paires FX via `yfinance-api`, avec sÃ©paration paires principales / autres cross.
 - Courbe equity superposÃ©e pour les 3 LLMs.
 - Matrice P&L net LLM x paire FX.

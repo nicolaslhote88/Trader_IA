@@ -8298,6 +8298,8 @@ NAV_GROUPS = {
     "Forex": [
         "Dashboard Forex",
         "Forex",
+        "Forex Trading (AG1-FX)",
+        "Forex P&L (LLM x Paire)",
     ],
 }
 nav_group = st.sidebar.radio("Univers", list(NAV_GROUPS.keys()), horizontal=True, index=1)
@@ -9306,8 +9308,27 @@ def _load_ag1_fx_dashboard_payloads() -> dict[str, dict[str, object]]:
                 ORDER BY created_at DESC
                 """,
             )
+            df_fills = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.fills
+                ORDER BY filled_at DESC
+                """,
+            )
+            df_costs = _ag1_fetchdf(
+                conn,
+                """
+                SELECT c.*, f.filled_at, f.fill_price, f.fill_size_lots,
+                       f.side AS fill_side, f.fees_eur AS fill_fees_eur,
+                       f.fill_source
+                FROM core.fill_costs c
+                LEFT JOIN core.fills f ON f.fill_id = c.fill_id
+                ORDER BY COALESCE(f.filled_at, c.recorded_at) DESC
+                """,
+            )
 
-            for df_obj in [df_snap, df_runs, df_open, df_closed, df_orders, df_cfg, df_alerts, df_ai_signals]:
+            for df_obj in [df_snap, df_runs, df_open, df_closed, df_orders, df_cfg, df_alerts, df_ai_signals, df_fills, df_costs]:
                 if isinstance(df_obj, pd.DataFrame) and not df_obj.empty:
                     df_obj["llm_key"] = key
                     df_obj["LLM"] = cfg.get("label", key)
@@ -9323,6 +9344,8 @@ def _load_ag1_fx_dashboard_payloads() -> dict[str, dict[str, object]]:
                     "df_cfg": df_cfg,
                     "df_alerts": df_alerts,
                     "df_ai_signals": df_ai_signals,
+                    "df_fills": df_fills,
+                    "df_costs": df_costs,
                 }
             )
 
@@ -9446,11 +9469,23 @@ def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], per
     df_orders = payload.get("df_orders", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
     df_alerts = payload.get("df_alerts", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
     df_ai_signals = payload.get("df_ai_signals", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_fills = payload.get("df_fills", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
+    df_costs = payload.get("df_costs", pd.DataFrame()) if isinstance(payload, dict) else pd.DataFrame()
 
     perf_period = _slice_timeseries_by_period(perf_ts, period_key)
     ref_end = pd.to_datetime(perf_ts["timestamp"], errors="coerce", utc=True).max() if not perf_ts.empty else cfg_summary.get("last_update")
+    costs_for_period = df_costs.copy() if isinstance(df_costs, pd.DataFrame) else pd.DataFrame()
+    if not costs_for_period.empty:
+        raw_cost_ts = (
+            costs_for_period["filled_at"] if "filled_at" in costs_for_period.columns else pd.Series(pd.NaT, index=costs_for_period.index)
+        )
+        if "recorded_at" in costs_for_period.columns:
+            raw_cost_ts = raw_cost_ts.fillna(costs_for_period["recorded_at"])
+        costs_for_period["_cost_ts"] = raw_cost_ts
     tx_period = _slice_events_by_period(tx_norm, period_key, ["timestamp"], ref_end)
     orders_period = _slice_events_by_period(df_orders, period_key, ["requested_at"], ref_end)
+    fills_period = _slice_events_by_period(df_fills, period_key, ["filled_at"], ref_end)
+    costs_period = _slice_events_by_period(costs_for_period, period_key, ["_cost_ts"], ref_end)
 
     period_delta_eur = None
     roi_delta_pp = None
@@ -9466,6 +9501,24 @@ def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], per
     current_dd = float(underwater["drawdown_pct"].iloc[-1]) if not underwater.empty else float(safe_float(cfg_summary.get("drawdown_total_pct", 0.0)))
 
     closed_pnl = pd.to_numeric(tx_period.get("realized_pnl", pd.Series(dtype=float)), errors="coerce").fillna(0.0) if isinstance(tx_period, pd.DataFrame) else pd.Series(dtype=float)
+    fees_period = 0.0
+    fee_rows_period = 0
+    fee_coverage_pct = None
+    fee_sources_missing = 0
+    fee_sources_assumed = 0
+    if isinstance(costs_period, pd.DataFrame) and not costs_period.empty:
+        fee_rows_period = int(len(costs_period))
+        fees_period = float(pd.to_numeric(costs_period.get("commission_eur", pd.Series(0.0, index=costs_period.index)), errors="coerce").fillna(0.0).sum())
+        src = costs_period.get("commission_source", pd.Series("", index=costs_period.index)).fillna("").astype(str).str.lower()
+        fee_sources_missing = int((src.eq("") | src.str.contains("missing", regex=False)).sum())
+        fee_sources_assumed = int(src.str.contains("assumed_eur_no_ccy", regex=False).sum())
+    elif isinstance(fills_period, pd.DataFrame) and not fills_period.empty:
+        fees_period = float(pd.to_numeric(fills_period.get("fees_eur", pd.Series(0.0, index=fills_period.index)), errors="coerce").fillna(0.0).sum())
+    fills_period_count = int(len(fills_period)) if isinstance(fills_period, pd.DataFrame) and not fills_period.empty else 0
+    if fills_period_count > 0:
+        fee_coverage_pct = fee_rows_period / fills_period_count * 100.0
+    net_realized_period = float(closed_pnl.sum()) - fees_period
+
     winrate = float((closed_pnl > 0).mean() * 100.0) if len(closed_pnl) else None
     gross_profit = float(closed_pnl[closed_pnl > 0].sum()) if len(closed_pnl) else 0.0
     gross_loss = abs(float(closed_pnl[closed_pnl < 0].sum())) if len(closed_pnl) else 0.0
@@ -9584,6 +9637,14 @@ def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], per
         "sharpe": risk_cards.get("sharpe"),
         "winrate_pct": winrate,
         "profit_factor": profit_factor,
+        "gross_realized_period": float(closed_pnl.sum()) if len(closed_pnl) else 0.0,
+        "fees_period": fees_period,
+        "net_realized_period": net_realized_period,
+        "fee_rows_period": fee_rows_period,
+        "fills_period_count": fills_period_count,
+        "fee_coverage_pct": fee_coverage_pct,
+        "fee_sources_missing": fee_sources_missing,
+        "fee_sources_assumed": fee_sources_assumed,
         "exposure_pct": exposure_pct,
         "open_pairs": open_pairs,
         "open_lots": open_lots,
@@ -14726,6 +14787,16 @@ elif page == "Dashboard Forex":
                 k1, k2 = st.columns(2)
                 k1.metric("Equity", _fmt_currency(c.get("total_val"), 2), _fmt_delta_eur(c.get("period_delta_eur")))
                 k2.metric("P&L total", _fmt_currency(c.get("pnl_total"), 2), _fmt_delta_eur(c.get("period_delta_eur")))
+                st.caption(
+                    f"Net realise {fx_compare_period}: {_fmt_currency(c.get('net_realized_period'), 2)} | "
+                    f"Fees: {_fmt_currency(c.get('fees_period'), 2)} | "
+                    f"Coverage: {_fmt_pct(c.get('fee_coverage_pct'), 0) if c.get('fee_coverage_pct') is not None else 'N/A'}"
+                )
+                if safe_float(c.get("fee_sources_missing")) > 0 or safe_float(c.get("fee_sources_assumed")) > 0:
+                    st.caption(
+                        f"Audit fees: missing={int(safe_float(c.get('fee_sources_missing')))} | "
+                        f"devise presumee={int(safe_float(c.get('fee_sources_assumed')))}"
+                    )
                 k3, k4 = st.columns(2)
                 k3.metric("ROI", _fmt_pct(c.get("roi_pct"), 2), _fmt_delta_pp(c.get("roi_delta_pp")))
                 k4.metric("Winrate", _fmt_pct(c.get("winrate_pct"), 1) if c.get("winrate_pct") is not None else "N/A")
@@ -16102,6 +16173,8 @@ elif page == "Forex Trading (AG1-FX)":
     lots_open = []
     lots_closed = []
     orders = []
+    fills = []
+    fill_costs = []
     configs = []
 
     for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items():
@@ -16162,6 +16235,40 @@ elif page == "Forex Trading (AG1-FX)":
                 ord_df["LLM"] = cfg["label"]
                 orders.append(ord_df)
 
+            fill_df = _ag1_fetchdf(
+                conn,
+                """
+                SELECT *
+                FROM core.fills
+                WHERE filled_at >= ? AND filled_at < ?
+                ORDER BY filled_at DESC
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            )
+            if not fill_df.empty:
+                fill_df["llm_key"] = key
+                fill_df["LLM"] = cfg["label"]
+                fills.append(fill_df)
+
+            cost_df = _ag1_fetchdf(
+                conn,
+                """
+                SELECT c.*, f.filled_at, f.fill_price, f.fill_size_lots,
+                       f.side AS fill_side, f.fees_eur AS fill_fees_eur,
+                       f.fill_source
+                FROM core.fill_costs c
+                LEFT JOIN core.fills f ON f.fill_id = c.fill_id
+                WHERE COALESCE(f.filled_at, c.recorded_at) >= ?
+                  AND COALESCE(f.filled_at, c.recorded_at) < ?
+                ORDER BY COALESCE(f.filled_at, c.recorded_at) DESC
+                """,
+                [start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+            )
+            if not cost_df.empty:
+                cost_df["llm_key"] = key
+                cost_df["LLM"] = cfg["label"]
+                fill_costs.append(cost_df)
+
             conf = conn.execute("SELECT * FROM cfg.portfolio_config WHERE config_key='default'").fetchdf()
             if not conf.empty:
                 conf["llm_key"] = key
@@ -16179,6 +16286,8 @@ elif page == "Forex Trading (AG1-FX)":
     df_open = pd.concat(lots_open, ignore_index=True, sort=False) if lots_open else pd.DataFrame()
     df_closed = pd.concat(lots_closed, ignore_index=True, sort=False) if lots_closed else pd.DataFrame()
     df_orders = pd.concat(orders, ignore_index=True, sort=False) if orders else pd.DataFrame()
+    df_fills = pd.concat(fills, ignore_index=True, sort=False) if fills else pd.DataFrame()
+    df_costs = pd.concat(fill_costs, ignore_index=True, sort=False) if fill_costs else pd.DataFrame()
     df_cfg = pd.concat(configs, ignore_index=True, sort=False) if configs else pd.DataFrame()
 
     if not df_snap.empty:
@@ -16188,6 +16297,31 @@ elif page == "Forex Trading (AG1-FX)":
             {"Run gestion portefeuille": 0, "Valorisation horaire": 1}
         ).fillna(2)
         df_snap = df_snap.sort_values(["LLM", "as_of", "_snapshot_rank"]).drop(columns=["_snapshot_rank"])
+
+    if not df_closed.empty:
+        df_closed["_pnl_eur"] = pd.to_numeric(
+            df_closed["pnl_eur"] if "pnl_eur" in df_closed.columns else pd.Series(0.0, index=df_closed.index),
+            errors="coerce",
+        ).fillna(0.0)
+        df_closed["_lot_fees_eur"] = pd.to_numeric(
+            df_closed["fees_eur"] if "fees_eur" in df_closed.columns else pd.Series(0.0, index=df_closed.index),
+            errors="coerce",
+        ).fillna(0.0)
+
+    if not df_fills.empty:
+        df_fills["filled_at"] = pd.to_datetime(df_fills.get("filled_at"), errors="coerce", utc=True)
+        df_fills["_fees_eur"] = pd.to_numeric(df_fills.get("fees_eur"), errors="coerce").fillna(0.0)
+
+    if not df_costs.empty:
+        cost_ts_raw = (
+            df_costs["filled_at"] if "filled_at" in df_costs.columns else pd.Series(pd.NaT, index=df_costs.index)
+        )
+        if "recorded_at" in df_costs.columns:
+            cost_ts_raw = cost_ts_raw.fillna(df_costs["recorded_at"])
+        df_costs["_cost_ts"] = pd.to_datetime(cost_ts_raw, errors="coerce", utc=True)
+        df_costs["_commission_eur"] = pd.to_numeric(df_costs.get("commission_eur"), errors="coerce").fillna(0.0)
+        df_costs["_commission_amount"] = pd.to_numeric(df_costs.get("commission_amount"), errors="coerce").fillna(0.0)
+        df_costs["_commission_source"] = df_costs.get("commission_source", pd.Series("", index=df_costs.index)).fillna("").astype(str)
 
     pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, df_open, df_closed)
     tab_pairs, tab_sparklines, tab_pair_diag = st.tabs(["Vue paires suivies", "Sparklines paires", "Diagnostic paires"])
@@ -16341,6 +16475,150 @@ elif page == "Forex Trading (AG1-FX)":
             st.caption(f"Winrate: {winrate:.1f}%" if winrate is not None else "Winrate: -")
             st.caption(f"Profit factor: {profit_factor:.2f}" if profit_factor is not None else "Profit factor: -")
             st.caption(f"Rejected orders: {rejected}")
+
+    st.subheader("Performance nette & couts d'execution")
+    gross_realized_period = float(df_closed["_pnl_eur"].sum()) if not df_closed.empty and "_pnl_eur" in df_closed.columns else 0.0
+    fees_period = (
+        float(df_costs["_commission_eur"].sum())
+        if not df_costs.empty and "_commission_eur" in df_costs.columns
+        else (float(df_fills["_fees_eur"].sum()) if not df_fills.empty and "_fees_eur" in df_fills.columns else 0.0)
+    )
+    net_realized_period = gross_realized_period - fees_period
+    fills_count = int(len(df_fills)) if not df_fills.empty else 0
+    cost_rows_count = int(len(df_costs)) if not df_costs.empty else 0
+    cost_coverage_pct = (cost_rows_count / fills_count * 100.0) if fills_count > 0 else None
+    avg_fee_per_fill = (fees_period / cost_rows_count) if cost_rows_count > 0 else 0.0
+
+    missing_costs = 0
+    assumed_ccy_costs = 0
+    simulated_costs = 0
+    ibkr_costs = 0
+    if not df_costs.empty and "_commission_source" in df_costs.columns:
+        source_series = df_costs["_commission_source"].fillna("").astype(str).str.lower()
+        missing_costs = int((source_series.eq("") | source_series.str.contains("missing", regex=False)).sum())
+        assumed_ccy_costs = int(source_series.str.contains("assumed_eur_no_ccy", regex=False).sum())
+        simulated_costs = int(source_series.str.contains("simulated_bps", regex=False).sum())
+        ibkr_costs = int(source_series.str.startswith("ibkr_").sum())
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("P&L realise brut", _fmt_currency(gross_realized_period, 2))
+    k2.metric("Fees execution", _fmt_currency(fees_period, 2))
+    k3.metric("P&L realise net", _fmt_currency(net_realized_period, 2), _fmt_delta_eur(net_realized_period - gross_realized_period))
+    k4.metric("Couverture fees", f"{cost_coverage_pct:.0f}%" if cost_coverage_pct is not None else "-", f"{cost_rows_count}/{fills_count} fills")
+    k5.metric("Fee moyen / fill", _fmt_currency(avg_fee_per_fill, 2))
+
+    if fills_count > 0 and cost_rows_count < fills_count:
+        st.warning(f"{fills_count - cost_rows_count} fill(s) n'ont pas encore de ligne `core.fill_costs` associee.")
+    if missing_costs > 0:
+        st.warning(f"{missing_costs} cout(s) ont une commission IBKR manquante ou une source vide.")
+    if assumed_ccy_costs > 0:
+        st.info(f"{assumed_ccy_costs} commission(s) IBKR n'indiquent pas la devise; elles sont tracees en EUR presume.")
+    if simulated_costs > 0:
+        st.info(f"{simulated_costs} cout(s) proviennent encore du mode dry-run `simulated_bps` sur la periode affichee.")
+
+    if df_costs.empty:
+        st.caption("Aucune ligne `core.fill_costs` sur la periode. Les couts apparaitront apres les prochains fills confirmes.")
+    else:
+        ctab1, ctab2, ctab3 = st.tabs(["Synthese couts", "Graphiques couts", "Audit fills"])
+        with ctab1:
+            by_llm = (
+                df_costs.groupby("LLM", as_index=False)
+                .agg(
+                    fills=("fill_id", "nunique"),
+                    fees_eur=("_commission_eur", "sum"),
+                    avg_fee_eur=("_commission_eur", "mean"),
+                    ibkr_rows=("_commission_source", lambda s: int(s.fillna("").astype(str).str.lower().str.startswith("ibkr_").sum())),
+                    missing_rows=("_commission_source", lambda s: int((s.fillna("").astype(str).eq("") | s.fillna("").astype(str).str.lower().str.contains("missing", regex=False)).sum())),
+                )
+                .sort_values("fees_eur", ascending=False)
+            )
+            render_interactive_table(
+                by_llm.rename(
+                    columns={
+                        "fills": "Fills",
+                        "fees_eur": "Fees EUR",
+                        "avg_fee_eur": "Fee moyen EUR",
+                        "ibkr_rows": "Lignes IBKR",
+                        "missing_rows": "Commissions manquantes",
+                    }
+                ),
+                key_suffix="ag1_fx_costs_by_llm",
+                height=220,
+            )
+
+            by_pair = (
+                df_costs.groupby(["LLM", "pair"], as_index=False)
+                .agg(fills=("fill_id", "nunique"), fees_eur=("_commission_eur", "sum"))
+                .sort_values("fees_eur", ascending=False)
+            )
+            render_interactive_table(
+                by_pair.rename(columns={"pair": "Paire", "fills": "Fills", "fees_eur": "Fees EUR"}).head(80),
+                key_suffix="ag1_fx_costs_by_pair",
+                height=300,
+            )
+
+        with ctab2:
+            chart_cols = st.columns(2)
+            with chart_cols[0]:
+                costs_daily = df_costs.dropna(subset=["_cost_ts"]).copy()
+                if not costs_daily.empty:
+                    costs_daily["Jour"] = costs_daily["_cost_ts"].dt.date
+                    daily = costs_daily.groupby(["Jour", "LLM"], as_index=False).agg(Fees=("_commission_eur", "sum"))
+                    fig_fee_day = px.bar(daily, x="Jour", y="Fees", color="LLM", barmode="group")
+                    fig_fee_day.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Fees EUR")
+                    st.plotly_chart(fig_fee_day, use_container_width=True, key="ag1_fx_fee_daily")
+                else:
+                    st.caption("Pas d'horodatage exploitable pour les couts.")
+            with chart_cols[1]:
+                source_counts = (
+                    df_costs.assign(Source=df_costs["_commission_source"].replace("", "missing"))
+                    .groupby("Source", as_index=False)
+                    .agg(Fills=("fill_id", "nunique"), Fees=("_commission_eur", "sum"))
+                    .sort_values("Fills", ascending=False)
+                )
+                fig_sources = px.bar(source_counts, x="Source", y="Fills", hover_data=["Fees"])
+                fig_sources.update_layout(height=320, margin=dict(l=10, r=10, t=20, b=10), xaxis_tickangle=-25)
+                st.plotly_chart(fig_sources, use_container_width=True, key="ag1_fx_fee_sources")
+
+        with ctab3:
+            audit = df_costs.copy()
+            audit["raw_json_len"] = audit.get("raw_json", pd.Series("", index=audit.index)).fillna("").astype(str).str.len()
+            show_cols = [
+                c
+                for c in [
+                    "_cost_ts",
+                    "LLM",
+                    "pair",
+                    "fill_id",
+                    "order_id",
+                    "broker",
+                    "broker_execution_id",
+                    "commission_amount",
+                    "commission_ccy",
+                    "commission_eur",
+                    "commission_source",
+                    "fill_source",
+                    "fill_price",
+                    "fill_size_lots",
+                    "raw_json_len",
+                ]
+                if c in audit.columns
+            ]
+            render_interactive_table(
+                audit[show_cols].rename(
+                    columns={
+                        "_cost_ts": "Timestamp",
+                        "pair": "Paire",
+                        "commission_amount": "Commission brute",
+                        "commission_ccy": "Devise",
+                        "commission_eur": "Commission EUR",
+                        "commission_source": "Source commission",
+                        "raw_json_len": "Raw JSON chars",
+                    }
+                ),
+                key_suffix="ag1_fx_cost_audit",
+                height=360,
+            )
 
     st.subheader("Courbe equity")
     if df_snap.empty:
