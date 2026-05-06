@@ -543,6 +543,7 @@ Source de donnÃ©es :
 Composantes UI :
 - 3 cartes KPI par LLM : equity, P&L total, leverage, lots ouverts, winrate, profit factor, ordres rejetÃ©s.
 - Scoreboard de performance nette : P&L realise brut, frais d'execution, P&L net, couverture `core.fill_costs`, sources de commission IBKR/simulees/manquantes.
+- Radar paires FX : matrice momentum technique composite (AG2-FX score + retours 5D/20D + RSI) vs biais macro/news directionnel AG4-Forex (-1 base bearish, +1 base bullish). Le volume/urgence news n'est plus un axe sature; il devient `Event risk` et pilote la taille des bulles, avec quadrants long aligned / short aligned / conflit / neutre.
 - Onglet `Sparklines paires` : Ã©volution 90j des 27 paires FX via `yfinance-api`, avec sÃ©paration paires principales / autres cross.
 - Courbe equity superposÃ©e pour les 3 LLMs.
 - Matrice P&L net LLM x paire FX.

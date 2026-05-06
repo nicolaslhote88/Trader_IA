@@ -2,6 +2,7 @@ import ast
 import json
 import hashlib
 import html
+import math
 import os
 import re
 import sys
@@ -264,6 +265,98 @@ def _fx_source_state(news_24h: int, high_impact: int, last_news_at: object) -> s
     return "Calme"
 
 
+def _fx_direction_from_hint(pair: str, hint: object, title: object = "") -> int:
+    """Infer signed pair direction from AG4-Forex text: +1 base bullish, -1 base bearish."""
+    pair_s = str(pair or "").upper().strip()
+    if len(pair_s) != 6:
+        return 0
+    base = pair_s[:3]
+    quote = pair_s[3:6]
+    text = f"{hint or ''} {title or ''}".upper()
+    if not text.strip():
+        return 0
+
+    pair_pattern = rf"{base}\s*/?\s*{quote}"
+    up_words = r"HIGHER|UP|RISE|RISING|BUY|LONG|BULLISH|BID|STRENGTHEN|APPRECIAT|HAUSSIER"
+    down_words = r"LOWER|DOWN|FALL|FALLING|SELL|SHORT|BEARISH|OFFERED|WEAKEN|PRESSUR|DEPRECIAT|BAISSIER"
+
+    if re.search(r"\bBUY_BASE\b", text):
+        return 1
+    if re.search(r"\bSELL_BASE\b", text):
+        return -1
+
+    pair_down = (
+        re.search(rf"\b{pair_pattern}\b.{{0,90}}\b({down_words})\b", text)
+        or re.search(rf"\b({down_words})\b.{{0,28}}\b{pair_pattern}\b", text)
+    )
+    pair_up = (
+        re.search(rf"\b{pair_pattern}\b.{{0,90}}\b({up_words})\b", text)
+        or re.search(rf"\b({up_words})\b.{{0,28}}\b{pair_pattern}\b", text)
+    )
+    if pair_down and not pair_up:
+        return -1
+    if pair_up and not pair_down:
+        return 1
+
+    def _ccy_polarity(ccy: str) -> int:
+        bullish = (
+            re.search(rf"\bBULLISH[_\s:/-]*{ccy}\b", text)
+            or re.search(rf"\b{ccy}\b.{{0,36}}\b(BULLISH|BID|SUPPORTED|STRENGTHEN|APPRECIAT|HAUSSIER)\b", text)
+            or re.search(rf"\b(BULLISH|BID|SUPPORTED|STRENGTHEN|APPRECIAT|HAUSSIER)\b.{{0,36}}\b{ccy}\b", text)
+        )
+        bearish = (
+            re.search(rf"\bBEARISH[_\s:/-]*{ccy}\b", text)
+            or re.search(rf"\b{ccy}\b.{{0,36}}\b(BEARISH|PRESSURED|UNDER PRESSURE|WEAKEN|DEPRECIAT|BAISSIER)\b", text)
+            or re.search(rf"\b(BEARISH|PRESSURED|UNDER PRESSURE|WEAKEN|DEPRECIAT|BAISSIER)\b.{{0,36}}\b{ccy}\b", text)
+        )
+        if bullish and not bearish:
+            return 1
+        if bearish and not bullish:
+            return -1
+        return 0
+
+    base_pol = _ccy_polarity(base)
+    quote_pol = _ccy_polarity(quote)
+    score = base_pol - quote_pol
+    if score > 0:
+        return 1
+    if score < 0:
+        return -1
+    return 0
+
+
+def _fx_news_weight(row: pd.Series, now_utc: pd.Timestamp) -> float:
+    published_at = pd.to_datetime(row.get("published_at"), errors="coerce", utc=True)
+    age_h = (now_utc - published_at).total_seconds() / 3600.0 if pd.notna(published_at) else 72.0
+    impact_score = pd.to_numeric(pd.Series([row.get("impact_score", pd.NA)]), errors="coerce").iloc[0]
+    urgency = pd.to_numeric(pd.Series([row.get("urgency", pd.NA)]), errors="coerce").iloc[0]
+    confidence = pd.to_numeric(pd.Series([row.get("confidence", pd.NA)]), errors="coerce").iloc[0]
+    high_impact = bool(row.get("high_impact"))
+    recency = max(0.12, math.exp(-max(0.0, float(age_h)) / 48.0))
+    impact_norm = float(impact_score) / 100.0 if pd.notna(impact_score) else (0.55 if high_impact else 0.25)
+    urgency_norm = float(urgency) if pd.notna(urgency) else (0.65 if high_impact else 0.25)
+    confidence_norm = float(confidence) if pd.notna(confidence) else 0.55
+    return recency * (0.55 + impact_norm) * (0.65 + urgency_norm) * (0.65 + confidence_norm) * (1.18 if high_impact else 1.0)
+
+
+def _fx_alignment_label(tech_score: object, news_bias: object, event_risk: object) -> str:
+    tech = pd.to_numeric(pd.Series([tech_score]), errors="coerce").iloc[0]
+    bias = pd.to_numeric(pd.Series([news_bias]), errors="coerce").iloc[0]
+    risk = pd.to_numeric(pd.Series([event_risk]), errors="coerce").iloc[0]
+    tech_n = float(tech) if pd.notna(tech) else 0.0
+    bias_n = float(bias) if pd.notna(bias) else 0.0
+    risk_n = float(risk) if pd.notna(risk) else 0.0
+    if abs(tech_n) < 0.18 and abs(bias_n) < 0.18:
+        return "Neutre"
+    if abs(tech_n) < 0.18 and abs(bias_n) >= 0.18:
+        return "Macro only"
+    if abs(bias_n) < 0.18:
+        return "Technique only" if risk_n < 55.0 else "Technique vs event risk"
+    if tech_n * bias_n > 0:
+        return "Aligne long" if tech_n > 0 else "Aligne short"
+    return "Conflit"
+
+
 def _fx_pair_overview_summary(tech_state: str, source_state: str, open_lots: int) -> str:
     if open_lots > 0 and source_state == "Alerte news":
         return "Position ouverte + news fortes"
@@ -401,6 +494,7 @@ def _load_ag1_fx_pair_overview(
             for pair in impacted_pairs:
                 impact_score = pd.to_numeric(pd.Series([row.get("impact_score", pd.NA)]), errors="coerce").iloc[0]
                 urgency = pd.to_numeric(pd.Series([row.get("urgency", pd.NA)]), errors="coerce").iloc[0]
+                confidence = pd.to_numeric(pd.Series([row.get("confidence", pd.NA)]), errors="coerce").iloc[0]
                 high_impact = (
                     str(row.get("impact_magnitude") or "").strip().lower() in {"high", "major", "critical"}
                     or (pd.notna(impact_score) and float(impact_score) >= 70.0)
@@ -414,16 +508,34 @@ def _load_ag1_fx_pair_overview(
                         "origin": str(row.get("origin") or "").strip() or "-",
                         "impact_score": float(impact_score) if pd.notna(impact_score) else pd.NA,
                         "urgency": float(urgency) if pd.notna(urgency) else pd.NA,
+                        "confidence": float(confidence) if pd.notna(confidence) else pd.NA,
                         "high_impact": bool(high_impact),
                         "is_24h": bool(pd.notna(row.get("published_at")) and row.get("published_at") >= cutoff_24h),
+                        "direction": _fx_direction_from_hint(pair, row.get("fx_directional_hint"), row.get("title")),
+                        "fx_directional_hint": str(row.get("fx_directional_hint") or "").strip(),
+                        "title": str(row.get("title") or "").strip(),
                     }
                 )
 
     news_by_pair: dict[str, dict[str, object]] = {}
     if news_rows:
         news_df = pd.DataFrame(news_rows)
+        now_for_news = pd.Timestamp.now(tz="UTC")
+        news_df["_weight"] = news_df.apply(lambda r: _fx_news_weight(r, now_for_news), axis=1)
+        news_df["_dir_weight"] = news_df["_weight"] * pd.to_numeric(news_df["direction"], errors="coerce").fillna(0.0)
         for pair, grp in news_df.groupby("pair"):
             src_counts = grp["source"].fillna("unknown").astype(str).value_counts().head(3)
+            directional = grp[pd.to_numeric(grp["direction"], errors="coerce").fillna(0.0).abs() > 0.0]
+            dir_weight_total = float(directional["_weight"].sum()) if not directional.empty else 0.0
+            bias = float(directional["_dir_weight"].sum() / dir_weight_total) if dir_weight_total > 0 else 0.0
+            event_weight = float(grp["_weight"].sum())
+            event_risk = min(
+                100.0,
+                math.sqrt(max(event_weight, 0.0)) * 26.0
+                + float(grp["high_impact"].sum()) * 7.5
+                + min(float(grp["is_24h"].sum()), 8.0) * 3.5
+                + float(grp["source"].nunique()) * 2.0,
+            )
             news_by_pair[pair] = {
                 "news_count": int(len(grp)),
                 "news_24h": int(grp["is_24h"].sum()),
@@ -432,6 +544,10 @@ def _load_ag1_fx_pair_overview(
                 "top_sources": ", ".join(src_counts.index.tolist()),
                 "last_news_at": grp["published_at"].max(),
                 "avg_impact": float(pd.to_numeric(grp["impact_score"], errors="coerce").mean()) if pd.to_numeric(grp["impact_score"], errors="coerce").notna().any() else pd.NA,
+                "news_bias": max(-1.0, min(1.0, bias)),
+                "news_confidence": min(100.0, dir_weight_total * 38.0),
+                "event_risk": event_risk,
+                "directional_items": int(len(directional)),
             }
 
     open_by_pair: dict[str, dict[str, object]] = {}
@@ -469,13 +585,22 @@ def _load_ag1_fx_pair_overview(
         tech_age_h = (now_utc - as_of).total_seconds() / 3600.0 if pd.notna(as_of) else pd.NA
         last_news_age_h = (now_utc - pd.to_datetime(last_news_at, errors="coerce", utc=True)).total_seconds() / 3600.0 if pd.notna(pd.to_datetime(last_news_at, errors="coerce", utc=True)) else pd.NA
         open_lots = int(o.get("open_lots") or 0)
+        news_bias = float(n.get("news_bias") or 0.0)
+        news_confidence = float(n.get("news_confidence") or 0.0)
+        event_risk = float(n.get("event_risk") or 0.0)
+        alignment = _fx_alignment_label(score, news_bias, event_risk)
         rows.append(
             {
                 "Paire": pair,
                 "Etat general": _fx_pair_overview_summary(tech_state, source_state, open_lots),
+                "Alignement": alignment,
                 "Technique": tech_state,
                 "Signal": str(label or "-"),
                 "Score": round(float(score), 2) if pd.notna(pd.to_numeric(pd.Series([score]), errors="coerce").iloc[0]) else pd.NA,
+                "Biais news": round(news_bias, 2),
+                "Confidence news %": round(news_confidence, 0),
+                "Event risk": round(event_risk, 0),
+                "News directionnelles": int(n.get("directional_items") or 0),
                 "Regime": str(t.get("regime") if t is not None else "-"),
                 "Prix": round(float(t.get("last_close")), 5) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("last_close")]), errors="coerce").iloc[0]) else pd.NA,
                 "Ret 1D %": round(float(t.get("ret_1d")) * 100.0, 2) if t is not None and pd.notna(pd.to_numeric(pd.Series([t.get("ret_1d")]), errors="coerce").iloc[0]) else pd.NA,
@@ -522,6 +647,9 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         return pd.to_numeric(wk[name], errors="coerce").fillna(default)
 
     wk["_score"] = _num_col("Score").clip(-1.0, 1.0)
+    wk["_news_bias"] = _num_col("Biais news").clip(-1.0, 1.0)
+    wk["_news_confidence"] = _num_col("Confidence news %").clip(0.0, 100.0)
+    wk["_event_risk"] = _num_col("Event risk").clip(0.0, 100.0)
     wk["_news_24h"] = _num_col("News 24h")
     wk["_news_period"] = _num_col("News periode")
     wk["_high_impact"] = _num_col("High impact")
@@ -531,48 +659,64 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
     wk["_rsi"] = _num_col("RSI14", default=float("nan"))
     wk["_ret_5d"] = _num_col("Ret 5D %", default=float("nan"))
     wk["_ret_20d"] = _num_col("Ret 20D %", default=float("nan"))
-    wk["_pressure"] = (
-        wk["_news_24h"] * 12.0
-        + wk["_high_impact"] * 28.0
-        + wk["_sources"] * 6.0
-        + wk["_news_period"].clip(upper=20.0) * 1.4
-    ).clip(0.0, 100.0)
-    wk["_bubble"] = (14.0 + wk["_open_lots"] * 10.0 + wk["_news_period"].clip(upper=30.0) * 1.2 + wk["_pnl"].abs().clip(upper=300.0) / 18.0).clip(12.0, 62.0)
+    wk["_rsi_momentum"] = ((wk["_rsi"] - 50.0) / 25.0).fillna(0.0).clip(-1.0, 1.0)
+    wk["_ret5_momentum"] = (wk["_ret_5d"].fillna(0.0) / 3.0).clip(-1.0, 1.0)
+    wk["_ret20_momentum"] = (wk["_ret_20d"].fillna(0.0) / 6.0).clip(-1.0, 1.0)
+    wk["_tech_momentum"] = (
+        wk["_score"] * 0.58
+        + wk["_ret5_momentum"] * 0.18
+        + wk["_ret20_momentum"] * 0.14
+        + wk["_rsi_momentum"] * 0.10
+    ).clip(-1.0, 1.0)
+    wk["_bubble"] = (
+        16.0
+        + wk["_event_risk"] * 0.34
+        + wk["_open_lots"] * 8.0
+        + wk["_pnl"].abs().clip(upper=300.0) / 24.0
+    ).clip(12.0, 66.0)
     wk["_technique"] = wk.get("Technique", pd.Series("Neutre", index=wk.index)).fillna("Neutre").astype(str)
     wk["_sources_state"] = wk.get("Sources", pd.Series("Calme", index=wk.index)).fillna("Calme").astype(str)
     wk["_state"] = wk.get("Etat general", pd.Series("-", index=wk.index)).fillna("-").astype(str)
-    wk["_score_plot"] = (
-        wk.apply(lambda row: float(row["_score"]) + _stable_jitter(str(row["Paire"]), "fx-score", amplitude=0.022), axis=1)
+    wk["_setup"] = wk.get("Alignement", pd.Series("Neutre", index=wk.index)).fillna("Neutre").astype(str)
+    wk["_exposure_state"] = "Hors portefeuille"
+    wk.loc[wk["_open_lots"] > 0, "_exposure_state"] = "Expose"
+    wk.loc[(wk["_open_lots"] <= 0) & (wk["_event_risk"] >= 55.0), "_exposure_state"] = "Event risk"
+    wk["_momentum_plot"] = (
+        wk.apply(lambda row: float(row["_tech_momentum"]) + _stable_jitter(str(row["Paire"]), "fx-momentum", amplitude=0.018), axis=1)
         .clip(-1.0, 1.0)
     )
-    wk["_pressure_plot"] = (
-        wk.apply(lambda row: float(row["_pressure"]) + _stable_jitter(str(row["Paire"]), "fx-pressure", amplitude=2.2), axis=1)
-        .clip(0.0, 102.0)
+    wk["_bias_plot"] = (
+        wk.apply(lambda row: float(row["_news_bias"]) + _stable_jitter(str(row["Paire"]), "fx-bias", amplitude=0.018), axis=1)
+        .clip(-1.0, 1.0)
     )
 
     color_map = {
-        "Fort haussier": "#00d084",
-        "Haussier": "#9acd32",
+        "Aligne long": "#00d084",
+        "Aligne short": "#ff4d5e",
+        "Conflit": "#f59e0b",
+        "Macro only": "#38bdf8",
+        "Technique only": "#a3e635",
+        "Technique vs event risk": "#fb7185",
         "Neutre": "#64748b",
-        "Tendu": "#d97706",
-        "Baissier": "#ff6b6b",
-        "Fort baissier": "#b00020",
     }
     symbol_map = {
-        "Calme": "circle",
-        "Recent": "diamond",
-        "Actif": "square",
-        "Alerte news": "triangle-up",
+        "Hors portefeuille": "circle",
+        "Expose": "diamond",
+        "Event risk": "triangle-up",
     }
-    technique_order = ["Fort haussier", "Haussier", "Neutre", "Tendu", "Baissier", "Fort baissier"]
-    source_order = ["Alerte news", "Actif", "Recent", "Calme"]
+    setup_order = ["Aligne long", "Aligne short", "Conflit", "Macro only", "Technique only", "Technique vs event risk", "Neutre"]
+    exposure_order = ["Expose", "Event risk", "Hors portefeuille"]
     custom_cols = [
         "Paire",
         "_state",
+        "_setup",
         "_technique",
         "_sources_state",
+        "_tech_momentum",
         "_score",
-        "_pressure",
+        "_news_bias",
+        "_news_confidence",
+        "_event_risk",
         "_news_24h",
         "_high_impact",
         "_sources",
@@ -588,39 +732,41 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
             wk[col] = pd.NA
 
     fig = px.scatter(
-        wk.sort_values(["_high_impact", "_news_24h", "_open_lots"], ascending=[False, False, False]),
-        x="_score_plot",
-        y="_pressure_plot",
-        color="_technique",
-        symbol="_sources_state",
+        wk.sort_values(["_open_lots", "_event_risk", "_high_impact"], ascending=[False, False, False]),
+        x="_momentum_plot",
+        y="_bias_plot",
+        color="_setup",
+        symbol="_exposure_state",
         size="_bubble",
         text="Paire",
         custom_data=custom_cols,
         color_discrete_map=color_map,
         symbol_map=symbol_map,
-        category_orders={"_technique": technique_order, "_sources_state": source_order},
+        category_orders={"_setup": setup_order, "_exposure_state": exposure_order},
         labels={
-            "_score_plot": "Score technique AG2 (-1 baissier -> +1 haussier)",
-            "_pressure_plot": "Pression news / sources AG4 (0-100)",
-            "_technique": "Technique",
-            "_sources_state": "Sources",
+            "_momentum_plot": "Momentum technique composite (-1 short -> +1 long)",
+            "_bias_plot": "Biais macro/news directionnel (-1 base bearish -> +1 base bullish)",
+            "_setup": "Setup",
+            "_exposure_state": "Portefeuille / event risk",
         },
         title=None,
     )
     hover_template = (
         "<b>%{customdata[0]}</b><br>"
         "Etat: %{customdata[1]}<br>"
-        "Technique: %{customdata[2]} | Sources: %{customdata[3]}<br>"
-        "Score technique: %{customdata[4]:+.2f}<br>"
-        "Pression news: %{customdata[5]:.0f}/100<br>"
-        "News 24h: %{customdata[6]:.0f} | High impact: %{customdata[7]:.0f} | Sources: %{customdata[8]:.0f}<br>"
-        "Lots ouverts: %{customdata[9]:.0f} | P&L clos: %{customdata[10]:+.2f} EUR<br>"
-        "Ret 5D / 20D: %{customdata[11]:+.2f}% / %{customdata[12]:+.2f}% | RSI14: %{customdata[13]:.1f}<br>"
-        "Top sources: %{customdata[14]}<extra></extra>"
+        "Setup: %{customdata[2]}<br>"
+        "Technique: %{customdata[3]} | Sources: %{customdata[4]}<br>"
+        "Momentum composite: %{customdata[5]:+.2f} | Score AG2: %{customdata[6]:+.2f}<br>"
+        "Biais macro/news: %{customdata[7]:+.2f} | confiance: %{customdata[8]:.0f}%<br>"
+        "Event risk: %{customdata[9]:.0f}/100<br>"
+        "News 24h: %{customdata[10]:.0f} | High impact: %{customdata[11]:.0f} | Sources: %{customdata[12]:.0f}<br>"
+        "Lots ouverts: %{customdata[13]:.0f} | P&L clos: %{customdata[14]:+.2f} EUR<br>"
+        "Ret 5D / 20D: %{customdata[15]:+.2f}% / %{customdata[16]:+.2f}% | RSI14: %{customdata[17]:.1f}<br>"
+        "Top sources: %{customdata[18]}<extra></extra>"
     )
     for trace in fig.data:
         trace_name = str(getattr(trace, "name", "") or "")
-        is_strong = "Fort haussier" in trace_name or "Fort baissier" in trace_name
+        is_strong = "Aligne long" in trace_name or "Aligne short" in trace_name or "Expose" in trace_name
         trace.marker.opacity = 0.82
         trace.marker.line.color = "rgba(255,255,255,0.92)" if is_strong else "rgba(255,255,255,0.56)"
         trace.marker.line.width = 2.4 if is_strong else 1.1
@@ -629,9 +775,13 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         trace.textfont = dict(size=10)
 
     fig.add_vline(x=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
-    fig.add_hline(y=35, line_dash="dot", line_color="#f59e0b")
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
+    fig.add_annotation(x=0.74, y=0.92, text="Long aligned", showarrow=False, font=dict(size=12, color="#00d084"))
+    fig.add_annotation(x=-0.74, y=-0.92, text="Short aligned", showarrow=False, font=dict(size=12, color="#ff4d5e"))
+    fig.add_annotation(x=-0.74, y=0.92, text="Conflit: macro > technique", showarrow=False, font=dict(size=12, color="#f59e0b"))
+    fig.add_annotation(x=0.74, y=-0.92, text="Conflit: technique > macro", showarrow=False, font=dict(size=12, color="#f59e0b"))
     fig.update_xaxes(range=[-1.05, 1.05], dtick=0.25, zeroline=False)
-    fig.update_yaxes(range=[-4, 108], dtick=10)
+    fig.update_yaxes(range=[-1.05, 1.05], dtick=0.25, zeroline=False)
     fig.update_layout(
         height=640,
         margin=dict(l=10, r=10, t=86, b=10),
@@ -642,7 +792,7 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
             xanchor="left",
             x=0,
             traceorder="normal",
-            title_text="Technique, sources",
+            title_text="Setup, exposition",
         ),
     )
     return fig, wk
@@ -14931,7 +15081,12 @@ elif page == "Dashboard Forex":
             m3.metric("Actives 24h", int((pd.to_numeric(pair_overview.get("News 24h", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()))
             m4.metric("Paires exposees", int((pd.to_numeric(pair_overview.get("Lots ouverts", pd.Series(dtype=float)), errors="coerce").fillna(0) > 0).sum()))
             avg_score = pd.to_numeric(pair_overview.get("Score", pd.Series(dtype=float)), errors="coerce").dropna()
-            m5.metric("Score moyen", f"{avg_score.mean():+.2f}" if not avg_score.empty else "N/A")
+            avg_bias = pd.to_numeric(pair_overview.get("Biais news", pd.Series(dtype=float)), errors="coerce").dropna()
+            m5.metric(
+                "Biais moyen",
+                f"{avg_bias.mean():+.2f}" if not avg_bias.empty else "N/A",
+                f"tech {avg_score.mean():+.2f}" if not avg_score.empty else None,
+            )
 
             fig_fx, _ = _build_fx_pair_signal_matrix(pair_overview)
             if fig_fx is not None:
@@ -14939,15 +15094,17 @@ elif page == "Dashboard Forex":
 
             priority = pair_overview.copy()
             priority["_priority"] = (
-                pd.to_numeric(priority.get("High impact", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 4.0
-                + pd.to_numeric(priority.get("News 24h", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 1.8
-                + pd.to_numeric(priority.get("Lots ouverts", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 2.0
-                + pd.to_numeric(priority.get("Score", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs()
+                pd.to_numeric(priority.get("Event risk", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 0.08
+                + pd.to_numeric(priority.get("Confidence news %", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 0.04
+                + pd.to_numeric(priority.get("Lots ouverts", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 2.4
+                + pd.to_numeric(priority.get("Score", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs() * 1.4
+                + pd.to_numeric(priority.get("Biais news", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs() * 1.8
             )
             priority = priority.sort_values("_priority", ascending=False).head(15)
             keep = [
                 c for c in [
-                    "Paire", "Etat general", "Technique", "Signal", "Score", "Sources", "News 24h",
+                    "Paire", "Alignement", "Technique", "Signal", "Score", "Biais news",
+                    "Confidence news %", "Event risk", "Sources", "News 24h",
                     "High impact", "Lots ouverts", "LLM exposes", "P&L clos EUR", "Top sources",
                 ] if c in priority.columns
             ]
@@ -16344,18 +16501,24 @@ elif page == "Forex Trading (AG1-FX)":
             m3.metric("News 24h", active_pairs)
             m4.metric("Paires exposees", exposed_pairs)
             st.caption(
-                "Lecture rapide : Technique = signal AG2-FX; Sources = intensite/news AG4-Forex sur la fenetre; "
+                "Lecture rapide : Technique = momentum AG2-FX; Biais news = direction macro/news AG4-Forex signee; "
+                "Event risk = risque headline/urgence utilise en taille de bulle; "
                 f"age technique moyen = {avg_age.mean():.1f} h" if not avg_age.empty else
-                "Lecture rapide : Technique = signal AG2-FX; Sources = intensite/news AG4-Forex sur la fenetre."
+                "Lecture rapide : Technique = momentum AG2-FX; Biais news = direction macro/news AG4-Forex signee; Event risk = risque headline/urgence."
             )
             show_cols = [
                 c
                 for c in [
                     "Paire",
                     "Etat general",
+                    "Alignement",
                     "Technique",
                     "Signal",
                     "Score",
+                    "Biais news",
+                    "Confidence news %",
+                    "Event risk",
+                    "News directionnelles",
                     "Regime",
                     "Ret 1D %",
                     "Ret 5D %",
