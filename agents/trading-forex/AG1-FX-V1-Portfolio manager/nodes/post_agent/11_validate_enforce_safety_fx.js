@@ -74,7 +74,8 @@ const orders = [];
 const alerts = [];
 
 let killSwitch = Boolean(cfg.kill_switch_active);
-if (num(portfolio.drawdown_day_pct, 0) <= -maxDd) {
+const drawdownDayFrac = num(portfolio.drawdown_day_frac, num(portfolio.drawdown_day_pct, 0));
+if (drawdownDayFrac <= -maxDd) {
   killSwitch = true;
   alerts.push({ severity: 'critical', category: 'kill_switch', message: 'Daily drawdown gate breached; opens blocked' });
 }

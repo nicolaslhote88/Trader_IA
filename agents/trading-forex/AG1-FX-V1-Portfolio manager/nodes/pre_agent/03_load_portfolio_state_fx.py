@@ -211,6 +211,11 @@ state = {
     "open_lots": lots,
     "open_lots_count": len(lots),
     "leverage_effective": leverage_effective,
+    "drawdown_day_frac": min(0.0, drawdown_day),
+    "drawdown_total_frac": min(0.0, drawdown_total),
+    "drawdown_day_pct_display": min(0.0, drawdown_day) * 100.0,
+    "drawdown_total_pct_display": min(0.0, drawdown_total) * 100.0,
+    # Backward-compatible legacy names: these are fractions, despite "_pct".
     "drawdown_day_pct": min(0.0, drawdown_day),
     "drawdown_total_pct": min(0.0, drawdown_total),
     "valuation_source": "live_recomputed_from_corrected_lots_and_latest_ag2",
