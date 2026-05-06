@@ -291,9 +291,36 @@ def _num(value: Any) -> float | None:
         text = str(value).replace(",", "").strip()
         if not text:
             return None
-        return float(text)
+        mult = 1.0
+        suffix = text[-1:].upper()
+        if suffix in {"K", "M", "B"}:
+            text = text[:-1]
+            mult = {"K": 1_000.0, "M": 1_000_000.0, "B": 1_000_000_000.0}[suffix]
+        return float(text) * mult
     except Exception:
         return None
+
+
+def _snapshot_has_price(raw: dict | None) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return any(_num(raw.get(field)) is not None for field in ("31", "84", "86"))
+
+
+def _merge_snapshot_rows(*batches: list[dict]) -> dict[int, dict]:
+    merged: dict[int, dict] = {}
+    for batch in batches:
+        for row in batch or []:
+            try:
+                conid = int(row.get("conid"))
+            except Exception:
+                continue
+            current = merged.get(conid)
+            if current is None or (_snapshot_has_price(row) and not _snapshot_has_price(current)):
+                merged[conid] = row
+            elif current is not None:
+                merged[conid] = {**current, **{k: v for k, v in row.items() if v not in (None, "", "N/A")}}
+    return merged
 
 
 def _snapshot_record(pair: str, raw: dict, inverted: bool = False) -> dict:
@@ -358,23 +385,30 @@ async def fx_marketdata_snapshot(
 
     conids = sorted(conid_to_pairs)
     try:
+        # CPAPI sometimes requires account initialization before market data,
+        # even though snapshots are account-agnostic for our read-only use case.
+        try:
+            await client.get_account_id()
+        except Exception as exc:
+            logger.info("IBKR account preflight before snapshot did not complete: %s", exc)
+
         # CPAPI needs a pre-flight snapshot request to start streams. A short
         # second pass usually returns the requested fields within the same run.
+        # Always do the second pass: one liquid pair can answer immediately while
+        # other conids are still warming up.
         first = await client.marketdata_snapshot(conids, fields=fields)
-        if not any(any(k in row for k in ("31", "84", "86")) for row in first if isinstance(row, dict)):
+        await asyncio.sleep(0.8)
+        second = await client.marketdata_snapshot(conids, fields=fields)
+        merged_initial = _merge_snapshot_rows(first, second)
+        missing = [conid for conid in conids if not _snapshot_has_price(merged_initial.get(conid))]
+        third = []
+        if missing:
             await asyncio.sleep(0.8)
-            raw_rows = await client.marketdata_snapshot(conids)
-        else:
-            raw_rows = first
+            third = await client.marketdata_snapshot(missing, fields=fields)
     except CPAPIError as exc:
         raise HTTPException(502, str(exc)) from exc
 
-    by_conid = {}
-    for row in raw_rows:
-        try:
-            by_conid[int(row.get("conid"))] = row
-        except Exception:
-            continue
+    by_conid = _merge_snapshot_rows(first, second, third)
 
     quotes = []
     for conid, pair_specs in conid_to_pairs.items():
