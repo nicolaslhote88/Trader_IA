@@ -15,8 +15,6 @@ import duckdb
 
 DEFAULT_TARGETS = [
     "/files/duckdb/ag1_fx_v1_chatgpt52.duckdb",
-    "/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb",
-    "/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb",
 ]
 
 DEFAULT_AG2_FX_PATH = "/files/duckdb/ag2_fx_v1.duckdb"
@@ -24,6 +22,7 @@ DEFAULT_SCHEMA_PATH = "/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql"
 DEFAULT_YFINANCE_API_BASE = "http://yfinance-api:8080"
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 5
 DEFAULT_MAX_PRICE_WORKERS = 8
+DEFAULT_BROKER_URL = "http://ibkr-broker:8080"
 
 VARIANT_BY_DB = {
     "ag1_fx_v1_chatgpt52.duckdb": "chatgpt52",
@@ -256,6 +255,378 @@ def fetch_price_from_yfinance(base_url, pair, cfg):
     raise RuntimeError("No last price in yfinance payload")
 
 
+def fetch_broker_json(base_url, path, timeout=12):
+    req = Request(f"{base_url.rstrip('/')}{path}", headers={"Accept": "application/json"})
+    with urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def fill_keys(fill):
+    keys = set()
+    for field in ("order_ref", "orderRef", "cOID", "client_order_id", "clientOrderId", "order_id", "orderId"):
+        value = fill.get(field)
+        if value is not None and to_text(value):
+            keys.add(to_text(value))
+    return keys
+
+
+def build_fill_map(fills_payload):
+    out = {}
+    for fill in fills_payload or []:
+        if not isinstance(fill, dict):
+            continue
+        for key in fill_keys(fill):
+            out.setdefault(key, fill)
+    return out
+
+
+def ensure_broker_columns(con):
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS broker VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS broker_order_id VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS ibkr_status VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS ibkr_response_json VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS ibkr_error VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS lot_id_to_close VARCHAR")
+
+
+def read_orders_waiting_for_ibkr_fill(con):
+    if not table_exists(con, "orders", "core"):
+        return []
+    ensure_broker_columns(con)
+    cur = con.execute(
+        """
+        SELECT order_id, client_order_id, run_id, pair, side, size_lots, order_type,
+               leverage_used, stop_loss_price, take_profit_price, risk_check_notes,
+               broker_order_id, lot_id_to_close, status, ibkr_status
+        FROM core.orders
+        WHERE COALESCE(broker, '') = 'IBKR'
+          AND COALESCE(status, '') IN ('submitted', 'pending')
+          AND COALESCE(ibkr_status, '') NOT IN ('filled', 'error')
+        """
+    )
+    cols = [d[0] for d in cur.description]
+    return [dict(zip(cols, row)) for row in cur.fetchall()]
+
+
+def broker_fill_for_order(order, fill_map):
+    keys = [
+        to_text(order.get("client_order_id")),
+        to_text(order.get("order_id")),
+        to_text(order.get("broker_order_id")),
+    ]
+    for key in keys:
+        if key and key in fill_map:
+            return fill_map[key]
+    return None
+
+
+def parse_broker_fill(order, fill):
+    price = fill.get("price") or fill.get("avgPrice") or fill.get("avg_price")
+    size = fill.get("size") or fill.get("quantity") or fill.get("shares") or fill.get("filledQuantity")
+    try:
+        price = float(str(price).replace(",", ""))
+        size_units = abs(float(str(size).replace(",", "")))
+    except Exception:
+        return None
+    if price <= 0 or size_units <= 0:
+        return None
+    try:
+        fees_eur = abs(float(str(fill.get("commission") or 0).replace(",", "")))
+    except Exception:
+        fees_eur = 0.0
+    execution_id = to_text(fill.get("execution_id") or fill.get("execId") or fill.get("id")) or f"{order.get('order_id')}_IBKR"
+    return {
+        "fill_id": f"IBKR_{execution_id}",
+        "order_id": order.get("order_id"),
+        "pair": order.get("pair"),
+        "side": order.get("side"),
+        "fill_price": price,
+        "fill_size_lots": size_units / 100000.0,
+        "fees_eur": fees_eur,
+        "swap_eur": 0.0,
+        "filled_at": fill.get("trade_time") or fill.get("tradeTime") or fill.get("time") or datetime.now(timezone.utc).isoformat(),
+        "fill_source": "ibkr_confirmed_pf_reconcile",
+        "raw": fill,
+    }
+
+
+def apply_open_fill(con, order, fill):
+    if fill["side"] not in {"buy_base", "sell_base"}:
+        return 0
+    side = "long" if fill["side"] == "buy_base" else "short"
+    con.execute(
+        """
+        INSERT OR REPLACE INTO core.position_lots (
+          lot_id, run_id_open, run_id_close, pair, side, size_lots, open_price, open_at,
+          close_price, close_at, pnl_quote, pnl_eur, fees_eur, swap_eur_total,
+          leverage_used, stop_loss_price, take_profit_price, status, notes
+        ) VALUES (?, ?, NULL, ?, ?, ?, ?, CAST(? AS TIMESTAMP), NULL, NULL, NULL, NULL, ?, 0, ?, ?, ?, 'open', ?)
+        """,
+        [
+            f"LOT_{fill['fill_id']}",
+            order.get("run_id"),
+            fill.get("pair"),
+            side,
+            fill.get("fill_size_lots"),
+            fill.get("fill_price"),
+            fill.get("filled_at"),
+            fill.get("fees_eur") or 0,
+            order.get("leverage_used") or 1,
+            order.get("stop_loss_price"),
+            order.get("take_profit_price"),
+            order.get("risk_check_notes") or "opened by AG1-FX-PF IBKR reconciliation",
+        ],
+    )
+    return 1
+
+
+def apply_close_fill(con, order, fill, prices):
+    if fill["side"] not in {"close_long", "close_short"}:
+        return 0
+    lot_id = to_text(order.get("lot_id_to_close"))
+    if not lot_id:
+        return 0
+    row = con.execute(
+        """
+        SELECT lot_id, run_id_open, pair, side, size_lots, open_price, open_at,
+               fees_eur, swap_eur_total, leverage_used, stop_loss_price, take_profit_price, notes
+        FROM core.position_lots
+        WHERE lot_id=? AND status='open'
+        """,
+        [lot_id],
+    ).fetchone()
+    if not row:
+        return 0
+    (
+        lot_id,
+        run_id_open,
+        lot_pair,
+        side,
+        lot_size,
+        open_price,
+        open_at,
+        fees_eur,
+        swap_eur_total,
+        leverage_used,
+        stop_loss_price,
+        take_profit_price,
+        notes,
+    ) = row
+    close_size = float(fill.get("fill_size_lots") or 0)
+    if close_size <= 0 or close_size > float(lot_size or 0) + 1e-9:
+        return 0
+    direction = 1 if side == "long" else -1
+    pnl_quote = close_size * 100000.0 * (float(fill.get("fill_price")) - float(open_price)) * direction
+    pnl_eur = pnl_quote * quote_to_eur(str(lot_pair)[3:6], prices)
+    if close_size >= float(lot_size or 0) - 1e-9:
+        con.execute(
+            """
+            UPDATE core.position_lots
+            SET run_id_close=?, close_price=?, close_at=CAST(? AS TIMESTAMP),
+                pnl_quote=?, pnl_eur=?, status='closed'
+            WHERE lot_id=?
+            """,
+            [order.get("run_id"), fill.get("fill_price"), fill.get("filled_at"), pnl_quote, pnl_eur, lot_id],
+        )
+    else:
+        con.execute("UPDATE core.position_lots SET size_lots=? WHERE lot_id=?", [float(lot_size) - close_size, lot_id])
+        con.execute(
+            """
+            INSERT OR REPLACE INTO core.position_lots (
+              lot_id, run_id_open, run_id_close, pair, side, size_lots, open_price, open_at,
+              close_price, close_at, pnl_quote, pnl_eur, fees_eur, swap_eur_total,
+              leverage_used, stop_loss_price, take_profit_price, status, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?, ?, ?, ?, ?, ?, ?, 'closed', ?)
+            """,
+            [
+                f"{lot_id}::CLOSE::{order.get('order_id')}",
+                run_id_open,
+                order.get("run_id"),
+                lot_pair,
+                side,
+                close_size,
+                open_price,
+                open_at,
+                fill.get("fill_price"),
+                fill.get("filled_at"),
+                pnl_quote,
+                pnl_eur,
+                fill.get("fees_eur") or 0,
+                swap_eur_total or 0,
+                leverage_used or 1,
+                stop_loss_price,
+                take_profit_price,
+                notes or "",
+            ],
+        )
+    return 1
+
+
+def import_ibkr_confirmed_fills(con, cfg, prices):
+    if os.environ.get("IBKR_DRY_RUN", "true").lower() != "false":
+        return {"enabled": False, "imported_fills": 0, "opened_lots": 0, "closed_lots": 0, "errors": []}
+    orders = read_orders_waiting_for_ibkr_fill(con)
+    if not orders:
+        return {"enabled": True, "orders_waiting": 0, "imported_fills": 0, "opened_lots": 0, "closed_lots": 0, "errors": []}
+    broker_url = to_text(cfg.get("ibkr_broker_url")) or os.environ.get("IBKR_BROKER_URL") or DEFAULT_BROKER_URL
+    errors = []
+    try:
+        fills_payload = fetch_broker_json(broker_url, "/fills", timeout=max(3, int(to_float(cfg.get("request_timeout_seconds"), 5))))
+    except Exception as exc:
+        return {"enabled": True, "orders_waiting": len(orders), "imported_fills": 0, "opened_lots": 0, "closed_lots": 0, "errors": [str(exc)]}
+    fill_map = build_fill_map(fills_payload)
+    imported = opened = closed = 0
+    for order in orders:
+        raw_fill = broker_fill_for_order(order, fill_map)
+        if not raw_fill:
+            continue
+        fill = parse_broker_fill(order, raw_fill)
+        if not fill:
+            errors.append(f"UNPARSABLE_FILL:{order.get('order_id')}")
+            continue
+        exists = con.execute("SELECT COUNT(*) FROM core.fills WHERE fill_id=?", [fill["fill_id"]]).fetchone()
+        if exists and int(exists[0] or 0) > 0:
+            continue
+        con.execute(
+            "INSERT OR REPLACE INTO core.fills VALUES (?, ?, ?, ?, ?, ?, ?, ?, CAST(? AS TIMESTAMP), ?)",
+            [
+                fill["fill_id"],
+                fill["order_id"],
+                fill["pair"],
+                fill["side"],
+                fill["fill_price"],
+                fill["fill_size_lots"],
+                fill["fees_eur"],
+                fill["swap_eur"],
+                fill["filled_at"],
+                fill["fill_source"],
+            ],
+        )
+        con.execute(
+            """
+            UPDATE core.orders
+            SET status='filled', ibkr_status='filled', ibkr_response_json=?
+            WHERE order_id=?
+            """,
+            [json.dumps(raw_fill, ensure_ascii=False), order.get("order_id")],
+        )
+        imported += 1
+        opened += apply_open_fill(con, order, fill)
+        closed += apply_close_fill(con, order, fill, prices)
+    return {
+        "enabled": True,
+        "orders_waiting": len(orders),
+        "broker_fills_seen": len(fills_payload or []),
+        "imported_fills": imported,
+        "opened_lots": opened,
+        "closed_lots": closed,
+        "errors": errors,
+    }
+
+
+def compact_letters(value):
+    return "".join(ch for ch in str(value or "").upper() if ch.isalpha())
+
+
+def ibkr_fx_pair(row, universe_pairs):
+    text = " ".join(
+        str(row.get(k) or "")
+        for k in ("contractDesc", "contract_description_1", "description", "symbol", "ticker", "fullName", "name")
+    ).upper()
+    compact = compact_letters(text)
+    for pair in universe_pairs:
+        if pair in compact or f"{pair[:3]}.{pair[3:]}" in text:
+            return pair
+    asset = str(row.get("assetClass") or row.get("sec_type") or row.get("secType") or "").upper()
+    if asset in {"CASH", "FX", "FOREX", "CURRENCY"}:
+        ccy = str(row.get("currency") or "").upper()
+        desc = compact_letters(row.get("contractDesc") or row.get("symbol") or row.get("ticker"))
+        for pair in universe_pairs:
+            if desc in {pair, pair[:3], pair[3:]} or ccy in {pair[:3], pair[3:]}:
+                return pair
+    return ""
+
+
+def db_units_by_pair(lots):
+    out = {}
+    for lot in lots or []:
+        pair = to_text(lot.get("pair")).upper()
+        sign = -1.0 if to_text(lot.get("side")).lower() == "short" else 1.0
+        out[pair] = out.get(pair, 0.0) + sign * to_float(lot.get("size_lots"), 0.0) * 100000.0
+    return out
+
+
+def reconcile_ibkr_positions(con, cfg, lots, universe_pairs, run_id):
+    summary = {
+        "enabled": os.environ.get("IBKR_DRY_RUN", "true").lower() == "false",
+        "ok": True,
+        "block_new_orders": False,
+        "reasons": [],
+        "db_units_by_pair": {},
+        "ibkr_units_by_pair": {},
+        "deltas": {},
+    }
+    if not summary["enabled"]:
+        return summary
+    broker_url = to_text(cfg.get("ibkr_broker_url")) or os.environ.get("IBKR_BROKER_URL") or DEFAULT_BROKER_URL
+    try:
+        health = fetch_broker_json(broker_url, "/health")
+        positions = fetch_broker_json(broker_url, "/positions")
+        summary["health"] = health
+        if not health.get("authenticated"):
+            summary["reasons"].append("IBKR_BROKER_NOT_AUTHENTICATED")
+        if health.get("dry_run"):
+            summary["reasons"].append("IBKR_BROKER_STILL_IN_DRY_RUN")
+        ibkr_units = {}
+        for row in positions or []:
+            qty = to_float(row.get("position"), 0.0)
+            if abs(qty) <= 1e-9:
+                continue
+            pair = ibkr_fx_pair(row, universe_pairs)
+            if pair:
+                ibkr_units[pair] = ibkr_units.get(pair, 0.0) + qty
+        db_units = db_units_by_pair(lots)
+        summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
+        summary["ibkr_units_by_pair"] = {k: round(v, 4) for k, v in sorted(ibkr_units.items()) if abs(v) > 1e-9}
+        for pair in sorted(set(db_units) | set(ibkr_units)):
+            delta = ibkr_units.get(pair, 0.0) - db_units.get(pair, 0.0)
+            if abs(delta) > 1.0:
+                summary["deltas"][pair] = round(delta, 4)
+        if summary["deltas"]:
+            summary["reasons"].append("IBKR_DUCKDB_POSITION_DIVERGENCE")
+    except Exception as exc:
+        summary["reasons"].append(f"IBKR_RECONCILIATION_FAILED:{exc}")
+    if summary["reasons"]:
+        summary["ok"] = False
+        summary["block_new_orders"] = True
+        try:
+            con.execute("UPDATE cfg.portfolio_config SET kill_switch_active=TRUE, updated_at=CURRENT_TIMESTAMP WHERE config_key='default'")
+        except Exception:
+            pass
+    if table_exists(con, "reconciliation_log", "core"):
+        con.execute(
+            """
+            INSERT OR REPLACE INTO core.reconciliation_log (
+              reconciliation_id, run_id, as_of, source, status, block_new_orders,
+              reasons_json, db_positions_json, broker_positions_json, deltas_json, payload_json
+            ) VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                f"REC_{run_id}_PF",
+                run_id,
+                "AG1-FX-PF-V1 hourly reconciliation",
+                "OK" if summary.get("ok") else "FAILED",
+                bool(summary.get("block_new_orders")),
+                json.dumps(summary.get("reasons") or [], ensure_ascii=False),
+                json.dumps(summary.get("db_units_by_pair") or {}, ensure_ascii=False),
+                json.dumps(summary.get("ibkr_units_by_pair") or {}, ensure_ascii=False),
+                json.dumps(summary.get("deltas") or {}, ensure_ascii=False),
+                json.dumps(summary, ensure_ascii=False),
+            ],
+        )
+    return summary
+
+
 def fetch_ag2_prices(ag2_path):
     db_path = resolve_existing_path(ag2_path)
     if not db_path or not os.path.exists(db_path):
@@ -486,7 +857,7 @@ def build_price_map(cfg, pairs_needed):
     return prices, errors
 
 
-def update_one_portfolio(db_path_cfg, cfg, prices):
+def update_one_portfolio(db_path_cfg, cfg, prices, universe_pairs):
     db_path = resolve_writable_path(db_path_cfg)
     now = datetime.now(timezone.utc)
     result = {
@@ -505,7 +876,15 @@ def update_one_portfolio(db_path_cfg, cfg, prices):
                 raise RuntimeError("Missing AG1-FX core tables")
 
             pcfg = read_config(con, db_path)
+            ibkr_fill_import = import_ibkr_confirmed_fills(con, cfg, prices)
             lots = read_open_lots(con)
+            ibkr_position_reconciliation = reconcile_ibkr_positions(
+                con,
+                cfg,
+                lots,
+                universe_pairs,
+                f"AG1FXMTM_{pcfg['variant']}_{now.strftime('%Y%m%d%H%M%S')}",
+            )
             cash = read_cash_eur(con, pcfg["initial_capital_eur"])
             realized = read_realized_pnl(con)
             fees = read_fees(con)
@@ -606,6 +985,8 @@ def update_one_portfolio(db_path_cfg, cfg, prices):
                     "open_lots_count": len(lots),
                     "priced_lots": priced_lots,
                     "missing_price_pairs": sorted(set(missing_prices)),
+                    "ibkr_fill_import": ibkr_fill_import,
+                    "ibkr_position_reconciliation": ibkr_position_reconciliation,
                     "cash_eur": cash,
                     "floating_pnl_eur": floating,
                     "realized_pnl_eur": realized,
@@ -644,8 +1025,9 @@ for target in targets:
         pass
 
 pairs_needed = conversion_pairs_for_open_pairs(open_pairs)
+universe_pairs = load_universe_pairs(cfg.get("ag2_fx_path") or DEFAULT_AG2_FX_PATH)
 prices, price_errors = build_price_map(cfg, pairs_needed)
-results = [update_one_portfolio(target, cfg, prices) for target in targets]
+results = [update_one_portfolio(target, cfg, prices, universe_pairs) for target in targets]
 
 status = "SUCCESS"
 if any(r.get("status") == "FAILED" for r in results):

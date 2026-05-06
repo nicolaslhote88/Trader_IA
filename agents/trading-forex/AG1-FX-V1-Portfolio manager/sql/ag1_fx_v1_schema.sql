@@ -52,7 +52,13 @@ CREATE TABLE IF NOT EXISTS core.orders (
     status              VARCHAR NOT NULL,
     rejection_reason    VARCHAR,
     risk_check_passed   BOOLEAN NOT NULL DEFAULT TRUE,
-    risk_check_notes    VARCHAR
+    risk_check_notes    VARCHAR,
+    broker              VARCHAR,
+    broker_order_id     VARCHAR,
+    ibkr_status         VARCHAR,
+    ibkr_response_json  VARCHAR,
+    ibkr_error          VARCHAR,
+    lot_id_to_close     VARCHAR
 );
 
 CREATE INDEX IF NOT EXISTS idx_orders_run ON core.orders(run_id);
@@ -149,6 +155,20 @@ CREATE TABLE IF NOT EXISTS core.alerts (
     category            VARCHAR NOT NULL,
     message             VARCHAR NOT NULL,
     payload             VARCHAR
+);
+
+CREATE TABLE IF NOT EXISTS core.reconciliation_log (
+    reconciliation_id   VARCHAR PRIMARY KEY,
+    run_id              VARCHAR,
+    as_of               TIMESTAMP NOT NULL,
+    source              VARCHAR NOT NULL,
+    status              VARCHAR NOT NULL,
+    block_new_orders    BOOLEAN NOT NULL DEFAULT FALSE,
+    reasons_json        VARCHAR,
+    db_positions_json   VARCHAR,
+    broker_positions_json VARCHAR,
+    deltas_json         VARCHAR,
+    payload_json        VARCHAR
 );
 
 INSERT INTO cfg.portfolio_config (

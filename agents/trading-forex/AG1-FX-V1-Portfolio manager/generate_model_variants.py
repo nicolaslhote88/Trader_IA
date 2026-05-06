@@ -174,12 +174,13 @@ def build_template(variant: str = "chatgpt52") -> dict:
         *llm_segment_nodes(variant, cfg),
         code_node("10 Parse Decision FX", "post_agent/10_parse_decision_fx.js", post_x0, -20, "javaScript"),
         code_node("11 Validate Enforce Safety FX", "post_agent/11_validate_enforce_safety_fx.js", post_x0 + 240, -20, "javaScript"),
-        code_node("12 Simulate Fills FX", "post_agent/12_simulate_fills_fx.py", post_x0 + 480, -20),
-        code_node("13 Write Orders FX", "post_agent/13_write_orders_fx.py", post_x0 + 720, -20),
-        code_node("14 Write Lots FX", "post_agent/14_write_lots_fx.py", post_x0 + 960, -20),
-        code_node("15 Close Lots FX", "post_agent/15_close_lots_fx.py", post_x0 + 1200, -20),
-        code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", post_x0 + 1440, -20),
-        code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", post_x0 + 1680, -20),
+        code_node("11b IBKR Send Orders FX", "post_agent/11b_ibkr_send_orders_fx.py", post_x0 + 480, -20),
+        code_node("12 Simulate Fills FX", "post_agent/12_simulate_fills_fx.py", post_x0 + 720, -20),
+        code_node("13 Write Orders FX", "post_agent/13_write_orders_fx.py", post_x0 + 960, -20),
+        code_node("14 Write Lots FX", "post_agent/14_write_lots_fx.py", post_x0 + 1200, -20),
+        code_node("15 Close Lots FX", "post_agent/15_close_lots_fx.py", post_x0 + 1440, -20),
+        code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", post_x0 + 1680, -20),
+        code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", post_x0 + 1920, -20),
     ]
 
     merge = PROVIDER_META[cfg["provider"]]["merge"]
@@ -218,6 +219,7 @@ def build_template(variant: str = "chatgpt52") -> dict:
             merge,
             "10 Parse Decision FX",
             "11 Validate Enforce Safety FX",
+            "11b IBKR Send Orders FX",
             "12 Simulate Fills FX",
             "13 Write Orders FX",
             "14 Write Lots FX",

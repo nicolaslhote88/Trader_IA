@@ -9,14 +9,21 @@ alerts = ctx.get("risk_alerts") or []
 
 with duckdb.connect(db_path) as con:
     now_ts = datetime.now(timezone.utc)
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS broker VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS broker_order_id VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS ibkr_status VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS ibkr_response_json VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS ibkr_error VARCHAR")
+    con.execute("ALTER TABLE core.orders ADD COLUMN IF NOT EXISTS lot_id_to_close VARCHAR")
     for o in orders:
         con.execute(
             """
             INSERT INTO core.orders (
               order_id, client_order_id, run_id, pair, side, order_type, size_lots,
               notional_quote, notional_eur, leverage_used, limit_price, stop_loss_price,
-              take_profit_price, requested_at, status, rejection_reason, risk_check_passed, risk_check_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              take_profit_price, requested_at, status, rejection_reason, risk_check_passed, risk_check_notes,
+              broker, broker_order_id, ibkr_status, ibkr_response_json, ibkr_error, lot_id_to_close
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (order_id) DO UPDATE SET
               client_order_id = excluded.client_order_id,
               run_id = excluded.run_id,
@@ -34,7 +41,13 @@ with duckdb.connect(db_path) as con:
               status = excluded.status,
               rejection_reason = excluded.rejection_reason,
               risk_check_passed = excluded.risk_check_passed,
-              risk_check_notes = excluded.risk_check_notes
+              risk_check_notes = excluded.risk_check_notes,
+              broker = excluded.broker,
+              broker_order_id = excluded.broker_order_id,
+              ibkr_status = excluded.ibkr_status,
+              ibkr_response_json = excluded.ibkr_response_json,
+              ibkr_error = excluded.ibkr_error,
+              lot_id_to_close = excluded.lot_id_to_close
             """,
             [
                 o.get("order_id"), o.get("client_order_id"), o.get("run_id"), o.get("pair"), o.get("side"),
@@ -43,6 +56,10 @@ with duckdb.connect(db_path) as con:
                 float(o.get("leverage_used") or 1), o.get("limit_price"), o.get("stop_loss_price"),
                 o.get("take_profit_price"), now_ts, o.get("status"), o.get("rejection_reason"),
                 bool(o.get("risk_check_passed")), o.get("risk_check_notes"),
+                o.get("broker"), o.get("broker_order_id"), o.get("ibkr_status"),
+                json.dumps(o.get("ibkr_response") or {}, ensure_ascii=False),
+                o.get("ibkr_error"),
+                o.get("lot_id_to_close") or "",
             ],
         )
     for idx, a in enumerate(alerts, 1):

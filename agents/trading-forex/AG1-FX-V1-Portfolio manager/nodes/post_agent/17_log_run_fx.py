@@ -1,4 +1,5 @@
 import json
+import os
 import duckdb
 from datetime import datetime, timezone
 
@@ -10,6 +11,7 @@ decision_json = json.dumps(ctx.get("decision_json") or {}, ensure_ascii=False)
 safety_summary = ctx.get("safety_summary") or {}
 rejected_orders_count = int(safety_summary.get("rejected_orders_count") or sum(1 for o in orders if o.get("status") == "rejected"))
 risk_rejection_json = json.dumps(safety_summary.get("rejection_reasons") or {}, ensure_ascii=False)
+reconciliation = ctx.get("ibkr_reconciliation") or {}
 
 with duckdb.connect(db_path) as con:
     now_ts = datetime.now(timezone.utc)
@@ -34,8 +36,23 @@ with duckdb.connect(db_path) as con:
             len(orders), len(fills), rejected_orders_count, risk_rejection_json, 0,
             float(((ctx.get("brief") or {}).get("config") or {}).get("leverage_max") or 1),
             bool(ctx.get("kill_switch_active_effective")),
-            "AG1-FX-V1 run completed",
+            json.dumps(
+                {
+                    "message": "AG1-FX-V1 run completed",
+                    "ibkr_reconciliation_ok": reconciliation.get("ok"),
+                    "ibkr_reconciliation_reasons": reconciliation.get("reasons") or [],
+                },
+                ensure_ascii=False,
+            ),
         ],
     )
 
-return [{"json": {"run_id": ctx.get("run_id"), "orders": len(orders), "fills": len(fills), "snapshot": ctx.get("snapshot")}}]
+lock_path = ((ctx.get("ag1_fx_lock") or {}).get("path") or "").strip()
+if lock_path:
+    try:
+        if os.path.exists(lock_path):
+            os.remove(lock_path)
+    except Exception:
+        pass
+
+return [{"json": {"run_id": ctx.get("run_id"), "orders": len(orders), "fills": len(fills), "snapshot": ctx.get("snapshot"), "lock_released": bool(lock_path)}}]

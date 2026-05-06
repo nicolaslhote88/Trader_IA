@@ -1,7 +1,15 @@
 ﻿# Trader_IA
 
-Plateforme de trading assistÃ© par IA, orchestrÃ©e par n8n sur un VPS Hostinger.
-Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-4.1 / Gemini-3), trois **analystes spÃ©cialisÃ©s** (technique, fondamental, sentiment/news), un **Risk Manager** dÃ©terministe et un **Execution Trader** (sandbox par defaut, IBKR pret en dry-run).
+Plateforme de trading assiste par IA, orchestree par n8n sur un VPS Hostinger.
+Le systeme combine des **Portfolio Managers LLM**, trois **analystes specialises**
+(technique, fondamental, sentiment/news), un **Risk Manager** deterministe et un
+**Execution Trader** branche sur IBKR Client Portal.
+
+Etat Forex au 2026-05-06 : seul le workflow AG1-FX GPT-5.2 est publie contre le
+compte IBKR paper unique. Les variantes Grok et Gemini restent versionnees mais
+desactivees pour eviter que plusieurs sources generent des ordres sur le meme
+portefeuille IBKR. Les bases DuckDB AG1-FX sont reconciliees avec IBKR avant les
+runs PM et toutes les heures via `AG1-FX-PF-V1`.
 
 ---
 
@@ -10,13 +18,15 @@ Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-
 | # | Agent | RÃ´le | ImplÃ©mentÃ© dans |
 |---|---|---|---|
 | 1 | **Univers** | Extraction et maintenance de l'univers d'investissement (tickers, mÃ©tadonnÃ©es, secteurs) | `outils/AG0-V1 - extraction universe/` (workflow n8n inactif, utilitaire ponctuel) |
-| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres thÃ©oriques â€” **ensemble de 3 LLM en parallÃ¨le** | `AG1-V3-Portfolio manager/` (+ variantes GPT-5.2 / Grok-4.1 / Gemini-3) |
+| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres theoriques. Cote Forex paper, GPT-5.2 est l'unique PM actif ; Grok/Gemini sont gardes inactifs. | `AG1-V3-Portfolio manager/`, `AG1-FX-V1-Portfolio manager/` |
 | 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
 | 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
 | 5 | **Analyste Sentiment / News** | Sentiment de marchÃ©, news, transcripts | `AG4-V3/` (macro + geo-tagging), `AG4-SPE-V2/` (par valeur), `AG4-Forex/` (canaux FX dÃ©diÃ©s) |
 | 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exÃ©cution | `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` (nodes 7â†’10) |
 
-> Ã‰tat actuel : l'Execution Trader reste en **sandbox interne par defaut**. Le branchement IBKR est cable via `ibkr-gateway` + `ibkr-broker`, avec `IBKR_DRY_RUN=true` tant que le live n'est pas valide manuellement.
+> Etat actuel : l'Execution Trader actions reste sandbox par defaut. Cote
+> Forex, `IBKR_DRY_RUN=false` est active uniquement sur l'environnement IBKR
+> paper, avec garde-fou de compte paper et reconciliation IBKR/DuckDB.
 
 ## 2. Stack technique
 
@@ -25,7 +35,7 @@ Le systÃ¨me combine un ensemble de **Portfolio Managers LLM** (GPT-5.2 / Grok-
 - **yfinance-api** : service maison autour de `yfinance` (cache, cooldown par symbole, endpoints `/history`, `/quote`, `/options`, `/calendar`, `/fundamentals`)
 - **yf-enrichment** : enrichissement quotidien (volatilitÃ©, earnings, calendar)
 - **Streamlit** : dashboard opÃ©rationnel (`dashboard/`, `trading-dashboard` service)
-- **IBKR Client Portal API** : gateway + broker FastAPI pour l'execution actions/ETF/FX, actif en dry-run par defaut
+- **IBKR Client Portal API** : gateway + broker FastAPI pour l'execution actions/ETF/FX. Forex est branche en paper, actions/ETF restent en dry-run par defaut.
 - **Traefik** : reverse proxy TLS (Let's Encrypt)
 
 Tout tourne dans Docker Compose â€” voir `vps_hostinger_config/`.

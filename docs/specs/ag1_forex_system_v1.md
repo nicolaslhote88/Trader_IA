@@ -4,8 +4,8 @@
 **Auteur spec** : Nicolas + Claude (session du 25/04/2026)
 **Statut** : Implemente par Codex le 25/04/2026 - cron ajustes 26/04/2026
 **Priorite** : P0 (etape cle avant connexion broker FX live)
-**Version** : v1.1
-**Derniere mise a jour** : 2026-04-26
+**Version** : v1.3
+**Derniere mise a jour** : 2026-05-06
 
 ---
 
@@ -28,6 +28,7 @@ Pourquoi maintenant : la base `ag4_forex_v1.duckdb` est en place depuis le 24/04
 | **26/04/2026** | **Cron AG2-FX (technique)** | **6x/jour** sur l'amplitude forex 24/5 (0h, 4h, 8h, 12h, 16h, 20h Paris, lun-ven). |
 | **26/04/2026** | **Cron AG4-FX (news)** | **2x/jour** dans la fenetre d'ouverture bourse FR 9h-17h30 (9h15 et 14h15 Paris, lun-ven). |
 | **05/05/2026** | **Cron AG1-FX (PM)** | **5x/jour** par LLM (4h30/35/40, 8h30/35/40, 12h30/35/40, 16h30/35/40, 20h30/35/40 Paris), **decales de 5 min entre LLMs** pour eviter les conflits de lecture concurrente DuckDB. |
+| **06/05/2026** | **IBKR paper** | Un seul compte IBKR paper est disponible : seul `chatgpt52` reste publie pour generer des ordres. `grok41_reasoning` et `gemini30_pro` restent versionnes mais desactives. `AG1-FX-PF-V1` assure la reconciliation horaire IBKR/DuckDB. |
 
 ---
 
@@ -61,7 +62,9 @@ Un systeme dedie resout ces 3 points : prompt FX-only, capital alloue, base isol
 
 ### 2.3 Hors scope de ce brief
 
-- Connexion broker live (IG, Saxo, IBKR) - decision separee apres ~4 semaines de donnees AG1-FX-V1.
+- Connexion broker live hors paper. Le Forex est branche en IBKR paper depuis le
+  06/05/2026 avec garde-fou de compte paper, lock global et reconciliation
+  IBKR/DuckDB.
 - Refonte du Risk Manager cote actions (issues #8 / #9 / #10 de `historique_issues.md`) - on **corrige ces 3 bugs uniquement dans le fork FX**, pas dans le systeme V3 actions.
 - Optimisation du sourcing FX (sources `forexlive_main` etc.) - deja cadre par le brief AG4 geo-tagging du 24/04.
 - Backtests historiques sur ces 3 mois - chantier separe.
@@ -176,10 +179,10 @@ Les 5 bases vivent dans `/local-files/duckdb/` (volume `/local-files` deja monte
 | **AG2-FX-V1** | `0 0,4,8,12,16,20 * * 1-5` | 0h, 4h, 8h, 12h, 16h, 20h | 6x/jour | Forex 24/5 -> couverture sessions Asie / Europe / US ; signaux techniques rafraichis toutes les 4h. |
 | **AG4-FX-V1** | `10 0,4,8,12,16,20 * * 1-5` | 0h10, 4h10, 8h10, 12h10, 16h10, 20h10 | 6x/jour | Digest news/macro rafraichi juste apres AG2-FX, avec sources officielles banques centrales/BIS. |
 | **AG3-FX-V1** | `20 4,8,12,16,20 * * 1-5` | 4h20, 8h20, 12h20, 16h20, 20h20 | 5x/jour | Score fondamental/equilibre apres AG2-FX et AG4-FX pour alimenter AG1. |
-| **AG1-FX-V1 chatgpt52** | `30 4,8,12,16,20 * * 1-5` | 4h30, 8h30, 12h30, 16h30, 20h30 | 5x/jour | Run environ 30 min apres les snapshots AG2-FX de 4h/8h/12h/16h/20h. |
-| **AG1-FX-V1 grok41_reasoning** | `35 4,8,12,16,20 * * 1-5` | 4h35, 8h35, 12h35, 16h35, 20h35 | 5x/jour | +5 min vs chatgpt52 pour etaler la charge runner et eviter conflits lecture concurrente DuckDB. |
-| **AG1-FX-V1 gemini30_pro** | `40 4,8,12,16,20 * * 1-5` | 4h40, 8h40, 12h40, 16h40, 20h40 | 5x/jour | +10 min vs chatgpt52, meme cadence AG2-FX. |
-| **AG1-FX-PF-V1 valuation** | `0 0 * * * 1-5` | toutes les heures | 24x/jour lun-ven | Mark-to-market horaire des 3 bases AG1-FX. Met a jour `core.portfolio_snapshot` sans decision LLM. |
+| **AG1-FX-V1 chatgpt52** | `30 4,8,12,16,20 * * 1-5` | 4h30, 8h30, 12h30, 16h30, 20h30 | 5x/jour | Seul PM Forex publie en production paper IBKR. |
+| **AG1-FX-V1 grok41_reasoning** | `35 4,8,12,16,20 * * 1-5` | 4h35, 8h35, 12h35, 16h35, 20h35 | 5x/jour | Genere pour comparaisons futures, mais desactive tant qu'il n'existe qu'un seul compte IBKR. |
+| **AG1-FX-V1 gemini30_pro** | `40 4,8,12,16,20 * * 1-5` | 4h40, 8h40, 12h40, 16h40, 20h40 | 5x/jour | Genere pour comparaisons futures, mais desactive tant qu'il n'existe qu'un seul compte IBKR. |
+| **AG1-FX-PF-V1 valuation** | `0 0 * * * 1-5` | toutes les heures | 24x/jour lun-ven | Mark-to-market horaire du ledger GPT actif, import des fills IBKR confirmes et reconciliation IBKR/DuckDB. |
 
 ### 4.2 Frise temporelle journee type (lun-ven)
 

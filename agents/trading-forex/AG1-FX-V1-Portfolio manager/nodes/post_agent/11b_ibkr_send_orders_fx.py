@@ -17,12 +17,22 @@ Live behavior:
 
 import json
 import os
+import time
 import uuid
 import urllib.request
+from urllib.error import URLError
 
 BROKER_URL = os.environ.get("IBKR_BROKER_URL", "http://ibkr-broker:8080")
 DRY_RUN = os.environ.get("IBKR_DRY_RUN", "true").lower() != "false"
 SEND_DRY_RUN_TO_BROKER = os.environ.get("IBKR_SEND_DRY_RUN_TO_BROKER", "false").lower() == "true"
+REQUIRE_PAPER_ACCOUNT = os.environ.get("IBKR_REQUIRE_PAPER_ACCOUNT", "true").lower() != "false"
+PAPER_ACCOUNT_PREFIXES = tuple(
+    p.strip().upper()
+    for p in os.environ.get("IBKR_PAPER_ACCOUNT_PREFIXES", "DU").split(",")
+    if p.strip()
+)
+FILL_CONFIRM_SECONDS = max(0, int(float(os.environ.get("IBKR_FILL_CONFIRM_SECONDS", "25") or 25)))
+FILL_POLL_INTERVAL_SECONDS = max(1, int(float(os.environ.get("IBKR_FILL_POLL_INTERVAL_SECONDS", "5") or 5)))
 
 
 def deterministic_client_order_id(seed: str) -> str:
@@ -47,6 +57,66 @@ def normalize_order_type(value):
     return text or "MKT"
 
 
+def get_json(path: str, timeout: int = 12):
+    req = urllib.request.Request(f"{BROKER_URL}{path}", headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def paper_account_ids(positions_payload):
+    ids = []
+    for row in positions_payload or []:
+        acct = str(row.get("acctId") or row.get("accountId") or "").strip().upper()
+        if acct and acct not in ids:
+            ids.append(acct)
+    return ids
+
+
+def possible_fill_keys(fill):
+    keys = set()
+    for field in (
+        "order_ref",
+        "orderRef",
+        "cOID",
+        "client_order_id",
+        "clientOrderId",
+        "order_id",
+        "orderId",
+    ):
+        value = fill.get(field)
+        if value is not None and str(value).strip():
+            keys.add(str(value).strip())
+    return keys
+
+
+def build_fill_map(fills_payload):
+    out = {}
+    for fill in fills_payload or []:
+        if not isinstance(fill, dict):
+            continue
+        for key in possible_fill_keys(fill):
+            out.setdefault(key, fill)
+    return out
+
+
+def poll_recent_fills(order_keys):
+    if not order_keys or FILL_CONFIRM_SECONDS <= 0:
+        return {}, []
+    deadline = time.time() + FILL_CONFIRM_SECONDS
+    last_payload = []
+    while True:
+        try:
+            last_payload = get_json("/fills", timeout=15)
+            fill_map = build_fill_map(last_payload)
+            matched = {key: fill_map[key] for key in order_keys if key in fill_map}
+            if matched or time.time() >= deadline:
+                return matched, last_payload
+        except Exception:
+            if time.time() >= deadline:
+                return {}, last_payload
+        time.sleep(min(FILL_POLL_INTERVAL_SECONDS, max(0.0, deadline - time.time())))
+
+
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 executable_orders = ctx.get("executable_orders") or []
 run_id = ctx.get("run_id") or ""
@@ -69,39 +139,98 @@ for idx, order in enumerate(executable_orders, start=1):
 ibkr_results = []
 ibkr_errors = []
 broker_called = False
+broker_health = {}
+broker_positions = []
+broker_fills = []
+matched_fills = {}
+broker_dry_run = None
 
 pending_orders = [o for o in executable_orders if o.get("status") == "pending"]
 
 if pending_orders and (not DRY_RUN or SEND_DRY_RUN_TO_BROKER):
-    payload = {
-        "orders": [
-            {
-                "pair": o["pair"],
-                "side": o["side"],
-                "size_lots": float(o.get("size_lots", 0)),
-                "order_id": o["order_id"],
-                "client_order_id": o["client_order_id"],
-                "order_type": normalize_order_type(o.get("order_type")),
-                "limit_price": o.get("limit_price"),
-            }
-            for o in pending_orders
-        ],
-        "run_id": run_id,
-    }
-
     try:
-        broker_called = True
-        req = urllib.request.Request(
-            f"{BROKER_URL}/orders/fx",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            response_data = json.loads(resp.read().decode("utf-8"))
-            ibkr_results = response_data.get("results", [])
-            ibkr_errors = response_data.get("errors", [])
-    except Exception as exc:
+        broker_health = get_json("/health")
+        broker_dry_run = bool(broker_health.get("dry_run"))
+        authenticated = bool(broker_health.get("authenticated"))
+        if not authenticated and not DRY_RUN:
+            ibkr_errors.extend(
+                {
+                    "order_id": o.get("order_id"),
+                    "client_order_id": o.get("client_order_id"),
+                    "error": "IBKR_BROKER_NOT_AUTHENTICATED",
+                }
+                for o in pending_orders
+            )
+        elif not DRY_RUN and broker_dry_run:
+            ibkr_errors.extend(
+                {
+                    "order_id": o.get("order_id"),
+                    "client_order_id": o.get("client_order_id"),
+                    "error": "IBKR_BROKER_STILL_IN_DRY_RUN",
+                }
+                for o in pending_orders
+            )
+        else:
+            if REQUIRE_PAPER_ACCOUNT and not DRY_RUN:
+                broker_positions = get_json("/positions")
+                account_ids = paper_account_ids(broker_positions)
+                if not account_ids or not all(acct.startswith(PAPER_ACCOUNT_PREFIXES) for acct in account_ids):
+                    ibkr_errors.extend(
+                        {
+                            "order_id": o.get("order_id"),
+                            "client_order_id": o.get("client_order_id"),
+                            "error": f"IBKR_PAPER_ACCOUNT_GUARD_FAILED: accounts={account_ids}",
+                        }
+                        for o in pending_orders
+                    )
+
+            if not ibkr_errors:
+                payload = {
+                    "orders": [
+                        {
+                            "pair": o["pair"],
+                            "side": o["side"],
+                            "size_lots": float(o.get("size_lots", 0)),
+                            "order_id": o["order_id"],
+                            "client_order_id": o["client_order_id"],
+                            "order_type": normalize_order_type(o.get("order_type")),
+                            "limit_price": o.get("limit_price"),
+                        }
+                        for o in pending_orders
+                    ],
+                    "run_id": run_id,
+                }
+
+                broker_called = True
+                req = urllib.request.Request(
+                    f"{BROKER_URL}/orders/fx",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    response_data = json.loads(resp.read().decode("utf-8"))
+                    broker_dry_run = bool(response_data.get("dry_run"))
+                    ibkr_results = response_data.get("results", [])
+                    ibkr_errors = response_data.get("errors", [])
+                    if not DRY_RUN and broker_dry_run:
+                        ibkr_results = []
+                        ibkr_errors.extend(
+                            {
+                                "order_id": o.get("order_id"),
+                                "client_order_id": o.get("client_order_id"),
+                                "error": "IBKR_BROKER_STILL_IN_DRY_RUN",
+                            }
+                            for o in pending_orders
+                        )
+                    elif ibkr_results:
+                        order_keys = set()
+                        for o in pending_orders:
+                            order_keys.add(str(o.get("order_id") or ""))
+                            order_keys.add(str(o.get("client_order_id") or ""))
+                        order_keys.discard("")
+                        matched_fills, broker_fills = poll_recent_fills(order_keys)
+    except (URLError, TimeoutError, Exception) as exc:
         ibkr_errors.append({"error": f"ibkr-broker unreachable: {exc}", "fallback": "sandbox_only"})
 
 result_map = {
@@ -126,6 +255,14 @@ for order in executable_orders:
         order["ibkr_response"] = result
         order["broker"] = "IBKR"
         order["broker_order_id"] = broker_order_id(result)
+        fill = matched_fills.get(str(oid or "")) or matched_fills.get(str(cid or ""))
+        if fill:
+            order["status"] = "filled"
+            order["ibkr_status"] = "filled"
+            order["ibkr_fill"] = fill
+            order["ibkr_filled_at"] = fill.get("trade_time") or fill.get("tradeTime") or fill.get("time")
+        elif not DRY_RUN:
+            order["status"] = "submitted"
     elif error:
         order["ibkr_status"] = "error"
         order["ibkr_error"] = error.get("error", "")
@@ -151,12 +288,21 @@ return [
             "executable_orders": executable_orders,
             "ibkr_send_summary": {
                 "dry_run": DRY_RUN,
+                "broker_dry_run": broker_dry_run,
                 "broker_called": broker_called,
                 "orders_considered": len(pending_orders),
                 "orders_sent": len(ibkr_results),
                 "errors": len(ibkr_errors),
+                "fills_matched": len(matched_fills),
+                "fills_seen": len(broker_fills),
                 "broker_url": BROKER_URL,
                 "errors_detail": ibkr_errors,
+                "health": broker_health,
+                "paper_account_guard": {
+                    "required": REQUIRE_PAPER_ACCOUNT,
+                    "prefixes": list(PAPER_ACCOUNT_PREFIXES),
+                    "detected_accounts": paper_account_ids(broker_positions),
+                },
             },
         }
     }

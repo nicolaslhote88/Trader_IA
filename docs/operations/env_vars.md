@@ -27,11 +27,15 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 
 | Variable | Rôle |
 |---|---|
-| `IBKR_DRY_RUN` | `true` par defaut : aucun ordre live n'est envoye. `false` active l'envoi via IBKR. |
+| `IBKR_DRY_RUN` | `true` : aucun ordre broker reel n'est envoye. `false` active l'envoi via IBKR. En production Forex actuelle, cette valeur est `false` uniquement sur le compte paper. |
 | `IBKR_SEND_DRY_RUN_TO_BROKER` | `false` par defaut : les nodes n8n restent sandbox-only en dry-run. `true` appelle `ibkr-broker` en dry-run pour valider le chemin HTTP sans ordre live. |
 | `IBKR_ACCOUNT_ID` | Compte IBKR cible. Laisser vide pour auto-detection, mais le fixer est recommande avant le live. |
 | `IBKR_BROKER_URL` | URL interne n8n/runners vers le broker. Definie dans compose : `http://ibkr-broker:8080`. |
 | `IBKR_GATEWAY_URL` | URL interne du broker vers Client Portal Gateway. Definie dans compose : `https://ibkr-gateway:5000`. |
+| `IBKR_REQUIRE_PAPER_ACCOUNT` | `true` en production Forex paper : bloque l'envoi si le compte detecte ne correspond pas a un compte paper attendu. |
+| `IBKR_PAPER_ACCOUNT_PREFIXES` | Prefixes autorises pour le garde-fou paper, par defaut `DU`. |
+| `IBKR_FILL_CONFIRM_SECONDS` | Temps maximal de polling des fills apres soumission d'ordres FX. |
+| `IBKR_FILL_POLL_INTERVAL_SECONDS` | Intervalle de polling `/fills` pendant la fenetre de confirmation. |
 | `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
 | `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |
 
@@ -84,6 +88,15 @@ Définies dans `infra/vps_hostinger_config/docker-compose.yml` pour `n8n`, `task
 - `AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb`
 - `AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py`
 - `AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql`
+- `AG1_FX_LOCK_PATH=/files/locks/ag1_fx_active.lock`
+- `AG1_FX_LOCK_TTL_SECONDS=2700`
+
+Production paper actuelle :
+
+- un seul workflow PM AG1-FX actif par compte IBKR ;
+- `chatgpt52` actif ;
+- `grok41_reasoning` et `gemini30_pro` desactives ;
+- `AG1-FX-PF-V1` actif pour la reconciliation horaire.
 
 ## Variables internes au service n8n
 
@@ -104,5 +117,10 @@ Ces variables sont déjà définies dans le docker-compose — elles ne sont **p
 - `N8N_RUNNERS_TASK_BROKER_URI=http://n8n:5679`
 - `N8N_RUNNERS_MAX_CONCURRENCY=4`
 - `N8N_RUNNERS_LAUNCHER_LOG_LEVEL=debug`
+- `N8N_BLOCK_RUNNER_ENV_ACCESS=false` lorsque les Code nodes Python doivent lire
+  les variables d'environnement IBKR/AG1-FX.
 
 Les mêmes `AG1_DUCKDB_*` sont répliquées côté runners pour accès aux `.duckdb`.
+Sur le VPS actuel, les runners externes utilisent aussi
+`/opt/trader-ia/n8n-task-runners.clean.json`; les variables IBKR et AG1-FX
+doivent etre presentes dans `allowed-env` pour etre visibles dans les workflows.

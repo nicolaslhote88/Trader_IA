@@ -104,12 +104,14 @@ curl -I https://${SUBDOMAIN}.${DOMAIN_NAME}/
 curl http://localhost:8080/health          # yfinance-api (via le réseau web)
 ```
 
-### 3.d Activation IBKR en dry-run
+### 3.d Activation IBKR
 
 ```bash
 cd /opt/trader-ia/infra/vps_hostinger_config
 
-# Dans .env, garder IBKR_DRY_RUN=true au demarrage.
+# Demarrage securise : garder IBKR_DRY_RUN=true.
+# Production Forex paper validee : IBKR_DRY_RUN=false avec
+# IBKR_REQUIRE_PAPER_ACCOUNT=true et IBKR_PAPER_ACCOUNT_PREFIXES=DU.
 # Renseigner IBKR_ACCOUNT_ID si possible.
 docker compose up -d --build ibkr-gateway ibkr-broker n8n task-runners
 
@@ -130,7 +132,9 @@ PY
 ```
 
 Les nodes n8n 07b/11b restent sandbox-only tant que `IBKR_DRY_RUN=true` et
-`IBKR_SEND_DRY_RUN_TO_BROKER=false`.
+`IBKR_SEND_DRY_RUN_TO_BROKER=false`. En production Forex paper, garder un seul
+PM AG1-FX actif par compte IBKR et laisser `AG1-FX-PF-V1` reconcilier le ledger
+toutes les heures.
 
 ## 4. Mises à jour
 
