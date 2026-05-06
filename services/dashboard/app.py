@@ -773,18 +773,19 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         trace.hovertemplate = hover_template
         trace.textposition = "top center"
         trace.textfont = dict(size=10)
+        trace.cliponaxis = False
 
     fig.add_vline(x=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
     fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
-    fig.add_annotation(x=0.74, y=0.92, text="Long aligned", showarrow=False, font=dict(size=12, color="#00d084"))
+    fig.add_annotation(x=0.74, y=0.90, text="Long aligned", showarrow=False, font=dict(size=12, color="#00d084"))
     fig.add_annotation(x=-0.74, y=-0.92, text="Short aligned", showarrow=False, font=dict(size=12, color="#ff4d5e"))
-    fig.add_annotation(x=-0.74, y=0.92, text="Conflit: macro > technique", showarrow=False, font=dict(size=12, color="#f59e0b"))
-    fig.add_annotation(x=0.74, y=-0.92, text="Conflit: technique > macro", showarrow=False, font=dict(size=12, color="#f59e0b"))
-    fig.update_xaxes(range=[-1.05, 1.05], dtick=0.25, zeroline=False)
-    fig.update_yaxes(range=[-1.05, 1.05], dtick=0.25, zeroline=False)
+    fig.add_annotation(x=-0.72, y=0.90, text="Conflit: macro > technique", showarrow=False, font=dict(size=12, color="#f59e0b"))
+    fig.add_annotation(x=0.72, y=-0.92, text="Conflit: technique > macro", showarrow=False, font=dict(size=12, color="#f59e0b"))
+    fig.update_xaxes(range=[-1.08, 1.08], dtick=0.25, zeroline=False)
+    fig.update_yaxes(range=[-1.12, 1.16], dtick=0.25, zeroline=False)
     fig.update_layout(
         height=640,
-        margin=dict(l=10, r=10, t=86, b=10),
+        margin=dict(l=10, r=10, t=104, b=10),
         legend=dict(
             orientation="h",
             yanchor="bottom",
@@ -15087,6 +15088,51 @@ elif page == "Dashboard Forex":
                 f"{avg_bias.mean():+.2f}" if not avg_bias.empty else "N/A",
                 f"tech {avg_score.mean():+.2f}" if not avg_score.empty else None,
             )
+
+            st.markdown("#### Comment lire cette matrice")
+            st.markdown(
+                """
+1. **Axe horizontal** : momentum technique composite. A gauche, le prix confirme plutot un setup short; a droite, il confirme plutot un setup long.
+2. **Axe vertical** : biais macro/news directionnel. En bas, les news favorisent la devise de cotation ou penalisent la devise de base; en haut, elles favorisent la devise de base.
+3. **Quadrants verts/rouges** : quand technique et macro vont dans le meme sens, le signal est plus propre. Les quadrants orange signalent un conflit a surveiller avant d'ajouter du risque.
+4. **Taille de bulle** : `Event risk`. Plus la bulle est grande, plus la paire est exposee aux headlines recentes/urgentes; ce n'est pas forcement un signal d'achat ou de vente.
+5. **Forme** : losange = deja expose en portefeuille; triangle = risque evenementiel eleve sans exposition; cercle = hors portefeuille/calme.
+"""
+            )
+            with st.expander("Definitions rapides des indicateurs FX", expanded=False):
+                render_interactive_table(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Indicateur": "Momentum technique",
+                                "Source": "AG2-FX",
+                                "Lecture": "-1 short / +1 long",
+                                "Ce que cela mesure": "Score AG2-FX combine avec retours 5D/20D et RSI pour eviter une lecture mono-indicateur.",
+                            },
+                            {
+                                "Indicateur": "Biais macro/news",
+                                "Source": "AG4-Forex",
+                                "Lecture": "-1 base bearish / +1 base bullish",
+                                "Ce que cela mesure": "Direction extraite des hints news par paire et par devise, ponderee par recence, impact, urgence et confiance.",
+                            },
+                            {
+                                "Indicateur": "Event risk",
+                                "Source": "AG4-Forex",
+                                "Lecture": "0-100",
+                                "Ce que cela mesure": "Risque de headline, volume de news recentes, urgence, high impact et diversite des sources.",
+                            },
+                            {
+                                "Indicateur": "Alignement",
+                                "Source": "AG2 + AG4",
+                                "Lecture": "Aligne / Conflit / Neutre",
+                                "Ce que cela mesure": "Qualite du setup directionnel: les trades les plus lisibles sont en haut-droite ou bas-gauche.",
+                            },
+                        ]
+                    ),
+                    key_suffix="fx_dashboard_matrix_indicator_help",
+                    enable_controls=False,
+                    height=220,
+                )
 
             fig_fx, _ = _build_fx_pair_signal_matrix(pair_overview)
             if fig_fx is not None:
