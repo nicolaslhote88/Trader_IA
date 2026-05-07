@@ -333,7 +333,7 @@ Tables `core` :
 - `portfolio_snapshot`, `cash_ledger`, `ai_signals`, `alerts`.
 
 Tables `cfg` :
-- `portfolio_config` (seeded avec capital 10 000 EUR, `leverage_max=1.0`, `max_pair_pct=0.20`, `max_currency_exposure_pct=0.50`, `max_daily_drawdown_pct=0.05`, `kill_switch_active=FALSE`, `universe_filter='forex_27'`).
+- `portfolio_config` (seeded avec capital 10 000 EUR, `leverage_max=1.0`, `max_pair_pct=0.20`, `max_currency_exposure_pct=0.50`, `max_daily_drawdown_pct=0.05`, `kill_switch_active=FALSE`, `universe_filter='forex_34'`).
 
 RÃ´le :
 - ledger exÃ©cution + audit + risque pour les trois PMs Forex-only (`chatgpt52`, `grok41_reasoning`, `gemini30_pro`).
@@ -400,7 +400,7 @@ Taxonomies fixÃ©es (cf `docs/specs/ag4_geo_tagging_and_forex_base_v1.md`) :
 - `impact_region âˆˆ {Global, US, EU, France, UK, APAC, Emerging, Other}`
 - `impact_asset_class âˆˆ {Equity, FX, Commodity, Bond, Crypto, Mixed, None}`
 - `impact_magnitude âˆˆ {Low, Medium, High}`
-- `impact_fx_pairs` : CSV de paires format `XXXYYY` (sans slash), liste fermÃ©e de 27 paires majeures.
+- `impact_fx_pairs` : CSV de paires format `XXXYYY` (sans slash), liste fermee de 34 paires FX.
 
 ### 5.5bis DuckDB AG4-Forex â€” `infra/migrations/ag4_forex_v1/20260425_init.sql`
 
@@ -544,7 +544,8 @@ Composantes UI :
 - 3 cartes KPI par LLM : equity, P&L total, leverage, lots ouverts, winrate, profit factor, ordres rejetÃ©s.
 - Scoreboard de performance nette : P&L realise brut, frais d'execution, P&L net, couverture `core.fill_costs`, sources de commission IBKR/simulees/manquantes.
 - Radar paires FX : matrice momentum technique composite (AG2-FX score + retours 5D/20D + RSI) vs biais macro/news directionnel AG4-Forex (-1 base bearish, +1 base bullish). Le volume/urgence news n'est plus un axe sature; il devient `Event risk` et pilote la taille des bulles, avec quadrants long aligned / short aligned / conflit / neutre. Un bloc d'aide de lecture et un dictionnaire des indicateurs expliquent les axes, la taille, la forme et les cas d'usage.
-- Onglet `Sparklines paires` : Ã©volution 90j des 27 paires FX via `yfinance-api`, avec sÃ©paration paires principales / autres cross.
+- Clic sur une paire dans la matrice : affiche une seconde matrice sous le graphe principal avec la trace historique de la paire. La trajectoire reprend les memes axes et colore les points du blanc (ancien) au bleu fonce (recent), a partir de `technical_signals_fx` et d'une fenetre news AG4-Forex roulante de 72h.
+- Onglet `Sparklines paires` : evolution 90j des 34 paires FX via `yfinance-api`, avec separation paires principales / autres cross.
 - Courbe equity superposÃ©e pour les 3 LLMs.
 - Matrice P&L net LLM x paire FX.
 - Distribution des trades clos.

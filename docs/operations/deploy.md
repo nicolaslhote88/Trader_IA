@@ -148,6 +148,37 @@ docker compose logs -f n8n
 docker compose logs -f task-runners
 ```
 
+### 4.a Dashboard Streamlit uniquement
+
+Sur le VPS actuel, le dashboard live est monte depuis `/opt/trading-dashboard/app`
+dans le conteneur `root-trading-dashboard-1`. Pour deploiement rapide d'une
+modification Streamlit :
+
+```bash
+# Depuis le poste local
+scp services/dashboard/app.py root@100.104.236.78:/opt/trading-dashboard/app/app.py
+scp -r services/dashboard/app_modules root@100.104.236.78:/opt/trading-dashboard/app/
+
+# Sur le VPS actuel
+cd /docker/root
+docker compose restart trading-dashboard
+docker compose logs --tail=80 trading-dashboard
+```
+
+Verification minimale :
+
+```bash
+curl -I http://127.0.0.1:8501
+docker ps --format 'table {{.Names}}\t{{.Status}}' | grep trading-dashboard
+```
+
+Note : le port 8501 n'est pas forcement publie sur l'hote. Si le `curl`
+local hote echoue, tester dans le conteneur :
+
+```bash
+docker exec root-trading-dashboard-1 python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8501', timeout=8).status)"
+```
+
 ## 5. Nettoyage
 
 ```bash

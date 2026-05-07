@@ -147,6 +147,7 @@ AG1_FX_V1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_CH
 AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH", "ag1_fx_v1_grok41_reasoning.duckdb")
 AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH", "ag1_fx_v1_gemini30_pro.duckdb")
 YFINANCE_API_URL = os.getenv("YFINANCE_API_URL", "http://yfinance-api:8080")
+IBKR_BROKER_URL = os.getenv("IBKR_BROKER_URL", "http://ibkr-broker:8080")
 
 AG1_MULTI_PORTFOLIO_CONFIG = {
     "chatgpt52": {
@@ -631,15 +632,8 @@ def _load_ag1_fx_pair_overview(
     return out, pd.DataFrame(diagnostics)
 
 
-def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFrame]:
-    if pair_overview is None or pair_overview.empty or "Paire" not in pair_overview.columns:
-        return None, pd.DataFrame()
-
-    wk = pair_overview.copy()
-    wk["Paire"] = wk["Paire"].fillna("").astype(str).str.upper()
-    wk = wk[wk["Paire"].str.len().eq(6)].copy()
-    if wk.empty:
-        return None, pd.DataFrame()
+def _augment_fx_pair_matrix_coordinates(matrix_rows: pd.DataFrame) -> pd.DataFrame:
+    wk = matrix_rows.copy()
 
     def _num_col(name: str, default: float = 0.0) -> pd.Series:
         if name not in wk.columns:
@@ -689,6 +683,20 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         wk.apply(lambda row: float(row["_news_bias"]) + _stable_jitter(str(row["Paire"]), "fx-bias", amplitude=0.018), axis=1)
         .clip(-1.0, 1.0)
     )
+    return wk
+
+
+def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFrame]:
+    if pair_overview is None or pair_overview.empty or "Paire" not in pair_overview.columns:
+        return None, pd.DataFrame()
+
+    wk = pair_overview.copy()
+    wk["Paire"] = wk["Paire"].fillna("").astype(str).str.upper()
+    wk = wk[wk["Paire"].str.len().eq(6)].copy()
+    if wk.empty:
+        return None, pd.DataFrame()
+
+    wk = _augment_fx_pair_matrix_coordinates(wk)
 
     color_map = {
         "Aligne long": "#00d084",
@@ -797,6 +805,346 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         ),
     )
     return fig, wk
+
+
+def _fx_pair_history_news_snapshot(pair: str, news: pd.DataFrame, as_of: pd.Timestamp) -> dict[str, object]:
+    if news is None or news.empty or pd.isna(as_of):
+        return {
+            "news_bias": 0.0,
+            "news_confidence": 0.0,
+            "event_risk": 0.0,
+            "news_24h": 0,
+            "high_impact": 0,
+            "sources": 0,
+            "top_sources": "-",
+            "directional_items": 0,
+        }
+
+    point_ts = pd.to_datetime(as_of, errors="coerce", utc=True)
+    if pd.isna(point_ts):
+        return {
+            "news_bias": 0.0,
+            "news_confidence": 0.0,
+            "event_risk": 0.0,
+            "news_24h": 0,
+            "high_impact": 0,
+            "sources": 0,
+            "top_sources": "-",
+            "directional_items": 0,
+        }
+
+    window_start = point_ts - pd.Timedelta(hours=72)
+    wk = news[(news["published_at"] >= window_start) & (news["published_at"] <= point_ts)].copy()
+    if wk.empty:
+        return {
+            "news_bias": 0.0,
+            "news_confidence": 0.0,
+            "event_risk": 0.0,
+            "news_24h": 0,
+            "high_impact": 0,
+            "sources": 0,
+            "top_sources": "-",
+            "directional_items": 0,
+        }
+
+    cutoff_24h = point_ts - pd.Timedelta(hours=24)
+    wk["is_24h"] = wk["published_at"] >= cutoff_24h
+    wk["_weight"] = wk.apply(lambda r: _fx_news_weight(r, point_ts), axis=1)
+    wk["_dir_weight"] = wk["_weight"] * pd.to_numeric(wk["direction"], errors="coerce").fillna(0.0)
+    directional = wk[pd.to_numeric(wk["direction"], errors="coerce").fillna(0.0).abs() > 0.0]
+    dir_weight_total = float(directional["_weight"].sum()) if not directional.empty else 0.0
+    bias = float(directional["_dir_weight"].sum() / dir_weight_total) if dir_weight_total > 0 else 0.0
+    event_weight = float(wk["_weight"].sum())
+    event_risk = min(
+        100.0,
+        math.sqrt(max(event_weight, 0.0)) * 26.0
+        + float(wk["high_impact"].sum()) * 7.5
+        + min(float(wk["is_24h"].sum()), 8.0) * 3.5
+        + float(wk["source"].nunique()) * 2.0,
+    )
+    src_counts = wk["source"].fillna("unknown").astype(str).value_counts().head(3)
+    return {
+        "news_bias": max(-1.0, min(1.0, bias)),
+        "news_confidence": min(100.0, dir_weight_total * 38.0),
+        "event_risk": event_risk,
+        "news_24h": int(wk["is_24h"].sum()),
+        "high_impact": int(wk["high_impact"].sum()),
+        "sources": int(wk["source"].nunique()),
+        "top_sources": ", ".join(src_counts.index.tolist()) if not src_counts.empty else "-",
+        "directional_items": int(len(directional)),
+    }
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_fx_pair_matrix_history(
+    pair: str,
+    start_iso: str,
+    end_iso: str,
+    ag2_sig: object,
+    ag4_sig: object,
+    max_points: int = 120,
+) -> pd.DataFrame:
+    del ag2_sig, ag4_sig
+    pair = re.sub(r"[^A-Z]", "", str(pair or "").upper())[:6]
+    if len(pair) != 6 or pair[:3] not in FX_CURRENCY_CODES or pair[3:6] not in FX_CURRENCY_CODES:
+        return pd.DataFrame()
+
+    start_ts = pd.to_datetime(start_iso, errors="coerce", utc=True)
+    end_ts = pd.to_datetime(end_iso, errors="coerce", utc=True)
+    if pd.isna(start_ts) or pd.isna(end_ts):
+        end_ts = pd.Timestamp.now(tz="UTC")
+        start_ts = end_ts - pd.Timedelta(days=90)
+
+    tech = pd.DataFrame()
+    if AG2_FX_V1_DUCKDB_PATH and os.path.exists(AG2_FX_V1_DUCKDB_PATH):
+        conn = _duckdb_connect_readonly_retry(AG2_FX_V1_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                tables = conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchdf()
+                table_names = set(tables["table_name"].astype(str).str.lower().tolist()) if tables is not None and not tables.empty else set()
+                if "technical_signals_fx" in table_names:
+                    tech = conn.execute(
+                        """
+                        SELECT as_of, run_id, pair, signal_score, signal_label, ret_5d, ret_20d, rsi14, regime
+                        FROM main.technical_signals_fx
+                        WHERE upper(pair) = ? AND as_of >= ? AND as_of <= ?
+                        ORDER BY as_of ASC, run_id ASC
+                        """,
+                        [pair, start_ts.to_pydatetime(), end_ts.to_pydatetime()],
+                    ).fetchdf()
+            except Exception:
+                tech = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+    if tech.empty:
+        return pd.DataFrame()
+
+    news = pd.DataFrame()
+    if AG4_FOREX_DUCKDB_PATH and os.path.exists(AG4_FOREX_DUCKDB_PATH):
+        conn = _duckdb_connect_readonly_retry(AG4_FOREX_DUCKDB_PATH)
+        if conn is not None:
+            try:
+                tables = conn.execute(
+                    "SELECT table_name FROM information_schema.tables WHERE table_schema='main'"
+                ).fetchdf()
+                table_names = set(tables["table_name"].astype(str).str.lower().tolist()) if tables is not None and not tables.empty else set()
+                if "fx_news_history" in table_names:
+                    news = conn.execute(
+                        """
+                        SELECT published_at, source, origin, impact_magnitude, impact_fx_pairs,
+                               urgency, confidence, impact_score, fx_directional_hint, title
+                        FROM main.fx_news_history
+                        WHERE published_at >= ? AND published_at <= ?
+                          AND upper(COALESCE(impact_fx_pairs, '')) LIKE ?
+                        ORDER BY published_at ASC
+                        """,
+                        [
+                            (start_ts - pd.Timedelta(hours=72)).to_pydatetime(),
+                            end_ts.to_pydatetime(),
+                            f"%{pair}%",
+                        ],
+                    ).fetchdf()
+            except Exception:
+                news = pd.DataFrame()
+            finally:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    news_rows: list[dict[str, object]] = []
+    if not news.empty:
+        news = normalize_cols(news)
+        news["published_at"] = pd.to_datetime(news.get("published_at"), errors="coerce", utc=True)
+        news = news.dropna(subset=["published_at"])
+        for _, row in news.iterrows():
+            if pair not in _fx_pair_tokens(row.get("impact_fx_pairs")):
+                continue
+            impact_score = pd.to_numeric(pd.Series([row.get("impact_score", pd.NA)]), errors="coerce").iloc[0]
+            urgency = pd.to_numeric(pd.Series([row.get("urgency", pd.NA)]), errors="coerce").iloc[0]
+            high_impact = (
+                str(row.get("impact_magnitude") or "").strip().lower() in {"high", "major", "critical"}
+                or (pd.notna(impact_score) and float(impact_score) >= 70.0)
+                or (pd.notna(urgency) and float(urgency) >= 0.75)
+            )
+            news_rows.append(
+                {
+                    "published_at": row.get("published_at"),
+                    "source": str(row.get("source") or "").strip() or "unknown",
+                    "impact_score": float(impact_score) if pd.notna(impact_score) else pd.NA,
+                    "urgency": float(urgency) if pd.notna(urgency) else pd.NA,
+                    "confidence": pd.to_numeric(pd.Series([row.get("confidence", pd.NA)]), errors="coerce").iloc[0],
+                    "high_impact": bool(high_impact),
+                    "direction": _fx_direction_from_hint(pair, row.get("fx_directional_hint"), row.get("title")),
+                }
+            )
+    news_by_time = pd.DataFrame(news_rows)
+
+    tech = normalize_cols(tech)
+    tech["as_of"] = pd.to_datetime(tech.get("as_of"), errors="coerce", utc=True)
+    tech = tech.dropna(subset=["as_of"]).sort_values(["as_of", "run_id"]).drop_duplicates(subset=["as_of"], keep="last")
+    if len(tech) > max_points:
+        tech = tech.tail(max_points).copy()
+
+    rows: list[dict[str, object]] = []
+    for _, row in tech.iterrows():
+        as_of = pd.to_datetime(row.get("as_of"), errors="coerce", utc=True)
+        n = _fx_pair_history_news_snapshot(pair, news_by_time, as_of)
+        score = pd.to_numeric(pd.Series([row.get("signal_score", pd.NA)]), errors="coerce").iloc[0]
+        rows.append(
+            {
+                "Paire": pair,
+                "Timestamp": as_of,
+                "Run": str(row.get("run_id") or ""),
+                "Signal": str(row.get("signal_label") or "-"),
+                "Regime": str(row.get("regime") or "-"),
+                "Score": round(float(score), 2) if pd.notna(score) else pd.NA,
+                "Ret 5D %": round(safe_float(row.get("ret_5d")) * 100.0, 2),
+                "Ret 20D %": round(safe_float(row.get("ret_20d")) * 100.0, 2),
+                "RSI14": round(float(row.get("rsi14")), 1) if pd.notna(pd.to_numeric(pd.Series([row.get("rsi14")]), errors="coerce").iloc[0]) else pd.NA,
+                "Biais news": round(float(n.get("news_bias") or 0.0), 2),
+                "Confidence news %": round(float(n.get("news_confidence") or 0.0), 0),
+                "Event risk": round(float(n.get("event_risk") or 0.0), 0),
+                "News 24h": int(n.get("news_24h") or 0),
+                "High impact": int(n.get("high_impact") or 0),
+                "Nb sources": int(n.get("sources") or 0),
+                "Top sources": str(n.get("top_sources") or "-"),
+                "Alignement": _fx_alignment_label(score, n.get("news_bias"), n.get("event_risk")),
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame()
+    out = _augment_fx_pair_matrix_coordinates(pd.DataFrame(rows))
+    out["_recency"] = 0.0 if len(out) <= 1 else [idx / (len(out) - 1) for idx in range(len(out))]
+    return out
+
+
+def _history_blue_scale() -> list[list[object]]:
+    return [[0.0, "#ffffff"], [0.45, "#7dd3fc"], [1.0, "#0b2f6f"]]
+
+
+def _history_color(ratio: float) -> str:
+    ratio = max(0.0, min(1.0, float(ratio or 0.0)))
+    stops = [(0.0, (255, 255, 255)), (0.45, (125, 211, 252)), (1.0, (11, 47, 111))]
+    for idx in range(1, len(stops)):
+        left_pos, left_rgb = stops[idx - 1]
+        right_pos, right_rgb = stops[idx]
+        if ratio <= right_pos:
+            local = (ratio - left_pos) / max(right_pos - left_pos, 0.001)
+            rgb = _blend_rgb(left_rgb, right_rgb, local)
+            return f"rgb({rgb[0]}, {rgb[1]}, {rgb[2]})"
+    return "rgb(11, 47, 111)"
+
+
+def _build_fx_pair_history_matrix(pair: str, history: pd.DataFrame) -> go.Figure | None:
+    if history is None or history.empty:
+        return None
+
+    wk = history.sort_values("Timestamp").copy()
+    wk["Timestamp"] = pd.to_datetime(wk["Timestamp"], errors="coerce", utc=True)
+    wk = wk.dropna(subset=["Timestamp", "_momentum_plot", "_bias_plot"])
+    if wk.empty:
+        return None
+
+    fig = go.Figure()
+    for idx in range(1, len(wk)):
+        prev = wk.iloc[idx - 1]
+        cur = wk.iloc[idx]
+        fig.add_trace(
+            go.Scatter(
+                x=[prev["_momentum_plot"], cur["_momentum_plot"]],
+                y=[prev["_bias_plot"], cur["_bias_plot"]],
+                mode="lines",
+                line=dict(color=_history_color(cur["_recency"]), width=3.0),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    marker_sizes = [7 + float(v) * 7 for v in wk["_recency"].tolist()]
+    fig.add_trace(
+        go.Scatter(
+            x=wk["_momentum_plot"],
+            y=wk["_bias_plot"],
+            mode="markers",
+            marker=dict(
+                size=marker_sizes,
+                color=wk["_recency"],
+                colorscale=_history_blue_scale(),
+                cmin=0,
+                cmax=1,
+                line=dict(color="rgba(255,255,255,0.72)", width=1.2),
+                colorbar=dict(title="Ancien -> recent", thickness=12, len=0.78),
+            ),
+            customdata=wk[["Timestamp", "Signal", "Score", "Biais news", "Event risk", "News 24h", "Top sources"]].values,
+            hovertemplate=(
+                "<b>%{customdata[0]|%Y-%m-%d %H:%M}</b><br>"
+                "Signal: %{customdata[1]}<br>"
+                "Momentum: %{x:+.2f} | Score: %{customdata[2]:+.2f}<br>"
+                "Biais news: %{customdata[3]:+.2f} | Event risk: %{customdata[4]:.0f}/100<br>"
+                "News 24h: %{customdata[5]:.0f}<br>"
+                "Top sources: %{customdata[6]}<extra></extra>"
+            ),
+            name="Trace historique",
+            showlegend=False,
+        )
+    )
+
+    first = wk.iloc[0]
+    last = wk.iloc[-1]
+    endpoint_specs = [
+        (first, "ancien", "bottom center", 14, "#ffffff", "rgba(255,255,255,0.72)"),
+        (last, "recent", "top center", 20, "#0b2f6f", "#bfdbfe"),
+    ]
+    for point, label, textposition, size, color, text_color in endpoint_specs:
+        fig.add_trace(
+            go.Scatter(
+                x=[point["_momentum_plot"]],
+                y=[point["_bias_plot"]],
+                mode="markers+text",
+                marker=dict(size=size, color=color, line=dict(color="rgba(255,255,255,0.95)", width=2.0)),
+                text=[label],
+                textposition=textposition,
+                textfont=dict(size=11, color=text_color),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+    fig.add_vline(x=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
+    fig.add_hline(y=0, line_dash="dot", line_color="rgba(255,255,255,0.55)")
+    fig.add_annotation(x=0.74, y=0.90, text="Long aligned", showarrow=False, font=dict(size=12, color="#00d084"))
+    fig.add_annotation(x=-0.74, y=-0.92, text="Short aligned", showarrow=False, font=dict(size=12, color="#ff4d5e"))
+    fig.add_annotation(x=-0.72, y=0.90, text="Conflit: macro > technique", showarrow=False, font=dict(size=12, color="#f59e0b"))
+    fig.add_annotation(x=0.72, y=-0.92, text="Conflit: technique > macro", showarrow=False, font=dict(size=12, color="#f59e0b"))
+    fig.update_xaxes(
+        range=[-1.08, 1.08],
+        dtick=0.25,
+        zeroline=False,
+        title_text="Momentum technique composite (-1 short -> +1 long)",
+    )
+    fig.update_yaxes(
+        range=[-1.12, 1.16],
+        dtick=0.25,
+        zeroline=False,
+        title_text="Biais macro/news directionnel (-1 base bearish -> +1 base bullish)",
+    )
+    fig.update_layout(
+        title=f"Historique de position - {pair} ({len(wk)} points)",
+        height=500,
+        margin=dict(l=10, r=10, t=56, b=10),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        hovermode="closest",
+        showlegend=False,
+    )
+    return fig
 
 
 DEFAULT_BENCHMARKS = {
@@ -1565,7 +1913,7 @@ from app_modules.core import (
     truthy_series,
 )
 from app_modules.tables import render_interactive_table
-from app_modules.visualizations import render_fx_pair_sparklines, render_portfolio_sparklines
+from app_modules.visualizations import _prefetch_histories, render_fx_pair_sparklines, render_portfolio_sparklines
 
 # ============================================================
 # HELPERS GENERAUX (modules externes)
@@ -3304,6 +3652,10 @@ def fetch_yfinance_calendar_snapshot(symbol: str) -> dict:
 
 
 FX_SUFFIX = "=X"
+FX_YF_SYMBOL_OVERRIDES = {
+    "USDCNH": "USDCNY=X",
+    "EURCNH": "EURCNY=X",
+}
 FX_CURRENCY_CODES = {
     "USD",
     "EUR",
@@ -3379,6 +3731,11 @@ def parse_fx_pair(symbol: str) -> tuple[str | None, str | None, str]:
             return base, quote, pair
         return None, None, pair
     return None, None, s
+
+
+def _fx_yf_symbol(pair: str) -> str:
+    normalized = re.sub(r"[^A-Z]", "", str(pair or "").upper().replace("FX:", "").replace(FX_SUFFIX, ""))[:6]
+    return FX_YF_SYMBOL_OVERRIDES.get(normalized, f"{normalized}{FX_SUFFIX}")
 
 
 def _fx_mask(df: pd.DataFrame, symbol_col: str = "symbol", asset_col: str | None = None) -> pd.Series:
@@ -3540,7 +3897,7 @@ def _fetch_fx_history_metrics_batch(
     out: dict[str, dict[str, float]] = {}
 
     def _load_one(pair: str) -> dict[str, float]:
-        hist = _fetch_yfinance_history_raw(f"{pair}=X", interval="1d", lookback_days=int(lookback_days))
+        hist = _fetch_yfinance_history_raw(_fx_yf_symbol(pair), interval="1d", lookback_days=int(lookback_days))
         return _fx_compute_history_metrics(hist)
 
     max_workers = max(1, min(int(FX_HISTORY_MAX_WORKERS), len(clean_pairs)))
@@ -8448,9 +8805,6 @@ NAV_GROUPS = {
     ],
     "Forex": [
         "Dashboard Forex",
-        "Forex",
-        "Forex Trading (AG1-FX)",
-        "Forex P&L (LLM x Paire)",
     ],
 }
 nav_group = st.sidebar.radio("Univers", list(NAV_GROUPS.keys()), horizontal=True, index=1)
@@ -9007,24 +9361,24 @@ def _build_compare_overlay_chart(cards: list[dict[str, object]], mode: str = "EU
         axis_unit = "EUR" if str(mode).upper() in {"EUR", "€"} else "base 100"
         fig_eq.update_layout(
             height=260,
-            margin=dict(t=58, b=20, l=20, r=20),
+            margin=dict(t=82, b=20, l=20, r=20),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="EUR" if str(mode).upper() in {"EUR", "€"} else "Base 100"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0.0, xanchor="left"),
-            title=dict(text=f"Courbes d'equity comparees par modele ({axis_unit})", x=0.0, xanchor="left"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.16, x=0.24, xanchor="left"),
+            title=dict(text=f"Courbes d'equity comparees par modele ({axis_unit})", x=0.0, xanchor="left", y=0.96),
         )
     if has_dd:
         fig_dd.update_layout(
             height=210,
-            margin=dict(t=58, b=20, l=20, r=20),
+            margin=dict(t=82, b=20, l=20, r=20),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
             xaxis=dict(gridcolor="rgba(128,128,128,0.15)"),
             yaxis=dict(gridcolor="rgba(128,128,128,0.15)", title="Drawdown %"),
-            legend=dict(orientation="h", yanchor="bottom", y=1.08, x=0.0, xanchor="left"),
-            title=dict(text="Drawdown compare par modele", x=0.0, xanchor="left"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.16, x=0.24, xanchor="left"),
+            title=dict(text="Drawdown compare par modele", x=0.0, xanchor="left", y=0.96),
         )
     return (fig_eq if has_eq else None), (fig_dd if has_dd else None)
 
@@ -9680,7 +10034,9 @@ def _prepare_fx_compare_card(portfolio_key: str, payload: dict[str, object], per
 
     rejected_orders = 0
     if isinstance(orders_period, pd.DataFrame) and not orders_period.empty and "status" in orders_period.columns:
-        rejected_orders = int((orders_period["status"].astype(str).str.lower() == "rejected").sum())
+        status_s = orders_period["status"].astype(str).str.lower()
+        reason_s = orders_period.get("rejection_reason", pd.Series("", index=orders_period.index)).fillna("").astype(str).str.strip()
+        rejected_orders = int((status_s.isin(["rejected", "broker_error", "error"]) | (reason_s != "")).sum())
 
     now_utc = pd.Timestamp.now(tz="UTC")
     signals_24h = 0
@@ -9838,6 +10194,932 @@ def _concat_fx_payload_frames(payloads: dict[str, dict[str, object]], frame_key:
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames, ignore_index=True, sort=False)
+
+
+FX_SIMULATION_BASE_EUR = 10000.0
+FX_IBKR_PAPER_BASE_EUR = 1000000.0
+
+FX_CURRENCY_FULL_NAMES = {
+    "AUD": "Dollar australien",
+    "BRL": "Real bresilien",
+    "CAD": "Dollar canadien",
+    "CHF": "Franc suisse",
+    "CNH": "Yuan offshore",
+    "CNY": "Yuan chinois",
+    "CZK": "Couronne tcheque",
+    "DKK": "Couronne danoise",
+    "EUR": "Euro",
+    "GBP": "Livre sterling",
+    "HKD": "Dollar de Hong Kong",
+    "HUF": "Forint hongrois",
+    "ILS": "Shekel israelien",
+    "INR": "Roupie indienne",
+    "JPY": "Yen japonais",
+    "KRW": "Won sud-coreen",
+    "MXN": "Peso mexicain",
+    "NOK": "Couronne norvegienne",
+    "NZD": "Dollar neo-zelandais",
+    "PLN": "Zloty polonais",
+    "RUB": "Rouble russe",
+    "SEK": "Couronne suedoise",
+    "SGD": "Dollar de Singapour",
+    "TRY": "Livre turque",
+    "USD": "Dollar americain",
+    "ZAR": "Rand sud-africain",
+}
+
+FX_CURRENCY_VISUAL_META = {
+    "AUD": {"symbol": "A$", "lon": 134.0, "lat": -25.0, "color": "#5dff9b"},
+    "BRL": {"symbol": "R$", "lon": -52.0, "lat": -12.0, "color": "#39e991"},
+    "CAD": {"symbol": "C$", "lon": -106.0, "lat": 56.0, "color": "#7dffb2"},
+    "CHF": {"symbol": "Fr", "lon": 8.2, "lat": 46.8, "color": "#55f3ff"},
+    "CNH": {"symbol": "CNH", "lon": 113.5, "lat": 22.3, "color": "#54e6ff"},
+    "CNY": {"symbol": "¥", "lon": 104.0, "lat": 35.0, "color": "#54e6ff"},
+    "EUR": {"symbol": "€", "lon": 2.35, "lat": 46.4, "color": "#5dff9b"},
+    "GBP": {"symbol": "£", "lon": -2.5, "lat": 54.0, "color": "#9aff75"},
+    "JPY": {"symbol": "¥", "lon": 139.5, "lat": 36.0, "color": "#34f5ff"},
+    "MXN": {"symbol": "MX$", "lon": -102.0, "lat": 23.6, "color": "#4ff6c8"},
+    "NOK": {"symbol": "kr", "lon": 8.5, "lat": 61.0, "color": "#7df6ff"},
+    "NZD": {"symbol": "NZ$", "lon": 172.0, "lat": -41.0, "color": "#65ff94"},
+    "SEK": {"symbol": "kr", "lon": 15.0, "lat": 62.0, "color": "#7df6ff"},
+    "SGD": {"symbol": "S$", "lon": 103.8, "lat": 1.3, "color": "#51ffc7"},
+    "USD": {"symbol": "$", "lon": -98.0, "lat": 39.5, "color": "#42f7ff"},
+    "ZAR": {"symbol": "R", "lon": 24.0, "lat": -29.0, "color": "#6effad"},
+}
+
+
+def _fx_currency_name(code: object) -> str:
+    c = str(code or "").strip().upper()
+    return FX_CURRENCY_FULL_NAMES.get(c, c or "-")
+
+
+def _fx_add_pair_currency_names(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty or "Paire" not in df.columns:
+        return df
+    out = df.copy()
+    pair_s = out["Paire"].fillna("").astype(str).str.upper().str.replace(r"[^A-Z]", "", regex=True).str[:6]
+    out["Devise base"] = pair_s.str[:3].map(_fx_currency_name)
+    out["Devise cotation"] = pair_s.str[3:6].map(_fx_currency_name)
+    return out
+
+
+def _parse_numeric_amount(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            n = float(value)
+            return n if pd.notna(n) else None
+        except Exception:
+            return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    raw = raw.replace("\u00a0", "").replace(" ", "")
+    if "," in raw and "." in raw:
+        raw = raw.replace(",", "")
+    elif "," in raw and "." not in raw:
+        raw = raw.replace(",", ".")
+    raw = re.sub(r"[^0-9.+-]", "", raw)
+    if not raw or raw in {"+", "-", ".", "+.", "-."}:
+        return None
+    try:
+        return float(raw)
+    except Exception:
+        return None
+
+
+def _iter_ibkr_ledger_rows(payload: object):
+    if isinstance(payload, list):
+        for row in payload:
+            if isinstance(row, dict):
+                yield "", row
+        return
+    if not isinstance(payload, dict):
+        return
+    for key, value in payload.items():
+        if isinstance(value, dict):
+            yield str(key), value
+        elif isinstance(value, list):
+            for row in value:
+                if isinstance(row, dict):
+                    yield str(key), row
+
+
+def _ibkr_cash_balances_from_ledger(payload: object) -> tuple[dict[str, float], dict[str, float], list[dict[str, object]]]:
+    balances: dict[str, float] = {}
+    rates: dict[str, float] = {}
+    raw_rows: list[dict[str, object]] = []
+    for key, row in _iter_ibkr_ledger_rows(payload):
+        ccy = str(row.get("currency") or row.get("ccy") or key or "").strip().upper()
+        if not ccy or ccy in {"BASE", "ACCOUNT", "TOTAL"}:
+            continue
+        value = None
+        for field in ("cashbalance", "cashBalance", "settledcash", "settledCash", "totalcash", "totalCash"):
+            if row.get(field) not in (None, ""):
+                value = _parse_numeric_amount(row.get(field))
+                break
+        if value is None:
+            continue
+        balances[ccy] = balances.get(ccy, 0.0) + float(value)
+        rate = _parse_numeric_amount(row.get("exchangerate") or row.get("exchangeRate"))
+        if rate is not None and rate > 0:
+            rates[ccy] = float(rate)
+        raw_rows.append({k: row.get(k) for k in ("currency", "cashbalance", "settledcash", "totalcash", "exchangerate") if k in row})
+    return balances, rates, raw_rows[:40]
+
+
+def _fx_universe_currencies_from_overview(pair_overview: pd.DataFrame) -> set[str]:
+    if pair_overview is None or pair_overview.empty or "Paire" not in pair_overview.columns:
+        return set()
+    ccys: set[str] = set()
+    pairs = pair_overview["Paire"].dropna().astype(str).str.upper().str.replace(r"[^A-Z]", "", regex=True).str[:6]
+    for pair in pairs.tolist():
+        if len(pair) == 6:
+            ccys.add(pair[:3])
+            ccys.add(pair[3:6])
+    return {c for c in ccys if c in FX_CURRENCY_CODES}
+
+
+def _fx_complete_currency_balance_rows(df: pd.DataFrame, currencies: set[str]) -> pd.DataFrame:
+    rows = [] if df is None or df.empty else df.to_dict("records")
+    present = {str(row.get("Devise") or "").upper() for row in rows}
+    for ccy in sorted(currencies - present):
+        meta = FX_CURRENCY_VISUAL_META.get(ccy, {})
+        rows.append(
+            {
+                "Devise": ccy,
+                "Nom": _fx_currency_name(ccy),
+                "Symbole": meta.get("symbol", ccy),
+                "Solde": 0.0,
+                "Solde abs": 0.0,
+                "Taux EUR": 1.0 if ccy == "EUR" else pd.NA,
+                "Solde EUR": 0.0,
+                "Poids portefeuille %": 0.0,
+                "Longitude": float(meta.get("lon", 0.0)),
+                "Latitude": float(meta.get("lat", 0.0)),
+                "Couleur": "#64748b",
+            }
+        )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return out
+    out["_sort_weight"] = pd.to_numeric(out.get("Solde EUR", pd.Series(0.0, index=out.index)), errors="coerce").abs().fillna(0.0)
+    out = out.sort_values(["_sort_weight", "Devise"], ascending=[False, True]).drop(columns=["_sort_weight"])
+    return _fx_recompute_currency_balance_weights(out)
+
+
+def _fx_recompute_currency_balance_weights(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    solde_eur = pd.to_numeric(out.get("Solde EUR", pd.Series(0.0, index=out.index)), errors="coerce").fillna(0.0)
+    net_total = float(solde_eur.sum())
+    gross_total = float(solde_eur.abs().sum())
+    denom = abs(net_total) if abs(net_total) > 1e-9 else gross_total
+    out["Poids portefeuille %"] = (solde_eur.abs() / denom * 100.0).round(2) if denom > 0 else 0.0
+    out["_sort_weight"] = solde_eur.abs()
+    out = out.sort_values(["_sort_weight", "Devise"], ascending=[False, True]).drop(columns=["_sort_weight"])
+    return out
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_ibkr_currency_balances(broker_url: str) -> dict[str, object]:
+    base_url = str(broker_url or "").strip().rstrip("/")
+    payload: dict[str, object] = {
+        "ok": False,
+        "error": "",
+        "broker_url": base_url,
+        "authenticated": None,
+        "connected": None,
+        "established": None,
+        "dry_run": None,
+        "health": {},
+        "rows": pd.DataFrame(),
+        "raw_rows": [],
+        "updated_at": pd.Timestamp.now(tz="UTC"),
+    }
+    if not base_url:
+        payload["error"] = "IBKR_BROKER_URL absent"
+        return payload
+    try:
+        try:
+            health_resp = requests.get(f"{base_url}/health", timeout=5)
+            if health_resp.status_code == 200:
+                health = health_resp.json()
+                ibkr_status = health.get("ibkr_status") if isinstance(health.get("ibkr_status"), dict) else {}
+                payload["health"] = health
+                payload["authenticated"] = bool(health.get("authenticated"))
+                payload["connected"] = bool(ibkr_status.get("connected"))
+                payload["established"] = bool(ibkr_status.get("established"))
+                payload["dry_run"] = bool(health.get("dry_run"))
+        except Exception:
+            pass
+        resp = requests.get(f"{base_url}/account/ledger", timeout=12)
+        if resp.status_code != 200:
+            payload["error"] = f"HTTP {resp.status_code}: {resp.text[:240]}"
+            return payload
+        balances, rates, raw_rows = _ibkr_cash_balances_from_ledger(resp.json())
+        rows = []
+        for ccy, amount in sorted(balances.items()):
+            if abs(float(amount)) < 1e-9:
+                continue
+            meta = FX_CURRENCY_VISUAL_META.get(ccy, {})
+            rate = 1.0 if ccy == "EUR" else float(rates.get(ccy, 0.0) or 0.0)
+            amount_eur = float(amount) * rate if rate > 0 else pd.NA
+            rows.append(
+                {
+                    "Devise": ccy,
+                    "Nom": _fx_currency_name(ccy),
+                    "Symbole": meta.get("symbol", ccy),
+                    "Solde": float(amount),
+                    "Solde abs": abs(float(amount)),
+                    "Taux EUR": rate if rate > 0 else pd.NA,
+                    "Solde EUR": amount_eur,
+                    "Longitude": float(meta.get("lon", 0.0)),
+                    "Latitude": float(meta.get("lat", 0.0)),
+                    "Couleur": str(meta.get("color", "#58f3ff")),
+                }
+            )
+        payload["ok"] = True
+        if rows:
+            df_rows = pd.DataFrame(rows)
+            payload["rows"] = _fx_recompute_currency_balance_weights(df_rows)
+        else:
+            payload["rows"] = pd.DataFrame()
+        payload["raw_rows"] = raw_rows
+        return payload
+    except Exception as exc:
+        payload["error"] = str(exc)
+        return payload
+
+
+def _fx_ibkr_session_level(payload: dict[str, object]) -> tuple[str, str, str]:
+    if not isinstance(payload, dict):
+        return "ERROR", "IBKR inconnu", "Lecture de statut IBKR impossible."
+    if bool(payload.get("authenticated")):
+        dry_txt = "dry-run ON" if bool(payload.get("dry_run")) else "dry-run OFF"
+        return "OK", "IBKR authentifie", f"Session Client Portal active, {dry_txt}."
+    if payload.get("authenticated") is False:
+        detail = str(payload.get("error") or "").strip()
+        if detail:
+            detail = f" Derniere erreur ledger: {detail}"
+        return "ERROR", "IBKR deconnecte", "Reconnecter la session Client Portal avant les prochains ordres." + detail
+    return "WARN", "IBKR a verifier", str(payload.get("error") or "Statut d'authentification non confirme.")
+
+
+def _render_fx_ibkr_session_status(payload: dict[str, object]) -> None:
+    level, title, detail = _fx_ibkr_session_level(payload)
+    colors = {
+        "OK": ("#16a34a", "rgba(22,163,74,.12)", "rgba(22,163,74,.35)"),
+        "WARN": ("#d97706", "rgba(217,119,6,.12)", "rgba(217,119,6,.35)"),
+        "ERROR": ("#dc2626", "rgba(220,38,38,.12)", "rgba(220,38,38,.35)"),
+    }
+    fg, bg, bd = colors.get(level, colors["WARN"])
+    checked = payload.get("updated_at")
+    checked_txt = _fmt_paris_datetime(checked, "%d/%m %H:%M:%S") if checked is not None else "N/A"
+    st.markdown(
+        (
+            f"<div style='margin:8px 0 14px 0;padding:10px 12px;border:1px solid {bd};"
+            f"border-radius:8px;background:{bg};display:flex;justify-content:space-between;"
+            "align-items:center;gap:12px;flex-wrap:wrap;'>"
+            f"<div><span style='font-weight:750;color:{fg};'>{html.escape(title)}</span>"
+            f"<span style='color:#cbd5e1;margin-left:8px;'>{html.escape(detail)}</span></div>"
+            f"<div style='color:#94a3b8;font-size:.82rem;'>Check {html.escape(str(checked_txt))}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _fx_currency_balance_totals(df: pd.DataFrame) -> dict[str, float]:
+    if df is None or df.empty:
+        return {"net_eur": 0.0, "gross_eur": 0.0}
+    solde_eur = pd.to_numeric(df.get("Solde EUR", pd.Series(0.0, index=df.index)), errors="coerce").fillna(0.0)
+    return {"net_eur": float(solde_eur.sum()), "gross_eur": float(solde_eur.abs().sum())}
+
+
+def _fx_apply_currency_value_basis(
+    df: pd.DataFrame,
+    rebase_to_10k: bool,
+    target_eur: float = FX_SIMULATION_BASE_EUR,
+    ibkr_paper_base_eur: float = FX_IBKR_PAPER_BASE_EUR,
+) -> tuple[pd.DataFrame, dict[str, float]]:
+    if df is None or df.empty:
+        return pd.DataFrame(), {"eur_adjustment": 0.0, "real_net_eur": 0.0, "real_gross_eur": 0.0, "display_net_eur": 0.0, "display_gross_eur": 0.0}
+    out = df.copy()
+    real_totals = _fx_currency_balance_totals(out)
+    real_net = float(real_totals.get("net_eur", 0.0))
+    real_gross = float(real_totals.get("gross_eur", 0.0))
+    out["Solde IBKR reel"] = pd.to_numeric(out.get("Solde", pd.Series(0.0, index=out.index)), errors="coerce").fillna(0.0)
+    out["Solde EUR IBKR reel"] = pd.to_numeric(out.get("Solde EUR", pd.Series(0.0, index=out.index)), errors="coerce").fillna(0.0)
+    eur_adjustment = max(0.0, float(ibkr_paper_base_eur) - float(target_eur)) if rebase_to_10k else 0.0
+    if eur_adjustment > 0 and "Devise" in out.columns:
+        eur_mask = out["Devise"].fillna("").astype(str).str.upper() == "EUR"
+        if bool(eur_mask.any()):
+            out.loc[eur_mask, "Solde"] = pd.to_numeric(out.loc[eur_mask, "Solde"], errors="coerce").fillna(0.0) - eur_adjustment
+            out.loc[eur_mask, "Solde EUR"] = pd.to_numeric(out.loc[eur_mask, "Solde EUR"], errors="coerce").fillna(0.0) - eur_adjustment
+        else:
+            meta = FX_CURRENCY_VISUAL_META.get("EUR", {})
+            out = pd.concat(
+                [
+                    out,
+                    pd.DataFrame(
+                        [
+                            {
+                                "Devise": "EUR",
+                                "Nom": _fx_currency_name("EUR"),
+                                "Symbole": meta.get("symbol", "EUR"),
+                                "Solde": float(target_eur) - float(ibkr_paper_base_eur),
+                                "Solde abs": abs(float(target_eur) - float(ibkr_paper_base_eur)),
+                                "Taux EUR": 1.0,
+                                "Solde EUR": float(target_eur) - float(ibkr_paper_base_eur),
+                                "Longitude": float(meta.get("lon", 2.35)),
+                                "Latitude": float(meta.get("lat", 46.4)),
+                                "Couleur": str(meta.get("color", "#5dff9b")),
+                                "Solde IBKR reel": 0.0,
+                                "Solde EUR IBKR reel": 0.0,
+                            }
+                        ]
+                    ),
+                ],
+                ignore_index=True,
+            )
+    out["Solde abs"] = pd.to_numeric(out.get("Solde", pd.Series(0.0, index=out.index)), errors="coerce").abs().fillna(0.0)
+    out = _fx_recompute_currency_balance_weights(out)
+    display_totals = _fx_currency_balance_totals(out)
+    return out, {
+        "eur_adjustment": float(eur_adjustment),
+        "real_net_eur": real_net,
+        "real_gross_eur": real_gross,
+        "display_net_eur": float(display_totals.get("net_eur", 0.0)),
+        "display_gross_eur": float(display_totals.get("gross_eur", 0.0)),
+    }
+
+
+def _fx_scale_compare_cards_for_value_basis(cards: list[dict[str, object]], scale: float, curve_mode: str) -> list[dict[str, object]]:
+    if abs(float(scale or 1.0) - 1.0) < 1e-9:
+        return cards
+    money_keys = {
+        "init_cap", "total_val", "cash", "margin_used", "pnl_total", "period_delta_eur",
+        "gross_realized_period", "fees_period", "net_realized_period",
+    }
+    out_cards: list[dict[str, object]] = []
+    for card in cards:
+        c = dict(card)
+        for key in money_keys:
+            val = c.get(key)
+            try:
+                if val is not None and not pd.isna(val):
+                    c[key] = float(safe_float(val)) * float(scale)
+            except Exception:
+                pass
+        for list_key in ["top_pairs", "worst_pairs"]:
+            rows = []
+            for row in c.get(list_key) or []:
+                if isinstance(row, dict):
+                    r = dict(row)
+                    if "pnl_eur" in r:
+                        r["pnl_eur"] = float(safe_float(r.get("pnl_eur"))) * float(scale)
+                    rows.append(r)
+            c[list_key] = rows
+        curve = c.get("curve_df")
+        if str(curve_mode) == "EUR" and isinstance(curve, pd.DataFrame) and not curve.empty and "display_value" in curve.columns:
+            curve_scaled = curve.copy()
+            curve_scaled["display_value"] = pd.to_numeric(curve_scaled["display_value"], errors="coerce") * float(scale)
+            c["curve_df"] = curve_scaled
+        out_cards.append(c)
+    return out_cards
+
+
+def _fx_scale_money_columns(df: pd.DataFrame, columns: list[str], scale: float) -> pd.DataFrame:
+    if df is None or df.empty or abs(float(scale or 1.0) - 1.0) < 1e-9:
+        return df
+    out = df.copy()
+    for col in columns:
+        if col in out.columns:
+            out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0) * float(scale)
+    return out
+
+
+def _fmt_native_currency_amount(ccy: object, amount: object, digits: int = 2) -> str:
+    c = str(ccy or "").strip().upper()
+    n = safe_float(amount)
+    symbol = str(FX_CURRENCY_VISUAL_META.get(c, {}).get("symbol") or c)
+    txt = f"{n:,.{digits}f}".replace(",", " ")
+    if c in {"JPY", "KRW"}:
+        txt = f"{n:,.0f}".replace(",", " ")
+    return f"{symbol} {txt}"
+
+
+def _fmt_eur_amount(amount: object, digits: int = 2) -> str:
+    n = safe_float(amount)
+    if pd.isna(n):
+        return "EUR N/A"
+    return f"€ {n:,.{digits}f}".replace(",", " ")
+
+
+def _fmt_currency_map_label(ccy: object, amount: object, amount_eur: object) -> str:
+    c = str(ccy or "").strip().upper()
+    native = _fmt_native_currency_amount(c, amount)
+    if c == "EUR":
+        return native
+    eur_txt = _fmt_eur_amount(amount_eur)
+    return f"{native}<br>({eur_txt})"
+
+
+def _build_ibkr_currency_exposure_map(df: pd.DataFrame, mode_label: str = "LIVE IBKR CASH LEDGER") -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scattergeo(
+            lon=[-180, 180],
+            lat=[-62, 78],
+            mode="markers",
+            marker=dict(size=1, color="rgba(0,0,0,0)"),
+            hoverinfo="skip",
+            showlegend=False,
+        )
+    )
+    if df is not None and not df.empty:
+        wk = df.copy()
+        wk["_weight_pct"] = pd.to_numeric(wk.get("Poids portefeuille %", pd.Series(0.0, index=wk.index)), errors="coerce").fillna(0.0).clip(lower=0.0, upper=100.0)
+        wk["_height"] = wk["_weight_pct"].map(lambda v: 2.5 if v <= 0 else 3.0 + 40.0 * (float(v) / 100.0))
+        for _, row in wk.iterrows():
+            lon = safe_float(row.get("Longitude"))
+            lat = safe_float(row.get("Latitude"))
+            height = safe_float(row.get("_height"))
+            ccy = str(row.get("Devise") or "")
+            symbol = str(row.get("Symbole") or ccy)
+            amount = safe_float(row.get("Solde"))
+            amount_eur = row.get("Solde EUR")
+            weight_pct = safe_float(row.get("_weight_pct"))
+            is_negative = amount < 0
+            is_zero = abs(amount) < 1e-9
+            bar_color = "#ef4444" if is_negative else ("#64748b" if is_zero else "#45ff9a")
+            glow_color = "#ff6b6b" if is_negative else ("#67e8f9" if is_zero else str(row.get("Couleur") or "#58f3ff"))
+            target_lat = max(-62.0, lat - height) if is_negative else min(78.0, lat + height)
+            text_lat = target_lat
+            text_position = "bottom right" if is_negative else "top right"
+            label = f"{symbol} {ccy}<br>{html.escape(_fmt_currency_map_label(ccy, amount, amount_eur))}"
+            hover = (
+                f"<b>{html.escape(ccy)} - {html.escape(str(row.get('Nom') or ''))}</b><br>"
+                f"Solde: {html.escape(_fmt_native_currency_amount(ccy, amount))}<br>"
+                f"Equivalent EUR: {html.escape(_fmt_eur_amount(amount_eur))}<br>"
+                f"Part portefeuille: {weight_pct:.2f}%<extra></extra>"
+            )
+            for width, opacity, color in [(22, 0.12, glow_color), (14, 0.28, glow_color), (7, 0.96, bar_color)]:
+                fig.add_trace(
+                    go.Scattergeo(
+                        lon=[lon, lon],
+                        lat=[lat, target_lat],
+                        mode="lines",
+                        line=dict(color=color, width=width),
+                        opacity=opacity,
+                        hoverinfo="skip",
+                        showlegend=False,
+                    )
+                )
+            fig.add_trace(
+                go.Scattergeo(
+                    lon=[lon],
+                    lat=[lat],
+                    mode="markers",
+                    marker=dict(size=16 if not is_zero else 9, color=bar_color, opacity=0.34 if not is_zero else 0.55, line=dict(color=glow_color, width=2)),
+                    hovertemplate=hover,
+                    showlegend=False,
+                )
+            )
+            if not is_zero:
+                fig.add_trace(
+                    go.Scattergeo(
+                        lon=[lon],
+                        lat=[text_lat],
+                        mode="markers+text",
+                        marker=dict(size=8, color="#eaffff", opacity=0.98, line=dict(color=bar_color, width=2)),
+                        text=[label],
+                        textfont=dict(size=13, color="#f8ffff"),
+                        textposition=text_position,
+                        hovertemplate=hover,
+                        showlegend=False,
+                    )
+                )
+            else:
+                fig.add_trace(
+                    go.Scattergeo(
+                        lon=[lon],
+                        lat=[lat],
+                        mode="text",
+                        text=[ccy],
+                        textfont=dict(size=10, color="rgba(203,213,225,.72)"),
+                        textposition="top center",
+                        hovertemplate=hover,
+                        showlegend=False,
+                    )
+                )
+    fig.update_geos(
+        projection_type="natural earth",
+        showframe=False,
+        showcoastlines=True,
+        coastlinecolor="rgba(83,224,255,.68)",
+        coastlinewidth=0.7,
+        showcountries=True,
+        countrycolor="rgba(83,224,255,.38)",
+        countrywidth=0.45,
+        showland=True,
+        landcolor="rgb(8,35,50)",
+        showocean=True,
+        oceancolor="rgb(1,12,26)",
+        showlakes=True,
+        lakecolor="rgb(1,18,32)",
+        lonaxis=dict(showgrid=True, gridcolor="rgba(71,212,255,.12)", dtick=30),
+        lataxis=dict(showgrid=True, gridcolor="rgba(71,212,255,.12)", dtick=20),
+        bgcolor="rgba(0,0,0,0)",
+    )
+    fig.update_layout(
+        height=560,
+        margin=dict(l=8, r=8, t=58, b=8),
+        paper_bgcolor="rgb(3,8,18)",
+        plot_bgcolor="rgb(3,8,18)",
+        title=dict(
+            text="GLOBAL CURRENCY EXPOSURE DASHBOARD | IBKR FOREX PORTFOLIO",
+            x=0.02,
+            y=0.98,
+            font=dict(size=18, color="#f8ffff"),
+        ),
+        font=dict(family="Arial, sans-serif", color="#e5faff"),
+    )
+    fig.add_annotation(
+        x=0.985,
+        y=0.98,
+        xref="paper",
+        yref="paper",
+        xanchor="right",
+        yanchor="top",
+        text=mode_label,
+        showarrow=False,
+        font=dict(size=12, color="#73f7ff"),
+        align="right",
+    )
+    fig.add_annotation(
+        x=0.985,
+        y=0.035,
+        xref="paper",
+        yref="paper",
+        xanchor="right",
+        yanchor="bottom",
+        text=f"LAST UPDATE: {pd.Timestamp.now(tz='UTC').strftime('%H:%M:%S UTC')}",
+        showarrow=False,
+        font=dict(size=11, color="#d8ffff"),
+        align="right",
+    )
+    return fig
+
+
+def _fx_signal_cell_style(value: object, column: str) -> str:
+    if value is None or pd.isna(value):
+        text = ""
+    else:
+        text = str(value).strip().lower()
+    if column in {"Score", "Biais news", "P&L clos EUR", "Ret 1D %", "Ret 5D %", "Ret 20D %"}:
+        n = safe_float(value)
+        if abs(n) < 1e-9:
+            return "background-color: rgba(148,163,184,.16); color: #e5e7eb;"
+        color = "16,185,129" if n > 0 else "248,113,113"
+        return f"background-color: rgba({color},.22); color: #f8fafc; font-weight: 650;"
+    if column in {"Confidence news %", "Event risk", "News 24h", "High impact", "Lots ouverts", "LLM exposes"}:
+        n = safe_float(value)
+        if n <= 0:
+            return "background-color: rgba(148,163,184,.12); color: #cbd5e1;"
+        if column in {"Event risk", "High impact"}:
+            return "background-color: rgba(245,158,11,.24); color: #fde68a; font-weight: 650;"
+        return "background-color: rgba(96,165,250,.20); color: #dbeafe; font-weight: 650;"
+    if column in {"Alignement", "Technique", "Signal", "Sources"}:
+        if any(token in text for token in ["erreur", "error", "rejected", "baissier", "sell", "short"]):
+            return "background-color: rgba(248,113,113,.22); color: #fecaca; font-weight: 650;"
+        if any(token in text for token in ["haussier", "buy", "long", "aligne", "ok"]):
+            return "background-color: rgba(16,185,129,.22); color: #bbf7d0; font-weight: 650;"
+        if any(token in text for token in ["conflit", "alerte", "event", "actif"]):
+            return "background-color: rgba(245,158,11,.24); color: #fde68a; font-weight: 650;"
+        if any(token in text for token in ["neutre", "calme", "neutral"]):
+            return "background-color: rgba(148,163,184,.16); color: #e5e7eb;"
+    return ""
+
+
+def _fx_pair_table_styler(df: pd.DataFrame):
+    def _style_col(col: pd.Series) -> list[str]:
+        return [_fx_signal_cell_style(v, str(col.name)) for v in col]
+
+    return df.style.apply(_style_col, axis=0)
+
+
+def _fx_currency_balance_styler(df: pd.DataFrame):
+    positive_cols = {"Solde", "Solde EUR", "Solde IBKR reel", "Solde EUR IBKR reel", "Poids portefeuille %"}
+
+    def _style_col(col: pd.Series) -> list[str]:
+        styles = []
+        for v in col:
+            if str(col.name) in positive_cols:
+                n = safe_float(v)
+                if abs(n) < 1e-9:
+                    styles.append("background-color: rgba(148,163,184,.14); color: #cbd5e1;")
+                elif n > 0:
+                    styles.append("background-color: rgba(16,185,129,.22); color: #bbf7d0; font-weight: 650;")
+                else:
+                    styles.append("background-color: rgba(248,113,113,.22); color: #fecaca; font-weight: 650;")
+            else:
+                styles.append("")
+        return styles
+
+    return df.style.apply(_style_col, axis=0)
+
+
+def _fx_build_entry_levels_by_pair(df_open: pd.DataFrame, color_by_llm: dict[str, str]) -> dict[str, list[dict[str, object]]]:
+    out: dict[str, list[dict[str, object]]] = {}
+    if df_open is None or df_open.empty or not {"pair", "LLM"}.issubset(df_open.columns):
+        return out
+    entry_tmp = df_open.copy()
+    entry_tmp["pair"] = entry_tmp["pair"].fillna("").astype(str).str.upper()
+    entry_tmp["LLM"] = entry_tmp["LLM"].fillna("").astype(str)
+    entry_tmp["_entry_price"] = pd.to_numeric(entry_tmp.get("open_price", pd.Series(0.0, index=entry_tmp.index)), errors="coerce").fillna(0.0)
+    lot_col = _first_existing_column(entry_tmp, ["size_lots", "remaining_qty", "open_qty", "quantity"])
+    entry_tmp["_entry_lots"] = pd.to_numeric(entry_tmp[lot_col], errors="coerce").fillna(0.0) if lot_col else 0.0
+    if "side" not in entry_tmp.columns:
+        entry_tmp["side"] = ""
+    entry_tmp = entry_tmp[(entry_tmp["pair"] != "") & (entry_tmp["LLM"] != "") & (entry_tmp["_entry_price"] > 0)].copy()
+    for pair, grp in entry_tmp.groupby("pair"):
+        out[pair] = [
+            {
+                "llm": str(row.get("LLM") or ""),
+                "price": float(row.get("_entry_price") or 0.0),
+                "side": str(row.get("side") or ""),
+                "lots": float(row.get("_entry_lots") or 0.0),
+                "at": row.get("open_at"),
+                "color": color_by_llm.get(str(row.get("LLM") or ""), "#888"),
+            }
+            for _, row in grp.iterrows()
+        ]
+    return out
+
+
+def _fx_pair_llm_summary(df_open: pd.DataFrame, df_closed: pd.DataFrame, short_by_llm: dict[str, str]) -> pd.DataFrame:
+    open_by_llm = pd.DataFrame(columns=["pair", "LLM", "open_lots", "open_sides"])
+    if df_open is not None and not df_open.empty and {"pair", "LLM"}.issubset(df_open.columns):
+        open_tmp = df_open.copy()
+        open_tmp["pair"] = open_tmp["pair"].fillna("").astype(str).str.upper()
+        open_tmp["LLM"] = open_tmp["LLM"].fillna("").astype(str)
+        if "side" not in open_tmp.columns:
+            open_tmp["side"] = ""
+        open_tmp = open_tmp[(open_tmp["pair"] != "") & (open_tmp["LLM"] != "")].copy()
+        if not open_tmp.empty:
+            open_by_llm = open_tmp.groupby(["pair", "LLM"], as_index=False).agg(
+                open_lots=("pair", "size"),
+                open_sides=("side", lambda s: ", ".join(sorted({str(x).lower() for x in s.dropna() if str(x).strip()})) or "-"),
+            )
+
+    closed_by_llm = pd.DataFrame(columns=["pair", "LLM", "pnl_closed_eur", "closed_lots"])
+    if df_closed is not None and not df_closed.empty and {"pair", "LLM"}.issubset(df_closed.columns):
+        closed_tmp = df_closed.copy()
+        closed_tmp["pair"] = closed_tmp["pair"].fillna("").astype(str).str.upper()
+        closed_tmp["LLM"] = closed_tmp["LLM"].fillna("").astype(str)
+        pnl_col = "_pnl_eur" if "_pnl_eur" in closed_tmp.columns else "pnl_eur" if "pnl_eur" in closed_tmp.columns else None
+        if pnl_col:
+            closed_tmp["_summary_pnl_eur"] = pd.to_numeric(closed_tmp[pnl_col], errors="coerce").fillna(0.0)
+            closed_tmp = closed_tmp[(closed_tmp["pair"] != "") & (closed_tmp["LLM"] != "")].copy()
+            if not closed_tmp.empty:
+                closed_by_llm = closed_tmp.groupby(["pair", "LLM"], as_index=False).agg(
+                    pnl_closed_eur=("_summary_pnl_eur", "sum"),
+                    closed_lots=("_summary_pnl_eur", "size"),
+                )
+
+    out = open_by_llm.merge(closed_by_llm, on=["pair", "LLM"], how="outer")
+    if out.empty:
+        return out
+    out["open_lots"] = pd.to_numeric(out.get("open_lots"), errors="coerce").fillna(0).astype(int)
+    out["closed_lots"] = pd.to_numeric(out.get("closed_lots"), errors="coerce").fillna(0).astype(int)
+    out["pnl_closed_eur"] = pd.to_numeric(out.get("pnl_closed_eur"), errors="coerce").fillna(0.0)
+    out["open_sides"] = out.get("open_sides", pd.Series("-", index=out.index)).fillna("-").astype(str)
+    out["llm_short"] = out["LLM"].map(short_by_llm).fillna(out["LLM"])
+    out["Synthese LLM"] = out.apply(
+        lambda r: (
+            f"{r['llm_short']}: {int(r['open_lots'])} open"
+            + (f" ({r['open_sides']})" if str(r["open_sides"]).strip("- ") else "")
+            + f", P&L {float(r['pnl_closed_eur']):+.2f}"
+        ),
+        axis=1,
+    )
+    return out
+
+
+def _fx_side_is_long(side: object) -> bool:
+    return str(side or "").strip().lower() in {"buy", "long", "buy_base", "open_long"}
+
+
+def _fx_side_is_short(side: object) -> bool:
+    return str(side or "").strip().lower() in {"sell", "short", "sell_base", "open_short"}
+
+
+def _fx_price_move_pct(open_price: object, target_price: object, side: object) -> float | None:
+    open_n = safe_float(open_price)
+    target_n = safe_float(target_price)
+    if open_n <= 0 or target_n <= 0:
+        return None
+    if _fx_side_is_short(side):
+        return (open_n / target_n - 1.0) * 100.0
+    return (target_n / open_n - 1.0) * 100.0
+
+
+def _fx_pair_decimals(pair: object) -> int:
+    text = str(pair or "").strip().upper()
+    text = re.sub(r"[^A-Z]", "", text.replace("FX:", "").replace(FX_SUFFIX, ""))[:6]
+    return 3 if len(text) == 6 and text[3:6] == "JPY" else 5
+
+
+def _fmt_fx_price_for_pair(pair: object, value: object) -> str:
+    n = safe_float(value)
+    if n <= 0:
+        return ""
+    return f"{n:.{_fx_pair_decimals(pair)}f}"
+
+
+def _fx_currency_to_eur_rate(ccy: object, price_by_pair: dict[str, float]) -> float | None:
+    code = str(ccy or "").strip().upper()
+    if not code:
+        return None
+    if code == "EUR":
+        return 1.0
+
+    prices = {
+        str(k or "").strip().upper(): safe_float(v)
+        for k, v in (price_by_pair or {}).items()
+        if str(k or "").strip()
+    }
+    direct = prices.get(f"{code}EUR")
+    if direct and direct > 0:
+        return direct
+    inverse = prices.get(f"EUR{code}")
+    if inverse and inverse > 0:
+        return 1.0 / inverse
+
+    eurusd = prices.get("EURUSD")
+    usdeur = prices.get("USDEUR")
+    usd_to_eur = (1.0 / eurusd) if eurusd and eurusd > 0 else (usdeur if usdeur and usdeur > 0 else None)
+    if code == "USD":
+        return usd_to_eur
+    if usd_to_eur:
+        ccy_usd = prices.get(f"{code}USD")
+        if ccy_usd and ccy_usd > 0:
+            return ccy_usd * usd_to_eur
+        usd_ccy = prices.get(f"USD{code}")
+        if usd_ccy and usd_ccy > 0:
+            return (1.0 / usd_ccy) * usd_to_eur
+    return None
+
+
+def _fx_lot_notional_eur(row: pd.Series, price_by_pair: dict[str, float]) -> float:
+    pair = str(row.get("pair") or "").strip().upper()
+    pair = re.sub(r"[^A-Z]", "", pair)[:6]
+    if len(pair) != 6:
+        return 0.0
+    size_lots = abs(safe_float(row.get("_size_lots", row.get("size_lots"))))
+    if size_lots <= 0:
+        return 0.0
+    base_units = size_lots * 100000.0
+    base_to_eur = _fx_currency_to_eur_rate(pair[:3], price_by_pair)
+    if base_to_eur is None or base_to_eur <= 0:
+        # Fallback conservateur : si la devise de base n'est pas convertible
+        # avec les prix disponibles, on évite de multiplier par la devise de
+        # cotation (cas EURJPY) et on garde 1 base ~= 1 EUR.
+        base_to_eur = 1.0
+    return base_units * base_to_eur
+
+
+def _fx_open_lots_enriched(df_open: pd.DataFrame, cards_by_label: dict[str, dict[str, object]], price_by_pair: dict[str, float]) -> pd.DataFrame:
+    if df_open is None or df_open.empty:
+        return pd.DataFrame()
+    out = df_open.copy()
+    out["pair"] = out.get("pair", pd.Series("", index=out.index)).fillna("").astype(str).str.upper()
+    out["LLM"] = out.get("LLM", pd.Series("", index=out.index)).fillna("").astype(str)
+    out["_portfolio_total"] = out["LLM"].map(lambda llm: safe_float((cards_by_label.get(llm) or {}).get("total_val")))
+    out["_current_price"] = out["pair"].map(price_by_pair).fillna(0.0)
+    out["_size_lots"] = pd.to_numeric(out.get("size_lots", pd.Series(0.0, index=out.index)), errors="coerce").fillna(0.0)
+    out["_open_price"] = pd.to_numeric(out.get("open_price", pd.Series(0.0, index=out.index)), errors="coerce").fillna(0.0)
+    out["_fees_eur"] = pd.to_numeric(out.get("fees_eur", pd.Series(0.0, index=out.index)), errors="coerce").fillna(0.0)
+    out["_notional_est"] = out.apply(lambda r: _fx_lot_notional_eur(r, price_by_pair), axis=1).replace(0, pd.NA)
+    out["Part portefeuille %"] = (out["_notional_est"] / out["_portfolio_total"].replace(0, pd.NA) * 100.0).round(2)
+    out["Stop loss % net"] = out.apply(
+        lambda r: (
+            None if _fx_price_move_pct(r.get("_open_price"), r.get("stop_loss_price"), r.get("side")) is None
+            else round(float(_fx_price_move_pct(r.get("_open_price"), r.get("stop_loss_price"), r.get("side"))) - (safe_float(r.get("_fees_eur")) / safe_float(r.get("_notional_est")) * 100.0 if safe_float(r.get("_notional_est")) > 0 else 0.0), 2)
+        ),
+        axis=1,
+    )
+    out["Take profit % net"] = out.apply(
+        lambda r: (
+            None if _fx_price_move_pct(r.get("_open_price"), r.get("take_profit_price"), r.get("side")) is None
+            else round(float(_fx_price_move_pct(r.get("_open_price"), r.get("take_profit_price"), r.get("side"))) - (safe_float(r.get("_fees_eur")) / safe_float(r.get("_notional_est")) * 100.0 if safe_float(r.get("_notional_est")) > 0 else 0.0), 2)
+        ),
+        axis=1,
+    )
+    out["Derniere valo"] = out["_current_price"].map(lambda v: round(float(v), 5) if safe_float(v) > 0 else pd.NA)
+    out["Gain/perte courant % net"] = out.apply(
+        lambda r: (
+            None if safe_float(r.get("_current_price")) <= 0 or _fx_price_move_pct(r.get("_open_price"), r.get("_current_price"), r.get("side")) is None
+            else round(float(_fx_price_move_pct(r.get("_open_price"), r.get("_current_price"), r.get("side"))) - (safe_float(r.get("_fees_eur")) / safe_float(r.get("_notional_est")) * 100.0 if safe_float(r.get("_notional_est")) > 0 else 0.0), 2)
+        ),
+        axis=1,
+    )
+    return out
+
+
+def _fx_open_lots_display_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return pd.DataFrame()
+    out = df.copy()
+    if "pair" not in out.columns:
+        return out
+    for col in ["open_price", "Derniere valo", "stop_loss_price", "take_profit_price"]:
+        if col in out.columns:
+            out[col] = out.apply(lambda r: _fmt_fx_price_for_pair(r.get("pair"), r.get(col)), axis=1)
+    if "open_at" in out.columns:
+        ts = pd.to_datetime(out["open_at"], errors="coerce", utc=True)
+        out["open_at"] = ts.dt.tz_convert("Europe/Paris").dt.strftime("%Y-%m-%d %H:%M").where(ts.notna(), out["open_at"].astype(str))
+    return out
+
+
+def _fx_open_lots_styler(df: pd.DataFrame):
+    signed_cols = {"Stop loss % net", "Take profit % net", "Gain/perte courant % net", "Part portefeuille %"}
+
+    def _style_col(col: pd.Series) -> list[str]:
+        styles = []
+        for v in col:
+            if str(col.name) in signed_cols:
+                n = safe_float(v)
+                if abs(n) < 1e-9:
+                    styles.append("background-color: rgba(148,163,184,.14);")
+                elif n > 0:
+                    styles.append("background-color: rgba(16,185,129,.22); color: #bbf7d0; font-weight: 650;")
+                else:
+                    styles.append("background-color: rgba(248,113,113,.22); color: #fecaca; font-weight: 650;")
+            else:
+                styles.append("")
+        return styles
+
+    fmt = {
+        "size_lots": "{:.3f}",
+        "Part portefeuille %": "{:.2f}",
+        "fees_eur": "{:.2f}",
+        "Gain/perte courant % net": "{:.2f}",
+        "Stop loss % net": "{:.2f}",
+        "Take profit % net": "{:.2f}",
+    }
+    return df.style.apply(_style_col, axis=0).format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="")
+
+
+FX_REJECTION_HELP = {
+    "PAIR_NOT_IN_UNIVERSE": ("Paire non autorisee", "Verifier universe_fx/enabled et le mapping de paire envoye par le LLM."),
+    "KILL_SWITCH_ACTIVE": ("Kill switch actif", "Lever le kill switch seulement apres verification des positions et de la divergence broker."),
+    "NO_ENTRY_PRICE": ("Prix d'entree absent", "Verifier la derniere valorisation AG2-FX/IBKR et le fallback de prix."),
+    "TRADE_PERMISSION_NO_NEW_POSITION": ("Nouvelle position interdite", "Controler la permission de trading calculee par paire/devise."),
+    "INVALID_SIZE": ("Taille invalide", "Verifier size_lots et les bornes min/max avant envoi."),
+    "MAX_PAIR_EXPOSURE": ("Exposition paire depassee", "Reduire la taille ou fermer une partie de l'exposition existante."),
+    "LEVERAGE_MAX": ("Levier maximum depasse", "Reduire size_lots ou augmenter le capital libre avant nouvel ordre."),
+    "INSUFFICIENT_MARGIN": ("Marge insuffisante", "Verifier margin_free_eur et l'etat du compte IBKR."),
+    "MAX_CURRENCY_EXPOSURE": ("Exposition devise depassee", "Reduire les paires partageant la meme devise de base/cotation."),
+    "STOP_LOSS_WRONG_SIDE": ("Stop loss du mauvais cote", "Pour un long SL < entree; pour un short SL > entree."),
+    "TAKE_PROFIT_WRONG_SIDE": ("Take profit du mauvais cote", "Pour un long TP > entree; pour un short TP < entree."),
+    "MISSING_LOT_ID_TO_CLOSE": ("Lot a fermer manquant", "Renseigner lot_id_to_close pour une fermeture."),
+    "LOT_TO_CLOSE_NOT_FOUND": ("Lot a fermer introuvable", "Comparer lot_id_to_close avec core.position_lots ouvert."),
+    "LOT_PAIR_MISMATCH": ("Paire du lot incoherente", "Verifier que l'ordre de fermeture cible le meme pair que le lot."),
+    "LOT_SIDE_INVALID": ("Sens du lot incoherent", "Verifier side et action close/reduce."),
+    "LOT_SIZE_INVALID": ("Taille du lot invalide", "Verifier size_lots du lot et taille restante."),
+    "INVALID_PARTIAL_CLOSE_SIZE": ("Fermeture partielle invalide", "La taille de fermeture doit etre > 0 et <= taille ouverte."),
+    "CLOSE_SIZE_EXCEEDS_LOT": ("Fermeture trop grande", "Limiter la taille a la taille restante du lot."),
+    "CLOSE_SIDE_MISMATCH": ("Sens de fermeture incoherent", "Un long se ferme par sell_base, un short par buy_base."),
+    "IBKR_BROKER_ERROR": ("Erreur broker IBKR", "Lire ibkr_error / ibkr_response_json, puis verifier authentification, compte paper et contrat FX."),
+    "IBKR_NOT_SENT": ("Ordre non envoye a IBKR", "Verifier IBKR_DRY_RUN, IBKR_SEND_DRY_RUN_TO_BROKER et l'etat du broker gateway."),
+}
+
+
+def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    reason = out.get("rejection_reason", pd.Series("", index=out.index)).fillna("").astype(str).str.upper()
+    out["rejection_label"] = reason.map(lambda r: FX_REJECTION_HELP.get(r, (r or "-", ""))[0])
+    out["rejection_action"] = reason.map(lambda r: FX_REJECTION_HELP.get(r, ("", "Verifier risk_check_notes, ibkr_error et le JSON de reponse broker."))[1])
+    detail_cols = [c for c in ["risk_check_notes", "ibkr_error", "ibkr_status", "broker", "broker_order_id", "ibkr_response_json"] if c in out.columns]
+    if detail_cols:
+        out["rejection_detail"] = out[detail_cols].apply(
+            lambda r: " | ".join(
+                f"{col}={str(r.get(col))[:240]}"
+                for col in detail_cols
+                if str(r.get(col) or "").strip() and str(r.get(col) or "").strip().lower() != "nan"
+            ),
+            axis=1,
+        )
+    else:
+        out["rejection_detail"] = ""
+    return out
 
 
 # ============================================================
@@ -12424,7 +13706,7 @@ elif page == "Vue consolidee Multi-Agents":
                     f"Direction: **{direction}** | Regime: **{regime}** | Vol: **{vol_txt}%** | Event risk: **{event_txt}**"
                 )
 
-                hist_fx = fetch_yfinance_history(str(selected_pair) + "=X", interval="1d", lookback_days=320)
+                hist_fx = fetch_yfinance_history(_fx_yf_symbol(str(selected_pair)), interval="1d", lookback_days=320)
                 if hist_fx is None or hist_fx.empty:
                     st.info("Historique OHLC indisponible pour cette paire.")
                 else:
@@ -14819,7 +16101,7 @@ elif page == "Dashboard Forex":
     fx_payloads = _load_ag1_fx_dashboard_payloads()
     compare_keys = [k for k in AG1_FX_MULTI_PORTFOLIO_CONFIG.keys() if k in fx_payloads]
 
-    ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
+    ctrl_period, ctrl_mode, ctrl_kpi, ctrl_columns, ctrl_value_basis, ctrl_bonus, ctrl_refresh = st.columns([1.45, 1.3, 1.25, 1.25, 1.35, 1.05, 0.85], gap="large")
     with ctrl_period:
         fx_compare_period = st.radio(
             "Periode",
@@ -14846,6 +16128,28 @@ elif page == "Dashboard Forex":
             if st.session_state.get("fx_dashboard_winner_kpi", "ROI") in ["ROI", "Equity", "MaxDD", "Winrate"] else 0,
             key="fx_dashboard_winner_kpi",
         )
+    with ctrl_columns:
+        try:
+            fx_columns_default = int(st.session_state.get("fx_dashboard_columns", 1))
+        except Exception:
+            fx_columns_default = 1
+        if fx_columns_default not in [1, 2, 3]:
+            fx_columns_default = 1
+        fx_dashboard_columns = st.radio(
+            "Colonnes portefeuilles",
+            options=[1, 2, 3],
+            horizontal=True,
+            key="fx_dashboard_columns",
+            index=[1, 2, 3].index(fx_columns_default),
+            help="GPT reste en production; ce selecteur permet de reouvrir temporairement 2 ou 3 colonnes pour comparer.",
+        )
+    with ctrl_value_basis:
+        fx_rebase_ibkr_to_10k = st.toggle(
+            "Retraitement 10k",
+            value=bool(st.session_state.get("fx_dashboard_rebase_ibkr_to_10k", True)),
+            key="fx_dashboard_rebase_ibkr_to_10k",
+            help="Desactive: valeur reelle du ledger IBKR paper. Active: soldes IBKR retraités sur une base 10 000 EUR, coherente avec la simulation AG1-FX.",
+        )
     with ctrl_bonus:
         fx_show_dd = st.checkbox(
             "Drawdown compare",
@@ -14858,7 +16162,10 @@ elif page == "Dashboard Forex":
         if st.button("Rafraichir", key="fx_dashboard_refresh", use_container_width=True):
             load_data.clear()
             _prefetch_histories.clear()
+            _load_ibkr_currency_balances.clear()
             st.rerun()
+
+    fx_ibkr_balances = _load_ibkr_currency_balances(IBKR_BROKER_URL)
 
     cards = [_prepare_fx_compare_card(key, fx_payloads.get(key, {}), fx_compare_period, fx_curve_mode) for key in compare_keys]
     cards_by_key = {str(c.get("key")): c for c in cards}
@@ -14867,6 +16174,14 @@ elif page == "Dashboard Forex":
     selected_fx_key = st.session_state.get("fx_dashboard_active_portfolio")
     if selected_fx_key not in compare_keys:
         selected_fx_key = available_keys[0] if available_keys else (compare_keys[0] if compare_keys else None)
+    active_compare_keys = []
+    if selected_fx_key in compare_keys:
+        active_compare_keys.append(str(selected_fx_key))
+    for key in compare_keys:
+        if key not in active_compare_keys:
+            active_compare_keys.append(key)
+    active_compare_keys = active_compare_keys[: int(fx_dashboard_columns)]
+    visible_cards = [c for c in cards if c.get("key") in set(active_compare_keys)]
 
     winner_cfg = FX_COMPARE_WINNER_META.get(fx_winner_kpi, FX_COMPARE_WINNER_META["ROI"])
     ranked = []
@@ -14887,7 +16202,7 @@ elif page == "Dashboard Forex":
         worst_key = None
 
     curve_vals = []
-    for c in cards:
+    for c in visible_cards:
         curve = c.get("curve_df")
         if isinstance(curve, pd.DataFrame) and not curve.empty and "display_value" in curve.columns:
             curve_vals.extend(pd.to_numeric(curve["display_value"], errors="coerce").dropna().astype(float).tolist())
@@ -14898,13 +16213,18 @@ elif page == "Dashboard Forex":
         curve_y_range = (ymin - pad, ymax + pad)
 
     status_colors = {"OK": "#16a34a", "WARN": "#d97706", "ERROR": "#dc2626"}
-    st.caption("Scoreboard AG1-FX : capital initial 10 000 EUR par LLM, bases dediees Forex-only.")
+    if fx_rebase_ibkr_to_10k:
+        value_basis_caption = "AG1-FX reste en base native 10 000 EUR; seul le cash EUR IBKR paper est ajuste."
+    else:
+        value_basis_caption = "AG1-FX reste en base native 10 000 EUR; la map montre le ledger IBKR paper reel."
+    st.caption(f"Scoreboard AG1-FX : {value_basis_caption} Bases dediees Forex-only.")
+    _render_fx_ibkr_session_status(fx_ibkr_balances)
 
-    sb_cols = st.columns(3, gap="large")
-    for idx in range(3):
-        if idx >= len(compare_keys):
+    sb_cols = st.columns(max(1, len(active_compare_keys)), gap="large")
+    for idx in range(max(1, len(active_compare_keys))):
+        if idx >= len(active_compare_keys):
             continue
-        key = compare_keys[idx]
+        key = active_compare_keys[idx]
         c = cards_by_key.get(key, {})
         is_focus = key == selected_fx_key
         accent = str(c.get("accent") or "#888")
@@ -15027,7 +16347,7 @@ elif page == "Dashboard Forex":
     if selected_fx_key:
         st.session_state["fx_dashboard_active_portfolio"] = selected_fx_key
 
-    fig_cmp_eq, fig_cmp_dd = _build_compare_overlay_chart(cards, mode=fx_curve_mode, show_drawdown=fx_show_dd)
+    fig_cmp_eq, fig_cmp_dd = _build_compare_overlay_chart(visible_cards, mode=fx_curve_mode, show_drawdown=fx_show_dd)
     if fig_cmp_eq is not None:
         st.plotly_chart(fig_cmp_eq, use_container_width=True, key="fx_dashboard_overlay_equity")
     if fx_show_dd and fig_cmp_dd is not None:
@@ -15071,9 +16391,22 @@ elif page == "Dashboard Forex":
     start_ts = (now_ts - pd.Timedelta(days=int(period_days))) if period_days is not None else pd.Timestamp("2026-01-01", tz="UTC")
     end_ts = now_ts + pd.Timedelta(days=1)
     pair_overview, pair_diag = _load_ag1_fx_pair_overview(start_ts, end_ts, all_open, all_closed)
+    fx_llm_short = {
+        str(cfg.get("label", key)): str(cfg.get("short_label") or cfg.get("label", key))
+        for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
+    }
+    fx_llm_colors = {
+        str(cfg.get("label", key)): str(cfg.get("accent") or "#888")
+        for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
+    }
+    fx_entry_levels_by_pair = _fx_build_entry_levels_by_pair(all_open, fx_llm_colors)
+    pair_llm_summary = _fx_pair_llm_summary(all_open, all_closed, fx_llm_short)
+    if pair_overview is not None and not pair_overview.empty and not pair_llm_summary.empty and "Paire" in pair_overview.columns:
+        pair_llm_display = pair_llm_summary.groupby("pair")["Synthese LLM"].apply(lambda s: " | ".join(s.astype(str))).to_dict()
+        pair_overview["Detail LLM"] = pair_overview["Paire"].astype(str).str.upper().map(pair_llm_display).fillna("-")
 
-    tab_pairs, tab_focus, tab_perf, tab_risk, tab_sources = st.tabs(
-        ["Radar paires", "Focus LLM", "Performance", "Risk manager", "Sources"]
+    tab_pairs, tab_perf, tab_risk, tab_sources = st.tabs(
+        ["Radar paires", "Performance", "Risk manager", "Sources"]
     )
 
     with tab_pairs:
@@ -15093,6 +16426,45 @@ elif page == "Dashboard Forex":
                 f"{avg_bias.mean():+.2f}" if not avg_bias.empty else "N/A",
                 f"tech {avg_score.mean():+.2f}" if not avg_score.empty else None,
             )
+
+            st.markdown("#### Soldes devises IBKR")
+            ibkr_balances = fx_ibkr_balances
+            ibkr_rows = ibkr_balances.get("rows", pd.DataFrame()) if isinstance(ibkr_balances, dict) else pd.DataFrame()
+            if isinstance(ibkr_balances, dict) and bool(ibkr_balances.get("ok")):
+                ibkr_rows = _fx_complete_currency_balance_rows(ibkr_rows, _fx_universe_currencies_from_overview(pair_overview))
+            if isinstance(ibkr_rows, pd.DataFrame) and not ibkr_rows.empty:
+                ibkr_rows, ibkr_basis = _fx_apply_currency_value_basis(ibkr_rows, bool(fx_rebase_ibkr_to_10k), FX_SIMULATION_BASE_EUR, FX_IBKR_PAPER_BASE_EUR)
+                nonzero_rows = ibkr_rows[pd.to_numeric(ibkr_rows.get("Solde abs", pd.Series(0.0, index=ibkr_rows.index)), errors="coerce").fillna(0.0) > 0].copy()
+                top_row = nonzero_rows.iloc[0] if not nonzero_rows.empty else ibkr_rows.iloc[0]
+                display_net_eur = float(ibkr_basis.get("display_net_eur", 0.0))
+                display_gross_eur = float(ibkr_basis.get("display_gross_eur", 0.0))
+                real_net_eur = float(ibkr_basis.get("real_net_eur", 0.0))
+                basis_delta = f"reel {_fmt_eur_amount(real_net_eur)}" if fx_rebase_ibkr_to_10k else "ledger natif"
+                b1, b2, b3, b4, b5 = st.columns(5)
+                b1.metric("Devises univers", int(len(ibkr_rows)), f"{len(nonzero_rows)} solde(s) non nul(s)")
+                b2.metric("Plus gros solde", str(top_row.get("Devise") or "-"), _fmt_eur_amount(top_row.get("Solde EUR")))
+                ibkr_level, ibkr_title, _ = _fx_ibkr_session_level(ibkr_balances)
+                b3.metric("Session IBKR", ibkr_title, ibkr_level)
+                b4.metric("Valeur portefeuille", _fmt_eur_amount(display_net_eur), basis_delta)
+                b5.metric("Exposition brute", _fmt_eur_amount(display_gross_eur), "Dry-run ON" if ibkr_balances.get("dry_run") else "Dry-run OFF")
+                map_mode_label = "IBKR CASH LEDGER | EUR PAPER AJUSTE BASE 10K" if fx_rebase_ibkr_to_10k else "LIVE IBKR CASH LEDGER | VALEUR REELLE"
+                st.plotly_chart(
+                    _build_ibkr_currency_exposure_map(ibkr_rows, mode_label=map_mode_label),
+                    use_container_width=True,
+                    config={"displayModeBar": False},
+                    key="fx_dashboard_ibkr_currency_exposure_map",
+                )
+                with st.expander("Detail soldes devises IBKR", expanded=False):
+                    detail = ibkr_rows[["Devise", "Nom", "Symbole", "Solde", "Taux EUR", "Solde EUR", "Poids portefeuille %"]].copy()
+                    detail["Solde affiche"] = detail.apply(lambda r: _fmt_native_currency_amount(r.get("Devise"), r.get("Solde")), axis=1)
+                    detail["Equivalent EUR"] = detail["Solde EUR"].map(_fmt_eur_amount)
+                    if fx_rebase_ibkr_to_10k and {"Solde IBKR reel", "Solde EUR IBKR reel"}.issubset(ibkr_rows.columns):
+                        detail["Solde IBKR reel"] = ibkr_rows["Solde IBKR reel"].values
+                        detail["Equivalent EUR reel"] = ibkr_rows["Solde EUR IBKR reel"].map(_fmt_eur_amount).values
+                    render_interactive_table(detail, key_suffix="fx_dashboard_ibkr_currency_balances", height=260, styler_func=_fx_currency_balance_styler)
+            else:
+                err = str(ibkr_balances.get("error") or "Aucun solde devise non nul retourne par IBKR.") if isinstance(ibkr_balances, dict) else "Lecture IBKR indisponible."
+                st.warning(f"Soldes IBKR indisponibles : {err}")
 
             st.markdown("#### Comment lire cette matrice")
             st.markdown(
@@ -15141,9 +16513,62 @@ elif page == "Dashboard Forex":
 
             fig_fx, _ = _build_fx_pair_signal_matrix(pair_overview)
             if fig_fx is not None:
-                st.plotly_chart(fig_fx, use_container_width=True, key="fx_dashboard_signal_matrix")
+                plot_selection = None
+                try:
+                    plot_selection = st.plotly_chart(
+                        fig_fx,
+                        use_container_width=True,
+                        key="fx_dashboard_signal_matrix",
+                        on_select="rerun",
+                        selection_mode=("points",),
+                    )
+                except TypeError:
+                    st.plotly_chart(fig_fx, use_container_width=True, key="fx_dashboard_signal_matrix_fallback")
+                clicked_pair = ""
+                try:
+                    points = ((plot_selection or {}).get("selection") or {}).get("points", [])
+                    if points:
+                        custom_data = points[0].get("customdata", [])
+                        if custom_data:
+                            clicked_pair = str(custom_data[0] or "").strip().upper()
+                except Exception:
+                    clicked_pair = ""
+                if clicked_pair:
+                    st.session_state["fx_dashboard_selected_pair"] = clicked_pair
 
-            priority = pair_overview.copy()
+            selected_dashboard_pair = str(st.session_state.get("fx_dashboard_selected_pair", "") or "").strip().upper()
+            valid_dashboard_pairs = set(pair_overview["Paire"].dropna().astype(str).str.upper()) if "Paire" in pair_overview.columns else set()
+            if selected_dashboard_pair and selected_dashboard_pair not in valid_dashboard_pairs:
+                selected_dashboard_pair = ""
+                st.session_state["fx_dashboard_selected_pair"] = ""
+            scoped_pair_overview = pair_overview
+            if selected_dashboard_pair:
+                scoped_pair_overview = pair_overview[pair_overview["Paire"].astype(str).str.upper() == selected_dashboard_pair].copy()
+                history = _load_fx_pair_matrix_history(
+                    selected_dashboard_pair,
+                    start_ts.isoformat(),
+                    end_ts.isoformat(),
+                    ag2_fx_db_sig,
+                    ag4_forex_db_sig,
+                )
+                fig_history = _build_fx_pair_history_matrix(selected_dashboard_pair, history)
+                if fig_history is not None:
+                    st.plotly_chart(
+                        fig_history,
+                        use_container_width=True,
+                        key=f"fx_dashboard_pair_history_matrix_{selected_dashboard_pair}",
+                    )
+                else:
+                    st.caption(f"Historique de position indisponible pour `{selected_dashboard_pair}` sur la periode affichee.")
+                f1, f2 = st.columns([3.2, 0.8])
+                with f1:
+                    st.caption(f"Filtre actif depuis la matrice : `{selected_dashboard_pair}`. Les indicateurs, tableaux et sparklines ci-dessous sont scopes sur cette paire.")
+                with f2:
+                    if st.button("Voir toutes les paires", key="fx_dashboard_clear_pair", use_container_width=True):
+                        st.session_state["fx_dashboard_selected_pair"] = ""
+                        st.rerun()
+
+            priority = scoped_pair_overview.copy()
             priority["_priority"] = (
                 pd.to_numeric(priority.get("Event risk", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 0.08
                 + pd.to_numeric(priority.get("Confidence news %", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0) * 0.04
@@ -15152,55 +16577,120 @@ elif page == "Dashboard Forex":
                 + pd.to_numeric(priority.get("Biais news", pd.Series(0.0, index=priority.index)), errors="coerce").fillna(0.0).abs() * 1.8
             )
             priority = priority.sort_values("_priority", ascending=False).head(15)
+            priority = _fx_add_pair_currency_names(priority)
             keep = [
                 c for c in [
-                    "Paire", "Alignement", "Technique", "Signal", "Score", "Biais news",
+                    "Paire", "Devise base", "Devise cotation", "Alignement", "Technique", "Signal", "Score", "Biais news",
                     "Confidence news %", "Event risk", "Sources", "News 24h",
-                    "High impact", "Lots ouverts", "LLM exposes", "P&L clos EUR", "Top sources",
+                    "High impact", "Lots ouverts", "LLM exposes", "P&L clos EUR", "Detail LLM", "Top sources",
                 ] if c in priority.columns
             ]
-            render_interactive_table(priority[keep], key_suffix="fx_dashboard_priority_pairs", height=380)
-
-            st.markdown("#### Sparklines prix 90 jours")
-            render_fx_pair_sparklines(
-                pair_overview,
-                yfinance_api_url=YFINANCE_API_URL,
-                lookback_days=90,
-                columns_per_row=3,
+            render_interactive_table(
+                priority[keep],
+                key_suffix="fx_dashboard_priority_pairs",
+                height=380,
+                styler_func=_fx_pair_table_styler,
             )
 
-    with tab_focus:
-        focus_payload = fx_payloads.get(str(selected_fx_key), {}) if selected_fx_key else {}
-        focus_card = cards_by_key.get(str(selected_fx_key), {}) if selected_fx_key else {}
-        st.subheader(f"Focus LLM - {focus_card.get('label') or selected_fx_key or 'N/A'}")
-        if not focus_payload:
-            st.info("Aucun LLM FX selectionne.")
-        else:
-            fc1, fc2, fc3, fc4 = st.columns(4)
-            fc1.metric("Equity", _fmt_currency(focus_card.get("total_val"), 2))
-            fc2.metric("P&L", _fmt_currency(focus_card.get("pnl_total"), 2))
-            fc3.metric("Lots ouverts", _fmt_number(focus_card.get("open_lots"), 0))
-            fc4.metric("Ordres rejetes", _fmt_number(focus_card.get("rejected_orders"), 0))
+            if selected_dashboard_pair and not scoped_pair_overview.empty:
+                row = scoped_pair_overview.iloc[0]
+                selected_pair_llm = pair_llm_summary[pair_llm_summary["pair"].astype(str) == selected_dashboard_pair].copy() if not pair_llm_summary.empty else pd.DataFrame()
+                scope_open_lots = int(pd.to_numeric(selected_pair_llm.get("open_lots", pd.Series(dtype=float)), errors="coerce").fillna(0).sum()) if not selected_pair_llm.empty else 0
+                scope_closed_pnl = float(pd.to_numeric(selected_pair_llm.get("pnl_closed_eur", pd.Series(dtype=float)), errors="coerce").fillna(0.0).sum()) if not selected_pair_llm.empty else 0.0
+                st.markdown(f"#### Analyse paire - {selected_dashboard_pair}")
+                a1, a2, a3, a4, a5 = st.columns(5)
+                a1.metric("Etat", str(row.get("Etat general", "-")))
+                a2.metric("Technique", str(row.get("Technique", "-")), delta=str(row.get("Signal", "-")))
+                a3.metric("Score", safe_num(row.get("Score", pd.NA), 2))
+                a4.metric("News 24h", int(row.get("News 24h") or 0), delta=f"High impact {int(row.get('High impact') or 0)}")
+                a5.metric("P&L clos", f"{scope_closed_pnl:+.2f} EUR", delta="tous LLM")
 
-            df_open_focus = focus_payload.get("df_open", pd.DataFrame())
-            if isinstance(df_open_focus, pd.DataFrame) and not df_open_focus.empty:
-                st.markdown("#### Lots ouverts")
-                cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "open_at", "fees_eur", "stop_loss_price", "take_profit_price"] if c in df_open_focus.columns]
-                render_interactive_table(df_open_focus[cols_show], key_suffix="fx_dashboard_focus_open", height=260)
-            else:
-                st.caption("Aucun lot ouvert pour ce LLM.")
+                b1, b2, b3, b4, b5 = st.columns(5)
+                b1.metric("Ret 1D", f"{safe_num(row.get('Ret 1D %', pd.NA), 2)}%")
+                b2.metric("Ret 5D", f"{safe_num(row.get('Ret 5D %', pd.NA), 2)}%")
+                b3.metric("Ret 20D", f"{safe_num(row.get('Ret 20D %', pd.NA), 2)}%")
+                b4.metric("RSI14", safe_num(row.get("RSI14", pd.NA), 1))
+                b5.metric("Lots ouverts", scope_open_lots, delta="tous LLM")
+                if not selected_pair_llm.empty:
+                    llm_detail_show = selected_pair_llm[["LLM", "open_lots", "open_sides", "pnl_closed_eur", "closed_lots"]].rename(
+                        columns={
+                            "open_lots": "Lots ouverts",
+                            "open_sides": "Sens ouverts",
+                            "pnl_closed_eur": "P&L clos EUR",
+                            "closed_lots": "Lots clos",
+                        }
+                    )
+                    render_interactive_table(llm_detail_show, key_suffix="fx_dashboard_pair_llm_detail", height=180, styler_func=_fx_pair_table_styler)
+                else:
+                    st.caption(f"Aucune exposition ou P&L clos AG1-FX pour {selected_dashboard_pair}.")
 
-            df_closed_focus = focus_payload.get("df_closed", pd.DataFrame())
-            if isinstance(df_closed_focus, pd.DataFrame) and not df_closed_focus.empty:
-                st.markdown("#### Derniers lots clos")
-                closed_show = df_closed_focus.copy()
-                if "close_at" in closed_show.columns:
-                    closed_show["close_at"] = pd.to_datetime(closed_show["close_at"], errors="coerce", utc=True)
-                    closed_show = closed_show.sort_values("close_at", ascending=False)
-                cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "pnl_eur", "fees_eur"] if c in closed_show.columns]
-                render_interactive_table(closed_show[cols_show].head(60), key_suffix="fx_dashboard_focus_closed", height=320)
+            st.markdown("#### Sparklines prix 90 jours")
+            if selected_dashboard_pair:
+                selected_entries = fx_entry_levels_by_pair.get(selected_dashboard_pair, [])
+                if selected_entries:
+                    entry_rows = pd.DataFrame(selected_entries).rename(
+                        columns={"llm": "LLM", "price": "Point d'entree", "side": "Sens", "lots": "Lots", "at": "Date entree"}
+                    )
+                    show_entry_cols = [c for c in ["LLM", "Point d'entree", "Sens", "Lots", "Date entree"] if c in entry_rows.columns]
+                    render_interactive_table(entry_rows[show_entry_cols], key_suffix="fx_dashboard_selected_entries", height=160)
+                else:
+                    st.caption(f"`{selected_dashboard_pair}` n'est pas en portefeuille AG1-FX ouvert actuellement.")
+            render_fx_pair_sparklines(
+                scoped_pair_overview,
+                yfinance_api_url=YFINANCE_API_URL,
+                lookback_days=90,
+                columns_per_row=1 if selected_dashboard_pair else 3,
+                selected_pairs=[selected_dashboard_pair] if selected_dashboard_pair else None,
+                entry_levels_by_pair=fx_entry_levels_by_pair,
+                focus=bool(selected_dashboard_pair),
+            )
+
+            focus_payload = fx_payloads.get(str(selected_fx_key), {}) if selected_fx_key else {}
+            focus_card = cards_by_key.get(str(selected_fx_key), {}) if selected_fx_key else {}
+            st.markdown(f"#### Focus LLM - {focus_card.get('label') or selected_fx_key or 'N/A'}")
+            if not focus_payload:
+                st.info("Aucun LLM FX selectionne.")
             else:
-                st.caption("Aucun lot clos pour ce LLM.")
+                fc1, fc2, fc3, fc4 = st.columns(4)
+                fc1.metric("Equity", _fmt_currency(focus_card.get("total_val"), 2))
+                fc2.metric("P&L", _fmt_currency(focus_card.get("pnl_total"), 2))
+                fc3.metric("Lots ouverts", _fmt_number(focus_card.get("open_lots"), 0))
+                fc4.metric("Ordres rejetes", _fmt_number(focus_card.get("rejected_orders"), 0))
+
+                df_open_focus = focus_payload.get("df_open", pd.DataFrame())
+                if isinstance(df_open_focus, pd.DataFrame) and not df_open_focus.empty:
+                    st.markdown("##### Lots ouverts")
+                    price_by_pair = {}
+                    if pair_overview is not None and not pair_overview.empty and {"Paire", "Prix"}.issubset(pair_overview.columns):
+                        price_by_pair = pair_overview.set_index(pair_overview["Paire"].astype(str).str.upper())["Prix"].map(safe_float).to_dict()
+                    cards_by_label = {str(c.get("label") or ""): c for c in cards}
+                    open_enriched = _fx_open_lots_enriched(df_open_focus, cards_by_label, price_by_pair)
+                    if selected_dashboard_pair and "pair" in open_enriched.columns:
+                        open_enriched = open_enriched[open_enriched["pair"].astype(str).str.upper() == selected_dashboard_pair].copy()
+                    cols_show = [
+                        c for c in [
+                            "LLM", "pair", "side", "size_lots", "Part portefeuille %", "open_price", "open_at",
+                            "fees_eur", "Derniere valo", "Gain/perte courant % net",
+                            "stop_loss_price", "Stop loss % net", "take_profit_price", "Take profit % net",
+                        ] if c in open_enriched.columns
+                    ]
+                    render_interactive_table(_fx_open_lots_display_df(open_enriched[cols_show]), key_suffix="fx_dashboard_focus_open", height=300, styler_func=_fx_open_lots_styler)
+                else:
+                    st.caption("Aucun lot ouvert pour ce LLM.")
+
+                df_closed_focus = focus_payload.get("df_closed", pd.DataFrame())
+                if isinstance(df_closed_focus, pd.DataFrame) and not df_closed_focus.empty:
+                    st.markdown("##### Derniers lots clos")
+                    closed_show = df_closed_focus.copy()
+                    if selected_dashboard_pair and "pair" in closed_show.columns:
+                        closed_show = closed_show[closed_show["pair"].astype(str).str.upper() == selected_dashboard_pair].copy()
+                    if "close_at" in closed_show.columns:
+                        closed_show["close_at"] = pd.to_datetime(closed_show["close_at"], errors="coerce", utc=True)
+                        closed_show = closed_show.sort_values("close_at", ascending=False)
+                    cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "pnl_eur", "fees_eur"] if c in closed_show.columns]
+                    render_interactive_table(closed_show[cols_show].head(60), key_suffix="fx_dashboard_focus_closed", height=320, styler_func=_fx_pair_table_styler)
+                else:
+                    st.caption("Aucun lot clos pour ce LLM.")
 
     with tab_perf:
         st.subheader("Performance AG1-FX comparee")
@@ -15218,7 +16708,7 @@ elif page == "Dashboard Forex":
                 markers=True,
                 hover_data=[c for c in ["run_id", "pnl_total_eur", "open_lots_count", "leverage_effective"] if c in snap_plot.columns],
             )
-            fig_eq.add_hline(y=10000, line_dash="dot", line_color="#888")
+            fig_eq.add_hline(y=FX_SIMULATION_BASE_EUR, line_dash="dot", line_color="#888")
             fig_eq.update_layout(height=380, margin=dict(l=10, r=10, t=20, b=10), yaxis_title="Equity EUR", xaxis_title="Date")
             st.plotly_chart(fig_eq, use_container_width=True, key="fx_dashboard_equity_full")
         else:
@@ -15246,7 +16736,11 @@ elif page == "Dashboard Forex":
                 orders_show["requested_at"] = pd.to_datetime(orders_show["requested_at"], errors="coerce", utc=True)
                 if period_days is not None:
                     orders_show = orders_show[orders_show["requested_at"] >= start_ts]
-            rejected = orders_show[orders_show.get("status", pd.Series(dtype=str)).astype(str).str.lower() == "rejected"].copy()
+            status_s = orders_show.get("status", pd.Series("", index=orders_show.index)).astype(str).str.lower()
+            reason_s = orders_show.get("rejection_reason", pd.Series("", index=orders_show.index)).fillna("").astype(str).str.strip()
+            rejected = orders_show[(status_s.isin(["rejected", "broker_error", "error"]) | (reason_s != ""))].copy()
+            rejected = _fx_enrich_rejection_details(rejected)
+            orders_show = _fx_enrich_rejection_details(orders_show)
             r1, r2, r3 = st.columns(3)
             r1.metric("Ordres periode", len(orders_show))
             r2.metric("Ordres rejetes", len(rejected))
@@ -15257,10 +16751,33 @@ elif page == "Dashboard Forex":
             ]
             r3.metric("Kill switches actifs", len(active_kill), ", ".join(active_kill) if active_kill else None)
             if not rejected.empty and "rejection_reason" in rejected.columns:
-                top = rejected.groupby("rejection_reason", as_index=False).size().sort_values("size", ascending=False).head(10)
-                render_interactive_table(top.rename(columns={"rejection_reason": "Raison", "size": "Ordres"}), key_suffix="fx_dashboard_rejections", height=260)
-            keep = [c for c in ["LLM", "pair", "side", "order_type", "size_lots", "requested_at", "status", "rejection_reason", "leverage_used"] if c in orders_show.columns]
-            render_interactive_table(orders_show[keep].head(100), key_suffix="fx_dashboard_orders", height=360)
+                top = (
+                    rejected.groupby(["rejection_reason", "rejection_label", "rejection_action"], as_index=False)
+                    .size()
+                    .sort_values("size", ascending=False)
+                    .head(10)
+                )
+                render_interactive_table(
+                    top.rename(
+                        columns={
+                            "rejection_reason": "Code",
+                            "rejection_label": "Lecture",
+                            "rejection_action": "Piste correction",
+                            "size": "Ordres",
+                        }
+                    ),
+                    key_suffix="fx_dashboard_rejections",
+                    height=300,
+                    styler_func=_fx_pair_table_styler,
+                )
+            keep = [
+                c for c in [
+                    "LLM", "pair", "side", "order_type", "size_lots", "requested_at", "status",
+                    "rejection_reason", "rejection_label", "rejection_action", "rejection_detail",
+                    "leverage_used",
+                ] if c in orders_show.columns
+            ]
+            render_interactive_table(orders_show[keep].head(100), key_suffix="fx_dashboard_orders", height=420, styler_func=_fx_pair_table_styler)
         else:
             st.caption("Aucun ordre AG1-FX disponible.")
 
@@ -15582,6 +17099,22 @@ elif page == "Forex":
 
             st.markdown("#### Sparklines prix 90 jours")
             if selected_indicator_pair:
+                history = _load_fx_pair_matrix_history(
+                    selected_indicator_pair,
+                    start_ts.isoformat(),
+                    end_ts.isoformat(),
+                    ag2_fx_db_sig,
+                    ag4_forex_db_sig,
+                )
+                fig_history = _build_fx_pair_history_matrix(selected_indicator_pair, history)
+                if fig_history is not None:
+                    st.plotly_chart(
+                        fig_history,
+                        use_container_width=True,
+                        key=f"forex_indicator_pair_history_matrix_{selected_indicator_pair}",
+                    )
+                else:
+                    st.caption(f"Historique de position indisponible pour `{selected_indicator_pair}` sur la periode affichee.")
                 s1, s2 = st.columns([3.2, 0.8])
                 with s1:
                     st.caption(f"Filtre actif depuis la carte : `{selected_indicator_pair}`")
