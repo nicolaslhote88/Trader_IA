@@ -8805,6 +8805,8 @@ NAV_GROUPS = {
     ],
     "Forex": [
         "Dashboard Forex",
+        "Forex",
+        "Three Pillars Monitor",
     ],
 }
 nav_group = st.sidebar.radio("Univers", list(NAV_GROUPS.keys()), horizontal=True, index=1)
@@ -18470,3 +18472,12 @@ elif page == "Forex Trading (AG1-FX)":
         if not rej.empty:
             top = rej.groupby("rejection_reason", as_index=False).size().sort_values("size", ascending=False).head(10)
             render_interactive_table(top.rename(columns={"rejection_reason": "Raison", "size": "Ordres"}), key_suffix="ag1_fx_rejections", height=260)
+
+elif page == "Three Pillars Monitor":
+    try:
+        from three_pillars_tab import render_three_pillars_tab
+        render_three_pillars_tab(st)
+    except ImportError as e:
+        st.error(f"Module three_pillars_tab non disponible: {e}")
+    except Exception as e:
+        st.error(f"Erreur Three Pillars Monitor: {e}")

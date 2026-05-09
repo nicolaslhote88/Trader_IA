@@ -620,3 +620,59 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
             errors.append({"order_id": order.order_id, "error": str(exc)})
 
     return {"results": results, "errors": errors, "dry_run": DRY_RUN}
+
+
+# ─── Market Data Historique (pour macro-data-api) ─────────────────────────────
+
+@app.get("/marketdata/history")
+async def get_market_data_history(
+    conid: int,
+    period: str = "1y",
+    bar: str = "1d",
+    outside_rth: bool = True,
+) -> dict:
+    """
+    Récupère l'historique de prix IBKR pour un contrat (FX, bonds, ETF).
+    Utilisé par macro-data-api pour obtenir les yields souverains et données FX IBKR.
+
+    Args:
+        conid:       Contract ID IBKR
+        period:      Période ("1y", "6m", "3m")
+        bar:         Taille barre ("1d", "1h")
+        outside_rth: Inclure données hors heures régulières
+    """
+    client = get_client()
+    try:
+        data = await client.get_market_data_history(conid, period, bar, outside_rth)
+        return {
+            "conid": conid,
+            "period": period,
+            "bar": bar,
+            "count": len(data),
+            "data": data,
+        }
+    except CPAPIError as exc:
+        logger.warning("market_data_history conid=%s failed: %s", conid, exc)
+        # Retourne résultat vide pour ne pas bloquer macro-data-api
+        return {"conid": conid, "period": period, "bar": bar, "count": 0, "data": [], "error": str(exc)}
+
+
+@app.get("/marketdata/snapshot")
+async def get_market_data_snapshot(
+    conids: str,
+    fields: str = "31,7741,55",
+) -> list[dict]:
+    """
+    Snapshot de marché pour plusieurs contrats (yields temps réel, prix).
+
+    Args:
+        conids: IDs séparés par virgule (ex: "8297,258")
+        fields: Champs IBKR (31=prix, 7741=yield, 55=symbole)
+    """
+    client = get_client()
+    try:
+        conid_list = [int(c.strip()) for c in conids.split(",") if c.strip()]
+        field_list = [f.strip() for f in fields.split(",") if f.strip()]
+        return await client.get_market_data_snapshot(conid_list, field_list)
+    except CPAPIError as exc:
+        raise HTTPException(502, str(exc)) from exc
