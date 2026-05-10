@@ -146,6 +146,63 @@ class CPAPIClient:
         r = await self._get("/v1/api/iserver/account/trades")
         return r if isinstance(r, list) else r.get("trades", [])
 
+    # ──────────────────────────────────────────────────────────────────────────
+    # Données de marché historiques
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def get_market_data_history(
+        self,
+        conid: int,
+        period: str = "1y",
+        bar: str = "1d",
+        outside_rth: bool = True,
+    ) -> list[dict]:
+        """
+        Récupère l'historique de prix/yields IBKR (HMDS endpoint).
+
+        Args:
+            conid:       Contract ID IBKR (ex: 8297 pour EUR/USD IDEALPRO)
+            period:      Période totale ("1y", "6m", "3m", "1w")
+            bar:         Taille des barres ("1d", "1h", "30min")
+            outside_rth: Inclure les données hors heures de trading régulières
+
+        Returns:
+            Liste de dicts avec 't' (timestamp ms), 'o', 'h', 'l', 'c', 'v'
+        """
+        params = {
+            "conid": conid,
+            "period": period,
+            "bar": bar,
+            "outsideRth": str(outside_rth).lower(),
+        }
+        r = await self._get("/v1/api/hmds/history", params=params)
+        if isinstance(r, dict):
+            return r.get("data", [])
+        return r if isinstance(r, list) else []
+
+    async def get_market_data_snapshot(
+        self,
+        conids: list[int],
+        fields: list[str] | None = None,
+    ) -> list[dict]:
+        """
+        Snapshot de marché pour une liste de conids (prix, yields, etc.).
+
+        fields communs: 31=last price, 7741=yield (bonds), 55=symbol
+        """
+        fields_str = ",".join(fields or ["31", "7741", "55"])
+        conids_str = ",".join(str(c) for c in conids)
+        params = {"conids": conids_str, "fields": fields_str}
+        r = await self._get("/v1/api/iserver/marketdata/snapshot", params=params)
+        return r if isinstance(r, list) else []
+
+    async def unsubscribe_market_data(self, conid: int) -> dict:
+        """Désabonne du flux de données pour libérer les ressources."""
+        try:
+            return await self._get(f"/v1/api/iserver/marketdata/{conid}/unsubscribe")
+        except Exception:
+            return {}
+
     async def cancel_order(self, order_id: str) -> dict:
         account_id = await self.get_account_id()
         return await self._delete(
