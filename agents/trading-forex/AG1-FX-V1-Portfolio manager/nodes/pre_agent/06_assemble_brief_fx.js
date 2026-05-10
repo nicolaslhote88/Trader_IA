@@ -38,6 +38,7 @@ const MAX_LLM_DRIVERS = envNum('AG1_FX_LLM_PAIR_DRIVERS_MAX', 2);
 const universeRows = j.universe_fx || [];
 const technicalRows = j.technical_signals || [];
 const macroNews = j.macro_news || { top_news: [], pair_focus: {}, macro_regime: {} };
+const fundamentalFx = j.fundamental_fx || {};
 const pairFocus = macroNews.pair_focus || {};
 const openLots = (j.portfolio_state || {}).open_lots || [];
 const openPairs = new Set(openLots.map((x) => x.pair).filter(Boolean));
@@ -60,10 +61,15 @@ const brief = {
   },
   technical_signals: technicalRows,
   macro_news: macroNews,
+  fundamental_fx: fundamentalFx,
   limits: {
     max_pair_pct: Number(cfg.max_pair_pct || cfg.max_pos_pct || 0.20),
     max_currency_exposure_pct: Number(cfg.max_currency_exposure_pct || 0.50),
     max_daily_drawdown_pct: Number(cfg.max_daily_drawdown_pct || 0.05),
+    max_pair_frac: Number(cfg.max_pair_pct || cfg.max_pos_pct || 0.20),
+    max_currency_exposure_frac: Number(cfg.max_currency_exposure_pct || 0.50),
+    max_daily_drawdown_frac: Number(cfg.max_daily_drawdown_pct || 0.05),
+    max_daily_drawdown_pct_display: pct(cfg.max_daily_drawdown_pct || 0.05, 2),
   },
 };
 
@@ -89,18 +95,28 @@ function compactLot(lot) {
   const px = num(tech.last_close, lot.open_price);
   const dir = lot.side === 'short' ? -1 : 1;
   const pnlPips = pip > 0 ? (px - num(lot.open_price, px)) * dir / pip : 0;
+  const sl = lot.stop_loss_price == null ? null : num(lot.stop_loss_price, null);
+  const tp = lot.take_profit_price == null ? null : num(lot.take_profit_price, null);
+  const q2e = num(lot.quote_to_eur, 1);
+  const sizeLots = num(lot.size_lots, 0);
+  const slDistancePips = sl == null || pip <= 0 ? null : Math.abs(sl - px) / pip;
+  const tpDistancePips = tp == null || pip <= 0 ? null : Math.abs(tp - px) / pip;
+  const slRiskEur = sl == null ? null : Math.max(0, sizeLots * 100000 * (sl - px) * -dir * q2e);
   return {
     lot_id: lot.lot_id,
     pair,
     side: lot.side,
-    size_lots: rounded(lot.size_lots, 4),
+    size_lots: rounded(sizeLots, 4),
     open_price: rounded(lot.open_price, num(meta.price_decimals, 5)),
     current_price: rounded(px, num(meta.price_decimals, 5)),
     pnl_pips: rounded(pnlPips, 1),
     pnl_eur: rounded(lot.unrealized_pnl_eur, 2),
     notional_eur: rounded(lot.notional_eur, 2),
-    sl: lot.stop_loss_price == null ? null : rounded(lot.stop_loss_price, num(meta.price_decimals, 5)),
-    tp: lot.take_profit_price == null ? null : rounded(lot.take_profit_price, num(meta.price_decimals, 5)),
+    sl: sl == null ? null : rounded(sl, num(meta.price_decimals, 5)),
+    tp: tp == null ? null : rounded(tp, num(meta.price_decimals, 5)),
+    sl_distance_pips: slDistancePips == null ? null : rounded(slDistancePips, 1),
+    tp_distance_pips: tpDistancePips == null ? null : rounded(tpDistancePips, 1),
+    sl_risk_eur: slRiskEur == null ? null : rounded(slRiskEur, 2),
   };
 }
 
@@ -121,6 +137,15 @@ function compactTech(row, detail = false) {
     ret20d_pct: pct(row.ret_20d, 2),
     atr_pips: pip > 0 ? rounded(num(row.atr14) / pip, 1) : 0,
   };
+  if (row.ibkr_mid != null || row.ibkr_market_data_source) {
+    out.market_px = {
+      source: row.ibkr_market_data_source || 'unknown',
+      bid: row.ibkr_bid == null ? null : rounded(row.ibkr_bid, decimals),
+      ask: row.ibkr_ask == null ? null : rounded(row.ibkr_ask, decimals),
+      mid: row.ibkr_mid == null ? null : rounded(row.ibkr_mid, decimals),
+      spread_bps: row.ibkr_spread_pct == null ? null : rounded(num(row.ibkr_spread_pct) * 10000, 2),
+    };
+  }
   if (detail) {
     out.sma20_gap_pct = num(row.sma20) ? pct((num(row.last_close) / num(row.sma20)) - 1, 2) : 0;
     out.sma50_gap_pct = num(row.sma50) ? pct((num(row.last_close) / num(row.sma50)) - 1, 2) : 0;
@@ -204,6 +229,169 @@ const topNews = topNewsSource
     hint: truncate(n.fx_directional_hint, 220),
   }));
 
+function compactFundamental(pair) {
+  const f = fundamentalFx[pair] || {};
+  const decimals = num(pairMeta(pair).price_decimals, String(pair || '').endsWith('JPY') ? 3 : 5);
+  return {
+    bias: f?.fundamental?.directional_bias || 'unknown',
+    score: rounded(f?.fundamental?.score, 2),
+    confidence: rounded(f?.fundamental?.confidence, 2),
+    equilibrium_mid: rounded(f?.equilibrium?.target_mid, decimals),
+    equilibrium_low: rounded(f?.equilibrium?.target_low, decimals),
+    equilibrium_high: rounded(f?.equilibrium?.target_high, decimals),
+    mispricing_pct: pct(f?.equilibrium?.mispricing_pct, 2),
+    horizon_days: f?.equilibrium?.target_horizon_days || null,
+    drivers: (f?.drivers || []).slice(0, 3).map((x) => truncate(x, 120)),
+    invalidators: (f?.invalidators || []).slice(0, 3).map((x) => truncate(x, 120)),
+    data_quality: rounded(f?.data_quality?.score, 2),
+    macro_degraded: Boolean(f?.data_quality?.macro_data_degraded),
+    missing_factors: (f?.data_quality?.missing_factors || []).slice(0, 4),
+    stale_factors: (f?.data_quality?.stale_factors || []).slice(0, 4),
+    conflict_score: rounded(f?.fundamental?.pair_conflict_score, 2),
+  };
+}
+
+function signedDirectionFromTech(row) {
+  const signal = String(row?.signal_label || '').toLowerCase();
+  if (signal.includes('buy')) return 'BUY_BASE';
+  if (signal.includes('sell')) return 'SELL_BASE';
+  return 'NEUTRAL';
+}
+
+function signedDirectionFromNews(pair) {
+  const focus = pairFocus[pair] || {};
+  const bias = String(focus.bias_news || '').toLowerCase();
+  const meta = pairMeta(pair);
+  if (!bias || bias === 'unknown' || bias === 'mixed') return 'NEUTRAL';
+  if (bias === `bullish_${String(meta.base_ccy || '').toLowerCase()}`) return 'BUY_BASE';
+  if (bias === `bearish_${String(meta.base_ccy || '').toLowerCase()}`) return 'SELL_BASE';
+  if (bias === `bullish_${String(meta.quote_ccy || '').toLowerCase()}`) return 'SELL_BASE';
+  if (bias === `bearish_${String(meta.quote_ccy || '').toLowerCase()}`) return 'BUY_BASE';
+  return 'NEUTRAL';
+}
+
+function directionConflict(a, b) {
+  return !['NEUTRAL', 'unknown'].includes(a) && !['NEUTRAL', 'unknown'].includes(b) && a !== b;
+}
+
+function directionAligned(a, b) {
+  return !['NEUTRAL', 'unknown'].includes(a) && a === b;
+}
+
+function exposureSummary() {
+  const equity = Math.max(1, num(brief.portfolio_state.equity_eur, brief.config.capital_eur || 10000));
+  const byPair = {};
+  const byCurrency = {};
+  let totalSlRisk = 0;
+  let missingSlCount = 0;
+
+  function addCurrency(ccy, value) {
+    if (!ccy) return;
+    byCurrency[ccy] = (byCurrency[ccy] || 0) + value;
+  }
+
+  for (const lot of openLots) {
+    const pair = String(lot.pair || '').toUpperCase();
+    const meta = pairMeta(pair);
+    const notional = Math.abs(num(lot.notional_eur, 0));
+    const sign = String(lot.side || '').toLowerCase() === 'short' ? -1 : 1;
+    byPair[pair] = (byPair[pair] || 0) + notional;
+    addCurrency(meta.base_ccy, sign * notional);
+    addCurrency(meta.quote_ccy, -sign * notional);
+
+    const compact = compactLot(lot);
+    if (compact.sl_risk_eur == null) {
+      missingSlCount += 1;
+    } else {
+      totalSlRisk += Math.max(0, num(compact.sl_risk_eur, 0));
+    }
+  }
+
+  const pairRows = Object.entries(byPair)
+    .map(([pair, exposure]) => ({
+      pair,
+      exposure_eur: rounded(exposure, 2),
+      exposure_pct_equity: rounded(exposure / equity, 4),
+      remaining_eur: rounded(Math.max(0, equity * brief.limits.max_pair_frac - exposure), 2),
+    }))
+    .sort((a, b) => Math.abs(b.exposure_eur) - Math.abs(a.exposure_eur));
+
+  const currencyRows = Object.entries(byCurrency)
+    .map(([currency, exposure]) => ({
+      currency,
+      net_exposure_eur: rounded(exposure, 2),
+      net_exposure_pct_equity: rounded(exposure / equity, 4),
+      remaining_abs_eur: rounded(Math.max(0, equity * brief.limits.max_currency_exposure_frac - Math.abs(exposure)), 2),
+    }))
+    .sort((a, b) => Math.abs(b.net_exposure_eur) - Math.abs(a.net_exposure_eur));
+
+  const dailyDdFrac = num(brief.portfolio_state.drawdown_day_frac, num(brief.portfolio_state.drawdown_day_pct, 0));
+  const ddLimit = num(brief.limits.max_daily_drawdown_frac, 0.05);
+  const killSwitchRequired = Boolean(brief.config.kill_switch_active) || dailyDdFrac <= -ddLimit;
+  const leverageCapacityEur = Math.max(0, equity * num(brief.config.leverage_max, 1) - num(brief.portfolio_state.gross_exposure_eur, 0));
+  const marginCapacityEur = Math.max(0, num(brief.portfolio_state.margin_free_eur, 0));
+
+  return {
+    can_open_new_trade: !killSwitchRequired && leverageCapacityEur > 0 && marginCapacityEur > 0,
+    kill_switch_required: killSwitchRequired,
+    daily_drawdown_limit_breached: dailyDdFrac <= -ddLimit,
+    leverage_capacity_eur: rounded(leverageCapacityEur, 2),
+    margin_capacity_eur: rounded(marginCapacityEur, 2),
+    total_sl_risk_eur: rounded(totalSlRisk, 2),
+    total_sl_risk_pct_equity: rounded(totalSlRisk / equity, 4),
+    open_lots_without_sl: missingSlCount,
+    by_pair: pairRows,
+    by_currency: currencyRows,
+  };
+}
+
+const portfolioRisk = exposureSummary();
+
+function pairDecisionProfile(pair) {
+  const tech = techByPair[pair] || { pair };
+  const fund = compactFundamental(pair);
+  const techDir = signedDirectionFromTech(tech);
+  const fundDir = fund.bias || 'unknown';
+  const newsDir = signedDirectionFromNews(pair);
+  const urgentNews = Boolean((pairFocus[pair] || {}).urgent_event_within_4h);
+  const macroDegraded = Boolean(fund.macro_degraded);
+  const conflictScore = num(fund.conflict_score, 0);
+  const techMacroConflict = directionConflict(techDir, fundDir);
+  const newsConflict = directionConflict(newsDir, fundDir) || directionConflict(newsDir, techDir);
+  const aligned = directionAligned(techDir, fundDir) || directionAligned(newsDir, fundDir);
+  let alignment = 'NEUTRAL_OR_INSUFFICIENT';
+  if (techMacroConflict) alignment = 'CONFLICT_TECH_VS_MACRO';
+  else if (newsConflict) alignment = 'CONFLICT_NEWS_VS_SIGNAL';
+  else if (conflictScore >= 0.5) alignment = 'CONFLICT_WITHIN_MACRO_SAFE_HAVENS';
+  else if (aligned) alignment = 'ALIGNED';
+  else if (fundDir !== 'NEUTRAL' && fundDir !== 'unknown') alignment = 'MACRO_ONLY';
+  else if (techDir !== 'NEUTRAL') alignment = 'TECH_ONLY';
+
+  let tradePermission = 'ALLOW';
+  let preferredAction = fundDir === 'SELL_BASE' ? 'SELL_BASE' : fundDir === 'BUY_BASE' ? 'BUY_BASE' : 'WAIT';
+  if (!portfolioRisk.can_open_new_trade) {
+    tradePermission = 'NO_NEW_POSITION';
+    preferredAction = 'MANAGE_OR_REDUCE_ONLY';
+  } else if (alignment.startsWith('CONFLICT') || urgentNews || macroDegraded) {
+    tradePermission = alignment.startsWith('CONFLICT') || urgentNews ? 'NO_NEW_POSITION' : 'REDUCED_SIZE_ONLY';
+    preferredAction = openPairs.has(pair) ? 'MANAGE_EXISTING_ONLY' : 'WAIT';
+  } else if (alignment === 'TECH_ONLY') {
+    tradePermission = 'REDUCED_SIZE_ONLY';
+    preferredAction = techDir === 'SELL_BASE' ? 'SELL_BASE' : techDir === 'BUY_BASE' ? 'BUY_BASE' : 'WAIT';
+  }
+
+  return {
+    decision_alignment: alignment,
+    trade_permission: tradePermission,
+    preferred_action: preferredAction,
+    tech_direction: techDir,
+    fundamental_direction: fundDir,
+    news_direction: newsDir,
+    urgent_news: urgentNews,
+    macro_degraded: macroDegraded,
+  };
+}
+
 const regime = macroNews.macro_regime || {};
 const llmBrief = {
   run: brief.run,
@@ -221,13 +409,16 @@ const llmBrief = {
     margin_used_eur: rounded(brief.portfolio_state.margin_used_eur, 2),
     margin_free_eur: rounded(brief.portfolio_state.margin_free_eur, 2),
     leverage_effective: rounded(brief.portfolio_state.leverage_effective, 3),
-    drawdown_day_pct: pct(brief.portfolio_state.drawdown_day_pct, 3),
-    drawdown_total_pct: pct(brief.portfolio_state.drawdown_total_pct, 3),
+    drawdown_day_frac: rounded(num(brief.portfolio_state.drawdown_day_frac, brief.portfolio_state.drawdown_day_pct), 6),
+    drawdown_total_frac: rounded(num(brief.portfolio_state.drawdown_total_frac, brief.portfolio_state.drawdown_total_pct), 6),
+    drawdown_day_pct_display: rounded(num(brief.portfolio_state.drawdown_day_pct_display, pct(brief.portfolio_state.drawdown_day_pct, 3)), 3),
+    drawdown_total_pct_display: rounded(num(brief.portfolio_state.drawdown_total_pct_display, pct(brief.portfolio_state.drawdown_total_pct, 3)), 3),
     valuation_source: brief.portfolio_state.valuation_source || 'unknown',
     kill_switch_auto_reset: Boolean(brief.portfolio_state.kill_switch_auto_reset),
     valuation_warnings: brief.portfolio_state.valuation_warnings || {},
     open_lots: openLots.map(compactLot),
   },
+  portfolio_risk: portfolioRisk,
   universe_pairs: brief.universe.pairs,
   macro: {
     market_regime: regime.market_regime || 'Unknown',
@@ -237,14 +428,22 @@ const llmBrief = {
     as_of: regime.as_of,
   },
   top_news: topNews,
-  pair_matrix: pairMatrix,
-  market_watch: marketWatch,
+  pair_matrix: pairMatrix.map((row) => ({ ...row, decision: pairDecisionProfile(row.pair) })),
+  market_watch: marketWatch.map((row) => ({ ...row, decision: pairDecisionProfile(row.pair) })),
   briefing_notes: [
     'pair_matrix is a compact scan of all eligible pairs.',
     'market_watch contains the highest-priority/open pairs with extra technical and news context.',
-    'Use only universe_pairs. Prefer no trade when macro and technicals conflict.',
+    'drawdown_*_frac fields are fractions; drawdown_*_pct_display fields are human-readable percentages.',
+    'portfolio_risk is precomputed. Do not open new positions if can_open_new_trade=false or trade_permission=NO_NEW_POSITION.',
+    'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
   ],
 };
+
+if (Object.keys(fundamentalFx).length > 0) {
+  llmBrief.fundamental = {
+    by_pair: Object.fromEntries(selectedPairs.map((pair) => [pair, compactFundamental(pair)])),
+  };
+}
 
 const fullBriefChars = JSON.stringify(brief, null, 2).length;
 const llmBriefJson = JSON.stringify(llmBrief);

@@ -3,6 +3,12 @@ function num(v, d = 0) {
   return Number.isFinite(n) ? n : d;
 }
 
+function envNum(name, fallback) {
+  const env = typeof $env !== 'undefined' ? $env : {};
+  const n = Number(env[name]);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
 function pairMeta(brief, pair) {
   return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };
 }
@@ -56,6 +62,50 @@ function rejectionSummary(orders) {
   return { rejected_orders_count: rejected, rejection_reasons: byReason };
 }
 
+function openLotById(openLots, lotId) {
+  const id = String(lotId || '').trim();
+  if (!id) return null;
+  return (openLots || []).find((lot) => String(lot.lot_id || '').trim() === id) || null;
+}
+
+function closeSideForLot(lot) {
+  if (lot?.side === 'long') return 'close_long';
+  if (lot?.side === 'short') return 'close_short';
+  return '';
+}
+
+function llmDecisionProfile(ctx, pair) {
+  const p = String(pair || '').toUpperCase();
+  const compact = ctx.llm_brief || {};
+  const rows = [
+    ...(compact.market_watch || []),
+    ...(compact.pair_matrix || []),
+  ];
+  const row = rows.find((x) => String(x?.pair || '').toUpperCase() === p);
+  return row?.decision || {};
+}
+
+function applySizeCap(order, sizeCapPct, equity, px, quoteToEurRate, reason) {
+  const capNotionalEur = Math.max(0, equity * sizeCapPct);
+  if (capNotionalEur <= 0 || order.notional_eur <= capNotionalEur + 1e-9) {
+    return;
+  }
+  const denom = Math.max(1, 100000 * px * quoteToEurRate);
+  const cappedLots = capNotionalEur / denom;
+  order.risk_size_adjustment = {
+    reason,
+    requested_size_lots: order.size_lots,
+    requested_notional_eur: order.notional_eur,
+    capped_size_lots: cappedLots,
+    capped_notional_eur: capNotionalEur,
+    cap_pct_equity: sizeCapPct,
+  };
+  order.size_lots = cappedLots;
+  order.notional_quote = Math.abs(cappedLots * 100000 * px);
+  order.notional_eur = Math.abs(order.notional_quote * quoteToEurRate);
+  order.risk_check_notes = `${order.risk_check_notes || ''} [Risk sizing: capped to ${(sizeCapPct * 100).toFixed(1)}% equity for ${reason}.]`.trim();
+}
+
 const j = $json || {};
 const brief = j.brief || {};
 const cfg = brief.config || {};
@@ -68,22 +118,40 @@ const leverageMax = Math.max(0.01, num(cfg.leverage_max, 1));
 const maxPairPct = num(limits.max_pair_pct, 0.20);
 const maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);
 const maxDd = num(limits.max_daily_drawdown_pct, 0.05);
+const reducedSizeMaxPairPct = Math.min(maxPairPct, envNum('AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT', 0.10));
 const openLots = portfolio.open_lots || [];
 const projected = [];
 const orders = [];
 const alerts = [];
 
 let killSwitch = Boolean(cfg.kill_switch_active);
-if (num(portfolio.drawdown_day_pct, 0) <= -maxDd) {
+const drawdownDayFrac = num(portfolio.drawdown_day_frac, num(portfolio.drawdown_day_pct, 0));
+if (drawdownDayFrac <= -maxDd) {
   killSwitch = true;
   alerts.push({ severity: 'critical', category: 'kill_switch', message: 'Daily drawdown gate breached; opens blocked' });
+}
+if (j.reconciliation_block_new_orders || j.ibkr_reconciliation?.block_new_orders || portfolio.reconciliation?.block_new_orders) {
+  killSwitch = true;
+  alerts.push({
+    severity: 'critical',
+    category: 'ibkr_reconciliation',
+    message: 'IBKR vs DuckDB divergence or broker guard failure; all new opens blocked',
+    payload: j.ibkr_reconciliation || portfolio.reconciliation || {},
+  });
 }
 
 let seq = 1;
 for (const d of decisions) {
-  const pair = d.pair;
+  const lotToClose = openLotById(openLots, d.lot_id_to_close);
+  const pair = lotToClose?.pair || d.pair;
   const action = d.decision;
-  const side = action === 'open_long' ? 'buy_base' : action === 'open_short' ? 'sell_base' : action === 'close' ? 'close_long' : action === 'partial_close' ? 'close_long' : 'hold';
+  const side = action === 'open_long'
+    ? 'buy_base'
+    : action === 'open_short'
+      ? 'sell_base'
+      : (action === 'close' || action === 'partial_close')
+        ? closeSideForLot(lotToClose)
+        : 'hold';
   const orderId = `ORD_${j.run_id}_${String(seq).padStart(3, '0')}`;
   const base = {
     order_id: orderId,
@@ -106,6 +174,7 @@ for (const d of decisions) {
     decision: action,
     conviction: d.conviction,
     horizon: d.horizon,
+    lot_id_to_close: d.lot_id_to_close || '',
   };
   seq += 1;
 
@@ -128,17 +197,31 @@ for (const d of decisions) {
     continue;
   }
   const meta = pairMeta(brief, pair);
+  const quoteToEurRate = quoteToEur(brief, meta.quote_ccy);
+  const profile = action.startsWith('open_') ? llmDecisionProfile(j, pair) : {};
+  const tradePermission = String(profile.trade_permission || 'ALLOW').toUpperCase();
+  const effectivePairPct = tradePermission === 'REDUCED_SIZE_ONLY' ? reducedSizeMaxPairPct : maxPairPct;
+  if (action.startsWith('open_')) {
+    base.trade_permission = tradePermission;
+    base.decision_alignment = profile.decision_alignment || '';
+    base.preferred_action = profile.preferred_action || '';
+  }
   let sizeLots = num(d.size_lots, 0);
   if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {
-    const targetEur = equity * Math.min(maxPairPct, num(d.size_pct_equity));
-    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEur(brief, meta.quote_ccy));
+    const targetEur = equity * Math.min(effectivePairPct, num(d.size_pct_equity));
+    sizeLots = targetEur / Math.max(1, 100000 * px * quoteToEurRate);
   }
   base.size_lots = sizeLots;
   base.notional_quote = Math.abs(sizeLots * 100000 * px);
-  base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));
+  base.notional_eur = Math.abs(base.notional_quote * quoteToEurRate);
 
   if (action.startsWith('open_')) {
-    if (sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
+    if (tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
+    if (!base.rejection_reason && sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
+    if (!base.rejection_reason && tradePermission === 'REDUCED_SIZE_ONLY') {
+      applySizeCap(base, reducedSizeMaxPairPct, equity, px, quoteToEurRate, 'REDUCED_SIZE_ONLY');
+      sizeLots = base.size_lots;
+    }
     const pairExisting = openLots.filter((l) => l.pair === pair).reduce((s, l) => s + Math.abs(num(l.size_lots) * 100000 * (lastPrice(brief, pair) || num(l.open_price)) * quoteToEur(brief, meta.quote_ccy)), 0);
     if (!base.rejection_reason && (pairExisting + base.notional_eur) / equity > maxPairPct) base.rejection_reason = 'MAX_PAIR_EXPOSURE';
     const totalNotional = openLots.reduce((s, l) => {
@@ -159,9 +242,51 @@ for (const d of decisions) {
       projected.push(base);
     }
   } else {
+    if (!d.lot_id_to_close) {
+      base.rejection_reason = 'MISSING_LOT_ID_TO_CLOSE';
+      orders.push(base);
+      continue;
+    }
+    if (!lotToClose) {
+      base.rejection_reason = 'LOT_TO_CLOSE_NOT_FOUND';
+      orders.push(base);
+      continue;
+    }
+    if (d.pair && d.pair !== lotToClose.pair) {
+      base.rejection_reason = 'LOT_PAIR_MISMATCH';
+      orders.push(base);
+      continue;
+    }
+    if (!side) {
+      base.rejection_reason = 'LOT_SIDE_INVALID';
+      orders.push(base);
+      continue;
+    }
+    const lotSize = num(lotToClose.size_lots, 0);
+    if (lotSize <= 0) {
+      base.rejection_reason = 'LOT_SIZE_INVALID';
+      orders.push(base);
+      continue;
+    }
+    if (action === 'close') {
+      sizeLots = lotSize;
+    } else if (action === 'partial_close') {
+      if (sizeLots <= 0) {
+        base.rejection_reason = 'INVALID_PARTIAL_CLOSE_SIZE';
+        orders.push(base);
+        continue;
+      }
+      if (sizeLots > lotSize + 1e-9) {
+        base.rejection_reason = 'CLOSE_SIZE_EXCEEDS_LOT';
+        orders.push(base);
+        continue;
+      }
+    }
+    base.size_lots = sizeLots;
+    base.notional_quote = Math.abs(sizeLots * 100000 * px);
+    base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));
     base.status = 'pending';
     base.risk_check_passed = true;
-    base.size_lots = sizeLots > 0 ? sizeLots : 999999;
   }
   orders.push(base);
 }

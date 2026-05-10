@@ -11,7 +11,10 @@ cols = [
     "rsi14", "atr14", "sma20", "sma50", "sma200", "ema12", "ema26",
     "macd", "macd_signal", "macd_hist", "bb_upper", "bb_lower", "bb_width",
     "pivot", "r1", "r2", "s1", "s2", "regime", "signal_score", "signal_label",
-    "pip_size", "base_ccy", "quote_ccy",
+    "pip_size", "base_ccy", "quote_ccy", "ibkr_bid", "ibkr_ask", "ibkr_mid",
+    "ibkr_last", "ibkr_spread", "ibkr_spread_pct", "ibkr_bid_size", "ibkr_ask_size",
+    "ibkr_market_data_availability", "ibkr_market_data_source", "ibkr_snapshot_at",
+    "ibkr_snapshot_error",
 ]
 rows = []
 as_of = datetime.now(timezone.utc).isoformat()
@@ -37,10 +40,26 @@ with duckdb.connect(db_path) as con:
       "pivot" DOUBLE, "r1" DOUBLE, "r2" DOUBLE, "s1" DOUBLE, "s2" DOUBLE,
       "regime" VARCHAR, "signal_score" DOUBLE, "signal_label" VARCHAR,
       "pip_size" DOUBLE, "base_ccy" VARCHAR, "quote_ccy" VARCHAR,
+      "ibkr_bid" DOUBLE, "ibkr_ask" DOUBLE, "ibkr_mid" DOUBLE, "ibkr_last" DOUBLE,
+      "ibkr_spread" DOUBLE, "ibkr_spread_pct" DOUBLE, "ibkr_bid_size" DOUBLE,
+      "ibkr_ask_size" DOUBLE, "ibkr_market_data_availability" VARCHAR,
+      "ibkr_market_data_source" VARCHAR, "ibkr_snapshot_at" VARCHAR,
+      "ibkr_snapshot_error" VARCHAR,
       PRIMARY KEY ("run_id", "pair")
     )
     """
     con.execute(schema_sql)
+    for col, typ in [
+        ("ibkr_bid", "DOUBLE"), ("ibkr_ask", "DOUBLE"), ("ibkr_mid", "DOUBLE"),
+        ("ibkr_last", "DOUBLE"), ("ibkr_spread", "DOUBLE"), ("ibkr_spread_pct", "DOUBLE"),
+        ("ibkr_bid_size", "DOUBLE"), ("ibkr_ask_size", "DOUBLE"),
+        ("ibkr_market_data_availability", "VARCHAR"), ("ibkr_market_data_source", "VARCHAR"),
+        ("ibkr_snapshot_at", "VARCHAR"), ("ibkr_snapshot_error", "VARCHAR"),
+    ]:
+        try:
+            con.execute(f'ALTER TABLE main.technical_signals_fx ADD COLUMN "{col}" {typ}')
+        except Exception:
+            pass
     if rows:
         con.executemany(
             f"INSERT OR REPLACE INTO main.technical_signals_fx ({', '.join(quoted_cols)}) VALUES ({', '.join(['?'] * len(cols))})",

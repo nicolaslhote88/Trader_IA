@@ -14,41 +14,45 @@ from typing import Optional
 logger = logging.getLogger("contract_cache")
 
 # ---------------------------------------------------------------------------
-# Conids FX stables (IDEALPRO, vérifié 2025-2026)
+# Conids FX IDEALPRO résolus via CPAPI secdef/info le 2026-05-06.
 # Format clé : XXXYYY sans slash
+# Certaines paires inverses du projet (ex: CHFCAD, JPYNZD) sont servies par
+# inversion du cross direct dans app.py, afin d'éviter de stocker un alias qui
+# masquerait le sens du prix.
 # ---------------------------------------------------------------------------
 FX_CONIDS: dict[str, int] = {
     # Majors
     "EURUSD": 12087792,
     "GBPUSD": 12087797,
-    "USDJPY": 12087798,
-    "USDCHF": 12087800,
+    "USDJPY": 15016059,
+    "USDCHF": 12087820,
     "AUDUSD": 14433401,
-    "USDCAD": 12087799,
-    "NZDUSD": 14433402,
+    "USDCAD": 15016062,
+    "NZDUSD": 39453441,
     # EUR crosses
-    "EURGBP": 12087793,
-    "EURJPY": 12087794,
-    "EURCHF": 12087796,
-    "EURAUD": 14433404,
-    "EURCAD": 14433405,
-    "EURNZD": 14433406,
+    "EURGBP": 12087807,
+    "EURJPY": 14321016,
+    "EURCHF": 12087817,
+    "EURAUD": 15016065,
+    "EURCAD": 15016068,
+    "EURNZD": 47101302,
     # GBP crosses
-    "GBPJPY": 12087801,
-    "GBPCHF": 12087803,
-    "GBPAUD": 14433407,
-    "GBPCAD": 14433408,
-    "GBPNZD": 14433409,
+    "GBPJPY": 14321015,
+    "GBPCHF": 12087826,
+    "GBPAUD": 15016075,
+    "GBPCAD": 15016078,
+    "GBPNZD": 47101305,
     # Commodity crosses
-    "AUDJPY": 14433403,
-    "AUDCHF": 14433410,
-    "AUDCAD": 14433411,
-    "AUDNZD": 14433412,
-    "CADJPY": 14433413,
-    "CHFJPY": 14433414,
-    "NZDJPY": 14433415,
-    "NZDCHF": 14433416,
-    "NZDCAD": 14433417,
+    "AUDJPY": 15016133,
+    "AUDCHF": 15016125,
+    "AUDCAD": 15016138,
+    "AUDNZD": 39453424,
+    "CADCHF": 15016234,
+    "CADJPY": 15016241,
+    "CHFJPY": 14321010,
+    "NZDJPY": 39453444,
+    "NZDCHF": 46189224,
+    "NZDCAD": 46189223,
 }
 
 # FX : base + quote pour construction du payload IBKR

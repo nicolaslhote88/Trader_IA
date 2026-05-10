@@ -104,12 +104,14 @@ curl -I https://${SUBDOMAIN}.${DOMAIN_NAME}/
 curl http://localhost:8080/health          # yfinance-api (via le réseau web)
 ```
 
-### 3.d Activation IBKR en dry-run
+### 3.d Activation IBKR
 
 ```bash
 cd /opt/trader-ia/infra/vps_hostinger_config
 
-# Dans .env, garder IBKR_DRY_RUN=true au demarrage.
+# Demarrage securise : garder IBKR_DRY_RUN=true.
+# Production Forex paper validee : IBKR_DRY_RUN=false avec
+# IBKR_REQUIRE_PAPER_ACCOUNT=true et IBKR_PAPER_ACCOUNT_PREFIXES=DU.
 # Renseigner IBKR_ACCOUNT_ID si possible.
 docker compose up -d --build ibkr-gateway ibkr-broker n8n task-runners
 
@@ -130,7 +132,9 @@ PY
 ```
 
 Les nodes n8n 07b/11b restent sandbox-only tant que `IBKR_DRY_RUN=true` et
-`IBKR_SEND_DRY_RUN_TO_BROKER=false`.
+`IBKR_SEND_DRY_RUN_TO_BROKER=false`. En production Forex paper, garder un seul
+PM AG1-FX actif par compte IBKR et laisser `AG1-FX-PF-V1` reconcilier le ledger
+toutes les heures.
 
 ## 4. Mises à jour
 
@@ -142,6 +146,37 @@ docker compose up -d n8n
 # Logs
 docker compose logs -f n8n
 docker compose logs -f task-runners
+```
+
+### 4.a Dashboard Streamlit uniquement
+
+Sur le VPS actuel, le dashboard live est monte depuis `/opt/trading-dashboard/app`
+dans le conteneur `root-trading-dashboard-1`. Pour deploiement rapide d'une
+modification Streamlit :
+
+```bash
+# Depuis le poste local
+scp services/dashboard/app.py root@100.104.236.78:/opt/trading-dashboard/app/app.py
+scp -r services/dashboard/app_modules root@100.104.236.78:/opt/trading-dashboard/app/
+
+# Sur le VPS actuel
+cd /docker/root
+docker compose restart trading-dashboard
+docker compose logs --tail=80 trading-dashboard
+```
+
+Verification minimale :
+
+```bash
+curl -I http://127.0.0.1:8501
+docker ps --format 'table {{.Names}}\t{{.Status}}' | grep trading-dashboard
+```
+
+Note : le port 8501 n'est pas forcement publie sur l'hote. Si le `curl`
+local hote echoue, tester dans le conteneur :
+
+```bash
+docker exec root-trading-dashboard-1 python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8501', timeout=8).status)"
 ```
 
 ## 5. Nettoyage

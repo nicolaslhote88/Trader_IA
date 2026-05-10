@@ -1,55 +1,107 @@
-﻿# AG1-FX-V1 Portfolio Manager
+# AG1-FX-V1 Portfolio Manager
 
-Dedicated Forex-only portfolio manager fork for three isolated LLM portfolios.
+Dedicated Forex-only portfolio manager fork. The repository still generates the
+three LLM variants, but production paper trading currently publishes only the
+`chatgpt52` workflow because there is a single IBKR paper portfolio available.
+`grok41_reasoning` and `gemini30_pro` must stay inactive unless they are moved to
+a separate broker account or a broker-side portfolio namespace.
 
 ## Role
 
-- Reads `ag2_fx_v1.duckdb` technical signals and `ag4_fx_v1.duckdb` macro/news digest.
+- Reads `ag2_fx_v1.duckdb` technical signals, `ag3_fx_v1.duckdb` fundamental
+  context and `ag4_fx_v1.duckdb` macro/news digest.
 - Maintains one DuckDB ledger per model:
   - `ag1_fx_v1_chatgpt52.duckdb`
   - `ag1_fx_v1_grok41_reasoning.duckdb`
   - `ag1_fx_v1_gemini30_pro.duckdb`
-- Starts each ledger with 10,000 EUR, leverage 1, configurable via `cfg.portfolio_config.leverage_max`.
-- Enforces the FX risk checks before simulated fills.
-- Sends a compact `llm_brief` to the model instead of the raw AG2/AG4 payload. The
-  full `brief` is still kept in the workflow context for risk checks, fills,
-  conversions and snapshots.
+- Production paper mode uses `ag1_fx_v1_chatgpt52.duckdb` as the only
+  executable ledger. The other ledgers may be reset and kept for offline tests,
+  but their n8n workflows are unpublished.
+- Starts each ledger with 10,000 EUR, leverage 1, configurable via
+  `cfg.portfolio_config.leverage_max`.
+- Sends a compact `llm_brief` to the model instead of the raw AG2/AG3/AG4
+  payload. The full `brief` is still kept in the workflow context for downstream
+  risk checks, fills, conversions and snapshots.
 - The init node derives `llm_model` from the selected variant. Use
   `AG1_FX_LLM_MODEL_OVERRIDE` only for an intentional one-off model override.
 - The compact news pack filters out top-news items without an FX directional hint
   when usable FX-specific news is available.
-- The IBKR execution node `nodes/post_agent/11b_ibkr_send_orders_fx.py` is
-  wired in the template and all variants between safety validation and fill
-  simulation. `IBKR_DRY_RUN=true` keeps the workflow sandbox-only by default;
-  set `IBKR_SEND_DRY_RUN_TO_BROKER=true` only to exercise the broker dry-run
-  endpoint.
+- The IBKR execution node `nodes/post_agent/11b_ibkr_send_orders_fx.py` is wired
+  in the template and all variants between safety validation and fill handling.
+  In `IBKR_DRY_RUN=false`, orders are submitted to `ibkr-broker`, must pass the
+  paper-account guard, and are considered filled only after an IBKR fill is
+  matched. Without a matched fill the order remains `submitted` for the hourly
+  reconciliation workflow.
 
-## Cron (updated 2026-05-05)
+## Production Paper Mode (Updated 2026-05-06)
+
+- Active PM workflow: `AG1-FX-V1 Portfolio Manager - chatgpt52`.
+- Inactive PM workflows: `grok41_reasoning`, `gemini30_pro`.
+- Account guard: `IBKR_REQUIRE_PAPER_ACCOUNT=true` and paper prefixes include
+  `DU`.
+- DuckDB is a local ledger, not the broker source of truth. Before every PM run,
+  node `03_load_portfolio_state_fx.py` compares open DuckDB lots with current
+  IBKR positions. A divergence activates the kill switch and blocks new orders.
+- A global lock (`AG1_FX_LOCK_PATH`, default `/files/locks/ag1_fx_active.lock`)
+  prevents overlapping PM runs against the single broker account.
+- Node `12_simulate_fills_fx.py` still simulates fills in dry-run. In paper/live
+  mode it writes only confirmed IBKR fills and never invents a simulated fill.
+- In dry-run, fees remain synthetic (`FEE_BPS = 0.5`) and are tagged
+  `simulated_bps`. In paper/live, `fees_eur` comes from IBKR fill commission
+  fields when available. Each fill also writes `core.fill_costs` with raw
+  commission amount, currency, broker execution id, source tag and raw broker
+  JSON for audit/statistics.
+- Node `11_validate_enforce_safety_fx.js` treats compact-pack
+  `trade_permission=NO_NEW_POSITION` as a hard broker-blocking rejection
+  (`TRADE_PERMISSION_NO_NEW_POSITION`), regardless of the LLM rationale.
+- Node `11_validate_enforce_safety_fx.js` caps `REDUCED_SIZE_ONLY` openings to
+  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` of equity, default `0.10`. Oversized LLM
+  requests are resized before pair, leverage, margin and currency checks.
+- Node `17_log_run_fx.py` releases the global lock at the end of the run.
+- `AG1-FX-PF-V1 - Hourly Portfolio Valuation` reconciles the GPT ledger hourly,
+  imports confirmed fills for submitted orders, and writes
+  `core.reconciliation_log`.
+
+## Cron (Updated 2026-05-06)
 
 - `chatgpt52`: `30 4,8,12,16,20 * * 1-5` (04:30, 08:30, 12:30, 16:30, 20:30)
-- `grok41_reasoning`: `35 4,8,12,16,20 * * 1-5` (04:35, 08:35, 12:35, 16:35, 20:35)
-- `gemini30_pro`: `40 4,8,12,16,20 * * 1-5` (04:40, 08:40, 12:40, 16:40, 20:40)
-- Portfolio valuation: `AG1-FX-PF-V1` runs `0 0 * * * 1-5` (hourly, Monday-Friday).
+- `grok41_reasoning`: generated with `35 4,8,12,16,20 * * 1-5`, but unpublished
+  in production paper mode.
+- `gemini30_pro`: generated with `40 4,8,12,16,20 * * 1-5`, but unpublished in
+  production paper mode.
+- Portfolio valuation: `AG1-FX-PF-V1` runs `0 0 * * * 1-5` (hourly,
+  Monday-Friday).
 
-All cron schedules use `Europe/Paris`. The 5-minute stagger between LLMs avoids
-DuckDB read-concurrency conflicts on the shared bases `ag2_fx_v1.duckdb` and
-`ag4_fx_v1.duckdb`. Each PM run is scheduled after AG2-FX
-(04:00 / 08:00 / 12:00 / 16:00 / 20:00) so it always reads a fresh technical
-snapshot, while AG4-FX keeps its 09:15 / 14:15 macro/news cadence.
-The hourly valuation workflow is separate from the PM workflows: it only refreshes
-`core.portfolio_snapshot` from current FX prices and never creates trade decisions.
+All cron schedules use `Europe/Paris`. The 5-minute stagger is retained in the
+generated files for future multi-account tests, but only GPT should be active
+while a single IBKR paper account is shared. Each PM run is scheduled after
+AG2-FX and AG3-FX so it reads fresh technical and fundamental context.
+
+The hourly valuation workflow is separate from the PM workflows: it refreshes
+`core.portfolio_snapshot`, imports confirmed broker fills, records reconciliation
+state and never creates trade decisions.
 
 `generate_model_variants.py` is the source of truth: never edit the per-model
-JSON workflows by hand — regenerate them.
+JSON workflows by hand. Regenerate them instead.
 
 ## Safety
 
 The generated workflows use real LangChain agent nodes for all three variants:
 OpenAI (`chatgpt52`), xAI Grok (`grok41_reasoning`) and Google Gemini
-(`gemini30_pro`). The downstream parser, risk manager, execution simulator and
-ledger writes are wired after each provider-specific agent merge.
+(`gemini30_pro`). The downstream parser, risk manager, broker sender, fill
+handler and ledger writes are wired after each provider-specific agent merge.
 
-## Local replay
+Post-agent safety is deterministic and takes precedence over the model output:
+
+- `NO_NEW_POSITION` from `llm_brief.pair_matrix[].decision` or
+  `llm_brief.market_watch[].decision` rejects new opens before IBKR.
+- `REDUCED_SIZE_ONLY` permits only reduced opens and caps notional exposure to
+  10% of equity by default, configurable with
+  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT`.
+- Existing portfolio, pair, currency, leverage, margin, SL/TP-side and
+  reconciliation gates still run after the compact-pack permission gate.
+
+## Local Replay
 
 ```powershell
 cd "agents/trading-forex/AG1-FX-V1-Portfolio manager"

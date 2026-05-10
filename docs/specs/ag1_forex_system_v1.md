@@ -4,8 +4,8 @@
 **Auteur spec** : Nicolas + Claude (session du 25/04/2026)
 **Statut** : Implemente par Codex le 25/04/2026 - cron ajustes 26/04/2026
 **Priorite** : P0 (etape cle avant connexion broker FX live)
-**Version** : v1.1
-**Derniere mise a jour** : 2026-04-26
+**Version** : v1.3
+**Derniere mise a jour** : 2026-05-06
 
 ---
 
@@ -28,6 +28,7 @@ Pourquoi maintenant : la base `ag4_forex_v1.duckdb` est en place depuis le 24/04
 | **26/04/2026** | **Cron AG2-FX (technique)** | **6x/jour** sur l'amplitude forex 24/5 (0h, 4h, 8h, 12h, 16h, 20h Paris, lun-ven). |
 | **26/04/2026** | **Cron AG4-FX (news)** | **2x/jour** dans la fenetre d'ouverture bourse FR 9h-17h30 (9h15 et 14h15 Paris, lun-ven). |
 | **05/05/2026** | **Cron AG1-FX (PM)** | **5x/jour** par LLM (4h30/35/40, 8h30/35/40, 12h30/35/40, 16h30/35/40, 20h30/35/40 Paris), **decales de 5 min entre LLMs** pour eviter les conflits de lecture concurrente DuckDB. |
+| **06/05/2026** | **IBKR paper** | Un seul compte IBKR paper est disponible : seul `chatgpt52` reste publie pour generer des ordres. `grok41_reasoning` et `gemini30_pro` restent versionnes mais desactives. `AG1-FX-PF-V1` assure la reconciliation horaire IBKR/DuckDB. |
 
 ---
 
@@ -61,7 +62,9 @@ Un systeme dedie resout ces 3 points : prompt FX-only, capital alloue, base isol
 
 ### 2.3 Hors scope de ce brief
 
-- Connexion broker live (IG, Saxo, IBKR) - decision separee apres ~4 semaines de donnees AG1-FX-V1.
+- Connexion broker live hors paper. Le Forex est branche en IBKR paper depuis le
+  06/05/2026 avec garde-fou de compte paper, lock global et reconciliation
+  IBKR/DuckDB.
 - Refonte du Risk Manager cote actions (issues #8 / #9 / #10 de `historique_issues.md`) - on **corrige ces 3 bugs uniquement dans le fork FX**, pas dans le systeme V3 actions.
 - Optimisation du sourcing FX (sources `forexlive_main` etc.) - deja cadre par le brief AG4 geo-tagging du 24/04.
 - Backtests historiques sur ces 3 mois - chantier separe.
@@ -174,23 +177,25 @@ Les 5 bases vivent dans `/local-files/duckdb/` (volume `/local-files` deja monte
 | Workflow | Cron expression | Heures Paris | Frequence | Justification |
 |---|---|---|---|---|
 | **AG2-FX-V1** | `0 0,4,8,12,16,20 * * 1-5` | 0h, 4h, 8h, 12h, 16h, 20h | 6x/jour | Forex 24/5 -> couverture sessions Asie / Europe / US ; signaux techniques rafraichis toutes les 4h. |
-| **AG4-FX-V1** | `15 9,14 * * 1-5` | 9h15, 14h15 | 2x/jour | Fenetre ouverture bourse FR (9h-17h30) ; matin = post-ouverture EU + macro asiatique nuit, apres-midi = pre-ouverture US. |
-| **AG1-FX-V1 chatgpt52** | `30 4,8,12,16,20 * * 1-5` | 4h30, 8h30, 12h30, 16h30, 20h30 | 5x/jour | Run environ 30 min apres les snapshots AG2-FX de 4h/8h/12h/16h/20h. |
-| **AG1-FX-V1 grok41_reasoning** | `35 4,8,12,16,20 * * 1-5` | 4h35, 8h35, 12h35, 16h35, 20h35 | 5x/jour | +5 min vs chatgpt52 pour etaler la charge runner et eviter conflits lecture concurrente DuckDB. |
-| **AG1-FX-V1 gemini30_pro** | `40 4,8,12,16,20 * * 1-5` | 4h40, 8h40, 12h40, 16h40, 20h40 | 5x/jour | +10 min vs chatgpt52, meme cadence AG2-FX. |
-| **AG1-FX-PF-V1 valuation** | `0 0 * * * 1-5` | toutes les heures | 24x/jour lun-ven | Mark-to-market horaire des 3 bases AG1-FX. Met a jour `core.portfolio_snapshot` sans decision LLM. |
+| **AG4-FX-V1** | `10 0,4,8,12,16,20 * * 1-5` | 0h10, 4h10, 8h10, 12h10, 16h10, 20h10 | 6x/jour | Digest news/macro rafraichi juste apres AG2-FX, avec sources officielles banques centrales/BIS. |
+| **AG3-FX-V1** | `20 4,8,12,16,20 * * 1-5` | 4h20, 8h20, 12h20, 16h20, 20h20 | 5x/jour | Score fondamental/equilibre apres AG2-FX et AG4-FX pour alimenter AG1. |
+| **AG1-FX-V1 chatgpt52** | `30 4,8,12,16,20 * * 1-5` | 4h30, 8h30, 12h30, 16h30, 20h30 | 5x/jour | Seul PM Forex publie en production paper IBKR. |
+| **AG1-FX-V1 grok41_reasoning** | `35 4,8,12,16,20 * * 1-5` | 4h35, 8h35, 12h35, 16h35, 20h35 | 5x/jour | Genere pour comparaisons futures, mais desactive tant qu'il n'existe qu'un seul compte IBKR. |
+| **AG1-FX-V1 gemini30_pro** | `40 4,8,12,16,20 * * 1-5` | 4h40, 8h40, 12h40, 16h40, 20h40 | 5x/jour | Genere pour comparaisons futures, mais desactive tant qu'il n'existe qu'un seul compte IBKR. |
+| **AG1-FX-PF-V1 valuation** | `0 0 * * * 1-5` | toutes les heures | 24x/jour lun-ven | Mark-to-market horaire du ledger GPT actif, import des fills IBKR confirmes et reconciliation IBKR/DuckDB. |
 
 ### 4.2 Frise temporelle journee type (lun-ven)
 
 ```
-00h  04h  04h30/35/40  08h  08h30/35/40  12h  12h30/35/40  16h  16h30/35/40  20h  20h30/35/40
- |    |        |        |        |        |        |        |        |        |        |
- AG2  AG2      AG1      AG2      AG1      AG2      AG1      AG2      AG1      AG2      AG1
- (technique 6x/j -- forex 24/5)        (PM matin)               (PM apres-midi)
+00h00 00h10   04h00 04h10 04h20 04h30/35/40   08h00 08h10 08h20 08h30/35/40   ...
+  |     |       |     |     |       |            |     |     |       |
+ AG2   AG4     AG2   AG4   AG3     AG1          AG2   AG4   AG3     AG1
+ (AG2 -> AG4 -> AG3 -> AG1, sequence fraiche toutes les 4h hors run AG1 de minuit)
 
 Legende :
-- AG2  = AG2-FX-V1 (technique, 6x/j, mutualise entre les 3 PMs)
-- AG4  = AG4-FX-V1 (news macro FX, 2x/j, mutualise entre les 3 PMs)
+- AG2  = AG2-FX-V1 (technique + snapshot IBKR, 6x/j, mutualise entre les 3 PMs)
+- AG4  = AG4-FX-V1 (news macro FX + sources officielles, 6x/j, mutualise entre les 3 PMs)
+- AG3  = AG3-FX-V1 (fondamental/equilibre, 5x/j, package AG1)
 - AG1A = chatgpt52    (:30 apres AG2)
 - AG1B = grok41       (:35, +5 min)
 - AG1C = gemini30_pro (:40, +10 min)
@@ -198,8 +203,8 @@ Legende :
 
 ### 4.3 Garanties cherches
 
-1. **Pas de conflit DuckDB** : les 3 PMs lisent `ag2_fx_v1.duckdb` et `ag4_fx_v1.duckdb` en concurrence. Le decalage 5 min garantit que chaque LLM a son propre creneau de lecture, sans collision simultanee avec un autre PM.
-2. **Donnees fraiches** : AG2 tourne **avant** AG4, AG4 tourne **avant** AG1. La sequence garantit que chaque PM lit le dernier snapshot technique + le dernier digest macro.
+1. **Pas de conflit DuckDB** : les 3 PMs lisent `ag2_fx_v1.duckdb`, `ag3_fx_v1.duckdb` et `ag4_fx_v1.duckdb` en concurrence. Le decalage 5 min garantit que chaque LLM a son propre creneau de lecture, sans collision simultanee avec un autre PM.
+2. **Donnees fraiches** : AG2 tourne **avant** AG4, AG4 tourne **avant** AG3, AG3 tourne **avant** AG1. La sequence garantit que chaque PM lit le dernier snapshot technique, le dernier digest macro et le dernier package fondamental/equilibre.
 3. **Couverture forex 24/5** : AG2 capte les sessions Asie (4h, 8h Paris), Europe (8h, 12h, 16h Paris) et US (16h, 20h Paris). Les 5 runs/j AG1-FX exploitent ces snapshots avec environ 30 minutes de latence.
 4. **Cadence PM compatible supervision** : 5 runs/j reste discret par rapport a un moteur intraday continu, mais couvre mieux les sessions FX qu'une cadence matin/apres-midi.
 
@@ -207,7 +212,7 @@ Legende :
 
 Le fichier `agents/trading-forex/AG1-FX-V1-Portfolio manager/generate_model_variants.py` est la **source de verite** des cron AG1. Il regenere les 3 fichiers `AG1_FX_workflow_*_v1.json` a partir du template. Les cron des 3 fichiers ne doivent jamais etre edites a la main.
 
-Pour AG2-FX-V1 et AG4-FX-V1, le cron est defini directement dans le node `Schedule Trigger` de chaque workflow JSON (un seul fichier par agent).
+Pour AG2-FX-V1, AG3-FX-V1 et AG4-FX-V1, le cron est defini directement dans le node `Schedule Trigger` de chaque workflow JSON (un seul fichier par agent).
 
 Pour AG1-FX-PF-V1, le cron horaire est defini dans `agents/trading-forex/AG1-FX-PF-V1/build_workflow.py`, qui genere `AG1-FX-PF-V1-workflow.json`.
 
@@ -499,6 +504,27 @@ CREATE TABLE IF NOT EXISTS core.fills (
 );
 
 -- ----------------------------------------------------------------------
+-- core.fill_costs
+-- Detail audit des couts broker par fill. En dry-run, source = simulated_bps.
+-- En paper/live, source = ibkr_* et raw_json conserve le payload /fills.
+-- ----------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS core.fill_costs (
+    fill_id             VARCHAR PRIMARY KEY,
+    order_id            VARCHAR NOT NULL,
+    pair                VARCHAR NOT NULL,
+    broker              VARCHAR,
+    broker_execution_id VARCHAR,
+    commission_amount   DOUBLE NOT NULL DEFAULT 0,
+    commission_ccy      VARCHAR,
+    commission_eur      DOUBLE NOT NULL DEFAULT 0,
+    commission_source   VARCHAR,
+    raw_json            VARCHAR,
+    recorded_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_fill_costs_order ON core.fill_costs(order_id);
+
+-- ----------------------------------------------------------------------
 -- core.position_lots (FX adapte)
 -- ----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS core.position_lots (
@@ -711,8 +737,9 @@ Pipeline de checks (un echec -> ordre rejete avec `rejection_reason`, pas crash)
 ### 7.8 Simulation des fills
 
 `12_simulate_fills_fx.py` :
-- Pour chaque ordre `pending` : prix de fill = mid-price du dernier `technical_signals_fx.last_close` + slippage 1 pip.
-- `fees_eur` = `0.5 * notional_eur / 10000` (= ~0.005 % du notional, ordre de grandeur retail FX). **A calibrer.** Ce calcul doit etre visible dans le code (variable `FEE_BPS = 0.5`).
+- En `IBKR_DRY_RUN=true`, pour chaque ordre `pending` : prix de fill = mid-price du dernier `technical_signals_fx.last_close` + slippage 1 pip.
+- En dry-run uniquement, `fees_eur` = `0.5 * notional_eur / 10000` (= ~0.005 % du notional, ordre de grandeur retail FX). Ce calcul reste visible dans le code (`FEE_BPS = 0.5`) et la source est tracee `simulated_bps`.
+- En `IBKR_DRY_RUN=false`, aucun fill simule n'est cree. Les fills doivent venir d'IBKR; `fees_eur` est derive des champs de commission IBKR, et `core.fill_costs` conserve montant brut, devise, source et JSON broker. Si IBKR omet la devise sur un fill FX CASH, la devise de commission est inferee depuis la cotation de la paire (`EUR.JPY` -> JPY, `EUR.CHF` -> CHF), puis convertie en EUR.
 - `swap_eur` = 0 si ferme le jour meme, sinon preleve en `19_overnight_swap.py` (hors v1, a laisser en TODO).
 
 ### 7.9 Generation des variants 3 LLMs (v1.1)

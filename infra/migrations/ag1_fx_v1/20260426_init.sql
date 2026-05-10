@@ -71,6 +71,22 @@ CREATE TABLE IF NOT EXISTS core.fills (
     fill_source         VARCHAR DEFAULT 'simulated_yfinance'
 );
 
+CREATE TABLE IF NOT EXISTS core.fill_costs (
+    fill_id             VARCHAR PRIMARY KEY,
+    order_id            VARCHAR NOT NULL,
+    pair                VARCHAR NOT NULL,
+    broker              VARCHAR,
+    broker_execution_id VARCHAR,
+    commission_amount   DOUBLE NOT NULL DEFAULT 0,
+    commission_ccy      VARCHAR,
+    commission_eur      DOUBLE NOT NULL DEFAULT 0,
+    commission_source   VARCHAR,
+    raw_json            VARCHAR,
+    recorded_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_fill_costs_order ON core.fill_costs(order_id);
+
 CREATE TABLE IF NOT EXISTS core.position_lots (
     lot_id              VARCHAR PRIMARY KEY,
     run_id_open         VARCHAR NOT NULL,

@@ -75,12 +75,19 @@ services:
       - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
       - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
       - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG3_FX_V1_DUCKDB_PATH=/files/duckdb/ag3_fx_v1.duckdb
       - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
       - IBKR_BROKER_URL=http://ibkr-broker:8080
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
       - IBKR_SEND_DRY_RUN_TO_BROKER=${IBKR_SEND_DRY_RUN_TO_BROKER:-false}
+      - IBKR_REQUIRE_PAPER_ACCOUNT=${IBKR_REQUIRE_PAPER_ACCOUNT:-true}
+      - IBKR_PAPER_ACCOUNT_PREFIXES=${IBKR_PAPER_ACCOUNT_PREFIXES:-DU}
+      - IBKR_RECONCILE_CASH_BALANCES=${IBKR_RECONCILE_CASH_BALANCES:-true}
+      - IBKR_BLOCK_ON_CASH_DIVERGENCE=${IBKR_BLOCK_ON_CASH_DIVERGENCE:-false}
+      - IBKR_CASH_RECON_THRESHOLD_UNITS=${IBKR_CASH_RECON_THRESHOLD_UNITS:-5}
+      - AG1_FX_PORTFOLIO_BASE_CCY=${AG1_FX_PORTFOLIO_BASE_CCY:-EUR}
       - EXECUTIONS_DATA_MAX_AGE=72
       - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
       - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
@@ -119,12 +126,19 @@ services:
       - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
       - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
       - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG3_FX_V1_DUCKDB_PATH=/files/duckdb/ag3_fx_v1.duckdb
       - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - AG1_FX_V1_WRITER_PATH=/files/AG1-FX-V1-EXPORT/nodes/post_agent/duckdb_writer.py
       - AG1_FX_V1_LEDGER_SCHEMA_PATH=/files/AG1-FX-V1-EXPORT/sql/ag1_fx_v1_schema.sql
       - IBKR_BROKER_URL=http://ibkr-broker:8080
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
       - IBKR_SEND_DRY_RUN_TO_BROKER=${IBKR_SEND_DRY_RUN_TO_BROKER:-false}
+      - IBKR_REQUIRE_PAPER_ACCOUNT=${IBKR_REQUIRE_PAPER_ACCOUNT:-true}
+      - IBKR_PAPER_ACCOUNT_PREFIXES=${IBKR_PAPER_ACCOUNT_PREFIXES:-DU}
+      - IBKR_RECONCILE_CASH_BALANCES=${IBKR_RECONCILE_CASH_BALANCES:-true}
+      - IBKR_BLOCK_ON_CASH_DIVERGENCE=${IBKR_BLOCK_ON_CASH_DIVERGENCE:-false}
+      - IBKR_CASH_RECON_THRESHOLD_UNITS=${IBKR_CASH_RECON_THRESHOLD_UNITS:-5}
+      - AG1_FX_PORTFOLIO_BASE_CCY=${AG1_FX_PORTFOLIO_BASE_CCY:-EUR}
     dns:
       - 1.1.1.1
       - 8.8.8.8
@@ -161,6 +175,7 @@ services:
       - AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb
       - AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb
       - AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb
+      - AG3_FX_V1_DUCKDB_PATH=/files/duckdb/ag3_fx_v1.duckdb
       - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - YF_ENRICH_DUCKDB_PATH=/files/duckdb/yf_enrichment_v1.duckdb
     command: sh -lc "pip install --no-cache-dir -r requirements.txt && streamlit run app.py --server.port=8501 --server.address=0.0.0.0"

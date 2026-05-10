@@ -89,6 +89,10 @@ class CPAPIClient:
         account_id = await self.get_account_id()
         return await self._get(f"/v1/api/portfolio/{account_id}/summary")
 
+    async def get_account_ledger(self) -> dict:
+        account_id = await self.get_account_id()
+        return await self._get(f"/v1/api/portfolio/{account_id}/ledger")
+
     # ──────────────────────────────────────────────────────────────────────────
     # Résolution de contrats
     # ──────────────────────────────────────────────────────────────────────────
@@ -106,6 +110,13 @@ class CPAPIClient:
 
     async def get_contract_info(self, conid: int) -> dict:
         return await self._get(f"/v1/api/iserver/contract/{conid}/info")
+
+    async def marketdata_snapshot(self, conids: list[int], fields: str = "") -> list[dict]:
+        params = {"conids": ",".join(str(c) for c in conids)}
+        if fields:
+            params["fields"] = fields
+        r = await self._get("/v1/api/iserver/marketdata/snapshot", params=params)
+        return r if isinstance(r, list) else [r]
 
     # ──────────────────────────────────────────────────────────────────────────
     # Ordres

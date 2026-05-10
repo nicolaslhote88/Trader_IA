@@ -19,7 +19,7 @@ with duckdb.connect(db_path) as con:
         )
         """
     )
-    errors = int(bool(ctx.get("global_error"))) + int(bool(ctx.get("fx_channel_error")))
+    errors = int(bool(ctx.get("global_error"))) + int(bool(ctx.get("fx_channel_error"))) + len(ctx.get("official_news_errors") or [])
     con.execute(
         """
         INSERT OR REPLACE INTO main.run_log VALUES (
@@ -33,7 +33,7 @@ with duckdb.connect(db_path) as con:
             int(ctx.get("news_after_dedupe") or 0),
             int(ctx.get("sections_written") or 0),
             errors,
-            "AG4-FX-V1 digest completed",
+            f"AG4-FX-V1 digest completed; official_news={int(ctx.get('official_news_pulled') or 0)}",
         ],
     )
 

@@ -9,10 +9,13 @@ Variables d'environnement :
 
 Endpoints exposés à n8n :
   GET  /health                  → statut session IBKR
+  GET  /marketdata/fx/snapshot  → snapshot FX bid/ask/mid/spread
   POST /orders/fx               → envoyer ordres FX
   POST /orders/equity           → envoyer ordres actions/ETF
   GET  /fills                   → fills récents
   GET  /positions               → positions actuelles
+  GET  /account/summary         → synthèse compte IBKR
+  GET  /account/ledger          → cash balances réelles par devise
   POST /auth/tickle             → keepalive manuel
 """
 
@@ -23,10 +26,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
 from contract_cache import (
+    FX_CONIDS,
     FX_META,
     fx_ibkr_side,
     get_fx_conid,
@@ -280,6 +284,174 @@ async def get_positions() -> list[dict]:
         raise HTTPException(502, str(exc)) from exc
 
 
+@app.get("/account/summary")
+async def get_account_summary() -> dict:
+    """Retourne le résumé de compte IBKR."""
+    client = get_client()
+    try:
+        return await client.get_account_summary()
+    except CPAPIError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/account/ledger")
+async def get_account_ledger() -> dict:
+    """Retourne les cash balances réelles par devise depuis IBKR."""
+    client = get_client()
+    try:
+        return await client.get_account_ledger()
+    except CPAPIError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+# ─── Market Data ─────────────────────────────────────────────────────────────
+
+def _num(value: Any) -> float | None:
+    try:
+        if value is None:
+            return None
+        text = str(value).replace(",", "").strip()
+        if not text:
+            return None
+        mult = 1.0
+        suffix = text[-1:].upper()
+        if suffix in {"K", "M", "B"}:
+            text = text[:-1]
+            mult = {"K": 1_000.0, "M": 1_000_000.0, "B": 1_000_000_000.0}[suffix]
+        return float(text) * mult
+    except Exception:
+        return None
+
+
+def _snapshot_has_price(raw: dict | None) -> bool:
+    if not isinstance(raw, dict):
+        return False
+    return any(_num(raw.get(field)) is not None for field in ("31", "84", "86"))
+
+
+def _merge_snapshot_rows(*batches: list[dict]) -> dict[int, dict]:
+    merged: dict[int, dict] = {}
+    for batch in batches:
+        for row in batch or []:
+            try:
+                conid = int(row.get("conid"))
+            except Exception:
+                continue
+            current = merged.get(conid)
+            if current is None or (_snapshot_has_price(row) and not _snapshot_has_price(current)):
+                merged[conid] = row
+            elif current is not None:
+                merged[conid] = {**current, **{k: v for k, v in row.items() if v not in (None, "", "N/A")}}
+    return merged
+
+
+def _snapshot_record(pair: str, raw: dict, inverted: bool = False) -> dict:
+    bid = _num(raw.get("84"))
+    ask = _num(raw.get("86"))
+    last = _num(raw.get("31"))
+    bid_size = _num(raw.get("88"))
+    ask_size = _num(raw.get("85"))
+
+    if inverted:
+        inv_bid = (1.0 / ask) if ask and ask > 0 else None
+        inv_ask = (1.0 / bid) if bid and bid > 0 else None
+        inv_last = (1.0 / last) if last and last > 0 else None
+        bid, ask, last = inv_bid, inv_ask, inv_last
+
+    mid = (bid + ask) / 2.0 if bid and ask and bid > 0 and ask > 0 else last
+    spread = (ask - bid) if bid and ask and ask >= bid else None
+    spread_pct = spread / mid if spread is not None and mid and mid > 0 else None
+    return {
+        "pair": pair,
+        "conid": raw.get("conid"),
+        "bid": bid,
+        "ask": ask,
+        "last": last,
+        "mid": mid,
+        "bid_size": bid_size,
+        "ask_size": ask_size,
+        "spread": spread,
+        "spread_pct": spread_pct,
+        "updated_ms": raw.get("_updated"),
+        "market_data_availability": raw.get("6509"),
+        "source": "ibkr_cpapi_snapshot_inverted" if inverted else "ibkr_cpapi_snapshot",
+        "raw": raw,
+    }
+
+
+@app.get("/marketdata/fx/snapshot")
+async def fx_marketdata_snapshot(
+    pairs: str = Query(..., description="Comma-separated FX pairs, e.g. EURUSD,USDJPY"),
+    fields: str = Query("31,84,85,86,88,7059,6509"),
+) -> dict[str, Any]:
+    """Retourne bid/ask/mid/spread FX depuis IBKR Client Portal API."""
+    client = get_client()
+    requested = [p.strip().upper().replace("/", "") for p in pairs.split(",") if p.strip()]
+    conid_to_pairs: dict[int, list[tuple[str, bool]]] = {}
+    errors = []
+
+    for pair in requested:
+        conid = get_fx_conid(pair)
+        inverted = False
+        if conid is None and len(pair) == 6:
+            reverse = pair[3:] + pair[:3]
+            conid = get_fx_conid(reverse)
+            inverted = conid is not None
+        if conid is None:
+            errors.append({"pair": pair, "error": "UNKNOWN_FX_CONID"})
+            continue
+        conid_to_pairs.setdefault(int(conid), []).append((pair, inverted))
+
+    if not conid_to_pairs:
+        return {"quotes": [], "errors": errors, "dry_run": DRY_RUN}
+
+    conids = sorted(conid_to_pairs)
+    try:
+        # CPAPI sometimes requires account initialization before market data,
+        # even though snapshots are account-agnostic for our read-only use case.
+        try:
+            await client.get_account_id()
+        except Exception as exc:
+            logger.info("IBKR account preflight before snapshot did not complete: %s", exc)
+
+        # CPAPI needs a pre-flight snapshot request to start streams. A short
+        # second pass usually returns the requested fields within the same run.
+        # Always do the second pass: one liquid pair can answer immediately while
+        # other conids are still warming up.
+        first = await client.marketdata_snapshot(conids, fields=fields)
+        await asyncio.sleep(0.8)
+        second = await client.marketdata_snapshot(conids, fields=fields)
+        merged_initial = _merge_snapshot_rows(first, second)
+        missing = [conid for conid in conids if not _snapshot_has_price(merged_initial.get(conid))]
+        third = []
+        if missing:
+            await asyncio.sleep(0.8)
+            third = await client.marketdata_snapshot(missing, fields=fields)
+    except CPAPIError as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+    by_conid = _merge_snapshot_rows(first, second, third)
+
+    quotes = []
+    for conid, pair_specs in conid_to_pairs.items():
+        raw = by_conid.get(conid)
+        if not raw:
+            for pair, _ in pair_specs:
+                errors.append({"pair": pair, "conid": conid, "error": "NO_SNAPSHOT_ROW"})
+            continue
+        for pair, inverted in pair_specs:
+            quotes.append(_snapshot_record(pair, raw, inverted=inverted))
+
+    return {
+        "quotes": quotes,
+        "errors": errors,
+        "fields": fields,
+        "dry_run": DRY_RUN,
+        "known_fx_conids": len(FX_CONIDS),
+        "fetched_at": now_iso(),
+    }
+
+
 # ─── FX Orders ────────────────────────────────────────────────────────────────
 
 @app.post("/orders/fx")
@@ -312,6 +484,9 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
             "quantity": quantity,
             "tif": "DAY",
             "cOID": order.client_order_id or order.order_id,
+            # Explicitly mark AG1-FX orders as speculative spot-FX trades, not
+            # cash-conversion tickets. IBKR conversion orders use isCcyConv=true.
+            "isCcyConv": False,
         }
         if ibkr_payload["orderType"] == "LMT" and order.limit_price:
             ibkr_payload["price"] = order.limit_price

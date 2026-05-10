@@ -26,6 +26,7 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | Méthode | Endpoint          | Description |
 |---------|-------------------|-------------|
 | GET     | `/health`         | Statut session IBKR |
+| GET     | `/marketdata/fx/snapshot?pairs=EURUSD,USDJPY` | Snapshot FX bid/ask/mid/spread via IBKR market data |
 | POST    | `/orders/fx`      | Envoyer ordres FX (IDEALPRO) |
 | POST    | `/orders/equity`  | Envoyer ordres actions/ETF |
 | GET     | `/fills`          | Fills récents |
@@ -94,6 +95,18 @@ Les confirmations IBKR renvoyant un `id` sont confirmees via
 `/v1/api/iserver/reply/{id}`.
 
 Reference : https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-doc/
+
+## Données de marché FX
+
+AG2-FX peut appeler :
+
+```bash
+curl "http://localhost:8080/marketdata/fx/snapshot?pairs=EURUSD,USDJPY"
+```
+
+Le endpoint retourne `bid`, `ask`, `mid`, `spread`, `spread_pct` et la disponibilité
+IBKR (`6509`) quand l'abonnement market data du compte le permet. Les ordres restent
+protégés par `IBKR_DRY_RUN`; ce endpoint ne passe aucun ordre.
 
 ## Format des requêtes
 

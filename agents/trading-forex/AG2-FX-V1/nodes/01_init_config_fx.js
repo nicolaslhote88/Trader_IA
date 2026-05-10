@@ -21,6 +21,8 @@ return [{
     as_of: new Date().toISOString(),
     db_path: $env.AG2_FX_V1_DUCKDB_PATH || '/files/duckdb/ag2_fx_v1.duckdb',
     yfinance_api_base: $env.YFINANCE_API_URL || 'http://yfinance-api:8080',
+    ibkr_broker_url: $env.IBKR_BROKER_URL || 'http://ibkr-broker:8080',
+    ibkr_marketdata_enabled: String($env.AG2_FX_IBKR_MARKETDATA_ENABLED || 'true').toLowerCase() !== 'false',
     dry_run: String($env.AG1_FX_DRY_RUN || $env.FX_DRY_RUN || '').toLowerCase() === '1',
     universe: AG4_V3_ALLOWED_PAIRS,
     interval: '1d',

@@ -45,6 +45,18 @@ CREATE TABLE IF NOT EXISTS main.technical_signals_fx (
     pip_size            DOUBLE,
     base_ccy            VARCHAR,
     quote_ccy           VARCHAR,
+    ibkr_bid            DOUBLE,
+    ibkr_ask            DOUBLE,
+    ibkr_mid            DOUBLE,
+    ibkr_last           DOUBLE,
+    ibkr_spread         DOUBLE,
+    ibkr_spread_pct     DOUBLE,
+    ibkr_bid_size       DOUBLE,
+    ibkr_ask_size       DOUBLE,
+    ibkr_market_data_availability VARCHAR,
+    ibkr_market_data_source VARCHAR,
+    ibkr_snapshot_at    VARCHAR,
+    ibkr_snapshot_error VARCHAR,
     PRIMARY KEY (run_id, pair)
 );
 

@@ -86,7 +86,7 @@ def agent_node() -> dict:
         },
         "type": "@n8n/n8n-nodes-langchain.agent",
         "typeVersion": 3.1,
-        "position": [580, -160],
+        "position": [820, -160],
         "id": "e5c4046e-e795-4c38-89b8-32cc6493ebd6",
         "name": "Agent #1 - Portfolio manager1",
     }
@@ -116,7 +116,7 @@ def model_node(variant: str, cfg: dict) -> dict:
         "parameters": params,
         "type": node_type,
         "typeVersion": type_version,
-        "position": [580, 80],
+        "position": [820, 80],
         "id": "2cda413f-27f9-4a0c-9f16-f1d4d5b0b98f",
         "name": meta["model_name"],
         "credentials": {meta["credential_key"]: meta["credential"]},
@@ -132,7 +132,7 @@ def merge_node(cfg: dict) -> dict:
         },
         "type": "n8n-nodes-base.merge",
         "typeVersion": 3.2,
-        "position": [820, -20],
+        "position": [1060, -20],
         "id": "merge-agent-output",
         "name": PROVIDER_META[cfg["provider"]]["merge"],
     }
@@ -153,7 +153,7 @@ def build_template(variant: str = "chatgpt52") -> dict:
     init_code = init_code.replace("const DEFAULT_VARIANT = 'chatgpt52';", f"const DEFAULT_VARIANT = {variant!r};")
     init_code = init_code.replace("dbPathByVariant[variant] || dbPathByVariant[DEFAULT_VARIANT]", repr(cfg["db_path"]))
 
-    post_x0 = 1060
+    post_x0 = 1300
     nodes = [
         {
             "parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": cfg["cron"]}]}},
@@ -169,16 +169,18 @@ def build_template(variant: str = "chatgpt52") -> dict:
         code_node("03 Load Portfolio State FX", "pre_agent/03_load_portfolio_state_fx.py", -380, -20),
         code_node("04 Load Technical Signals FX", "pre_agent/04_load_technical_signals_fx.py", -140, -20),
         code_node("05 Load News Macro FX", "pre_agent/05_load_news_macro_fx.py", 100, -20),
-        code_node("06 Assemble Brief FX", "pre_agent/06_assemble_brief_fx.js", 340, -20, "javaScript"),
+        code_node("05b Load Fundamental FX", "pre_agent/05b_load_fundamental_fx.py", 340, -20),
+        code_node("06 Assemble Brief FX", "pre_agent/06_assemble_brief_fx.js", 580, -20, "javaScript"),
         *llm_segment_nodes(variant, cfg),
         code_node("10 Parse Decision FX", "post_agent/10_parse_decision_fx.js", post_x0, -20, "javaScript"),
         code_node("11 Validate Enforce Safety FX", "post_agent/11_validate_enforce_safety_fx.js", post_x0 + 240, -20, "javaScript"),
-        code_node("12 Simulate Fills FX", "post_agent/12_simulate_fills_fx.py", post_x0 + 480, -20),
-        code_node("13 Write Orders FX", "post_agent/13_write_orders_fx.py", post_x0 + 720, -20),
-        code_node("14 Write Lots FX", "post_agent/14_write_lots_fx.py", post_x0 + 960, -20),
-        code_node("15 Close Lots FX", "post_agent/15_close_lots_fx.py", post_x0 + 1200, -20),
-        code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", post_x0 + 1440, -20),
-        code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", post_x0 + 1680, -20),
+        code_node("11b IBKR Send Orders FX", "post_agent/11b_ibkr_send_orders_fx.py", post_x0 + 480, -20),
+        code_node("12 Simulate Fills FX", "post_agent/12_simulate_fills_fx.py", post_x0 + 720, -20),
+        code_node("13 Write Orders FX", "post_agent/13_write_orders_fx.py", post_x0 + 960, -20),
+        code_node("14 Write Lots FX", "post_agent/14_write_lots_fx.py", post_x0 + 1200, -20),
+        code_node("15 Close Lots FX", "post_agent/15_close_lots_fx.py", post_x0 + 1440, -20),
+        code_node("16 Snapshot Portfolio FX", "post_agent/16_snapshot_portfolio_fx.py", post_x0 + 1680, -20),
+        code_node("17 Log Run FX", "post_agent/17_log_run_fx.py", post_x0 + 1920, -20),
     ]
 
     merge = PROVIDER_META[cfg["provider"]]["merge"]
@@ -195,6 +197,7 @@ def build_template(variant: str = "chatgpt52") -> dict:
             "03 Load Portfolio State FX",
             "04 Load Technical Signals FX",
             "05 Load News Macro FX",
+            "05b Load Fundamental FX",
             "06 Assemble Brief FX",
         ],
     )
@@ -216,6 +219,7 @@ def build_template(variant: str = "chatgpt52") -> dict:
             merge,
             "10 Parse Decision FX",
             "11 Validate Enforce Safety FX",
+            "11b IBKR Send Orders FX",
             "12 Simulate Fills FX",
             "13 Write Orders FX",
             "14 Write Lots FX",

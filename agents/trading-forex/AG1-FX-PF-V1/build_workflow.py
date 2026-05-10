@@ -84,9 +84,7 @@ def build() -> dict:
                             "name": "portfolio_db_paths_json",
                             "value": (
                                 "["
-                                "\"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\","
-                                "\"/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb\","
-                                "\"/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb\""
+                                "\"/files/duckdb/ag1_fx_v1_chatgpt52.duckdb\""
                                 "]"
                             ),
                             "type": "string",
@@ -121,6 +119,12 @@ def build() -> dict:
                             "value": "AG1-FX-PF-V1 hourly portfolio valuation",
                             "type": "string",
                         },
+                        {
+                            "id": "ag1fxpf-00-13",
+                            "name": "ibkr_broker_url",
+                            "value": "http://ibkr-broker:8080",
+                            "type": "string",
+                        },
                     ]
                 },
                 "options": {},
@@ -146,9 +150,10 @@ def build() -> dict:
         {
             "parameters": {
                 "content": (
-                    "AG1-FX-PF-V1: hourly mark-to-market for the three dedicated AG1-FX DuckDB portfolios. "
-                    "Reads open lots, refreshes FX prices through yfinance-api with AG2-FX fallback, and writes "
-                    "core.portfolio_snapshot rows without asking the LLM for new decisions."
+                    "AG1-FX-PF-V1: hourly mark-to-market and broker reconciliation for AG1-FX. "
+                    "In production paper mode only the GPT AG1-FX DuckDB is reconciled against the single IBKR paper account. "
+                    "The workflow imports confirmed IBKR fills, compares positions, and writes core.portfolio_snapshot rows "
+                    "without asking the LLM for new decisions."
                 ),
                 "height": 220,
                 "width": 760,
