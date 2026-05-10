@@ -114,7 +114,7 @@ def parse_stk_symbol(symbol: str) -> tuple[str, str]:
 
 
 SUFFIX_TO_EXCHANGE: dict[str, str] = {
-    "PA": "EURONEXT",
+    "PA": "SBF",
     "DE": "IBIS",
     "AS": "AEB",
     "BR": "ENEXT.BE",

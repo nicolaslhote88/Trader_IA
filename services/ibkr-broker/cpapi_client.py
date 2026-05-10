@@ -119,28 +119,16 @@ class CPAPIClient:
         Les champs minimum sont conid, orderType, side, tif et quantity.
 
         Retourne la liste des réponses IBKR (une par ordre).
-        Gère la confirmation en 2 temps quand IBKR renvoie un reply_id.
+        Les confirmations IBKR en 2 temps ne sont jamais auto-acceptees ici.
+        Un item avec "id" doit remonter au caller comme confirmation requise,
+        afin qu'un ordre strategie ne contourne pas une alerte de prix, taille,
+        liquidite ou contrainte IBKR.
         """
         account_id = await self.get_account_id()
         response = await self._post(
-            f"/v1/api/iserver/account/{account_id}/orders", orders
+            f"/v1/api/iserver/account/{account_id}/orders", {"orders": orders}
         )
-        # IBKR peut retourner une liste de confirmations à valider
-        results = response if isinstance(response, list) else [response]
-        confirmed = []
-        for item in results:
-            reply_id = item.get("id")
-            if reply_id:
-                # Confirmation automatique (ordre non-ambigu)
-                confirm_resp = await self._post(
-                    f"/v1/api/iserver/reply/{reply_id}", {"confirmed": True}
-                )
-                confirmed.extend(
-                    confirm_resp if isinstance(confirm_resp, list) else [confirm_resp]
-                )
-            else:
-                confirmed.append(item)
-        return confirmed
+        return response if isinstance(response, list) else [response]
 
     async def get_recent_trades(self) -> list[dict]:
         """Retourne les fills récents (depuis dernier appel)."""

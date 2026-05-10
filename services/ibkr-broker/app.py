@@ -144,6 +144,53 @@ def _dry_run_result(order_id: str, details: dict) -> dict:
     }
 
 
+def _reply_required_items(response: list[dict]) -> list[dict]:
+    """Return IBKR prompt/reply objects that still need human confirmation."""
+    return [
+        item for item in response
+        if isinstance(item, dict) and item.get("id") and not item.get("order_id")
+    ]
+
+
+def _reply_required_error(order_id: str, client_order_id: str, response: list[dict]) -> dict:
+    messages = []
+    for item in _reply_required_items(response):
+        raw_message = item.get("message") or item.get("text") or []
+        if isinstance(raw_message, list):
+            messages.extend(str(m) for m in raw_message)
+        elif raw_message:
+            messages.append(str(raw_message))
+    return {
+        "order_id": order_id,
+        "client_order_id": client_order_id,
+        "status": "needs_confirmation",
+        "error": "IBKR_ORDER_NEEDS_CONFIRMATION" + (f": {' | '.join(messages)}" if messages else ""),
+        "ibkr_response": response,
+    }
+
+
+def _contract_exchanges(contract: dict) -> set[str]:
+    exchanges = {
+        str(contract.get("listingExchange") or "").upper(),
+        str(contract.get("exchange") or "").upper(),
+    }
+    all_exchanges = str(contract.get("allExchanges") or "")
+    exchanges.update(part.strip().upper() for part in all_exchanges.split(",") if part.strip())
+    for section in contract.get("sections") or []:
+        exchanges.add(str(section.get("exchange") or "").upper())
+    return {exchange for exchange in exchanges if exchange}
+
+
+def _position_qty_by_conid(positions: list[dict], conid: int) -> float:
+    for position in positions:
+        try:
+            if int(position.get("conid") or 0) == int(conid):
+                return float(position.get("position") or 0)
+        except (TypeError, ValueError):
+            continue
+    return 0.0
+
+
 async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
     """
     Résout le conid IBKR d'un symbole action.
@@ -160,19 +207,17 @@ async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
     if not contracts:
         raise HTTPException(404, f"No IBKR contract found for {symbol}")
 
-    # Cherche l'exchange correspondant, sinon prend le premier
+    # Cherche l'exchange correspondant. Pour un symbole suffixe (ex: .PA),
+    # on refuse le fallback vers un autre marche afin d'eviter CRI.PA -> CRI US.
     best = None
     for c in contracts:
-        sections = c.get("sections") or []
-        for sec in sections:
-            if sec.get("exchange", "").upper() == exchange.upper():
-                best = {"conid": int(c["conid"]), "exchange": exchange}
-                break
-        if best:
+        if exchange.upper() in _contract_exchanges(c):
+            best = {"conid": int(c["conid"]), "exchange": exchange}
             break
 
     if not best:
-        # Prend le premier résultat (SMART routing)
+        if suffix:
+            raise HTTPException(404, f"No IBKR contract found for {symbol} on exchange {exchange}")
         first = contracts[0]
         best = {"conid": int(first["conid"]), "exchange": "SMART"}
 
@@ -283,9 +328,13 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
         client = get_client()
         try:
             ibkr_resp = await client.place_orders([ibkr_payload])
+            client_order_id = order.client_order_id or order.order_id
+            if _reply_required_items(ibkr_resp):
+                errors.append(_reply_required_error(order.order_id, client_order_id, ibkr_resp))
+                continue
             results.append({
                 "order_id": order.order_id,
-                "client_order_id": order.client_order_id or order.order_id,
+                "client_order_id": client_order_id,
                 "status": "submitted",
                 "ibkr_response": ibkr_resp,
                 "sent_at": now_iso(),
@@ -321,8 +370,42 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
             else:
                 conid = await _resolve_stk_conid(client, symbol)
         except HTTPException as exc:
-            errors.append({"order_id": order.order_id, "error": exc.detail})
+            errors.append({
+                "order_id": order.order_id,
+                "client_order_id": order.client_order_id or order.order_id,
+                "error": exc.detail,
+            })
             continue
+        except CPAPIError as exc:
+            logger.error("Equity contract resolution failed symbol=%s: %s", symbol, exc)
+            errors.append({
+                "order_id": order.order_id,
+                "client_order_id": order.client_order_id or order.order_id,
+                "error": str(exc),
+            })
+            continue
+
+        if not DRY_RUN and ibkr_side == "SELL":
+            try:
+                held_qty = _position_qty_by_conid(await client.get_portfolio_positions(), conid)
+            except CPAPIError as exc:
+                logger.error("Equity position preflight failed symbol=%s: %s", symbol, exc)
+                errors.append({
+                    "order_id": order.order_id,
+                    "client_order_id": order.client_order_id or order.order_id,
+                    "error": f"IBKR_POSITION_PREFLIGHT_FAILED: {exc}",
+                })
+                continue
+            if held_qty < float(order.quantity):
+                errors.append({
+                    "order_id": order.order_id,
+                    "client_order_id": order.client_order_id or order.order_id,
+                    "error": (
+                        "IBKR_SELL_REJECTED_INSUFFICIENT_POSITION:"
+                        f"{symbol}:held={held_qty}:sell={order.quantity}"
+                    ),
+                })
+                continue
 
         ibkr_payload = {
             "conid": conid,
@@ -346,9 +429,13 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
 
         try:
             ibkr_resp = await client.place_orders([ibkr_payload])
+            client_order_id = order.client_order_id or order.order_id
+            if _reply_required_items(ibkr_resp):
+                errors.append(_reply_required_error(order.order_id, client_order_id, ibkr_resp))
+                continue
             results.append({
                 "order_id": order.order_id,
-                "client_order_id": order.client_order_id or order.order_id,
+                "client_order_id": client_order_id,
                 "status": "submitted",
                 "ibkr_response": ibkr_resp,
                 "sent_at": now_iso(),
