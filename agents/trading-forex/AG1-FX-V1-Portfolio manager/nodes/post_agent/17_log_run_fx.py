@@ -46,6 +46,31 @@ with duckdb.connect(db_path) as con:
             ),
         ],
     )
+    for idx, decision in enumerate((ctx.get("decision_json") or {}).get("decisions") or [], 1):
+        pair = str(decision.get("pair") or "").upper()
+        if not pair:
+            continue
+        con.execute(
+            """
+            INSERT OR REPLACE INTO core.ai_signals (
+              signal_id, run_id, pair, decision, conviction, rationale,
+              target_size_lots, stop_loss_price, take_profit_price, horizon, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                f"SIG_{ctx.get('run_id')}_{pair}_{idx:03d}",
+                ctx.get("run_id"),
+                pair,
+                str(decision.get("decision") or "hold"),
+                decision.get("conviction"),
+                decision.get("rationale"),
+                decision.get("size_lots"),
+                decision.get("stop_loss_price"),
+                decision.get("take_profit_price"),
+                decision.get("horizon"),
+                now_ts,
+            ],
+        )
 
 lock_path = ((ctx.get("ag1_fx_lock") or {}).get("path") or "").strip()
 if lock_path:

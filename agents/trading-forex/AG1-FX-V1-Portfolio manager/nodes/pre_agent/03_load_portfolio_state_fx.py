@@ -2,6 +2,7 @@ import math
 import os
 import json
 import time
+from contextlib import contextmanager
 from pathlib import Path
 import urllib.request
 
@@ -20,7 +21,8 @@ reconcile_cash_balances_enabled = os.environ.get("IBKR_RECONCILE_CASH_BALANCES",
 block_on_cash_divergence = os.environ.get("IBKR_BLOCK_ON_CASH_DIVERGENCE", "false").lower() == "true"
 cash_recon_threshold_units = float(os.environ.get("IBKR_CASH_RECON_THRESHOLD_UNITS", "5") or 5)
 portfolio_base_ccy = os.environ.get("AG1_FX_PORTFOLIO_BASE_CCY", "EUR").upper()
-lock_ttl_seconds = int(float(os.environ.get("AG1_FX_LOCK_TTL_SECONDS", "2700") or 2700))
+lock_ttl_seconds = int(float(os.environ.get("AG1_FX_LOCK_TTL_SECONDS", "300") or 300))
+lock_wait_seconds = int(float(os.environ.get("AG1_FX_LOCK_WAIT_SECONDS", "50") or 50))
 lock_path = os.environ.get("AG1_FX_LOCK_PATH", "/files/locks/ag1_fx_active.lock")
 
 
@@ -79,32 +81,78 @@ def fetch_dicts(con, query, params=None):
     return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
+def is_retryable_duckdb_error(exc):
+    msg = str(exc).lower()
+    return any(token in msg for token in ("lock", "locked", "conflict", "busy", "timeout"))
+
+
+@contextmanager
+def duckdb_connect_retry(path_text, read_only=False, attempts=10, base_delay=0.35):
+    con = None
+    for attempt in range(attempts):
+        try:
+            con = duckdb.connect(path_text, read_only=read_only)
+            break
+        except Exception as exc:
+            if is_retryable_duckdb_error(exc) and attempt < attempts - 1:
+                time.sleep(base_delay * (1.7 ** attempt))
+                continue
+            raise
+    try:
+        yield con
+    finally:
+        if con is not None:
+            con.close()
+
+
 def acquire_lock(path_text):
     if os.environ.get("AG1_FX_DISABLE_LOCK", "").lower() in {"1", "true", "yes"}:
         return {"enabled": False}
     path = Path(path_text)
     path.parent.mkdir(parents=True, exist_ok=True)
-    now = time.time()
-    if path.exists():
+    started = time.time()
+    waits = 0
+    last_age = 0.0
+    while True:
+        now = time.time()
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+                last_age = now - float(existing.get("created_ts") or 0)
+            except Exception:
+                existing = {}
+                last_age = now - path.stat().st_mtime
+            if last_age >= lock_ttl_seconds:
+                path.unlink(missing_ok=True)
+            elif now - started < lock_wait_seconds:
+                waits += 1
+                time.sleep(min(5.0, 0.75 * (1.5 ** min(waits, 5))))
+                continue
+            else:
+                raise RuntimeError(
+                    f"AG1_FX_PORTFOLIO_LOCK_ACTIVE:{path}:"
+                    f"run_id={existing.get('run_id')}:age_seconds={last_age:.0f}:waited_seconds={now-started:.0f}"
+                )
+        payload = {
+            "run_id": ctx.get("run_id"),
+            "variant": ctx.get("variant"),
+            "db_path": db_path,
+            "created_ts": now,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+            "waited_seconds": round(now - started, 3),
+            "lock_waits": waits,
+        }
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-            age = now - float(payload.get("created_ts") or 0)
-        except Exception:
-            age = now - path.stat().st_mtime
-        if age < lock_ttl_seconds:
-            raise RuntimeError(f"AG1_FX_PORTFOLIO_LOCK_ACTIVE:{path}:age_seconds={age:.0f}")
-        path.unlink(missing_ok=True)
-    payload = {
-        "run_id": ctx.get("run_id"),
-        "variant": ctx.get("variant"),
-        "db_path": db_path,
-        "created_ts": now,
-        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
-    }
-    fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(payload, fh)
-    return {"enabled": True, "path": str(path), **payload}
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            if now - started < lock_wait_seconds:
+                waits += 1
+                time.sleep(min(5.0, 0.75 * (1.5 ** min(waits, 5))))
+                continue
+            raise RuntimeError(f"AG1_FX_PORTFOLIO_LOCK_RACE:{path}:waited_seconds={now-started:.0f}")
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        return {"enabled": True, "path": str(path), **payload}
 
 
 def get_broker_json(path, timeout=12):
@@ -288,6 +336,19 @@ def cash_balance_reconciliation(lots, cfg, ledger_payload):
     }
 
 
+def cash_ledger_confirms_open_fx_lots(cash_summary):
+    if not cash_summary or not cash_summary.get("enabled"):
+        return False
+    db_effects = cash_summary.get("db_cash_effect_by_currency") or {}
+    deltas = cash_summary.get("currency_deltas") or {}
+    tracked_ccys = [
+        str(ccy).upper()
+        for ccy, value in db_effects.items()
+        if str(ccy).upper() != portfolio_base_ccy and abs(to_float(value, 0.0)) > 1e-9
+    ]
+    return bool(tracked_ccys) and not any(ccy in deltas for ccy in tracked_ccys)
+
+
 def fx_units_from_recent_fills(fills_payload, universe_pairs):
     latest = {}
     for row in fills_payload or []:
@@ -351,8 +412,6 @@ def reconcile_ibkr_state(lots, cfg):
             delta = ibkr_units.get(pair, 0.0) - db_units.get(pair, 0.0)
             if abs(delta) > 1.0:
                 summary["deltas"][pair] = round(delta, 4)
-        if summary["deltas"]:
-            summary["reasons"].append("IBKR_DUCKDB_POSITION_DIVERGENCE")
         if reconcile_cash_balances_enabled:
             try:
                 ledger_payload = get_broker_json("/account/ledger")
@@ -369,6 +428,12 @@ def reconcile_ibkr_state(lots, cfg):
                 }
                 if block_on_cash_divergence:
                     summary["reasons"].append(f"IBKR_LEDGER_RECONCILIATION_FAILED:{ledger_exc}")
+        if summary["deltas"]:
+            if cash_ledger_confirms_open_fx_lots(summary.get("cash_balances")):
+                summary["position_reconciliation_mode"] = "cash_ledger_authoritative_for_fx_cash"
+                summary["position_deltas_audited_only"] = True
+            else:
+                summary["reasons"].append("IBKR_DUCKDB_POSITION_DIVERGENCE")
     except Exception as exc:
         summary["ok"] = False
         summary["reasons"].append(f"IBKR_RECONCILIATION_FAILED:{exc}")
@@ -384,7 +449,7 @@ def load_latest_ag2_prices(path):
     if not os.path.exists(path):
         return {}, "AG2_DB_MISSING"
     try:
-        with duckdb.connect(path, read_only=True) as con:
+        with duckdb_connect_retry(path, read_only=True) as con:
             rows = con.execute(
                 """
                 SELECT pair, CAST(last_close AS DOUBLE) AS last_close
@@ -434,7 +499,7 @@ def quote_to_eur(pair, prices):
 
 lock_info = acquire_lock(lock_path)
 
-with duckdb.connect(db_path) as con:
+with duckdb_connect_retry(db_path, read_only=False) as con:
     if os.path.exists(schema_path):
         for stmt in split_sql(Path(schema_path).read_text(encoding="utf-8")):
             con.execute(stmt)
@@ -575,7 +640,7 @@ state = {
 }
 
 cfg["llm_model"] = ctx.get("llm_model") or cfg.get("llm_model") or "unset"
-with duckdb.connect(db_path) as con:
+with duckdb_connect_retry(db_path, read_only=False) as con:
     con.execute(
         "UPDATE cfg.portfolio_config SET llm_model = ?, kill_switch_active = ?, updated_at = CURRENT_TIMESTAMP WHERE config_key = 'default'",
         [cfg["llm_model"], bool(cfg.get("kill_switch_active"))],

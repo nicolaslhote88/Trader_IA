@@ -7,7 +7,7 @@ brief = ctx.get("brief") or {}
 prices = {r.get("pair"): r.get("last_close") for r in brief.get("technical_signals", []) if r.get("pair")}
 
 def quote_to_eur(pair):
-    quote = pair[3:]
+    quote = str(pair or "")[3:6].upper()
     if quote == "EUR":
         return 1.0
     direct = prices.get(f"{quote}EUR")
@@ -18,8 +18,8 @@ def quote_to_eur(pair):
         return 1.0 / float(inv)
     if quote == "USD":
         eurusd = prices.get("EURUSD")
-        return 1.0 / float(eurusd) if eurusd else 1.0
-    return 1.0
+        return 1.0 / float(eurusd) if eurusd else None
+    return None
 
 with duckdb.connect(db_path) as con:
     cash = float(con.execute("SELECT COALESCE(SUM(amount_eur), 0) FROM core.cash_ledger").fetchone()[0] or 0)
@@ -29,6 +29,8 @@ with duckdb.connect(db_path) as con:
     for pair, side, size_lots, open_price in lots:
         px = float(prices.get(pair) or open_price or 0)
         q2e = quote_to_eur(pair)
+        if q2e is None:
+            q2e = (1.0 / px) if pair.startswith("EUR") and px > 0 else 0.0
         direction = 1 if side == "long" else -1
         floating += float(size_lots) * 100000 * (px - float(open_price)) * direction * q2e
         notional += abs(float(size_lots) * 100000 * px * q2e)
