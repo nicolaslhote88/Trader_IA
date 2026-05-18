@@ -99,9 +99,11 @@ Garanties ajoutees :
   DuckDB ouverts avec `/positions` IBKR. Une divergence active le kill switch et
   bloque les ouvertures.
 - Reconciliation des balances cash IBKR via `/account/ledger` dans le pre-run
-  AG1-FX et dans `AG1-FX-PF-V1`. Par defaut, elle audite les ecarts de devises
-  non base dans `core.reconciliation_log`. Pour transformer un ecart cash en
-  blocage dur, definir `IBKR_BLOCK_ON_CASH_DIVERGENCE=true`.
+  AG1-FX et dans `AG1-FX-PF-V1`. Pour les contrats spot-FX `CASH`, le ledger
+  cash IBKR est la source autoritaire car CPAPI ne remonte pas toujours de
+  lignes de positions FX exploitables. Par defaut, les ecarts de devises non
+  base sont audites dans `core.reconciliation_log`. Pour transformer un ecart
+  cash en blocage dur, definir `IBKR_BLOCK_ON_CASH_DIVERGENCE=true`.
 - Global lock AG1-FX : empeche deux runs PM simultanes contre le meme compte.
 - Le validateur `11 Validate Enforce Safety FX` bloque deterministiquement tout
   nouvel ordre dont le compact pack indique `trade_permission=NO_NEW_POSITION`.

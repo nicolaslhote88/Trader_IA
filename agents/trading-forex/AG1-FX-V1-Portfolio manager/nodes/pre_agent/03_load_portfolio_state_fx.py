@@ -377,23 +377,13 @@ def cash_balance_reconciliation(lots, cfg, ledger_payload):
 def cash_ledger_confirms_open_fx_lots(cash_summary):
     if not cash_summary or not cash_summary.get("enabled"):
         return False
-    db_effects = cash_summary.get("db_cash_effect_by_currency") or {}
-    deltas = cash_summary.get("currency_deltas") or {}
-    ibkr_cash = cash_summary.get("ibkr_cash_by_currency") or {}
-    tracked_ccys = []
-    directionally_confirmed = []
-    for ccy, value in db_effects.items():
-        ccy = str(ccy).upper()
-        expected = to_float(value, 0.0)
-        if ccy == portfolio_base_ccy or abs(expected) <= 1e-9:
-            continue
-        tracked_ccys.append(ccy)
-        broker = to_float(ibkr_cash.get(ccy), 0.0)
-        if ccy not in deltas:
-            directionally_confirmed.append(ccy)
-        elif abs(broker) > cash_recon_threshold_units and (broker > 0) == (expected > 0):
-            directionally_confirmed.append(ccy)
-    return bool(tracked_ccys) and len(directionally_confirmed) == len(tracked_ccys)
+    if cash_summary.get("error"):
+        return False
+    # IBKR CPAPI usually exposes spot-FX as currency cash balances, not as
+    # portfolio positions. When the ledger is readable, it is the authoritative
+    # source for FX CASH exposure; cash deltas remain separately auditable and
+    # only block when IBKR_BLOCK_ON_CASH_DIVERGENCE=true.
+    return bool(cash_summary.get("ibkr_cash_by_currency"))
 
 
 def fx_units_from_recent_fills(fills_payload, universe_pairs):

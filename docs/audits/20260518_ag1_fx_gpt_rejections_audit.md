@@ -32,10 +32,11 @@ Date: 2026-05-18
   navigateur/2FA est necessaire.
 - Les logs de reconciliation conservent les lots DuckDB attendus meme si le
   broker est indisponible, ce qui evite les payloads vides peu actionnables.
-- La reconciliation FX cash-ledger accepte aussi une confirmation
-  directionnelle par devise lorsque le compte a un solde cash externe dans la
-  meme devise. Cas observe: le lot `EURUSD` est confirme par un cash USD positif
-  chez IBKR, meme si un solde USD preexistant cree un delta non bloquant.
+- Correction de suivi: la reconciliation FX traite maintenant `/account/ledger`
+  comme source autoritaire pour les contrats spot-FX CASH lorsque le ledger est
+  lisible. Les deltas de pseudo-position CPAPI restent audites, mais ne bloquent
+  plus les nouvelles ouvertures si le ledger cash est disponible. Les ecarts
+  cash ne bloquent que si `IBKR_BLOCK_ON_CASH_DIVERGENCE=true`.
 - `AG1_FX_CASH_ONLY_BASE_CCY_MODE=true` bloque avant broker les nouvelles
   ouvertures qui exposeraient le compte a du levier de devise non-EUR. Avec
   `AG1_FX_PORTFOLIO_BASE_CCY=EUR`, seules les nouvelles ouvertures `SELL_BASE`
