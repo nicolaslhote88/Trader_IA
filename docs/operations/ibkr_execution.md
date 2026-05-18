@@ -25,7 +25,11 @@ References IBKR utilisees :
 - `services/ibkr-gateway/` telecharge et lance `clientportal.gw`.
 - `services/ibkr-broker/` expose `/health`, `/orders/fx`, `/orders/equity`,
   `/fills`, `/positions`, `/account/summary`, `/account/ledger` et
-  `/auth/tickle`.
+  `/auth/tickle`, `/auth/initialize`.
+- Le broker supervise la session CPAPI : `/tickle` toutes les 55 secondes,
+  puis tentative `/iserver/auth/ssodh/init` si IBKR indique
+  `connected=true/authenticated=false`. Si la session Gateway/SSO a expire,
+  `/health` expose `session_monitor.manual_login_required=true`.
 - Sur le VPS actuel, les deux services sont integres directement dans le stack
   `/docker/yfinance`. Le fichier de reference a copier comme compose principal
   est `infra/vps_hostinger_config/docker-compose.yfinance.yml`.
@@ -38,6 +42,26 @@ References IBKR utilisees :
   `AG1_FX_PORTFOLIO_BASE_CCY`. Sans variable explicite, ils restent en dry-run,
   utilisent `http://ibkr-broker:8080`, auditent les balances cash et ne bloquent
   que sur divergence de positions.
+
+## Realite authentification IBKR
+
+Le Client Portal Gateway ne permet pas d'automatiser le login complet pour un
+client individuel. Le login navigateur + 2FA reste obligatoire au moins une fois
+par jour selon IBKR, et plus tot en cas de maintenance serveur ou d'expiration
+SSO. La solution de production retenue est donc :
+
+- maintenir la session active avec `/tickle`;
+- relancer automatiquement la session brokerage via `/iserver/auth/ssodh/init`
+  quand la session Gateway/SSO est encore valide;
+- signaler explicitement `manual_login_required=true` quand IBKR impose un
+  relogin navigateur;
+- utiliser un username IBKR dedie au robot pour eviter les sessions concurrentes
+  Client Portal/TWS/mobile.
+
+`IBKR_AUTO_REAUTH_COMPETE=false` par defaut evite de deconnecter une autre
+session ouverte avec le meme username. Si le robot utilise un username dedie,
+`IBKR_AUTO_REAUTH_COMPETE=true` peut etre active pour reprendre la priorite sur
+une session concurrente accidentelle.
 
 ## Intention FX IBKR
 
@@ -100,6 +124,15 @@ Garanties ajoutees :
 - Les rejets IBKR explicites sont classes en `broker_error` et ne generent ni
   fill simule ni retry automatique.
 - `core.reconciliation_log` conserve les controles IBKR/DuckDB.
+- Depuis le 2026-05-18, `AG1_FX_CASH_ONLY_BASE_CCY_MODE=true` est le mode par
+  defaut en paper live CPAPI. Le compte paper refuse les ouvertures qui
+  exposent le compte a du levier de devise non-EUR; AG1-FX les bloque donc
+  avant envoi broker. Avec `AG1_FX_PORTFOLIO_BASE_CCY=EUR`, les nouvelles
+  ouvertures autorisees sont `SELL_BASE` sur `EURxxx` ou `BUY_BASE` sur
+  `xxxEUR`. Les clotures/reductions de lots existants restent autorisees.
+- Les echecs de session CPAPI sont journalises comme `IBKR_MANUAL_LOGIN_REQUIRED`
+  quand le broker indique qu'un relogin navigateur/2FA est necessaire, au lieu
+  d'un simple `HTTP Error 502`.
 
 ## Deploiement VPS
 
@@ -125,6 +158,9 @@ grep -q '^IBKR_RECONCILE_CASH_BALANCES=' .env || echo 'IBKR_RECONCILE_CASH_BALAN
 grep -q '^IBKR_BLOCK_ON_CASH_DIVERGENCE=' .env || echo 'IBKR_BLOCK_ON_CASH_DIVERGENCE=false' >> .env
 grep -q '^IBKR_CASH_RECON_THRESHOLD_UNITS=' .env || echo 'IBKR_CASH_RECON_THRESHOLD_UNITS=5' >> .env
 grep -q '^AG1_FX_PORTFOLIO_BASE_CCY=' .env || echo 'AG1_FX_PORTFOLIO_BASE_CCY=EUR' >> .env
+grep -q '^IBKR_KEEPALIVE_INTERVAL_SECONDS=' .env || echo 'IBKR_KEEPALIVE_INTERVAL_SECONDS=55' >> .env
+grep -q '^IBKR_AUTO_REAUTH_ENABLED=' .env || echo 'IBKR_AUTO_REAUTH_ENABLED=true' >> .env
+grep -q '^IBKR_AUTO_REAUTH_COMPETE=' .env || echo 'IBKR_AUTO_REAUTH_COMPETE=false' >> .env
 docker compose config --quiet
 docker compose up -d --build yfinance-api yf-enrichment ibkr-gateway ibkr-broker
 docker compose ps yfinance-api yf-enrichment ibkr-gateway ibkr-broker
@@ -138,6 +174,17 @@ depuis la machine locale :
 ssh -L 5000:127.0.0.1:5000 root@100.104.236.78
 # puis ouvrir https://localhost:5000
 ```
+
+Controle apres login :
+
+```bash
+curl -sS http://127.0.0.1:18080/health
+curl -sS -X POST http://127.0.0.1:18080/auth/initialize
+```
+
+Le second appel doit repondre `ok=true` uniquement si la session Gateway/SSO est
+encore valide. S'il echoue avec `manual_login_required`, ouvrir a nouveau
+`https://localhost:5000` et valider IBKR/2FA.
 
 Les task-runners n8n externes doivent exposer les variables IBKR aux Code nodes.
 Sur le VPS actuel, cela passe par `/opt/trader-ia/n8n-task-runners.clean.json` :

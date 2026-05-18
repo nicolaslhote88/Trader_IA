@@ -14,7 +14,9 @@ DuckDB AG1-FX sont reconciliees avec les positions et les cash balances IBKR
 avant les runs PM et toutes les heures via `AG1-FX-PF-V1`.
 Le validateur AG1-FX bloque maintenant les ouvertures `NO_NEW_POSITION` et
 ramene les ouvertures `REDUCED_SIZE_ONLY` a un cap reduit configurable avant
-tout envoi IBKR.
+tout envoi IBKR. Depuis le 2026-05-18, le mode paper live bloque aussi avant
+broker les nouvelles ouvertures FX qui emprunteraient une devise non-EUR
+(`AG1_FX_CASH_ONLY_BASE_CCY_MODE=true`).
 
 ---
 

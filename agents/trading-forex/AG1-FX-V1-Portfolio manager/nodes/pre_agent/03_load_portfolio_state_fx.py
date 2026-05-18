@@ -161,6 +161,44 @@ def get_broker_json(path, timeout=12):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def post_broker_json(path, payload=None, timeout=12):
+    req = urllib.request.Request(
+        f"{broker_url}{path}",
+        data=json.dumps(payload or {}).encode("utf-8"),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+class BrokerPreflightBlocked(Exception):
+    pass
+
+
+def broker_auth_reason(health):
+    monitor = health.get("session_monitor") if isinstance(health, dict) else {}
+    error = str((health or {}).get("error") or monitor.get("last_tickle_error") or "").lower()
+    if monitor.get("manual_login_required") or any(token in error for token in ("401", "unauthorized", "login", "sso", "session")):
+        return "IBKR_MANUAL_LOGIN_REQUIRED"
+    return "IBKR_BROKER_NOT_AUTHENTICATED"
+
+
+def refresh_broker_health(health):
+    if health.get("authenticated"):
+        return health
+    if (health.get("session_monitor") or {}).get("manual_login_required"):
+        return health
+    try:
+        init = post_broker_json("/auth/initialize", {}, timeout=15)
+        refreshed = get_broker_json("/health")
+        refreshed["auth_initialize"] = init
+        return refreshed
+    except Exception as exc:
+        health["auth_initialize_error"] = str(exc)
+        return health
+
+
 def paper_account_ids(positions_payload):
     ids = []
     for row in positions_payload or []:
@@ -341,12 +379,21 @@ def cash_ledger_confirms_open_fx_lots(cash_summary):
         return False
     db_effects = cash_summary.get("db_cash_effect_by_currency") or {}
     deltas = cash_summary.get("currency_deltas") or {}
-    tracked_ccys = [
-        str(ccy).upper()
-        for ccy, value in db_effects.items()
-        if str(ccy).upper() != portfolio_base_ccy and abs(to_float(value, 0.0)) > 1e-9
-    ]
-    return bool(tracked_ccys) and not any(ccy in deltas for ccy in tracked_ccys)
+    ibkr_cash = cash_summary.get("ibkr_cash_by_currency") or {}
+    tracked_ccys = []
+    directionally_confirmed = []
+    for ccy, value in db_effects.items():
+        ccy = str(ccy).upper()
+        expected = to_float(value, 0.0)
+        if ccy == portfolio_base_ccy or abs(expected) <= 1e-9:
+            continue
+        tracked_ccys.append(ccy)
+        broker = to_float(ibkr_cash.get(ccy), 0.0)
+        if ccy not in deltas:
+            directionally_confirmed.append(ccy)
+        elif abs(broker) > cash_recon_threshold_units and (broker > 0) == (expected > 0):
+            directionally_confirmed.append(ccy)
+    return bool(tracked_ccys) and len(directionally_confirmed) == len(tracked_ccys)
 
 
 def fx_units_from_recent_fills(fills_payload, universe_pairs):
@@ -384,26 +431,28 @@ def reconcile_ibkr_state(lots, cfg):
     }
     if ibkr_dry_run:
         return summary
+    universe_pairs = sorted({str(r.get("pair") or "").upper() for r in ctx.get("universe_fx", []) if r.get("pair")})
+    db_units = db_units_by_pair(lots)
+    summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
     try:
-        health = get_broker_json("/health")
-        positions = get_broker_json("/positions")
-        fills_payload = get_broker_json("/fills")
+        health = refresh_broker_health(get_broker_json("/health"))
         summary["health"] = health
-        accounts = paper_account_ids(positions)
-        summary["paper_account_guard"]["detected_accounts"] = accounts
         if not health.get("authenticated"):
-            summary["reasons"].append("IBKR_BROKER_NOT_AUTHENTICATED")
+            summary["reasons"].append(broker_auth_reason(health))
+            raise BrokerPreflightBlocked()
         if health.get("dry_run"):
             summary["reasons"].append("IBKR_BROKER_STILL_IN_DRY_RUN")
+            raise BrokerPreflightBlocked()
+        positions = get_broker_json("/positions")
+        fills_payload = get_broker_json("/fills")
+        accounts = paper_account_ids(positions)
+        summary["paper_account_guard"]["detected_accounts"] = accounts
         if require_paper and (not accounts or not all(acct.startswith(paper_prefixes) for acct in accounts)):
             summary["reasons"].append(f"IBKR_PAPER_ACCOUNT_GUARD_FAILED:{accounts}")
-        universe_pairs = sorted({str(r.get("pair") or "").upper() for r in ctx.get("universe_fx", []) if r.get("pair")})
-        db_units = db_units_by_pair(lots)
         ibkr_units, fx_rows = ibkr_units_by_pair(positions, universe_pairs)
         fill_units = fx_units_from_recent_fills(fills_payload, universe_pairs)
         for pair, qty in fill_units.items():
             ibkr_units[pair] = qty
-        summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
         summary["ibkr_units_by_pair"] = {k: round(v, 4) for k, v in sorted(ibkr_units.items()) if abs(v) > 1e-9}
         summary["ibkr_units_source"] = "positions_plus_recent_fills"
         summary["ibkr_fx_positions_count"] = len(fx_rows)
@@ -434,6 +483,8 @@ def reconcile_ibkr_state(lots, cfg):
                 summary["position_deltas_audited_only"] = True
             else:
                 summary["reasons"].append("IBKR_DUCKDB_POSITION_DIVERGENCE")
+    except BrokerPreflightBlocked:
+        pass
     except Exception as exc:
         summary["ok"] = False
         summary["reasons"].append(f"IBKR_RECONCILIATION_FAILED:{exc}")

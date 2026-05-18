@@ -31,9 +31,18 @@ function envNum(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envBool(name, fallback) {
+  const env = typeof $env !== 'undefined' ? $env : {};
+  const raw = env[name];
+  if (raw == null || raw === '') return fallback;
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(raw).trim().toLowerCase());
+}
+
 const MAX_LLM_NEWS = envNum('AG1_FX_LLM_TOP_NEWS_MAX', 6);
 const MAX_LLM_WATCH = envNum('AG1_FX_LLM_MARKET_WATCH_MAX', 14);
 const MAX_LLM_DRIVERS = envNum('AG1_FX_LLM_PAIR_DRIVERS_MAX', 2);
+const CASH_ONLY_BASE_CCY_MODE = envBool('AG1_FX_CASH_ONLY_BASE_CCY_MODE', true);
+const PORTFOLIO_BASE_CCY = String((typeof $env !== 'undefined' ? $env.AG1_FX_PORTFOLIO_BASE_CCY : '') || 'EUR').toUpperCase();
 
 const universeRows = j.universe_fx || [];
 const technicalRows = j.technical_signals || [];
@@ -278,6 +287,15 @@ function directionAligned(a, b) {
   return !['NEUTRAL', 'unknown'].includes(a) && a === b;
 }
 
+function cashOnlyOpenAllowed(pair, preferredAction) {
+  if (!CASH_ONLY_BASE_CCY_MODE) return true;
+  const p = String(pair || '').toUpperCase();
+  if (p.length !== 6) return false;
+  const base = p.slice(0, 3);
+  const quote = p.slice(3, 6);
+  return (preferredAction === 'SELL_BASE' && base === PORTFOLIO_BASE_CCY) || (preferredAction === 'BUY_BASE' && quote === PORTFOLIO_BASE_CCY);
+}
+
 function exposureSummary() {
   const equity = Math.max(1, num(brief.portfolio_state.equity_eur, brief.config.capital_eur || 10000));
   const byPair = {};
@@ -379,6 +397,11 @@ function pairDecisionProfile(pair) {
     tradePermission = 'REDUCED_SIZE_ONLY';
     preferredAction = techDir === 'SELL_BASE' ? 'SELL_BASE' : techDir === 'BUY_BASE' ? 'BUY_BASE' : 'WAIT';
   }
+  const brokerConstraint = CASH_ONLY_BASE_CCY_MODE && !['WAIT', 'MANAGE_OR_REDUCE_ONLY', 'MANAGE_EXISTING_ONLY'].includes(preferredAction) && !cashOnlyOpenAllowed(pair, preferredAction);
+  if (brokerConstraint && !openPairs.has(pair)) {
+    tradePermission = 'NO_NEW_POSITION';
+    preferredAction = 'WAIT';
+  }
 
   return {
     decision_alignment: alignment,
@@ -389,6 +412,7 @@ function pairDecisionProfile(pair) {
     news_direction: newsDir,
     urgent_news: urgentNews,
     macro_degraded: macroDegraded,
+    broker_cash_only_blocked: brokerConstraint,
   };
 }
 
@@ -397,6 +421,14 @@ const llmBrief = {
   run: brief.run,
   config: brief.config,
   limits: brief.limits,
+  broker_execution_constraints: {
+    cash_only_base_ccy_mode: CASH_ONLY_BASE_CCY_MODE,
+    portfolio_base_ccy: PORTFOLIO_BASE_CCY,
+    allowed_new_open_patterns: CASH_ONLY_BASE_CCY_MODE
+      ? [`SELL_BASE when pair base is ${PORTFOLIO_BASE_CCY}`, `BUY_BASE when pair quote is ${PORTFOLIO_BASE_CCY}`]
+      : ['No cash-only currency-leg restriction'],
+    note: 'Closes and reductions of existing lots remain allowed; new opens outside these patterns are blocked before IBKR.',
+  },
   portfolio: {
     cash_eur: rounded(brief.portfolio_state.cash_eur, 2),
     available_cash_eur: rounded(brief.portfolio_state.available_cash_eur, 2),
@@ -435,6 +467,7 @@ const llmBrief = {
     'market_watch contains the highest-priority/open pairs with extra technical and news context.',
     'drawdown_*_frac fields are fractions; drawdown_*_pct_display fields are human-readable percentages.',
     'portfolio_risk is precomputed. Do not open new positions if can_open_new_trade=false or trade_permission=NO_NEW_POSITION.',
+    'broker_execution_constraints are hard live-execution constraints; do not propose new opens outside the allowed patterns.',
     'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
   ],
 };

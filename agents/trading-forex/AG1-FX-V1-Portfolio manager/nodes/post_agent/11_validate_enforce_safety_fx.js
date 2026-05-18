@@ -9,6 +9,13 @@ function envNum(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envBool(name, fallback) {
+  const env = typeof $env !== 'undefined' ? $env : {};
+  const raw = env[name];
+  if (raw == null || raw === '') return fallback;
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(raw).trim().toLowerCase());
+}
+
 function pairMeta(brief, pair) {
   return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };
 }
@@ -106,6 +113,15 @@ function applySizeCap(order, sizeCapPct, equity, px, quoteToEurRate, reason) {
   order.risk_check_notes = `${order.risk_check_notes || ''} [Risk sizing: capped to ${(sizeCapPct * 100).toFixed(1)}% equity for ${reason}.]`.trim();
 }
 
+function cashOnlyBrokerOpenAllowed(pair, side, baseCcy) {
+  const p = String(pair || '').toUpperCase();
+  const b = String(baseCcy || 'EUR').toUpperCase();
+  if (p.length !== 6) return false;
+  const base = p.slice(0, 3);
+  const quote = p.slice(3, 6);
+  return (side === 'sell_base' && base === b) || (side === 'buy_base' && quote === b);
+}
+
 const j = $json || {};
 const brief = j.brief || {};
 const cfg = brief.config || {};
@@ -119,6 +135,8 @@ const maxPairPct = num(limits.max_pair_pct, 0.20);
 const maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);
 const maxDd = num(limits.max_daily_drawdown_pct, 0.05);
 const reducedSizeMaxPairPct = Math.min(maxPairPct, envNum('AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT', 0.10));
+const cashOnlyBaseCcyMode = envBool('AG1_FX_CASH_ONLY_BASE_CCY_MODE', true);
+const portfolioBaseCcy = String(cfg.portfolio_base_ccy || (typeof $env !== 'undefined' ? $env.AG1_FX_PORTFOLIO_BASE_CCY : '') || 'EUR').toUpperCase();
 const openLots = portfolio.open_lots || [];
 const projected = [];
 const orders = [];
@@ -205,6 +223,10 @@ for (const d of decisions) {
     base.trade_permission = tradePermission;
     base.decision_alignment = profile.decision_alignment || '';
     base.preferred_action = profile.preferred_action || '';
+    if (cashOnlyBaseCcyMode && !cashOnlyBrokerOpenAllowed(pair, side, portfolioBaseCcy)) {
+      base.rejection_reason = `IBKR_CASH_ONLY_${portfolioBaseCcy}_LEG_REQUIRED`;
+      base.risk_check_notes = `${base.risk_check_notes || ''} [Broker guard: live IBKR paper account rejects new FX orders that borrow non-${portfolioBaseCcy} currency.]`.trim();
+    }
   }
   let sizeLots = num(d.size_lots, 0);
   if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {
@@ -216,7 +238,7 @@ for (const d of decisions) {
   base.notional_eur = Math.abs(base.notional_quote * quoteToEurRate);
 
   if (action.startsWith('open_')) {
-    if (tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
+    if (!base.rejection_reason && tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
     if (!base.rejection_reason && sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
     if (!base.rejection_reason && tradePermission === 'REDUCED_SIZE_ONLY') {
       applySizeCap(base, reducedSizeMaxPairPct, equity, px, quoteToEurRate, 'REDUCED_SIZE_ONLY');
