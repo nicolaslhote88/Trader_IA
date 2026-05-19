@@ -92,6 +92,8 @@ with duckdb.connect(db_path) as con:
         write_fill_cost(con, f)
         con.execute("UPDATE core.orders SET status='filled' WHERE order_id=?", [f.get("order_id")])
         order = orders_by_id.get(f.get("order_id")) or {}
+        if f.get("is_currency_conversion") or order.get("is_currency_conversion") or str(order.get("order_type") or "").lower() == "cash_conversion":
+            continue
         if f.get("side") in {"buy_base", "sell_base"}:
             side = "long" if f.get("side") == "buy_base" else "short"
             con.execute(

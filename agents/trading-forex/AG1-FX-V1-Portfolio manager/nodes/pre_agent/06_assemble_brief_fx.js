@@ -42,6 +42,7 @@ const MAX_LLM_NEWS = envNum('AG1_FX_LLM_TOP_NEWS_MAX', 6);
 const MAX_LLM_WATCH = envNum('AG1_FX_LLM_MARKET_WATCH_MAX', 14);
 const MAX_LLM_DRIVERS = envNum('AG1_FX_LLM_PAIR_DRIVERS_MAX', 2);
 const CASH_ONLY_BASE_CCY_MODE = envBool('AG1_FX_CASH_ONLY_BASE_CCY_MODE', true);
+const PREFUND_NON_EUR_FX = envBool('AG1_FX_PREFUND_NON_EUR_FX', true);
 const PORTFOLIO_BASE_CCY = String((typeof $env !== 'undefined' ? $env.AG1_FX_PORTFOLIO_BASE_CCY : '') || 'EUR').toUpperCase();
 
 const universeRows = j.universe_fx || [];
@@ -398,7 +399,7 @@ function pairDecisionProfile(pair) {
     preferredAction = techDir === 'SELL_BASE' ? 'SELL_BASE' : techDir === 'BUY_BASE' ? 'BUY_BASE' : 'WAIT';
   }
   const brokerConstraint = CASH_ONLY_BASE_CCY_MODE && !['WAIT', 'MANAGE_OR_REDUCE_ONLY', 'MANAGE_EXISTING_ONLY'].includes(preferredAction) && !cashOnlyOpenAllowed(pair, preferredAction);
-  if (brokerConstraint && !openPairs.has(pair)) {
+  if (brokerConstraint && !PREFUND_NON_EUR_FX && !openPairs.has(pair)) {
     tradePermission = 'NO_NEW_POSITION';
     preferredAction = 'WAIT';
   }
@@ -413,6 +414,7 @@ function pairDecisionProfile(pair) {
     urgent_news: urgentNews,
     macro_degraded: macroDegraded,
     broker_cash_only_blocked: brokerConstraint,
+    prefunding_required: brokerConstraint && PREFUND_NON_EUR_FX && !openPairs.has(pair),
   };
 }
 
@@ -423,11 +425,15 @@ const llmBrief = {
   limits: brief.limits,
   broker_execution_constraints: {
     cash_only_base_ccy_mode: CASH_ONLY_BASE_CCY_MODE,
+    prefund_non_eur_fx: PREFUND_NON_EUR_FX,
     portfolio_base_ccy: PORTFOLIO_BASE_CCY,
     allowed_new_open_patterns: CASH_ONLY_BASE_CCY_MODE
       ? [`SELL_BASE when pair base is ${PORTFOLIO_BASE_CCY}`, `BUY_BASE when pair quote is ${PORTFOLIO_BASE_CCY}`]
       : ['No cash-only currency-leg restriction'],
-    note: 'Closes and reductions of existing lots remain allowed; new opens outside these patterns are blocked before IBKR.',
+    prefunding_rule: PREFUND_NON_EUR_FX
+      ? `For a new open outside the direct ${PORTFOLIO_BASE_CCY} patterns, the execution layer must first buy the currency that the target order will sell, using ${PORTFOLIO_BASE_CCY}. SELL_BASE needs the pair base currency; BUY_BASE needs the pair quote currency.`
+      : 'New opens outside the direct base-currency patterns are blocked before IBKR.',
+    note: 'Closes and reductions of existing lots remain allowed. When prefunding is enabled, do not invent separate funding decisions; propose the target trade only and the validator derives the EUR funding leg.',
   },
   portfolio: {
     cash_eur: rounded(brief.portfolio_state.cash_eur, 2),
@@ -467,7 +473,7 @@ const llmBrief = {
     'market_watch contains the highest-priority/open pairs with extra technical and news context.',
     'drawdown_*_frac fields are fractions; drawdown_*_pct_display fields are human-readable percentages.',
     'portfolio_risk is precomputed. Do not open new positions if can_open_new_trade=false or trade_permission=NO_NEW_POSITION.',
-    'broker_execution_constraints are hard live-execution constraints; do not propose new opens outside the allowed patterns.',
+    'broker_execution_constraints are hard live-execution constraints. If prefund_non_eur_fx=true, non-EUR target opens may be proposed only when their setup is strong; the validator will derive the required EUR funding leg.',
     'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
   ],
 };

@@ -208,6 +208,50 @@ def paper_account_ids(positions_payload):
     return ids
 
 
+def account_ids_from_payload(payload):
+    ids = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            candidates = [
+                value.get("acctcode"),
+                value.get("acctCode"),
+                value.get("accountcode"),
+                value.get("accountCode"),
+                value.get("accountId"),
+                value.get("acctId"),
+                value.get("account"),
+            ]
+            for candidate in candidates:
+                if isinstance(candidate, dict):
+                    candidate = candidate.get("value") or candidate.get("amount")
+                acct = str(candidate or "").strip().upper()
+                if acct and acct not in ids:
+                    ids.append(acct)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return ids
+
+
+def merge_account_ids(*groups):
+    ids = []
+    for group in groups:
+        for acct in group or []:
+            acct = str(acct or "").strip().upper()
+            if acct and acct not in ids:
+                ids.append(acct)
+    return ids
+
+
+def paper_account_guard_failed(accounts):
+    return require_paper and (not accounts or not all(acct.startswith(paper_prefixes) for acct in accounts))
+
+
 def norm_pair(text):
     letters = "".join(ch for ch in str(text or "").upper() if ch.isalpha())
     return letters
@@ -437,8 +481,6 @@ def reconcile_ibkr_state(lots, cfg):
         fills_payload = get_broker_json("/fills")
         accounts = paper_account_ids(positions)
         summary["paper_account_guard"]["detected_accounts"] = accounts
-        if require_paper and (not accounts or not all(acct.startswith(paper_prefixes) for acct in accounts)):
-            summary["reasons"].append(f"IBKR_PAPER_ACCOUNT_GUARD_FAILED:{accounts}")
         ibkr_units, fx_rows = ibkr_units_by_pair(positions, universe_pairs)
         fill_units = fx_units_from_recent_fills(fills_payload, universe_pairs)
         for pair, qty in fill_units.items():
@@ -454,6 +496,8 @@ def reconcile_ibkr_state(lots, cfg):
         if reconcile_cash_balances_enabled:
             try:
                 ledger_payload = get_broker_json("/account/ledger")
+                accounts = merge_account_ids(accounts, account_ids_from_payload(ledger_payload))
+                summary["paper_account_guard"]["detected_accounts"] = accounts
                 cash_summary = cash_balance_reconciliation(lots, cfg, ledger_payload)
                 summary["cash_balances"] = cash_summary
                 if cash_summary.get("currency_deltas") and block_on_cash_divergence:
@@ -467,6 +511,8 @@ def reconcile_ibkr_state(lots, cfg):
                 }
                 if block_on_cash_divergence:
                     summary["reasons"].append(f"IBKR_LEDGER_RECONCILIATION_FAILED:{ledger_exc}")
+        if paper_account_guard_failed(accounts):
+            summary["reasons"].append(f"IBKR_PAPER_ACCOUNT_GUARD_FAILED:{accounts}")
         if summary["deltas"]:
             if cash_ledger_confirms_open_fx_lots(summary.get("cash_balances")):
                 summary["position_reconciliation_mode"] = "cash_ledger_authoritative_for_fx_cash"

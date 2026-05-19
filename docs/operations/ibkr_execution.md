@@ -126,12 +126,15 @@ Garanties ajoutees :
 - Les rejets IBKR explicites sont classes en `broker_error` et ne generent ni
   fill simule ni retry automatique.
 - `core.reconciliation_log` conserve les controles IBKR/DuckDB.
-- Depuis le 2026-05-18, `AG1_FX_CASH_ONLY_BASE_CCY_MODE=true` est le mode par
-  defaut en paper live CPAPI. Le compte paper refuse les ouvertures qui
-  exposent le compte a du levier de devise non-EUR; AG1-FX les bloque donc
-  avant envoi broker. Avec `AG1_FX_PORTFOLIO_BASE_CCY=EUR`, les nouvelles
-  ouvertures autorisees sont `SELL_BASE` sur `EURxxx` ou `BUY_BASE` sur
-  `xxxEUR`. Les clotures/reductions de lots existants restent autorisees.
+- Depuis le 2026-05-19, `AG1_FX_PREFUND_NON_EUR_FX=true` complete
+  `AG1_FX_CASH_ONLY_BASE_CCY_MODE=true`. Pour une nouvelle ouverture hors
+  patterns EUR directs, AG1-FX cree une jambe de conversion cash avant l'ordre
+  cible: `SELL_BASE` doit d'abord acheter la devise base avec EUR; `BUY_BASE`
+  doit d'abord acheter la devise quote avec EUR. Ces jambes sont envoyees a
+  IBKR avec `isCcyConv=true`, ne creent pas de lot speculatif dans DuckDB, et
+  l'ordre cible n'est envoye que si la conversion est confirmee. Si
+  `AG1_FX_PREFUND_NON_EUR_FX=false`, le comportement historique reste un
+  blocage pre-broker avec `IBKR_CASH_ONLY_EUR_LEG_REQUIRED`.
 - Les echecs de session CPAPI sont journalises comme `IBKR_MANUAL_LOGIN_REQUIRED`
   quand le broker indique qu'un relogin navigateur/2FA est necessaire, au lieu
   d'un simple `HTTP Error 502`.
@@ -160,6 +163,8 @@ grep -q '^IBKR_RECONCILE_CASH_BALANCES=' .env || echo 'IBKR_RECONCILE_CASH_BALAN
 grep -q '^IBKR_BLOCK_ON_CASH_DIVERGENCE=' .env || echo 'IBKR_BLOCK_ON_CASH_DIVERGENCE=false' >> .env
 grep -q '^IBKR_CASH_RECON_THRESHOLD_UNITS=' .env || echo 'IBKR_CASH_RECON_THRESHOLD_UNITS=5' >> .env
 grep -q '^AG1_FX_PORTFOLIO_BASE_CCY=' .env || echo 'AG1_FX_PORTFOLIO_BASE_CCY=EUR' >> .env
+grep -q '^AG1_FX_PREFUND_NON_EUR_FX=' .env || echo 'AG1_FX_PREFUND_NON_EUR_FX=true' >> .env
+grep -q '^AG1_FX_PREFUND_BUFFER_PCT=' .env || echo 'AG1_FX_PREFUND_BUFFER_PCT=0.005' >> .env
 grep -q '^IBKR_KEEPALIVE_INTERVAL_SECONDS=' .env || echo 'IBKR_KEEPALIVE_INTERVAL_SECONDS=55' >> .env
 grep -q '^IBKR_AUTO_REAUTH_ENABLED=' .env || echo 'IBKR_AUTO_REAUTH_ENABLED=true' >> .env
 grep -q '^IBKR_AUTO_REAUTH_COMPETE=' .env || echo 'IBKR_AUTO_REAUTH_COMPETE=false' >> .env

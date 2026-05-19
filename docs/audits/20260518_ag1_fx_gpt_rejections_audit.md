@@ -42,6 +42,14 @@ Date: 2026-05-18
   `AG1_FX_PORTFOLIO_BASE_CCY=EUR`, seules les nouvelles ouvertures `SELL_BASE`
   sur `EURxxx` et `BUY_BASE` sur `xxxEUR` passent. Les clotures/reductions de
   lots existants restent autorisees.
+- Correction de suivi 2026-05-19: les derniers rejets observes etaient encore
+  `KILL_SWITCH_ACTIVE` avant broker, pas des refus IBKR directs. Le garde
+  paper-account ne depend plus uniquement de `/positions` lorsque les positions
+  spot-FX sont absentes; il accepte aussi l'`acctcode` DU present dans
+  `/account/ledger`. Les nouvelles ouvertures non-EUR peuvent maintenant etre
+  prefundees: le validateur cree d'abord une conversion cash EUR vers la devise
+  qui sera vendue par l'ordre cible, puis l'ordre cible n'est envoye que si la
+  conversion est confirmee.
 - Le brief compact donne cette contrainte au LLM pour reduire les propositions
   non executables.
 

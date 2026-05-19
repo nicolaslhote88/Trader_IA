@@ -528,6 +528,10 @@ def parse_broker_fill(order, fill, prices):
 
 
 def apply_open_fill(con, order, fill):
+    if str(order.get("order_type") or "").lower() == "cash_conversion":
+        return 0
+    if "cash conversion" in str(order.get("risk_check_notes") or "").lower():
+        return 0
     if fill["side"] not in {"buy_base", "sell_base"}:
         return 0
     side = "long" if fill["side"] == "buy_base" else "short"

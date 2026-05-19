@@ -99,6 +99,7 @@ class FXOrder(BaseModel):
     client_order_id: str | None = None  # devient cOID pour idempotence IBKR
     order_type: str = "MKT"
     limit_price: float | None = None
+    is_currency_conversion: bool = False
 
 
 class EquityOrder(BaseModel):
@@ -129,7 +130,7 @@ def now_iso() -> str:
 
 def normalize_order_type(value: str) -> str:
     text = str(value or "MKT").strip().upper()
-    if text == "MARKET":
+    if text in {"MARKET", "CASH_CONVERSION"}:
         return "MKT"
     if text == "LIMIT":
         return "LMT"
@@ -484,9 +485,10 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
             "quantity": quantity,
             "tif": "DAY",
             "cOID": order.client_order_id or order.order_id,
-            # Explicitly mark AG1-FX orders as speculative spot-FX trades, not
-            # cash-conversion tickets. IBKR conversion orders use isCcyConv=true.
-            "isCcyConv": False,
+            # Target AG1-FX orders are speculative spot-FX trades. Prefunding
+            # legs are explicit cash conversions so they do not create a
+            # leveraged non-base-currency borrow before the target order.
+            "isCcyConv": bool(order.is_currency_conversion),
         }
         if ibkr_payload["orderType"] == "LMT" and order.limit_price:
             ibkr_payload["price"] = order.limit_price

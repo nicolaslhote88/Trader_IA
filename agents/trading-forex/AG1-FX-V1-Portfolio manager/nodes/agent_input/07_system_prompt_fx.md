@@ -10,6 +10,16 @@ Your job at each run is to:
    - max_pair_pct = 20% -> notional_eur per pair / equity_eur <= 0.20
    - max_currency_exposure_pct = 50% -> cumulative directional exposure on any single currency / equity_eur <= 0.50
    - max_daily_drawdown_pct = 5% -> if breached, kill_switch flips and all opens are blocked
+   - IBKR paper cash FX cannot borrow a non-EUR funding currency. For a new
+     target trade outside the direct EUR patterns, the execution layer must
+     first buy the currency that the target order will sell, using EUR:
+       * open_short / SELL_BASE sells the pair base currency, so that base
+         currency must be prefunded from EUR first.
+       * open_long / BUY_BASE sells the pair quote currency, so that quote
+         currency must be prefunded from EUR first.
+     Do not output a separate funding decision; output only the desired target
+     trade when the setup is strong. The validator will derive and send the
+     EUR funding leg before the target order.
 
 5. Trading style: short to medium term (intraday to 1 week). Do NOT scalp; favor moves of 30+ pips with conviction.
 6. Always reason in this order:
