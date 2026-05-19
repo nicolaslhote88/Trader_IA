@@ -21,6 +21,7 @@ from rates_client import RatesClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("macro-data-api")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 fred = FREDClient()
 cot = COTClient()
@@ -135,10 +136,14 @@ async def refresh_cot():
     try:
         # Récupérer l'historique complet (2 ans) pour calculer les z-scores
         records = await cot.get_historical_cot(years_back=2)
+        if not records:
+            raise RuntimeError("COT refresh returned zero records from CFTC")
         # Calculer les z-scores sur 52 semaines
         records_with_z = cot.compute_z_scores(records, lookback_weeks=52)
         db.upsert_cot_positions(records_with_z)
         latest = db.get_latest_cot()
+        if not latest:
+            raise RuntimeError("COT refresh wrote zero latest currency rows")
         return {
             "run_id": run_id,
             "status": "ok",

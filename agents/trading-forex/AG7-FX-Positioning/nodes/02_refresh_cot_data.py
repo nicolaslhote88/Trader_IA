@@ -21,6 +21,8 @@ try:
     )
     with urllib.request.urlopen(req, timeout=120) as resp:
         refresh_result = json.loads(resp.read())
+    if int(refresh_result.get("records_total") or 0) <= 0 or int(refresh_result.get("currencies_updated") or 0) <= 0:
+        error = f"COT_REFRESH_EMPTY:{refresh_result}"
 except Exception as exc:
     error = str(exc)
 

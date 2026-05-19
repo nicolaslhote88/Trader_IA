@@ -2,6 +2,7 @@
 
 import sys
 import os
+import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from cot_client import COTClient
@@ -76,3 +77,26 @@ def test_cot_market_mapping():
     assert "JPY" in CFTC_MARKET_TO_CURRENCY.values()
     assert "GBP" in CFTC_MARKET_TO_CURRENCY.values()
     assert "EURO FX" in CFTC_MARKET_TO_CURRENCY
+    assert CFTC_MARKET_TO_CURRENCY["NZ DOLLAR"] == "NZD"
+
+
+def test_parse_tff_underscored_columns_and_exchange_suffix():
+    """Le rapport TFF annuel CFTC utilise des colonnes underscorees et un suffixe exchange."""
+    client = COTClient()
+    df = pd.DataFrame([
+        {
+            "Market_and_Exchange_Names": "EURO FX - CHICAGO MERCANTILE EXCHANGE",
+            "Report_Date_as_YYYY-MM-DD": "2026-05-12",
+            "Open_Interest_All": 1000,
+            "Asset_Mgr_Positions_Long_All": 250,
+            "Asset_Mgr_Positions_Short_All": 100,
+            "Lev_Money_Positions_Long_All": 300,
+            "Lev_Money_Positions_Short_All": 450,
+        }
+    ])
+
+    records = client._parse_df(df)
+
+    assert len(records) == 1
+    assert records[0]["currency"] == "EUR"
+    assert records[0]["net_spec"] == 0
