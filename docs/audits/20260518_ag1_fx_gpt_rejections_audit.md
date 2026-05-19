@@ -50,6 +50,14 @@ Date: 2026-05-18
   prefundees: le validateur cree d'abord une conversion cash EUR vers la devise
   qui sera vendue par l'ordre cible, puis l'ordre cible n'est envoye que si la
   conversion est confirmee.
+- Correction operationnelle 2026-05-19 14:39 UTC: le run
+  `AG1FX_chatgpt52_20260519143006` a encore execute l'ancienne version publiee
+  n8n, bien que `workflow_entity.nodes` contienne le patch. Cause: la mise a
+  jour DB avait change `versionId` sans creer/publier l'entree correspondante
+  dans `workflow_history`; le cron actif utilisait donc l'ancien
+  `activeVersionId`. Correctif applique sur VPS: creation des entrees
+  `workflow_history`, publication via `n8n publish:workflow` pour AG1-FX et
+  AG1-FX-PF, puis redemarrage de n8n et des task-runners.
 - Le brief compact donne cette contrainte au LLM pour reduire les propositions
   non executables.
 
