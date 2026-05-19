@@ -58,6 +58,14 @@ Date: 2026-05-18
   `activeVersionId`. Correctif applique sur VPS: creation des entrees
   `workflow_history`, publication via `n8n publish:workflow` pour AG1-FX et
   AG1-FX-PF, puis redemarrage de n8n et des task-runners.
+- Correction operationnelle 2026-05-19 19:30 UTC: le run n8n `9312`
+  (20:30 Europe/Paris) a bien utilise la version publiee corrigee, mais a
+  echoue dans `03 Load Portfolio State FX` avec `__build_class__ not found`.
+  Cause: le runner Python sandbox de n8n ne supporte pas les definitions de
+  classes Python; les nodes AG1-FX et AG1-FX-PF definissaient
+  `BrokerPreflightBlocked(Exception)`. Correctif: remplacement par le sentinel
+  integre `BrokerPreflightBlocked = LookupError`, regeneration des workflows,
+  publication n8n, puis redemarrage de n8n et des task-runners.
 - Le brief compact donne cette contrainte au LLM pour reduire les propositions
   non executables.
 

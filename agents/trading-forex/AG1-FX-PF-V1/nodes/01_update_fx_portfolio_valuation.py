@@ -291,8 +291,9 @@ def post_broker_json(base_url, path, payload=None, timeout=12):
         return json.loads(resp.read().decode("utf-8"))
 
 
-class BrokerPreflightBlocked(Exception):
-    pass
+# n8n's Python task-runner sandbox does not expose __build_class__, so custom
+# exception classes fail at runtime. Use a rarely-raised built-in as a sentinel.
+BrokerPreflightBlocked = LookupError
 
 
 def broker_auth_reason(health):
