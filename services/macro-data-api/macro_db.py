@@ -73,6 +73,8 @@ CREATE TABLE IF NOT EXISTS cot.speculative_positions (
     crowded_flag        BOOLEAN DEFAULT FALSE,
     crowded_direction   VARCHAR DEFAULT 'neutral',
     positioning_score   DOUBLE,
+    source              VARCHAR DEFAULT 'CFTC_COT',
+    confidence          VARCHAR DEFAULT 'high',
     updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (report_date, currency)
 );
@@ -98,6 +100,10 @@ CREATE TABLE IF NOT EXISTS pillars.currency_scores (
     -- Composite
     composite_score         DOUBLE,  -- moyenne pondérée des 3 piliers
     all_pillars_aligned     BOOLEAN DEFAULT FALSE,
+    data_completeness       VARCHAR DEFAULT 'complete',
+    score_status            VARCHAR DEFAULT 'scored',
+    confidence_floor        VARCHAR DEFAULT 'high',
+    missing_inputs          VARCHAR,
     updated_at              TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (as_of, currency)
 );
@@ -125,6 +131,26 @@ class MacroDB:
     def _init_schema(self):
         with self._connect() as con:
             con.execute(SCHEMA_SQL)
+            self._migrate_schema(con)
+
+    @staticmethod
+    def _migrate_schema(con):
+        """Idempotent migrations for already-created DuckDB files."""
+        migrations = [
+            "ALTER TABLE cot.speculative_positions ADD COLUMN source VARCHAR DEFAULT 'CFTC_COT'",
+            "ALTER TABLE cot.speculative_positions ADD COLUMN confidence VARCHAR DEFAULT 'high'",
+            "UPDATE cot.speculative_positions SET source = 'CFTC_COT' WHERE source IS NULL",
+            "UPDATE cot.speculative_positions SET confidence = 'high' WHERE confidence IS NULL",
+            "ALTER TABLE pillars.currency_scores ADD COLUMN data_completeness VARCHAR DEFAULT 'complete'",
+            "ALTER TABLE pillars.currency_scores ADD COLUMN score_status VARCHAR DEFAULT 'scored'",
+            "ALTER TABLE pillars.currency_scores ADD COLUMN confidence_floor VARCHAR DEFAULT 'high'",
+            "ALTER TABLE pillars.currency_scores ADD COLUMN missing_inputs VARCHAR",
+        ]
+        for sql in migrations:
+            try:
+                con.execute(sql)
+            except Exception as exc:
+                logger.warning("MacroDB migration skipped (%s): %s", sql, exc)
 
     @staticmethod
     def _json_safe(value):
@@ -204,6 +230,17 @@ class MacroDB:
             if d.get("balance_bn_usd") is not None:
                 self.upsert_country_indicator(currency, "current_account_bn_usd", d["balance_bn_usd"], d.get("as_of", date.today().isoformat()), "bn_usd")
 
+    def upsert_unemployment_data(self, unemployment_data: dict[str, dict]):
+        for currency, d in unemployment_data.items():
+            if d.get("unemployment_pct") is not None:
+                self.upsert_country_indicator(
+                    currency,
+                    "unemployment_pct",
+                    d["unemployment_pct"],
+                    d.get("as_of", date.today().isoformat()),
+                    "pct",
+                )
+
     def get_indicators(self, currency: Optional[str] = None, indicator: Optional[str] = None) -> list[dict]:
         with self._connect() as con:
             q = "SELECT * FROM macro.country_indicators WHERE 1=1"
@@ -228,7 +265,7 @@ class MacroDB:
                 r["report_date"], r["currency"], r.get("net_spec"), r.get("lev_money_long"), r.get("lev_money_short"),
                 r.get("asset_mgr_long"), r.get("asset_mgr_short"), r.get("open_interest"),
                 r.get("net_z_score"), r.get("crowded_flag", False), r.get("crowded_direction", "neutral"),
-                r.get("positioning_score"),
+                r.get("positioning_score"), r.get("source", "CFTC_COT"), r.get("confidence", "high"),
             )
             for r in records
         ]
@@ -237,8 +274,8 @@ class MacroDB:
                 """INSERT OR REPLACE INTO cot.speculative_positions
                    (report_date, currency, net_spec, lev_money_long, lev_money_short,
                     asset_mgr_long, asset_mgr_short, open_interest, net_z_score,
-                    crowded_flag, crowded_direction, positioning_score)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    crowded_flag, crowded_direction, positioning_score, source, confidence)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
 
@@ -271,7 +308,7 @@ class MacroDB:
                 d.get("as_of", today), ccy,
                 d.get("yield_2y"), d.get("yield_10y"),
                 d.get("slope_10y2y"), d.get("slope_change_30d"),
-                d.get("steepening"), d.get("rates_signal", "neutral"), "FRED",
+                d.get("steepening"), d.get("rates_signal", "neutral"), d.get("source", "FRED"),
             )
             for ccy, d in curves.items()
             if d.get("yield_10y") is not None
@@ -318,6 +355,8 @@ class MacroDB:
                 s.get("carry_score"), s.get("ppp_deviation"), s.get("valuation_score"),
                 s.get("cot_z_score"), s.get("positioning_score"), s.get("crowded_flag", False),
                 s.get("composite_score"), s.get("all_pillars_aligned", False),
+                s.get("data_completeness", "complete"), s.get("score_status", "scored"),
+                s.get("confidence_floor", "high"), s.get("missing_inputs"),
             )
             for s in scores
         ]
@@ -328,8 +367,9 @@ class MacroDB:
                     macro_policy_score, macro_ca_score, macro_score,
                     carry_score, ppp_deviation, valuation_score,
                     cot_z_score, positioning_score, crowded_flag,
-                    composite_score, all_pillars_aligned)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    composite_score, all_pillars_aligned, data_completeness,
+                    score_status, confidence_floor, missing_inputs)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 rows,
             )
 

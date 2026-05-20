@@ -8,6 +8,7 @@ Pilier 3 – Positionnement : COT z-score (inversé → hated = bullish)
 
 import logging
 import math
+import json
 from datetime import date
 from typing import Optional
 
@@ -26,16 +27,42 @@ NEUTRAL_POLICY_RATE = {
     "CAD": 2.5,
     "AUD": 3.0,
     "NZD": 3.0,
+    "MXN": 6.0,
     "SEK": 2.0,
     "NOK": 2.5,
     "KRW": 2.5,
 }
 
-G10 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
+CORE_G8 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
+EXTENDED_SCORING_CURRENCIES = ["MXN", "SEK", "NOK"]
+MACRO_ONLY_CURRENCIES = ["KRW"]
+SCORING_CURRENCIES = CORE_G8 + EXTENDED_SCORING_CURRENCIES
+
+# Backward-compatible alias used by existing tests and comments.
+G10 = CORE_G8
+
+CONFIDENCE_RANK = {"missing": 0, "low": 1, "medium": 2, "high": 3}
+RANK_CONFIDENCE = {v: k for k, v in CONFIDENCE_RANK.items()}
 
 
 def clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))
+
+
+def _has_number(value) -> bool:
+    try:
+        return value is not None and math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _confidence_floor(*values: str) -> str:
+    ranks = [CONFIDENCE_RANK.get(str(v or "missing").lower(), 0) for v in values]
+    return RANK_CONFIDENCE.get(min(ranks) if ranks else 0, "missing")
+
+
+def _is_complete_enough(confidence: str) -> bool:
+    return CONFIDENCE_RANK.get(str(confidence or "missing").lower(), 0) >= CONFIDENCE_RANK["medium"]
 
 
 def score_gdp_growth(growth_qoq: Optional[float], momentum: Optional[float]) -> float:
@@ -153,7 +180,7 @@ def compute_macro_score(indicators: list[dict], policy_rates: list[dict]) -> dic
     rates_by_ccy = {r["currency"]: r.get("rate_pct") for r in policy_rates}
 
     result = {}
-    for ccy in G10:
+    for ccy in SCORING_CURRENCIES:
         inds = ind_by_ccy.get(ccy, {})
         policy = rates_by_ccy.get(ccy)
 
@@ -186,12 +213,17 @@ def compute_carry_score(policy_rates: list[dict]) -> dict[str, float]:
     Score carry par devise = taux directeur normalisé vs. moyenne G10.
     Devise avec taux élevé = positif (attire les capitaux carry trade).
     """
-    rates = {r["currency"]: r.get("rate_pct", 0.0) or 0.0 for r in policy_rates if r.get("currency") in G10}
-    if not rates:
+    all_rates = {
+        r["currency"]: r.get("rate_pct", 0.0) or 0.0
+        for r in policy_rates
+        if r.get("currency") in SCORING_CURRENCIES
+    }
+    baseline_rates = {ccy: all_rates[ccy] for ccy in CORE_G8 if ccy in all_rates}
+    if not baseline_rates:
         return {}
-    avg = sum(rates.values()) / len(rates)
-    std = max(math.sqrt(sum((v - avg) ** 2 for v in rates.values()) / len(rates)), 0.5)
-    return {ccy: clamp((rate - avg) / std / 2) for ccy, rate in rates.items()}
+    avg = sum(baseline_rates.values()) / len(baseline_rates)
+    std = max(math.sqrt(sum((v - avg) ** 2 for v in baseline_rates.values()) / len(baseline_rates)), 0.5)
+    return {ccy: clamp((rate - avg) / std / 2) for ccy, rate in all_rates.items()}
 
 
 def compute_ppp_deviation(cpi_data: list[dict]) -> dict[str, float]:
@@ -204,7 +236,7 @@ def compute_ppp_deviation(cpi_data: list[dict]) -> dict[str, float]:
     cpi_by_ccy: dict[str, list] = {}
     for row in cpi_data:
         ccy = row.get("currency", "")
-        if ccy in G10 and row.get("value") is not None:
+        if ccy in SCORING_CURRENCIES and row.get("value") is not None:
             if ccy not in cpi_by_ccy:
                 cpi_by_ccy[ccy] = []
             cpi_by_ccy[ccy].append(float(row["value"]))
@@ -234,7 +266,7 @@ def compute_valuation_scores(policy_rates: list[dict], cpi_history: list[dict]) 
     ppp = compute_ppp_deviation(cpi_history)
 
     result = {}
-    for ccy in G10:
+    for ccy in SCORING_CURRENCIES:
         c = carry.get(ccy, 0.0)
         p = ppp.get(ccy, 0.0)
         # Sans REER, on double la pondération du carry
@@ -245,6 +277,74 @@ def compute_valuation_scores(policy_rates: list[dict], cpi_history: list[dict]) 
             "valuation_score": round(valuation, 3),
         }
     return result
+
+
+def compute_input_confidence(
+    currency: str,
+    indicators_by_ccy: dict[str, dict[str, float]],
+    policy_rates_by_ccy: dict[str, float],
+    carry_scores: dict[str, float],
+    ppp_scores: dict[str, float],
+    cot_by_ccy: dict[str, dict],
+    yield_by_ccy: dict[str, dict],
+) -> dict:
+    """Return completeness metadata without changing the legacy score formulas."""
+    inds = indicators_by_ccy.get(currency, {})
+    has_policy = _has_number(policy_rates_by_ccy.get(currency))
+    has_cpi = _has_number(inds.get("cpi_yoy"))
+    has_gdp = _has_number(inds.get("gdp_growth_qoq"))
+    has_ca = _has_number(inds.get("current_account_bn_usd"))
+    has_unemployment = _has_number(inds.get("unemployment_pct"))
+
+    macro_inputs = [has_policy, has_cpi, has_gdp]
+    if has_ca or has_unemployment:
+        macro_conf = "high" if all(macro_inputs) else "medium"
+    elif all(macro_inputs):
+        macro_conf = "medium"
+    else:
+        macro_conf = "low" if any(macro_inputs) else "missing"
+
+    has_carry = _has_number(carry_scores.get(currency))
+    has_ppp = currency == "USD" or _has_number(ppp_scores.get(currency))
+    if has_carry and has_ppp:
+        valuation_conf = "high"
+    elif has_carry:
+        valuation_conf = "medium"
+    else:
+        valuation_conf = "missing"
+
+    cot = cot_by_ccy.get(currency, {})
+    if cot:
+        positioning_conf = str(cot.get("confidence") or "high").lower()
+    else:
+        positioning_conf = "missing"
+
+    curve = yield_by_ccy.get(currency, {})
+    has_y2 = _has_number(curve.get("yield_2y_pct") or curve.get("yield_2y"))
+    has_y10 = _has_number(curve.get("yield_10y_pct") or curve.get("yield_10y"))
+    rates_conf = "high" if has_y2 and has_y10 else "missing"
+
+    floor = _confidence_floor(macro_conf, valuation_conf, positioning_conf, rates_conf)
+    missing = []
+    if not _is_complete_enough(macro_conf):
+        missing.append("macro")
+    if not _is_complete_enough(valuation_conf):
+        missing.append("valuation")
+    if not _is_complete_enough(positioning_conf):
+        missing.append("positioning")
+    if not _is_complete_enough(rates_conf):
+        missing.append("yield_curve")
+
+    return {
+        "macro_confidence": macro_conf,
+        "valuation_confidence": valuation_conf,
+        "positioning_confidence": positioning_conf,
+        "rates_confidence": rates_conf,
+        "confidence_floor": floor,
+        "data_completeness": "complete" if _is_complete_enough(floor) else "data_incomplete",
+        "score_status": "scored" if _is_complete_enough(floor) else "data_incomplete",
+        "missing_inputs": missing,
+    }
 
 
 def compute_all_pillar_scores(db) -> list[dict]:
@@ -259,16 +359,29 @@ def compute_all_pillar_scores(db) -> list[dict]:
     policy_rates = db.get_latest_policy_rates()
     cot_latest = db.get_latest_cot()
     cpi_history = db.get_indicators(indicator="cpi_yoy")
+    yield_curves = db.get_latest_yield_curve()
+
+    ind_by_ccy: dict[str, dict[str, float]] = {}
+    for row in indicators:
+        ccy = row.get("currency", "")
+        ind = row.get("indicator", "")
+        val = row.get("value")
+        if ccy and ind and val is not None:
+            ind_by_ccy.setdefault(ccy, {})[ind] = float(val)
+    policy_by_ccy = {r["currency"]: r.get("rate_pct") for r in policy_rates}
 
     # Calcul des 3 piliers
     macro_scores = compute_macro_score(indicators, policy_rates)
     valuation_scores = compute_valuation_scores(policy_rates, cpi_history)
+    carry_scores = compute_carry_score(policy_rates)
+    ppp_scores = compute_ppp_deviation(cpi_history)
 
     # COT positioning scores
     cot_by_ccy = {r["currency"]: r for r in cot_latest}
+    yield_by_ccy = {r["currency"]: r for r in yield_curves}
 
     results = []
-    for ccy in G10:
+    for ccy in SCORING_CURRENCIES:
         m = macro_scores.get(ccy, {})
         v = valuation_scores.get(ccy, {})
         c = cot_by_ccy.get(ccy, {})
@@ -278,6 +391,16 @@ def compute_all_pillar_scores(db) -> list[dict]:
         positioning_s = c.get("positioning_score", 0.0)
         cot_z = c.get("net_z_score", 0.0)
         crowded = c.get("crowded_flag", False)
+        completeness = compute_input_confidence(
+            ccy,
+            ind_by_ccy,
+            policy_by_ccy,
+            carry_scores,
+            ppp_scores,
+            cot_by_ccy,
+            yield_by_ccy,
+        )
+        can_score = completeness["score_status"] == "scored" or ccy in CORE_G8
 
         # Composite (pondération égale des 3 piliers)
         composite = clamp((macro_s + valuation_s + positioning_s) / 3.0)
@@ -285,7 +408,7 @@ def compute_all_pillar_scores(db) -> list[dict]:
         # Alignement : les 3 piliers doivent pointer dans la même direction
         # avec un seuil minimum de 0.20 pour éviter le bruit
         THRESHOLD = 0.20
-        all_aligned = (
+        all_aligned = can_score and (
             abs(macro_s) >= THRESHOLD and
             abs(valuation_s) >= THRESHOLD and
             abs(positioning_s) >= THRESHOLD and
@@ -300,8 +423,16 @@ def compute_all_pillar_scores(db) -> list[dict]:
             "cot_z_score": round(cot_z, 3) if cot_z else None,
             "positioning_score": round(positioning_s, 3),
             "crowded_flag": crowded,
-            "composite_score": round(composite, 3),
+            "composite_score": round(composite, 3) if can_score else None,
             "all_pillars_aligned": all_aligned,
+            "data_completeness": completeness["data_completeness"],
+            "score_status": "scored_legacy" if completeness["score_status"] != "scored" and ccy in CORE_G8 else completeness["score_status"],
+            "confidence_floor": completeness["confidence_floor"],
+            "macro_confidence": completeness["macro_confidence"],
+            "valuation_confidence": completeness["valuation_confidence"],
+            "positioning_confidence": completeness["positioning_confidence"],
+            "rates_confidence": completeness["rates_confidence"],
+            "missing_inputs": json.dumps(completeness["missing_inputs"]),
         })
 
     return results

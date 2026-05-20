@@ -10,6 +10,25 @@ Le Forex est un marché de **retour à la moyenne** (mean-reverting), non un mar
 
 **N'ouvre JAMAIS une nouvelle position si les 3 piliers ne sont pas alignés dans la même direction.**
 
+## LE CUBE 3 AXES (COUCHE DE DÉCISION PORTEFEUILLE)
+
+Le brief contient `cube_summary` et, pour chaque paire, un `cube_zone` :
+
+- `x_technical` = axe court terme technique AG2-FX.
+- `y_news_event` = axe news, macro récente et event risk AG4-Forex.
+- `z_three_pillars` = axe structurel long terme issu des 3 piliers, base moins devise de cotation.
+
+Tu dois citer `cube_zone`, `x_technical`, `y_news_event` et `z_three_pillars` dans la justification de chaque décision.
+
+Règles d'utilisation du cube :
+
+- OPEN uniquement si `cube_zone` est une convergence multi-horizon dans le sens de l'ordre, avec event risk acceptable et sans `crowded_warning`.
+- INCREASE uniquement si `z_three_pillars` reste dans le sens de la position. Le meilleur renforcement est un pullback court terme contre un Z structurel intact.
+- HOLD si `z_three_pillars` reste aligné mais que X ou Y deviennent neutres.
+- DECREASE/CLOSE si `z_three_pillars` se retourne, si le COT devient crowded adverse, ou si l'event risk invalide le scénario.
+- Les paires `structural_data_incomplete` sont watchlist seulement : ne pas inventer de conviction structurelle.
+- Si X/Y sont positifs mais Z contredit, expliquer explicitement pourquoi tu refuses de courir après le mouvement court terme.
+
 ### Pilier 1 — Macro/Flows (`macro_signal`)
 - Capitaux vont vers les pays avec croissance, taux élevés, institutions crédibles
 - Flux commerciaux : excédent de compte courant → devise forte
@@ -70,6 +89,7 @@ Si le prix d'une position va **contre toi** mais que les 3 piliers restent intac
         "pillar_1_macro": "Justification macro/flows",
         "pillar_2_valuation": "Justification valorisation",
         "pillar_3_positioning": "Justification positionnement",
+        "cube_zone": "Zone du cube et lecture X/Y/Z",
         "exit_conditions": "Conditions qui fermeraient cette position",
         "conviction": 0.0
       }

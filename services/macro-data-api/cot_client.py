@@ -7,8 +7,9 @@ Utilise le rapport Disaggregated Futures Only (format legacy compatible).
 import io
 import logging
 import zipfile
+from dataclasses import dataclass
 from datetime import date
-from typing import Optional
+from typing import Literal, Optional
 
 import httpx
 import pandas as pd
@@ -19,6 +20,30 @@ logger = logging.getLogger("cot_client")
 # commodity-focused disaggregated report. Annual files include the current year
 # to date and have stable headers.
 COT_FINANCIAL_FUTURES_URL = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
+
+PositioningSource = Literal["CFTC_COT", "OPTION_RR_25D", "ETF_FLOWS", "CME_OI"]
+PositioningConfidence = Literal["high", "medium", "low"]
+
+
+@dataclass(frozen=True)
+class PositioningRecord:
+    currency: str
+    net_specs: float
+    timestamp: date
+    source: PositioningSource
+    confidence: PositioningConfidence
+
+
+SOURCE_CONFIDENCE: dict[str, PositioningConfidence] = {
+    "CFTC_COT": "high",
+    "OPTION_RR_25D": "medium",
+    "CME_OI": "medium",
+    "ETF_FLOWS": "low",
+}
+
+
+def confidence_for_source(source: str) -> PositioningConfidence:
+    return SOURCE_CONFIDENCE.get(str(source or "").upper(), "low")
 
 # Mapping nom de marché CFTC → devise ISO
 CFTC_MARKET_TO_CURRENCY = {
@@ -35,11 +60,17 @@ CFTC_MARKET_TO_CURRENCY = {
     "CHINESE RENMINBI":      "CNH",
 }
 
+CFTC_MARKET_CODE_TO_CURRENCY = {
+    "095741": "MXN",
+}
+
 # Colonnes importantes dans les rapports CFTC. Keep legacy names as fallback,
 # but prefer the underscored TFF headers from fut_fin_txt_YYYY.zip.
 COT_COLUMNS = {
     "Market and Exchange Names":         "market_name",
     "Market_and_Exchange_Names":         "market_name",
+    "CFTC Contract Market Code":         "market_code",
+    "CFTC_Contract_Market_Code":         "market_code",
     "As of Date in Form YYYY-MM-DD":     "report_date",
     "Report_Date_as_YYYY-MM-DD":         "report_date",
     "Open Interest (All)":               "open_interest",
@@ -66,6 +97,35 @@ COT_COLUMNS = {
 class COTClient:
     def __init__(self):
         pass
+
+    def build_proxy_positioning_record(
+        self,
+        currency: str,
+        net_spec: float,
+        report_date: str,
+        source: PositioningSource,
+        open_interest: int = 0,
+    ) -> dict:
+        """
+        Normalise un proxy de positionnement non-CFTC.
+
+        Les fetchers provider-specific (option risk reversal, CME OI, ETF flows)
+        doivent produire ce format avant persistence, afin que le scoring puisse
+        appliquer le gating via source/confidence.
+        """
+        source_value = str(source or "").upper()
+        return {
+            "report_date": report_date,
+            "currency": str(currency or "").upper(),
+            "net_spec": float(net_spec),
+            "lev_money_long": 0,
+            "lev_money_short": 0,
+            "asset_mgr_long": 0,
+            "asset_mgr_short": 0,
+            "open_interest": int(open_interest or 0),
+            "source": source_value,
+            "confidence": confidence_for_source(source_value),
+        }
 
     async def _download_file(self, url: str) -> Optional[pd.DataFrame]:
         """Télécharge et parse un fichier COT CFTC zip/csv/txt."""
@@ -113,7 +173,8 @@ class COTClient:
 
         for _, row in df.iterrows():
             mkt = self._normalize_market_name(row.get("market_name", ""))
-            currency = CFTC_MARKET_TO_CURRENCY.get(mkt)
+            market_code = str(row.get("market_code") or "").strip()
+            currency = CFTC_MARKET_TO_CURRENCY.get(mkt) or CFTC_MARKET_CODE_TO_CURRENCY.get(market_code)
             if not currency:
                 continue
 
@@ -143,6 +204,8 @@ class COTClient:
                 "asset_mgr_long": am_long,
                 "asset_mgr_short": am_short,
                 "open_interest": safe_int(row.get("open_interest", 0)),
+                "source": "CFTC_COT",
+                "confidence": confidence_for_source("CFTC_COT"),
             })
         return results
 
@@ -209,5 +272,7 @@ class COTClient:
                     "crowded_flag": crowded,
                     "crowded_direction": ("long" if z > 1.5 else "short" if z < -1.5 else "neutral"),
                     "positioning_score": round(positioning_score, 3),
+                    "source": row.get("source", "CFTC_COT"),
+                    "confidence": row.get("confidence", confidence_for_source(row.get("source", "CFTC_COT"))),
                 })
         return result

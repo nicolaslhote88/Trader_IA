@@ -26,6 +26,10 @@ FRED_SERIES = {
         "CAD": "IRSTCI01CAM156N", # Bank of Canada
         "AUD": "IRSTCI01AUM156N", # Reserve Bank of Australia
         "NZD": "IRSTCI01NZM156N", # RBNZ
+        "MXN": "INTDSRMXM193N",    # Banco de Mexico
+        "SEK": "INTDSRSEM193N",    # Riksbank
+        "NOK": "INTDSRNOM193N",    # Norges Bank
+        "KRW": "INTDSRKRM193N",    # Bank of Korea
     },
     # PIB réel (croissance QoQ annualisée)
     "gdp_growth": {
@@ -35,6 +39,9 @@ FRED_SERIES = {
         "GBP": "UKNGDP",             # UK Real GDP
         "CAD": "NAEXKP01CAQ189S",    # Canada Real GDP
         "AUD": "NGDPRNSAXDCAUQ",     # Australia Real GDP
+        "MXN": "NGDPRSAXDCMXQ",       # Mexico Real GDP
+        "SEK": "NGDPRSAXDCSEQ",       # Sweden Real GDP
+        "NOK": "NGDPRSAXDCNOQ",       # Norway Real GDP
     },
     # CPI (Inflation YoY %)
     "cpi_yoy": {
@@ -46,6 +53,14 @@ FRED_SERIES = {
         "CAD": "CANCPIALLMINMEI",     # Canada CPI
         "AUD": "AUSCPIALLQINMEI",     # Australia CPI
         "NZD": "NZLCPIALLQINMEI",     # New Zealand CPI
+        "MXN": "MEXCPALTT01IXOBM",    # Mexico CPI all items
+        "SEK": "SWECPIALLMINMEI",     # Sweden CPI all items
+        "NOK": "NORCPIALLMINMEI",     # Norway CPI all items
+        "KRW": "KORCPIALLMINMEI",     # Korea CPI all items
+    },
+    # Chômage (macro contextuel, pas encore pondéré dans le score pilier 1)
+    "unemployment": {
+        "MXN": "LRHUTTTTMXM156S",
     },
     # Balance du compte courant (Milliards USD, trimestriel)
     "current_account": {
@@ -68,6 +83,9 @@ FRED_SERIES = {
     "yield_10y_cad": {"CAD": "IRLTLT01CAM156N"},
     "yield_10y_aud": {"AUD": "IRLTLT01AUM156N"},
     "yield_10y_chf": {"CHF": "IRLTLT01CHM156N"},
+    "yield_10y_sek": {"SEK": "IRLTLT01SEM156N"},
+    "yield_10y_nok": {"NOK": "IRLTLT01NOM156N"},
+    "yield_10y_krw": {"KRW": "IRLTLT01KRM156N"},
     "yield_2y_eur": {"EUR": "IRLTST01EZM156N"},
 }
 
@@ -203,6 +221,23 @@ class FREDClient:
                 }
         return results
 
+    async def get_unemployment(self) -> dict[str, dict]:
+        """Taux de chômage pour les devises hors G8 suivies en contexte macro."""
+        results = {}
+        for currency, series_id in FRED_SERIES.get("unemployment", {}).items():
+            try:
+                obs = await self.get_series(series_id, limit=5)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
+            if obs:
+                results[currency] = {
+                    "unemployment_pct": obs[0]["value"],
+                    "as_of": obs[0]["date"],
+                    "series_id": series_id,
+                }
+        return results
+
     async def get_us_yield_curve(self) -> dict[str, dict]:
         """Courbe des taux US Treasuries (2Y, 5Y, 10Y, 30Y)."""
         results = {}
@@ -224,6 +259,9 @@ class FREDClient:
             "CAD": ("yield_10y_cad", "CAD"),
             "AUD": ("yield_10y_aud", "AUD"),
             "CHF": ("yield_10y_chf", "CHF"),
+            "SEK": ("yield_10y_sek", "SEK"),
+            "NOK": ("yield_10y_nok", "NOK"),
+            "KRW": ("yield_10y_krw", "KRW"),
         }
         results = {}
         for currency, (key, ccy) in mapping.items():

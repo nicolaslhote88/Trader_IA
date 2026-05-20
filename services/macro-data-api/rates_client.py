@@ -39,12 +39,17 @@ G10_COUNTRIES = {
     "CAD": {"country": "Canada",        "cb": "Bank of Canada"},
     "AUD": {"country": "Australia",     "cb": "RBA"},
     "NZD": {"country": "New Zealand",   "cb": "RBNZ"},
+    "MXN": {"country": "Mexico",        "cb": "Banxico"},
+    "SEK": {"country": "Sweden",        "cb": "Riksbank"},
+    "NOK": {"country": "Norway",        "cb": "Norges Bank"},
+    "KRW": {"country": "South Korea",   "cb": "Bank of Korea"},
 }
 
 
 class RatesClient:
     def __init__(self, ibkr_broker_url: Optional[str] = None):
         self.ibkr_url = ibkr_broker_url or os.environ.get("IBKR_BROKER_URL", "http://ibkr-broker:8080")
+        self.banxico_token = os.environ.get("BANXICO_API_TOKEN", "")
 
     async def get_ibkr_market_data(self, conid: int, period: str = "1y", bar: str = "1d") -> list[dict]:
         """Récupère les données historiques IBKR pour un contrat."""
@@ -59,6 +64,48 @@ class RatesClient:
         except Exception as exc:
             logger.warning("IBKR market data failed for conid %s: %s", conid, exc)
         return []
+
+    async def get_banxico_yields(self) -> tuple[dict[str, dict], dict[str, dict]]:
+        """
+        Fetch MXN sovereign yields from Banxico SIE when series IDs are configured.
+
+        Required env vars:
+        - BANXICO_API_TOKEN
+        - BANXICO_MXN_YIELD_2Y_SERIES_ID
+        - BANXICO_MXN_YIELD_10Y_SERIES_ID
+
+        The series IDs stay configurable because Banxico can expose several
+        benchmark variants; operations can choose the exact curve convention.
+        """
+        series = {
+            "2Y": os.environ.get("BANXICO_MXN_YIELD_2Y_SERIES_ID", ""),
+            "10Y": os.environ.get("BANXICO_MXN_YIELD_10Y_SERIES_ID", ""),
+        }
+        if not self.banxico_token or not all(series.values()):
+            return {}, {}
+
+        async def fetch_one(tenor: str, series_id: str) -> Optional[dict]:
+            url = f"https://www.banxico.org.mx/SieAPIRest/service/v1/series/{series_id}/datos/oportuno"
+            try:
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    resp = await client.get(url, headers={"Bmx-Token": self.banxico_token})
+                    resp.raise_for_status()
+                data = resp.json()
+                rows = (((data.get("bmx") or {}).get("series") or [{}])[0].get("datos") or [])
+                if not rows:
+                    return None
+                latest = rows[-1]
+                value = str(latest.get("dato") or "").replace(",", "")
+                return {"yield_pct": float(value), "as_of": latest.get("fecha"), "source": "Banxico"}
+            except Exception as exc:
+                logger.warning("Banxico MXN %s yield failed: %s", tenor, exc)
+                return None
+
+        y2 = await fetch_one("2Y", series["2Y"])
+        y10 = await fetch_one("10Y", series["10Y"])
+        yields_2y = {"MXN": {"yield_2y_pct": y2["yield_pct"], "as_of": y2["as_of"], "source": y2["source"]}} if y2 else {}
+        yields_10y = {"MXN": {"yield_10y_pct": y10["yield_pct"], "as_of": y10["as_of"], "source": y10["source"]}} if y10 else {}
+        return yields_10y, yields_2y
 
     def build_yield_curve(
         self,
@@ -78,6 +125,20 @@ class RatesClient:
             y10 = yields_10y.get(currency, {}).get("yield_10y_pct")
             y2 = yields_2y.get(currency, {}).get("yield_2y_pct")
             policy = policy_rates.get(currency, {}).get("rate_pct")
+            source = yields_10y.get(currency, {}).get("source") or "FRED"
+
+            # Operational override for non-FRED curves such as Banxico 2Y/10Y.
+            # Example: MXN_YIELD_10Y_PCT=9.55 MXN_YIELD_2Y_PCT=9.85.
+            env_y10 = os.environ.get(f"{currency}_YIELD_10Y_PCT")
+            env_y2 = os.environ.get(f"{currency}_YIELD_2Y_PCT")
+            try:
+                if env_y10 not in (None, ""):
+                    y10 = float(env_y10)
+                    source = os.environ.get(f"{currency}_YIELD_SOURCE", "manual_override")
+                if env_y2 not in (None, ""):
+                    y2 = float(env_y2)
+            except ValueError:
+                logger.warning("Invalid manual yield override for %s", currency)
 
             if y2 is None and policy is not None:
                 # Proxy : taux directeur + spread moyen historique
@@ -92,6 +153,7 @@ class RatesClient:
                 "yield_10y": y10,
                 "slope_10y2y": slope,
                 "as_of": yields_10y.get(currency, {}).get("as_of") or date.today().isoformat(),
+                "source": source,
             }
         return result
 

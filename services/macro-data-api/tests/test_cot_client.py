@@ -5,7 +5,7 @@ import os
 import pandas as pd
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from cot_client import COTClient
+from cot_client import COTClient, confidence_for_source
 
 
 def test_compute_z_scores_crowded_long():
@@ -78,6 +78,23 @@ def test_cot_market_mapping():
     assert "GBP" in CFTC_MARKET_TO_CURRENCY.values()
     assert "EURO FX" in CFTC_MARKET_TO_CURRENCY
     assert CFTC_MARKET_TO_CURRENCY["NZ DOLLAR"] == "NZD"
+    assert CFTC_MARKET_TO_CURRENCY["MEXICAN PESO"] == "MXN"
+
+
+def test_confidence_for_source():
+    assert confidence_for_source("CFTC_COT") == "high"
+    assert confidence_for_source("OPTION_RR_25D") == "medium"
+    assert confidence_for_source("CME_OI") == "medium"
+    assert confidence_for_source("ETF_FLOWS") == "low"
+
+
+def test_build_proxy_positioning_record_for_sek_rr():
+    client = COTClient()
+    rec = client.build_proxy_positioning_record("SEK", -0.35, "2026-05-20", "OPTION_RR_25D")
+    assert rec["currency"] == "SEK"
+    assert rec["source"] == "OPTION_RR_25D"
+    assert rec["confidence"] == "medium"
+    assert rec["net_spec"] == -0.35
 
 
 def test_parse_tff_underscored_columns_and_exchange_suffix():
@@ -100,3 +117,30 @@ def test_parse_tff_underscored_columns_and_exchange_suffix():
     assert len(records) == 1
     assert records[0]["currency"] == "EUR"
     assert records[0]["net_spec"] == 0
+    assert records[0]["source"] == "CFTC_COT"
+    assert records[0]["confidence"] == "high"
+
+
+def test_parse_mxn_cftc_market_code():
+    """MXN doit être reconnu même si le nom de marché varie mais que le code CFTC est présent."""
+    client = COTClient()
+    df = pd.DataFrame([
+        {
+            "Market_and_Exchange_Names": "MEXICAN PESO - CHICAGO MERCANTILE EXCHANGE",
+            "CFTC_Contract_Market_Code": "095741",
+            "Report_Date_as_YYYY-MM-DD": "2026-05-12",
+            "Open_Interest_All": 1000,
+            "Asset_Mgr_Positions_Long_All": 200,
+            "Asset_Mgr_Positions_Short_All": 50,
+            "Lev_Money_Positions_Long_All": 400,
+            "Lev_Money_Positions_Short_All": 100,
+        }
+    ])
+
+    records = client._parse_df(df)
+
+    assert len(records) == 1
+    assert records[0]["currency"] == "MXN"
+    assert records[0]["net_spec"] == 450
+    assert records[0]["source"] == "CFTC_COT"
+    assert records[0]["confidence"] == "high"

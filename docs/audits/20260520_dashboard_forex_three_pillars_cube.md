@@ -35,3 +35,21 @@ Pour etendre proprement le perimetre a d'autres devises actives de l'univers For
 - `services/macro-data-api/scoring.py` pour elargir l'univers score.
 
 Sans ces donnees, une paire peut rester visible dans le dashboard Forex, mais l'axe structurel du cube est marque incomplet.
+
+## Extension hors G8 et AG1-FX-V2
+
+Ajout de la premiere couche d'extension hors G8:
+
+- `MXN` devient scorables des que macro/policy, valorisation, COT CFTC et courbe 2Y/10Y sont complets.
+- `SEK` et `NOK` sont prepares, mais restent `data_incomplete` tant qu'un proxy de positionnement `OPTION_RR_25D` ou `CME_OI` n'est pas charge.
+- `KRW` est conserve en macro-only: pas de score structurel tant qu'une source NDF/positionnement fiable n'est pas disponible.
+- `cot.speculative_positions` porte maintenant `source` et `confidence`.
+- `pillars.currency_scores` porte `data_completeness`, `score_status`, `confidence_floor` et `missing_inputs`.
+
+AG1-FX-V2 consomme maintenant le cube dans le brief:
+
+- `cube_summary.best_convergences` pour les ouvertures potentielles.
+- `cube_summary.portfolio_positions_review` pour HOLD/REDUCE/CLOSE sur positions existantes.
+- `cube_summary.pullback_reinforcement_candidates` pour les renforcements si Z reste intact.
+- `cube_summary.short_term_hype_to_avoid` pour eviter de courir apres X/Y quand Z contredit.
+- `cube_summary.missing_structural_data` pour signaler les paires non jugeables structurellement.
