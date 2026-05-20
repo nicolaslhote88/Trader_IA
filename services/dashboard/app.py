@@ -17054,7 +17054,6 @@ Ce cube ajoute le chaînon manquant entre le radar de paires et le framework mac
                             },
                         ]
                     ),
-                    fit_columns=["Position dans le cube"],
                     hide_index=True,
                     height=320,
                 )

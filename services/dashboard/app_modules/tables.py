@@ -195,8 +195,11 @@ def _wrapped_table_css(table_id: str, height: int | None = None) -> str:
 }}
 #{table_id} th.fit,
 #{table_id} td.fit {{
-  width: 1%;
+  width: auto;
+  min-width: max-content;
   max-width: 24ch;
+  white-space: nowrap !important;
+  overflow-wrap: normal;
 }}
 #{table_id} th.wrap,
 #{table_id} td.wrap {{
