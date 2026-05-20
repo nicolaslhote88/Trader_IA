@@ -34,7 +34,7 @@ FRED_SERIES = {
         "JPY": "JPNRGDPEXP",         # Japan Real GDP
         "GBP": "UKNGDP",             # UK Real GDP
         "CAD": "NAEXKP01CAQ189S",    # Canada Real GDP
-        "AUD": "AUSRGDPEXPGSCA",     # Australia Real GDP
+        "AUD": "NGDPRNSAXDCAUQ",     # Australia Real GDP
     },
     # CPI (Inflation YoY %)
     "cpi_yoy": {
@@ -44,8 +44,8 @@ FRED_SERIES = {
         "GBP": "GBRCPIALLMINMEI",     # UK CPI
         "CHF": "CHECPIALLMINMEI",     # Switzerland CPI
         "CAD": "CANCPIALLMINMEI",     # Canada CPI
-        "AUD": "AUSCPIALLMINMEI",     # Australia CPI
-        "NZD": "NZLCPIALLMINMEI",     # New Zealand CPI
+        "AUD": "AUSCPIALLQINMEI",     # Australia CPI
+        "NZD": "NZLCPIALLQINMEI",     # New Zealand CPI
     },
     # Balance du compte courant (Milliards USD, trimestriel)
     "current_account": {
@@ -104,7 +104,11 @@ class FREDClient:
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(f"{FRED_BASE}/series/observations", params=params)
-            r.raise_for_status()
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text[:300].replace(self.api_key, "***")
+                raise RuntimeError(f"FRED series {series_id} failed with HTTP {exc.response.status_code}: {detail}") from None
             data = r.json()
             obs = data.get("observations", [])
             result = []
@@ -118,7 +122,11 @@ class FREDClient:
 
     async def get_latest(self, series_id: str) -> Optional[dict]:
         """Retourne la dernière observation disponible."""
-        obs = await self.get_series(series_id, limit=5)
+        try:
+            obs = await self.get_series(series_id, limit=5)
+        except RuntimeError as exc:
+            logger.warning("%s", exc)
+            return None
         return obs[0] if obs else None
 
     async def get_policy_rates(self) -> dict[str, dict]:
@@ -138,7 +146,11 @@ class FREDClient:
         """Croissance PIB réel pour les principales économies."""
         results = {}
         for currency, series_id in FRED_SERIES["gdp_growth"].items():
-            obs = await self.get_series(series_id, limit=8)
+            try:
+                obs = await self.get_series(series_id, limit=8)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
             if len(obs) >= 2:
                 latest = obs[0]["value"]
                 prev = obs[1]["value"]
@@ -155,7 +167,11 @@ class FREDClient:
         """Inflation CPI YoY pour les principales devises."""
         results = {}
         for currency, series_id in FRED_SERIES["cpi_yoy"].items():
-            obs = await self.get_series(series_id, limit=14)
+            try:
+                obs = await self.get_series(series_id, limit=14)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
             if len(obs) >= 13:
                 latest = obs[0]["value"]
                 year_ago = obs[12]["value"] if len(obs) > 12 else None
@@ -172,7 +188,11 @@ class FREDClient:
         """Balance du compte courant (déficit/excédent) en Mds USD."""
         results = {}
         for currency, series_id in FRED_SERIES["current_account"].items():
-            obs = await self.get_series(series_id, limit=8)
+            try:
+                obs = await self.get_series(series_id, limit=8)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
             if obs:
                 latest = obs[0]["value"]
                 results[currency] = {

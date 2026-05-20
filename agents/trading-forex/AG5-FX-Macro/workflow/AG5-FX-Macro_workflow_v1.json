@@ -1,0 +1,153 @@
+{
+  "id": "AG5FXMacroPillarsV1",
+  "name": "AG5-FX-Macro",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 3 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -920,
+        -120
+      ],
+      "id": "schedule",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        80
+      ],
+      "id": "manual",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// AG5-FX-Macro — Init Run\n// Pilier 1 : Analyse Macro/Flows par devise\nconst runId = `AG5MACRO_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    macro_api_url: $env.MACRO_DATA_API_URL || 'http://macro-data-api:8081',\n    macro_duckdb_path: $env.MACRO_DUCKDB_PATH || '/files/duckdb/macro_data.duckdb',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        -20
+      ],
+      "id": "01-init-run",
+      "name": "01 Init Run"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"\nAG5-FX-Macro — Pilier 1 : Macro/Flows\nDéclenche le refresh complet des données macro depuis FRED via macro-data-api.\n\"\"\"\nimport os\nimport urllib.request\nimport json\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\napi_url = ctx.get(\"macro_api_url\", os.environ.get(\"MACRO_DATA_API_URL\", \"http://macro-data-api:8081\"))\n\nerror = None\nrefresh_result = {}\n\ntry:\n    req = urllib.request.Request(\n        f\"{api_url}/macro/refresh_all\",\n        method=\"POST\",\n        headers={\"Content-Type\": \"application/json\"},\n        data=b\"{}\",\n    )\n    with urllib.request.urlopen(req, timeout=60) as resp:\n        refresh_result = json.loads(resp.read())\nexcept Exception as exc:\n    error = str(exc)\n\nreturn [{\"json\": {**ctx, \"refresh_result\": refresh_result, \"refresh_error\": error}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        -20
+      ],
+      "id": "02-refresh-macro-data",
+      "name": "02 Refresh Macro Data"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"\nAG5-FX-Macro — Pilier 1 : Calcul des scores macro par devise.\nAppelle /pillars/compute sur macro-data-api pour calculer et sauvegarder les scores.\n\"\"\"\nimport os\nimport urllib.request\nimport json\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\napi_url = ctx.get(\"macro_api_url\", os.environ.get(\"MACRO_DATA_API_URL\", \"http://macro-data-api:8081\"))\n\nerror = None\nscores_result = {}\n\ntry:\n    req = urllib.request.Request(\n        f\"{api_url}/pillars/compute\",\n        method=\"POST\",\n        headers={\"Content-Type\": \"application/json\"},\n        data=b\"{}\",\n    )\n    with urllib.request.urlopen(req, timeout=30) as resp:\n        scores_result = json.loads(resp.read())\nexcept Exception as exc:\n    error = str(exc)\n\nscores = scores_result.get(\"scores\", [])\naligned_count = scores_result.get(\"aligned_count\", 0)\n\nreturn [{\"json\": {**ctx, \"pillar_scores\": scores, \"aligned_count\": aligned_count, \"scores_error\": error}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        -20
+      ],
+      "id": "03-compute-macro-scores",
+      "name": "03 Compute Macro Scores"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"\nAG5-FX-Macro — Log du run dans macro_data.duckdb.\n\"\"\"\nimport os\nimport duckdb\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"macro_duckdb_path\", os.environ.get(\"MACRO_DUCKDB_PATH\", \"/files/duckdb/macro_data.duckdb\"))\n\nrun_id = ctx.get(\"run_id\", \"unknown\")\nscores = ctx.get(\"pillar_scores\", [])\nerror = ctx.get(\"scores_error\") or ctx.get(\"refresh_error\")\nstatus = \"error\" if error else \"ok\"\n\ntry:\n    if os.path.exists(db_path):\n        with duckdb.connect(db_path) as con:\n            con.execute(\n                \"\"\"INSERT OR REPLACE INTO pillars.run_log\n                   (run_id, finished_at, status, error_msg, records_written)\n                   VALUES (?, ?, ?, ?, ?)\"\"\",\n                [run_id, datetime.now(timezone.utc).isoformat(), status, error, len(scores)],\n            )\nexcept Exception as exc:\n    pass  # Ne pas crasher sur le log\n\nreturn [{\"json\": {\n    \"run_id\": run_id,\n    \"status\": status,\n    \"currencies_scored\": len(scores),\n    \"error\": error,\n}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        -20
+      ],
+      "id": "04-log-run",
+      "name": "04 Log Run"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01 Init Run": {
+      "main": [
+        [
+          {
+            "node": "02 Refresh Macro Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Refresh Macro Data": {
+      "main": [
+        [
+          {
+            "node": "03 Compute Macro Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Compute Macro Scores": {
+      "main": [
+        [
+          {
+            "node": "04 Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Europe/Paris"
+  }
+}

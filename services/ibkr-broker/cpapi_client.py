@@ -57,6 +57,27 @@ class CPAPIClient:
         self._last_tickle = time.monotonic()
         return r
 
+    async def initialize_brokerage_session(
+        self,
+        publish: bool = True,
+        compete: bool = False,
+    ) -> dict:
+        """
+        Reinitialise la session brokerage si la session Gateway/SSO est encore valide.
+
+        IBKR recommande cet endpoint a la place de /iserver/reauthenticate.
+        Il ne remplace pas le login navigateur + 2FA quand la session Gateway a
+        totalement expire.
+        """
+        return await self._post(
+            "/v1/api/iserver/auth/ssodh/init",
+            {"publish": publish, "compete": compete},
+        )
+
+    async def logout(self) -> dict:
+        """Deconnecte la session Gateway courante."""
+        return await self._post("/v1/api/logout", {})
+
     async def is_authenticated(self) -> bool:
         try:
             status = await self.auth_status()

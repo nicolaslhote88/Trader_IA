@@ -75,6 +75,9 @@ services:
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
       - IBKR_SSL_VERIFY=false
       - IBKR_ACCOUNT_ID=${IBKR_ACCOUNT_ID:-}
+      - IBKR_KEEPALIVE_INTERVAL_SECONDS=${IBKR_KEEPALIVE_INTERVAL_SECONDS:-55}
+      - IBKR_AUTO_REAUTH_ENABLED=${IBKR_AUTO_REAUTH_ENABLED:-true}
+      - IBKR_AUTO_REAUTH_COMPETE=${IBKR_AUTO_REAUTH_COMPETE:-false}
     depends_on:
       - ibkr-gateway
     networks:

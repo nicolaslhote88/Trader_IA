@@ -4,8 +4,9 @@ Toutes les tables du framework 3 piliers.
 """
 
 import logging
+import math
 import os
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 import duckdb
@@ -125,6 +126,29 @@ class MacroDB:
         with self._connect() as con:
             con.execute(SCHEMA_SQL)
 
+    @staticmethod
+    def _json_safe(value):
+        if value is None:
+            return None
+        if isinstance(value, float) and not math.isfinite(value):
+            return None
+        if isinstance(value, (date, datetime)):
+            return value.isoformat()
+        try:
+            if hasattr(value, "item"):
+                return MacroDB._json_safe(value.item())
+        except Exception:
+            pass
+        return value
+
+    @classmethod
+    def _records(cls, cur) -> list[dict]:
+        cols = [d[0] for d in cur.description]
+        return [
+            {col: cls._json_safe(value) for col, value in zip(cols, row)}
+            for row in cur.fetchall()
+        ]
+
     # ── Policy Rates ──────────────────────────────────────────────────────────
 
     def upsert_policy_rates(self, rates: dict[str, dict]):
@@ -146,12 +170,12 @@ class MacroDB:
 
     def get_latest_policy_rates(self) -> list[dict]:
         with self._connect() as con:
-            df = con.execute(
+            cur = con.execute(
                 """SELECT DISTINCT ON (currency) *
                    FROM macro.policy_rates
                    ORDER BY currency, as_of DESC"""
-            ).fetchdf()
-        return df.to_dict("records")
+            )
+            return self._records(cur)
 
     # ── Country Indicators ────────────────────────────────────────────────────
 
@@ -191,8 +215,8 @@ class MacroDB:
                 q += " AND indicator = ?"
                 params.append(indicator)
             q += " ORDER BY as_of DESC"
-            df = con.execute(q, params).fetchdf()
-        return df.to_dict("records")
+            cur = con.execute(q, params)
+            return self._records(cur)
 
     # ── COT Data ──────────────────────────────────────────────────────────────
 
@@ -227,16 +251,16 @@ class MacroDB:
                 q += " WHERE currency = ?"
                 params.append(currency)
             q += " ORDER BY currency, report_date DESC"
-            df = con.execute(q, params).fetchdf()
-        return df.to_dict("records")
+            cur = con.execute(q, params)
+            return self._records(cur)
 
     def get_cot_history(self, currency: str, limit: int = 104) -> list[dict]:
         with self._connect() as con:
-            df = con.execute(
+            cur = con.execute(
                 "SELECT * FROM cot.speculative_positions WHERE currency = ? ORDER BY report_date DESC LIMIT ?",
                 [currency, limit],
-            ).fetchdf()
-        return df.to_dict("records")
+            )
+            return self._records(cur)
 
     # ── Yield Curve ───────────────────────────────────────────────────────────
 
@@ -265,20 +289,20 @@ class MacroDB:
 
     def get_latest_yield_curve(self) -> list[dict]:
         with self._connect() as con:
-            df = con.execute(
+            cur = con.execute(
                 """SELECT DISTINCT ON (currency) *
                    FROM rates.yield_curve
                    ORDER BY currency, as_of DESC"""
-            ).fetchdf()
-        return df.to_dict("records")
+            )
+            return self._records(cur)
 
     def get_yield_curve_history(self, currency: str, limit: int = 90) -> list[dict]:
         with self._connect() as con:
-            df = con.execute(
+            cur = con.execute(
                 "SELECT * FROM rates.yield_curve WHERE currency = ? ORDER BY as_of DESC LIMIT ?",
                 [currency, limit],
-            ).fetchdf()
-        return df.to_dict("records")
+            )
+            return self._records(cur)
 
     # ── Pillar Scores ─────────────────────────────────────────────────────────
 
@@ -311,17 +335,17 @@ class MacroDB:
 
     def get_latest_pillar_scores(self) -> list[dict]:
         with self._connect() as con:
-            df = con.execute(
+            cur = con.execute(
                 """SELECT DISTINCT ON (currency) *
                    FROM pillars.currency_scores
                    ORDER BY currency, as_of DESC"""
-            ).fetchdf()
-        return df.to_dict("records")
+            )
+            return self._records(cur)
 
     def get_pillar_history(self, currency: str, limit: int = 30) -> list[dict]:
         with self._connect() as con:
-            df = con.execute(
+            cur = con.execute(
                 "SELECT * FROM pillars.currency_scores WHERE currency = ? ORDER BY as_of DESC LIMIT ?",
                 [currency, limit],
-            ).fetchdf()
-        return df.to_dict("records")
+            )
+            return self._records(cur)

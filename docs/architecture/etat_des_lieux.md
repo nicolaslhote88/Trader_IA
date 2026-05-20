@@ -500,7 +500,7 @@ Chargements data principaux :
 - loaders par domaine (`load_ag2_overview`, `load_ag3_overview`, `load_ag4_*`, `load_yf_enrichment_latest`),
 - loaders pages composites (`load_system_health_page_data`, `load_multi_agent_page_data`, etc.).
 
-### 6.2 Navigation fonctionnelle (8 pages)
+### 6.2 Navigation fonctionnelle (8 entrees visibles)
 
 1. `Dashboard Trading`
 2. `System Health (Monitoring)`
@@ -508,8 +508,10 @@ Chargements data principaux :
 4. `Analyse Technique V2`
 5. `Analyse Fondamentale V2`
 6. `Macro & News (AG4)`
-7. `Forex P&L (LLM x Paire)` *(ajoutÃ©e 2026-04-25)*
-8. `Forex Trading (AG1-FX)` *(ajoutÃ©e 2026-04-26)*
+7. `Dashboard Forex`
+8. `Three Pillars Monitor`
+
+Note 2026-05-20 : l'ancienne entree visible `Forex` a ete retiree de l'univers Forex, car elle dupliquait le `Dashboard Forex`. Les branches historiques `Forex P&L (LLM x Paire)` et `Forex Trading (AG1-FX)` restent documentees ci-dessous comme references fonctionnelles, mais ne sont plus exposees dans la navigation principale.
 
 ### 6.2bis Page 7 â€” Forex P&L (LLM x Paire)
 
@@ -545,6 +547,7 @@ Composantes UI :
 - Scoreboard de performance nette : P&L realise brut, frais d'execution, P&L net, couverture `core.fill_costs`, sources de commission IBKR/simulees/manquantes.
 - Radar paires FX : matrice momentum technique composite (AG2-FX score + retours 5D/20D + RSI) vs biais macro/news directionnel AG4-Forex (-1 base bearish, +1 base bullish). Le volume/urgence news n'est plus un axe sature; il devient `Event risk` et pilote la taille des bulles, avec quadrants long aligned / short aligned / conflit / neutre. Un bloc d'aide de lecture et un dictionnaire des indicateurs expliquent les axes, la taille, la forme et les cas d'usage.
 - Clic sur une paire dans la matrice : affiche une seconde matrice sous le graphe principal avec la trace historique de la paire. La trajectoire reprend les memes axes et colore les points du blanc (ancien) au bleu fonce (recent), a partir de `technical_signals_fx` et d'une fenetre news AG4-Forex roulante de 72h.
+- Onglet `Cube 3 piliers` *(ajoute 2026-05-20)* : visualisation 3D manipulable avec zoom/rotation. Axes : technique court terme AG2-FX, biais news/event AG4-Forex, puis impact structurel des 3 piliers calcule comme differentiel de `composite_score` entre devise de base et devise de cotation. Les zones du cube distinguent convergence multi-horizon base, convergence multi-horizon cotation, divergence court terme/long terme et information incomplete.
 - Onglet `Sparklines paires` : evolution 90j des 34 paires FX via `yfinance-api`, avec separation paires principales / autres cross.
 - Courbe equity superposÃ©e pour les 3 LLMs.
 - Matrice P&L net LLM x paire FX.

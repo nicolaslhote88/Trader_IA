@@ -1,6 +1,8 @@
 import json
 import math
 import os
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import urlopen
@@ -9,7 +11,10 @@ ctx = (_items or [{"json": {}}])[0].get("json", {})
 run_id = ctx.get("run_id") or ""
 as_of = ctx.get("as_of") or datetime.now(timezone.utc).isoformat()
 fred_key = ctx.get("fred_api_key") or os.getenv("FRED_API_KEY") or ""
-timeout = max(2, int(ctx.get("macro_fetch_timeout_seconds") or 8))
+timeout = min(4, max(2, int(ctx.get("macro_fetch_timeout_seconds") or 4)))
+fetch_budget_seconds = min(50, max(10, int(ctx.get("macro_fetch_budget_seconds") or os.getenv("AG3_FX_MACRO_FETCH_BUDGET_SECONDS") or 45)))
+max_workers = min(16, max(4, int(ctx.get("macro_fetch_max_workers") or os.getenv("AG3_FX_MACRO_FETCH_MAX_WORKERS") or 12)))
+deadline = time.monotonic() + fetch_budget_seconds
 currencies = ctx.get("currencies") or ["USD", "EUR", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD"]
 
 FRED_SERIES = {
@@ -65,6 +70,13 @@ def clamp(v, lo=-1.0, hi=1.0):
         return None
 
 
+def remaining_timeout():
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError("macro fetch budget exhausted")
+    return max(1, min(timeout, remaining))
+
+
 def fred_observations(series_id):
     if not fred_key:
         return []
@@ -76,7 +88,7 @@ def fred_observations(series_id):
         "limit": 18,
     }
     url = "https://api.stlouisfed.org/fred/series/observations?" + urlencode(params)
-    with urlopen(url, timeout=timeout) as resp:
+    with urlopen(url, timeout=remaining_timeout()) as resp:
         payload = json.loads(resp.read().decode("utf-8"))
     out = []
     for row in payload.get("observations") or []:
@@ -94,9 +106,9 @@ def worldbank_observations(country, indicator):
     params = {"format": "json", "per_page": 20}
     url = f"https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?" + urlencode(params)
     last_exc = None
-    for _ in range(2):
+    for _ in range(1):
         try:
-            with urlopen(url, timeout=timeout) as resp:
+            with urlopen(url, timeout=remaining_timeout()) as resp:
                 payload = json.loads(resp.read().decode("utf-8"))
             break
         except Exception as exc:
@@ -119,6 +131,8 @@ def worldbank_observations(country, indicator):
 def worldbank_member_proxy_observations(countries, indicator, min_members=3):
     by_year = {}
     for country in countries:
+        if time.monotonic() >= deadline:
+            break
         try:
             for row in worldbank_observations(country, indicator):
                 year = str(row.get("date") or "")
@@ -223,47 +237,78 @@ def worldbank_record(currency, factor, indicator, higher_is_bullish, weight):
 observations = []
 fetch_errors = []
 
-for ccy in currencies:
+
+def fetch_factor_record(ccy, factor, meta):
     configured = FRED_SERIES.get(ccy, {})
-    for factor, meta in FACTOR_DEFAULTS.items():
-        if factor in configured:
-            series_id, higher_is_bullish, weight = configured[factor]
-            try:
-                obs = fred_observations(series_id)
-                latest = obs[0] if obs else None
-                previous = obs[1] if len(obs) > 1 else None
-                if latest:
-                    rec = observation(
-                        ccy,
-                        factor,
-                        meta["source"],
-                        series_id,
-                        latest.get("value"),
-                        previous.get("value") if previous else None,
-                        "OK",
-                        higher_is_bullish,
-                        weight,
-                    )
-                    rec["observation_date"] = latest.get("date")
-                elif factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
-                    indicator, wb_higher_is_bullish, wb_weight = WORLDBANK_SERIES[factor]
-                    rec = worldbank_record(ccy, factor, indicator, wb_higher_is_bullish, wb_weight)
-                else:
-                    rec = observation(ccy, factor, meta["source"], series_id, None, None, "MISSING", higher_is_bullish, weight)
-                observations.append(rec)
-            except Exception as exc:
-                fetch_errors.append(f"{ccy}.{factor}.{series_id}: {exc}")
-                observations.append(observation(ccy, factor, meta["source"], series_id, None, None, "ERROR", meta["higher_is_bullish"], meta["weight"]))
-        elif factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
-            indicator, higher_is_bullish, weight = WORLDBANK_SERIES[factor]
-            try:
-                observations.append(worldbank_record(ccy, factor, indicator, higher_is_bullish, weight))
-            except Exception as exc:
-                fetch_errors.append(f"{ccy}.{factor}.{indicator}: {exc}")
-                source = "WorldBankProxy" if factor == "policy_rate" else "WorldBank"
-                observations.append(observation(ccy, factor, source, indicator, None, None, "ERROR", higher_is_bullish, weight))
-        else:
-            observations.append(observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]))
+    if factor in configured:
+        series_id, higher_is_bullish, weight = configured[factor]
+        try:
+            obs = fred_observations(series_id)
+            latest = obs[0] if obs else None
+            previous = obs[1] if len(obs) > 1 else None
+            if latest:
+                rec = observation(
+                    ccy,
+                    factor,
+                    meta["source"],
+                    series_id,
+                    latest.get("value"),
+                    previous.get("value") if previous else None,
+                    "OK",
+                    higher_is_bullish,
+                    weight,
+                )
+                rec["observation_date"] = latest.get("date")
+            elif factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
+                indicator, wb_higher_is_bullish, wb_weight = WORLDBANK_SERIES[factor]
+                rec = worldbank_record(ccy, factor, indicator, wb_higher_is_bullish, wb_weight)
+            else:
+                rec = observation(ccy, factor, meta["source"], series_id, None, None, "MISSING", higher_is_bullish, weight)
+            return rec, None
+        except Exception as exc:
+            return (
+                observation(ccy, factor, meta["source"], series_id, None, None, "ERROR", meta["higher_is_bullish"], meta["weight"]),
+                f"{ccy}.{factor}.{series_id}: {exc}",
+            )
+    if factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
+        indicator, higher_is_bullish, weight = WORLDBANK_SERIES[factor]
+        try:
+            return worldbank_record(ccy, factor, indicator, higher_is_bullish, weight), None
+        except Exception as exc:
+            source = "WorldBankProxy" if factor == "policy_rate" else "WorldBank"
+            return (
+                observation(ccy, factor, source, indicator, None, None, "ERROR", higher_is_bullish, weight),
+                f"{ccy}.{factor}.{indicator}: {exc}",
+            )
+    return observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]), None
+
+
+tasks = [(ccy, factor, meta) for ccy in currencies for factor, meta in FACTOR_DEFAULTS.items()]
+results_by_key = {}
+executor = ThreadPoolExecutor(max_workers=max_workers)
+future_map = {executor.submit(fetch_factor_record, ccy, factor, meta): (ccy, factor, meta) for ccy, factor, meta in tasks}
+try:
+    for future in as_completed(future_map, timeout=fetch_budget_seconds):
+        ccy, factor, meta = future_map[future]
+        try:
+            rec, err = future.result()
+        except Exception as exc:
+            rec = observation(ccy, factor, meta["source"], None, None, None, "ERROR", meta["higher_is_bullish"], meta["weight"])
+            err = f"{ccy}.{factor}: {exc}"
+        results_by_key[(ccy, factor)] = rec
+        if err:
+            fetch_errors.append(err)
+except Exception as exc:
+    fetch_errors.append(f"macro_fetch_budget_exhausted: {exc}")
+finally:
+    executor.shutdown(wait=False, cancel_futures=True)
+
+for ccy, factor, meta in tasks:
+    rec = results_by_key.get((ccy, factor))
+    if rec is None:
+        rec = observation(ccy, factor, meta["source"], None, None, None, "ERROR", meta["higher_is_bullish"], meta["weight"])
+        fetch_errors.append(f"{ccy}.{factor}: macro fetch budget exhausted")
+    observations.append(rec)
 
 ok_count = sum(1 for x in observations if x.get("data_status") == "OK")
 status_by_currency = {ccy: {} for ccy in currencies}

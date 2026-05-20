@@ -32,6 +32,7 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | GET     | `/fills`          | Fills récents |
 | GET     | `/positions`      | Positions actuelles |
 | POST    | `/auth/tickle`    | Keepalive manuel |
+| POST    | `/auth/initialize` | Reinitialise la session brokerage si la session Gateway/SSO est encore valide |
 
 ## Variables d'environnement
 
@@ -41,6 +42,9 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | `IBKR_DRY_RUN`     | `true`                      | **true** = log only, **false** = live |
 | `IBKR_SSL_VERIFY`  | `false`                     | Vérifier le certificat SSL du gateway |
 | `IBKR_ACCOUNT_ID`  | *(auto-détecté)*            | ID compte IBKR |
+| `IBKR_KEEPALIVE_INTERVAL_SECONDS` | `55` | Frequence du superviseur de session |
+| `IBKR_AUTO_REAUTH_ENABLED` | `true` | Tente `/iserver/auth/ssodh/init` si la session brokerage n'est plus authentifiee mais reste connectee |
+| `IBKR_AUTO_REAUTH_COMPETE` | `false` | Si `true`, peut deconnecter une session IBKR concurrente du meme username |
 | `IBKR_SEND_DRY_RUN_TO_BROKER` | `false` | Variable lue par les nodes n8n, pas par le broker. Permet de tester le chemin HTTP en dry-run. |
 
 ## Démarrage et authentification
@@ -63,7 +67,12 @@ ssh -L 5000:localhost:5000 user@vps_ip
 # → Login avec credentials IBKR
 ```
 
-Après login, le `ibkr-broker` envoie un tickle toutes les 55 secondes pour maintenir la session.
+Après login, le `ibkr-broker` envoie un tickle toutes les 55 secondes pour
+maintenir la session. Si IBKR retourne `connected=true` mais
+`authenticated=false`, le broker tente automatiquement
+`/iserver/auth/ssodh/init`. Si le Gateway/SSO a totalement expire, `/health`
+indique `session_monitor.manual_login_required=true` : il faut alors rouvrir
+`https://localhost:5000` via le tunnel et valider le login/2FA.
 
 ### 3. Vérifier la santé
 
@@ -88,6 +97,13 @@ docker compose up -d ibkr-broker
 **⚠️ Ne passer à `false` qu'après avoir validé au moins 5 runs en dry-run.**
 
 ## Notes API IBKR
+
+IBKR ne permet pas aux clients individuels d'automatiser le login complet du
+Client Portal Gateway. La reinitialisation automatique ajoutee ici couvre
+uniquement le cas ou la session Gateway/SSO est encore valide mais ou la session
+brokerage `/iserver` est tombee. Pour une exploitation autonome, prevoir une
+fenetre quotidienne de relogin controlee, ou migrer l'execution vers IB Gateway /
+TWS API avec auto-restart si cette contrainte CPAPI devient bloquante.
 
 Le broker envoie les ordres au format Web API actuel : `POST
 /v1/api/iserver/account/{accountId}/orders` avec un objet `{ "orders": [...] }`.
