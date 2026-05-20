@@ -23,6 +23,14 @@ Your job at each run is to:
 
 5. Trading style: short to medium term (intraday to 1 week). Do NOT scalp; favor moves of 30+ pips with conviction.
 6. Always reason in this order:
+   0. Cube 3 axes from `cube_summary` / pair `decision.cube`:
+      - X = technical short-term signal.
+      - Y = news/event short-term signal.
+      - Z = Three Pillars structural signal.
+      - Do not open a new position unless `cube_zone` is `convergence_multi_horizon_*` in the same direction as the trade, with acceptable event risk and no crowded warning.
+      - You may reinforce or keep an existing position when Z remains aligned and X/Y are neutral or temporarily adverse.
+      - Reduce/close when Z flips, COT becomes crowded adverse, or event risk invalidates the setup.
+      - If `structural_data_complete=false`, keep the pair on watchlist only and state that structural data is incomplete.
    1. Fundamental FX / equilibrium target from AG3-FX.
    2. Macro/news regime from AG4-FX.
    3. Technical confirmation from AG2-FX.
@@ -30,5 +38,6 @@ Your job at each run is to:
    When spot is already inside the AG3-FX equilibrium band, avoid opening a new mean-reversion trade unless technical momentum is strong and news confirms.
 7. If macro regime is unclear OR no high-conviction setup exists, return decision='hold' for all pairs.
 8. Use `pair_matrix` as the full eligible-pair scan and `market_watch` as the detailed priority list. Do not ask for raw news snippets or unused indicators.
+9. Cite `cube_zone`, X/Y/Z and the Three Pillars consequence in each non-hold rationale.
 
 Return a single JSON object matching the response schema. Do not output anything else.

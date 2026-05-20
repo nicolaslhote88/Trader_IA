@@ -16,6 +16,16 @@ function pct(v, decimals = 2) {
   return rounded(num(v, 0) * 100, decimals);
 }
 
+function clamp(v, lo = -1, hi = 1) {
+  return Math.max(lo, Math.min(hi, num(v, 0)));
+}
+
+function signalSign(v, threshold = 0.20) {
+  const n = num(v, 0);
+  if (Math.abs(n) < threshold) return 0;
+  return n > 0 ? 1 : -1;
+}
+
 function truncate(v, max = 160) {
   const s = String(v || '').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1).trim()}...` : s;
@@ -49,6 +59,8 @@ const universeRows = j.universe_fx || [];
 const technicalRows = j.technical_signals || [];
 const macroNews = j.macro_news || { top_news: [], pair_focus: {}, macro_regime: {} };
 const fundamentalFx = j.fundamental_fx || {};
+const threePillars = j.three_pillars || {};
+const byPillarCcy = threePillars.by_currency || {};
 const pairFocus = macroNews.pair_focus || {};
 const openLots = (j.portfolio_state || {}).open_lots || [];
 const openPairs = new Set(openLots.map((x) => x.pair).filter(Boolean));
@@ -72,6 +84,13 @@ const brief = {
   technical_signals: technicalRows,
   macro_news: macroNews,
   fundamental_fx: fundamentalFx,
+  three_pillars: {
+    data_available: Boolean(threePillars.data_available),
+    threshold: num(threePillars.threshold, 0.20),
+    by_currency: byPillarCcy,
+    opportunities: threePillars.opportunities || [],
+    crowded_alerts: threePillars.crowded_alerts || [],
+  },
   limits: {
     max_pair_pct: Number(cfg.max_pair_pct || cfg.max_pos_pct || 0.20),
     max_currency_exposure_pct: Number(cfg.max_currency_exposure_pct || 0.50),
@@ -183,6 +202,90 @@ function compactPairFocus(pair, detail = false) {
   return out;
 }
 
+function newsEventAxis(pair) {
+  const f = pairFocus[pair] || {};
+  const score = Number.isFinite(Number(f.bias_news_score)) ? Number(f.bias_news_score) : 0;
+  const eventRisk = f.urgent_event_within_4h ? 0.85 : Math.max(num(f.event_risk_score, 0), num(f.urgency_score, 0));
+  return {
+    score: clamp(score),
+    event_risk_score: Math.max(0, Math.min(1, eventRisk > 1 ? eventRisk / 100 : eventRisk)),
+  };
+}
+
+function cubeZone(xTechnical, yNews, zPillars, hasStructuralData) {
+  if (!hasStructuralData) return 'structural_data_incomplete';
+  const sx = signalSign(xTechnical);
+  const sy = signalSign(yNews);
+  const sz = signalSign(zPillars);
+  if (sx && sy && sz && sx === sy && sy === sz) {
+    return sz > 0 ? 'convergence_multi_horizon_long_base' : 'convergence_multi_horizon_short_base';
+  }
+  const shortTerm = signalSign((xTechnical + yNews) / 2);
+  if (sz && shortTerm && shortTerm === -sz) return 'pullback_against_structural_z';
+  if (sx && sy && sx === sy && sz && sx === -sz) return 'short_term_hype_against_pillars';
+  if (sz && (!sx || !sy)) return 'structural_valid_short_term_neutral';
+  return 'neutral_or_mixed';
+}
+
+function sideFromDirection(direction) {
+  return direction > 0 ? 'BUY_BASE' : direction < 0 ? 'SELL_BASE' : 'WAIT';
+}
+
+function pairCubeSignal(pair) {
+  const p = String(pair || '').toUpperCase();
+  const base = p.slice(0, 3);
+  const quote = p.slice(3, 6);
+  const tech = techByPair[p] || {};
+  const news = newsEventAxis(p);
+  const basePillar = byPillarCcy[base] || {};
+  const quotePillar = byPillarCcy[quote] || {};
+  const baseComplete = basePillar.score_status !== 'data_incomplete' && basePillar.composite_score !== null && basePillar.composite_score !== undefined;
+  const quoteComplete = quotePillar.score_status !== 'data_incomplete' && quotePillar.composite_score !== null && quotePillar.composite_score !== undefined;
+  const structuralComplete = Boolean(baseComplete && quoteComplete);
+  const macroSignal = num(basePillar.macro_score, 0) - num(quotePillar.macro_score, 0);
+  const valuationSignal = num(basePillar.valuation_score, 0) - num(quotePillar.valuation_score, 0);
+  const positioningSignal = num(basePillar.positioning_score, 0) - num(quotePillar.positioning_score, 0);
+  const z = structuralComplete ? clamp((macroSignal + valuationSignal + positioningSignal) / 3) : null;
+  const x = clamp(tech.signal_score || 0);
+  const y = news.score;
+  const zone = cubeZone(x, y, z, structuralComplete);
+  const zSign = signalSign(z);
+  const direction = sideFromDirection(zSign);
+  const crowdedWarning = Boolean(basePillar.crowded_flag && (
+    (basePillar.crowded_direction === 'long' && zSign > 0) ||
+    (basePillar.crowded_direction === 'short' && zSign < 0)
+  ));
+  let actionHint = 'WATCH';
+  if (!structuralComplete) actionHint = 'NO_STRUCTURAL_TRADE';
+  else if (crowdedWarning) actionHint = 'AVOID_CROWDED';
+  else if (news.event_risk_score >= 0.75) actionHint = openPairs.has(p) ? 'REDUCE_OR_WAIT_EVENT_RISK' : 'AVOID_EVENT_RISK';
+  else if (zone.startsWith('convergence_multi_horizon')) actionHint = openPairs.has(p) ? 'HOLD_OR_INCREASE' : 'OPEN_CANDIDATE';
+  else if (zone === 'pullback_against_structural_z') actionHint = openPairs.has(p) ? 'INCREASE_CANDIDATE' : 'WATCH_PULLBACK';
+  else if (zone === 'short_term_hype_against_pillars') actionHint = openPairs.has(p) ? 'REDUCE_CANDIDATE' : 'AVOID_CHASING';
+  else if (zone === 'structural_valid_short_term_neutral') actionHint = openPairs.has(p) ? 'HOLD' : 'WATCH';
+
+  return {
+    pair: p,
+    x_technical: rounded(x, 3),
+    y_news_event: rounded(y, 3),
+    z_three_pillars: z == null ? null : rounded(z, 3),
+    cube_alignment_score: z == null ? null : rounded((x + y + z) / 3, 3),
+    cube_zone: zone,
+    cube_direction: direction,
+    macro_signal: rounded(macroSignal, 2),
+    valuation_signal: rounded(valuationSignal, 2),
+    positioning_signal: rounded(positioningSignal, 2),
+    structural_data_complete: structuralComplete,
+    structural_missing: structuralComplete ? [] : [base, quote].filter((ccy) => {
+      const row = byPillarCcy[ccy] || {};
+      return row.score_status === 'data_incomplete' || row.composite_score === null || row.composite_score === undefined;
+    }),
+    event_risk_score: rounded(news.event_risk_score, 3),
+    crowded_warning: crowdedWarning,
+    portfolio_action_hint: actionHint,
+  };
+}
+
 function candidateScore(row) {
   const f = pairFocus[row.pair] || {};
   return (
@@ -206,6 +309,7 @@ const selectedPairs = unique([
 const pairMatrix = technicalRows.map((row) => ({
   ...compactTech(row, false),
   news: compactPairFocus(row.pair, false),
+  cube: pairCubeSignal(row.pair),
 }));
 
 const marketWatch = selectedPairs.map((pair) => ({
@@ -217,6 +321,7 @@ const marketWatch = selectedPairs.map((pair) => ({
     tier: pairMeta(pair).liquidity_tier,
   },
   news: compactPairFocus(pair, true),
+  cube: pairCubeSignal(pair),
 }));
 
 const rawTopNews = macroNews.top_news || [];
@@ -373,6 +478,7 @@ function pairDecisionProfile(pair) {
   const fundDir = fund.bias || 'unknown';
   const newsDir = signedDirectionFromNews(pair);
   const urgentNews = Boolean((pairFocus[pair] || {}).urgent_event_within_4h);
+  const cube = pairCubeSignal(pair);
   const macroDegraded = Boolean(fund.macro_degraded);
   const conflictScore = num(fund.conflict_score, 0);
   const techMacroConflict = directionConflict(techDir, fundDir);
@@ -398,6 +504,25 @@ function pairDecisionProfile(pair) {
     tradePermission = 'REDUCED_SIZE_ONLY';
     preferredAction = techDir === 'SELL_BASE' ? 'SELL_BASE' : techDir === 'BUY_BASE' ? 'BUY_BASE' : 'WAIT';
   }
+  if (!openPairs.has(pair)) {
+    if (!cube.structural_data_complete) {
+      tradePermission = 'NO_NEW_POSITION';
+      preferredAction = 'WAIT';
+    } else if (cube.crowded_warning) {
+      tradePermission = 'NO_NEW_POSITION';
+      preferredAction = 'WAIT';
+    } else if (cube.event_risk_score >= 0.75) {
+      tradePermission = 'NO_NEW_POSITION';
+      preferredAction = 'WAIT';
+    } else if (cube.cube_zone.startsWith('convergence_multi_horizon')) {
+      preferredAction = cube.cube_direction;
+    } else if (cube.cube_zone === 'short_term_hype_against_pillars') {
+      tradePermission = 'NO_NEW_POSITION';
+      preferredAction = 'WAIT';
+    } else {
+      tradePermission = tradePermission === 'ALLOW' ? 'REDUCED_SIZE_ONLY' : tradePermission;
+    }
+  }
   const brokerConstraint = CASH_ONLY_BASE_CCY_MODE && !['WAIT', 'MANAGE_OR_REDUCE_ONLY', 'MANAGE_EXISTING_ONLY'].includes(preferredAction) && !cashOnlyOpenAllowed(pair, preferredAction);
   if (brokerConstraint && !PREFUND_NON_EUR_FX && !openPairs.has(pair)) {
     tradePermission = 'NO_NEW_POSITION';
@@ -415,8 +540,34 @@ function pairDecisionProfile(pair) {
     macro_degraded: macroDegraded,
     broker_cash_only_blocked: brokerConstraint,
     prefunding_required: brokerConstraint && PREFUND_NON_EUR_FX && !openPairs.has(pair),
+    cube,
   };
 }
+
+const allCubeSignals = technicalRows.map((row) => pairCubeSignal(row.pair));
+const cubeSummary = {
+  best_convergences: allCubeSignals
+    .filter((p) => p.cube_zone.startsWith('convergence_multi_horizon') && !p.crowded_warning && p.event_risk_score < 0.75)
+    .sort((a, b) => Math.abs(num(b.cube_alignment_score, 0)) - Math.abs(num(a.cube_alignment_score, 0)))
+    .slice(0, 10),
+  portfolio_positions_review: openLots.map((lot) => {
+    const p = pairCubeSignal(lot.pair);
+    const lotSide = String(lot.side || '').toLowerCase() === 'short' ? 'SELL_BASE' : 'BUY_BASE';
+    return {
+      pair: lot.pair,
+      side: lot.side,
+      cube_zone: p.cube_zone,
+      z_three_pillars: p.z_three_pillars,
+      event_risk_score: p.event_risk_score,
+      crowded_warning: p.crowded_warning,
+      portfolio_action_hint: p.cube_direction !== 'WAIT' && p.cube_direction !== lotSide ? 'REDUCE_OR_CLOSE_Z_FLIPPED' : p.portfolio_action_hint,
+    };
+  }),
+  pullback_reinforcement_candidates: allCubeSignals.filter((p) => p.cube_zone === 'pullback_against_structural_z' && openPairs.has(p.pair) && !p.crowded_warning).slice(0, 10),
+  short_term_hype_to_avoid: allCubeSignals.filter((p) => p.cube_zone === 'short_term_hype_against_pillars').slice(0, 10),
+  missing_structural_data: allCubeSignals.filter((p) => !p.structural_data_complete).map((p) => ({ pair: p.pair, missing: p.structural_missing })),
+};
+brief.cube_summary = cubeSummary;
 
 const regime = macroNews.macro_regime || {};
 const llmBrief = {
@@ -468,6 +619,7 @@ const llmBrief = {
   top_news: topNews,
   pair_matrix: pairMatrix.map((row) => ({ ...row, decision: pairDecisionProfile(row.pair) })),
   market_watch: marketWatch.map((row) => ({ ...row, decision: pairDecisionProfile(row.pair) })),
+  cube_summary: cubeSummary,
   briefing_notes: [
     'pair_matrix is a compact scan of all eligible pairs.',
     'market_watch contains the highest-priority/open pairs with extra technical and news context.',
@@ -475,6 +627,8 @@ const llmBrief = {
     'portfolio_risk is precomputed. Do not open new positions if can_open_new_trade=false or trade_permission=NO_NEW_POSITION.',
     'broker_execution_constraints are hard live-execution constraints. If prefund_non_eur_fx=true, non-EUR target opens may be proposed only when their setup is strong; the validator will derive the required EUR funding leg.',
     'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
+    'Cube 3 axes is mandatory for new opens: X=technical, Y=news/event, Z=3 Pillars structural. Open only in convergence_multi_horizon_* and cite cube_zone in rationale.',
+    'If cube zone is structural_data_incomplete, keep the pair on watchlist only. If short-term X/Y conflicts with Z, explain why the trade is ignored or reduced.',
   ],
 };
 

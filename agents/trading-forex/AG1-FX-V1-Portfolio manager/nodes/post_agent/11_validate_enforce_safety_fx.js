@@ -81,6 +81,18 @@ function closeSideForLot(lot) {
   return '';
 }
 
+function signalSign(v, threshold = 0.20) {
+  const n = num(v, 0);
+  if (Math.abs(n) < threshold) return 0;
+  return n > 0 ? 1 : -1;
+}
+
+function sideToCubeDirection(side) {
+  if (side === 'buy_base') return 'BUY_BASE';
+  if (side === 'sell_base') return 'SELL_BASE';
+  return 'WAIT';
+}
+
 function llmDecisionProfile(ctx, pair) {
   const p = String(pair || '').toUpperCase();
   const compact = ctx.llm_brief || {};
@@ -309,11 +321,19 @@ for (const d of decisions) {
   const quoteToEurRate = quoteToEur(brief, meta.quote_ccy);
   const profile = action.startsWith('open_') ? llmDecisionProfile(j, pair) : {};
   const tradePermission = String(profile.trade_permission || 'ALLOW').toUpperCase();
+  const cube = profile.cube || {};
   const effectivePairPct = tradePermission === 'REDUCED_SIZE_ONLY' ? reducedSizeMaxPairPct : maxPairPct;
   if (action.startsWith('open_')) {
     base.trade_permission = tradePermission;
     base.decision_alignment = profile.decision_alignment || '';
     base.preferred_action = profile.preferred_action || '';
+    base.cube_check = {
+      zone: cube.cube_zone || '',
+      x_technical: cube.x_technical,
+      y_news_event: cube.y_news_event,
+      z_three_pillars: cube.z_three_pillars,
+      action_hint: cube.portfolio_action_hint,
+    };
   }
   let sizeLots = num(d.size_lots, 0);
   if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {
@@ -326,6 +346,12 @@ for (const d of decisions) {
 
   if (action.startsWith('open_')) {
     if (!base.rejection_reason && tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
+    if (!base.rejection_reason && cube.structural_data_complete === false) base.rejection_reason = 'CUBE_STRUCTURAL_DATA_INCOMPLETE';
+    if (!base.rejection_reason && cube.crowded_warning) base.rejection_reason = 'CUBE_CROWDED_WARNING';
+    if (!base.rejection_reason && num(cube.event_risk_score, 0) >= 0.75) base.rejection_reason = 'CUBE_EVENT_RISK_TOO_HIGH';
+    if (!base.rejection_reason && !String(cube.cube_zone || '').startsWith('convergence_multi_horizon')) base.rejection_reason = 'CUBE_NOT_MULTI_HORIZON_CONVERGENCE';
+    if (!base.rejection_reason && cube.cube_direction && cube.cube_direction !== sideToCubeDirection(side)) base.rejection_reason = 'CUBE_DIRECTION_MISMATCH';
+    if (!base.rejection_reason && signalSign(cube.z_three_pillars) === 0) base.rejection_reason = 'CUBE_Z_TOO_WEAK';
     if (!base.rejection_reason && sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
     if (!base.rejection_reason && tradePermission === 'REDUCED_SIZE_ONLY') {
       applySizeCap(base, reducedSizeMaxPairPct, equity, px, quoteToEurRate, 'REDUCED_SIZE_ONLY');
