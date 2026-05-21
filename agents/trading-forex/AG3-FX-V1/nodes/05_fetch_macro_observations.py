@@ -7,15 +7,22 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
+try:
+    import duckdb
+except Exception:
+    duckdb = None
+
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 run_id = ctx.get("run_id") or ""
 as_of = ctx.get("as_of") or datetime.now(timezone.utc).isoformat()
 fred_key = ctx.get("fred_api_key") or os.getenv("FRED_API_KEY") or ""
+macro_duckdb_path = ctx.get("macro_duckdb_path") or os.getenv("MACRO_DUCKDB_PATH") or "/files/duckdb/macro_data.duckdb"
 timeout = min(4, max(2, int(ctx.get("macro_fetch_timeout_seconds") or 4)))
 fetch_budget_seconds = min(50, max(10, int(ctx.get("macro_fetch_budget_seconds") or os.getenv("AG3_FX_MACRO_FETCH_BUDGET_SECONDS") or 45)))
 max_workers = min(16, max(4, int(ctx.get("macro_fetch_max_workers") or os.getenv("AG3_FX_MACRO_FETCH_MAX_WORKERS") or 12)))
 deadline = time.monotonic() + fetch_budget_seconds
 currencies = ctx.get("currencies") or ["USD", "EUR", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD"]
+CORE_CURRENCIES = {"USD", "EUR", "JPY", "GBP", "CHF", "AUD", "CAD", "NZD"}
 
 FRED_SERIES = {
     "USD": {
@@ -236,9 +243,364 @@ def worldbank_record(currency, factor, indicator, higher_is_bullish, weight):
 
 observations = []
 fetch_errors = []
+macro_data_quality = {"enabled": bool(duckdb and macro_duckdb_path), "loaded": False, "error": None, "records": 0}
+macro_data_snapshot = {
+    "policy_rates": {},
+    "policy_previous": {},
+    "indicators": {},
+    "indicator_previous": {},
+    "yield_curves": {},
+    "pillar_scores": {},
+}
+
+
+def parse_dt(value):
+    if not value:
+        return None
+    text = str(value)
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        if len(text) == 10:
+            return datetime.fromisoformat(text).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(text)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def age_days(value):
+    dt = parse_dt(value)
+    if not dt:
+        return None
+    return max(0, (datetime.now(timezone.utc) - dt.astimezone(timezone.utc)).days)
+
+
+def freshness_status(value, max_age_days):
+    age = age_days(value)
+    if age is None:
+        return "OK"
+    return "STALE" if age > max_age_days else "OK"
+
+
+def load_macro_data_snapshot():
+    if not duckdb or not macro_duckdb_path or not os.path.exists(macro_duckdb_path):
+        return
+    try:
+        with duckdb.connect(macro_duckdb_path, read_only=True) as con:
+            rows = con.execute(
+                """
+                SELECT currency, as_of, rate_pct, source
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY currency ORDER BY as_of DESC, updated_at DESC) rn
+                    FROM macro.policy_rates
+                    WHERE rate_pct IS NOT NULL
+                )
+                WHERE rn = 1
+                """
+            ).fetchall()
+            for currency, as_of_value, rate_pct, source in rows:
+                macro_data_snapshot["policy_rates"][str(currency).upper()] = {
+                    "as_of": as_of_value,
+                    "value": float(rate_pct) if rate_pct is not None else None,
+                    "source": source or "macro.policy_rates",
+                }
+            rows = con.execute(
+                """
+                SELECT currency, as_of, rate_pct
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY currency ORDER BY as_of DESC, updated_at DESC) rn
+                    FROM macro.policy_rates
+                    WHERE rate_pct IS NOT NULL
+                )
+                WHERE rn = 2
+                """
+            ).fetchall()
+            for currency, as_of_value, rate_pct in rows:
+                macro_data_snapshot["policy_previous"][str(currency).upper()] = {
+                    "as_of": as_of_value,
+                    "value": float(rate_pct) if rate_pct is not None else None,
+                }
+            rows = con.execute(
+                """
+                SELECT currency, indicator, as_of, value, source
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY currency, indicator ORDER BY as_of DESC, updated_at DESC
+                    ) rn
+                    FROM macro.country_indicators
+                    WHERE value IS NOT NULL
+                )
+                WHERE rn = 1
+                """
+            ).fetchall()
+            for currency, indicator, as_of_value, value, source in rows:
+                key = (str(currency).upper(), str(indicator or "").lower())
+                macro_data_snapshot["indicators"][key] = {
+                    "as_of": as_of_value,
+                    "value": float(value) if value is not None else None,
+                    "source": source or "macro.country_indicators",
+                }
+            rows = con.execute(
+                """
+                SELECT currency, indicator, as_of, value
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY currency, indicator ORDER BY as_of DESC, updated_at DESC
+                    ) rn
+                    FROM macro.country_indicators
+                    WHERE value IS NOT NULL
+                )
+                WHERE rn = 2
+                """
+            ).fetchall()
+            for currency, indicator, as_of_value, value in rows:
+                key = (str(currency).upper(), str(indicator or "").lower())
+                macro_data_snapshot["indicator_previous"][key] = {
+                    "as_of": as_of_value,
+                    "value": float(value) if value is not None else None,
+                }
+            rows = con.execute(
+                """
+                SELECT currency, as_of, yield_2y_pct, yield_10y_pct
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY currency ORDER BY as_of DESC, updated_at DESC) rn
+                    FROM rates.yield_curve
+                )
+                WHERE rn = 1
+                """
+            ).fetchall()
+            for currency, as_of_value, yield_2y, yield_10y in rows:
+                macro_data_snapshot["yield_curves"][str(currency).upper()] = {
+                    "as_of": as_of_value,
+                    "yield_2y_pct": float(yield_2y) if yield_2y is not None else None,
+                    "yield_10y_pct": float(yield_10y) if yield_10y is not None else None,
+                }
+            rows = con.execute(
+                """
+                SELECT currency, as_of, carry_score, valuation_score, macro_score, data_completeness, score_status
+                FROM (
+                    SELECT *, ROW_NUMBER() OVER (PARTITION BY currency ORDER BY as_of DESC, updated_at DESC) rn
+                    FROM pillars.currency_scores
+                )
+                WHERE rn = 1
+                """
+            ).fetchall()
+            for currency, as_of_value, carry_score, valuation_score, macro_score, data_completeness, score_status in rows:
+                macro_data_snapshot["pillar_scores"][str(currency).upper()] = {
+                    "as_of": as_of_value,
+                    "carry_score": float(carry_score) if carry_score is not None else None,
+                    "valuation_score": float(valuation_score) if valuation_score is not None else None,
+                    "macro_score": float(macro_score) if macro_score is not None else None,
+                    "data_completeness": data_completeness,
+                    "score_status": score_status,
+                }
+        macro_data_quality["loaded"] = True
+        macro_data_quality["records"] = (
+            len(macro_data_snapshot["policy_rates"])
+            + len(macro_data_snapshot["indicators"])
+            + len(macro_data_snapshot["yield_curves"])
+            + len(macro_data_snapshot["pillar_scores"])
+        )
+    except Exception as exc:
+        macro_data_quality["error"] = str(exc)
+        fetch_errors.append(f"macro_data_snapshot: {exc}")
+
+
+def indicator_row(ccy, *names):
+    for name in names:
+        row = macro_data_snapshot["indicators"].get((ccy, name))
+        if row and row.get("value") is not None:
+            return name, row
+    return None, None
+
+
+def macro_data_record(ccy, factor, meta):
+    ccy = str(ccy or "").upper()
+    if not macro_data_quality["loaded"]:
+        return None
+
+    if factor == "policy_rate":
+        row = macro_data_snapshot["policy_rates"].get(ccy)
+        if not row or row.get("value") is None:
+            return None
+        prev = macro_data_snapshot["policy_previous"].get(ccy, {})
+        rec = observation(
+            ccy,
+            factor,
+            "macro.policy_rates",
+            f"{ccy}:policy_rate",
+            row.get("value"),
+            prev.get("value"),
+            freshness_status(row.get("as_of"), 45),
+            True,
+            1.0,
+        )
+        rec["observation_date"] = str(row.get("as_of") or "")[:10] or None
+        return rec
+
+    if factor == "real_yield":
+        policy = macro_data_snapshot["policy_rates"].get(ccy)
+        indicator, cpi = indicator_row(ccy, "cpi_yoy")
+        curve = macro_data_snapshot["yield_curves"].get(ccy, {})
+        pillars = macro_data_snapshot["pillar_scores"].get(ccy, {})
+        nominal = policy.get("value") if policy else None
+        source = "macro.policy_rates-cpi_yoy"
+        if nominal is None:
+            nominal = curve.get("yield_2y_pct")
+            source = "rates.yield_curve_2y-cpi_yoy"
+        if nominal is not None and cpi and cpi.get("value") is not None:
+            value = float(nominal) - float(cpi["value"])
+            status = "OK"
+            if freshness_status((policy or curve).get("as_of"), 45) == "STALE" or freshness_status(cpi.get("as_of"), 180) == "STALE":
+                status = "STALE"
+            if status == "OK":
+                rec = observation(
+                    ccy,
+                    factor,
+                    source,
+                    f"{ccy}:nominal_minus_cpi",
+                    value,
+                    None,
+                    status,
+                    True,
+                    1.0,
+                    normalized_override=clamp(value / 3.0),
+                )
+                rec["observation_date"] = str((policy or curve).get("as_of") or cpi.get("as_of") or "")[:10] or None
+                return rec
+        carry_score = pillars.get("carry_score")
+        if carry_score is not None and freshness_status(pillars.get("as_of"), 10) == "OK":
+            rec = observation(
+                ccy,
+                factor,
+                "pillars.currency_scores.carry_score_proxy",
+                f"{ccy}:carry_score_proxy",
+                carry_score,
+                None,
+                "OK",
+                True,
+                0.7,
+                normalized_override=clamp(carry_score),
+            )
+            rec["observation_date"] = str(pillars.get("as_of") or "")[:10] or None
+            return rec
+        if nominal is not None and cpi and cpi.get("value") is not None:
+            rec = observation(
+                ccy,
+                factor,
+                source,
+                f"{ccy}:nominal_minus_cpi",
+                float(nominal) - float(cpi["value"]),
+                None,
+                "STALE",
+                True,
+                1.0,
+                normalized_override=None,
+            )
+            rec["observation_date"] = str((policy or curve).get("as_of") or cpi.get("as_of") or "")[:10] or None
+            return rec
+        return None
+
+    if factor == "inflation":
+        indicator, row = indicator_row(ccy, "cpi_yoy")
+        if not row:
+            return None
+        prev = macro_data_snapshot["indicator_previous"].get((ccy, indicator), {})
+        value = row.get("value")
+        rec = observation(
+            ccy,
+            factor,
+            "macro.country_indicators",
+            f"{ccy}:{indicator}",
+            value,
+            prev.get("value"),
+            freshness_status(row.get("as_of"), 180),
+            False,
+            0.8,
+            normalized_override=clamp((2.0 - float(value)) / 3.0) if value is not None else None,
+        )
+        rec["observation_date"] = str(row.get("as_of") or "")[:10] or None
+        return rec
+
+    if factor == "growth":
+        indicator, row = indicator_row(ccy, "gdp_momentum", "gdp_growth_qoq")
+        if not row:
+            return None
+        prev = macro_data_snapshot["indicator_previous"].get((ccy, indicator), {})
+        value = row.get("value")
+        normalized = None
+        if value is not None:
+            scale = 10.0 if indicator == "gdp_momentum" else 5.0
+            normalized = clamp(float(value) / scale)
+        rec = observation(
+            ccy,
+            factor,
+            "macro.country_indicators",
+            f"{ccy}:{indicator}",
+            value,
+            prev.get("value"),
+            freshness_status(row.get("as_of"), 240),
+            True,
+            0.8,
+            normalized_override=normalized,
+        )
+        rec["observation_date"] = str(row.get("as_of") or "")[:10] or None
+        return rec
+
+    if factor == "labor":
+        indicator, row = indicator_row(ccy, "unemployment_pct")
+        if not row:
+            return None
+        prev = macro_data_snapshot["indicator_previous"].get((ccy, indicator), {})
+        value = row.get("value")
+        rec = observation(
+            ccy,
+            factor,
+            "macro.country_indicators",
+            f"{ccy}:{indicator}",
+            value,
+            prev.get("value"),
+            freshness_status(row.get("as_of"), 180),
+            False,
+            0.6,
+            normalized_override=clamp((5.0 - float(value)) / 5.0) if value is not None else None,
+        )
+        rec["observation_date"] = str(row.get("as_of") or "")[:10] or None
+        return rec
+
+    if factor == "external_balance":
+        indicator, row = indicator_row(ccy, "current_account_bn_usd")
+        if not row:
+            return None
+        prev = macro_data_snapshot["indicator_previous"].get((ccy, indicator), {})
+        value = row.get("value")
+        rec = observation(
+            ccy,
+            factor,
+            "macro.country_indicators",
+            f"{ccy}:{indicator}",
+            value,
+            prev.get("value"),
+            freshness_status(row.get("as_of"), 240),
+            True,
+            0.5,
+            normalized_override=clamp(float(value) / 50.0) if value is not None else None,
+        )
+        rec["observation_date"] = str(row.get("as_of") or "")[:10] or None
+        return rec
+
+    return None
+
+
+load_macro_data_snapshot()
 
 
 def fetch_factor_record(ccy, factor, meta):
+    macro_rec = macro_data_record(ccy, factor, meta)
+    if macro_rec and macro_rec.get("data_status") == "OK":
+        return macro_rec, None
+
     configured = FRED_SERIES.get(ccy, {})
     if factor in configured:
         series_id, higher_is_bullish, weight = configured[factor]
@@ -263,9 +625,11 @@ def fetch_factor_record(ccy, factor, meta):
                 indicator, wb_higher_is_bullish, wb_weight = WORLDBANK_SERIES[factor]
                 rec = worldbank_record(ccy, factor, indicator, wb_higher_is_bullish, wb_weight)
             else:
-                rec = observation(ccy, factor, meta["source"], series_id, None, None, "MISSING", higher_is_bullish, weight)
+                rec = macro_rec or observation(ccy, factor, meta["source"], series_id, None, None, "MISSING", higher_is_bullish, weight)
             return rec, None
         except Exception as exc:
+            if macro_rec:
+                return macro_rec, f"{ccy}.{factor}.{series_id}: {exc}; using macro_data fallback"
             return (
                 observation(ccy, factor, meta["source"], series_id, None, None, "ERROR", meta["higher_is_bullish"], meta["weight"]),
                 f"{ccy}.{factor}.{series_id}: {exc}",
@@ -273,14 +637,19 @@ def fetch_factor_record(ccy, factor, meta):
     if factor in WORLDBANK_SERIES and ccy in CURRENCY_COUNTRY:
         indicator, higher_is_bullish, weight = WORLDBANK_SERIES[factor]
         try:
-            return worldbank_record(ccy, factor, indicator, higher_is_bullish, weight), None
+            wb_rec = worldbank_record(ccy, factor, indicator, higher_is_bullish, weight)
+            if macro_rec and wb_rec.get("data_status") != "OK":
+                return macro_rec, None
+            return wb_rec, None
         except Exception as exc:
+            if macro_rec:
+                return macro_rec, f"{ccy}.{factor}.{indicator}: {exc}; using macro_data fallback"
             source = "WorldBankProxy" if factor == "policy_rate" else "WorldBank"
             return (
                 observation(ccy, factor, source, indicator, None, None, "ERROR", higher_is_bullish, weight),
                 f"{ccy}.{factor}.{indicator}: {exc}",
             )
-    return observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]), None
+    return macro_rec or observation(ccy, factor, meta["source"], None, None, None, "NOT_MAPPED", meta["higher_is_bullish"], meta["weight"]), None
 
 
 tasks = [(ccy, factor, meta) for ccy in currencies for factor, meta in FACTOR_DEFAULTS.items()]
@@ -319,9 +688,16 @@ for row in observations:
         status_by_currency[ccy][factor] = str(row.get("data_status") or "").upper()
 
 critical_factors = {"policy_rate", "real_yield"}
+core_currencies = [ccy for ccy in currencies if ccy in CORE_CURRENCIES]
 critical_ok_count = sum(
     1
     for ccy in currencies
+    for factor in critical_factors
+    if status_by_currency.get(ccy, {}).get(factor) == "OK"
+)
+core_critical_ok_count = sum(
+    1
+    for ccy in core_currencies
     for factor in critical_factors
     if status_by_currency.get(ccy, {}).get(factor) == "OK"
 )
@@ -330,12 +706,24 @@ currency_ok_count = sum(
     for ccy in currencies
     if sum(1 for status in status_by_currency.get(ccy, {}).values() if status == "OK") >= 4
 )
+core_currency_ok_count = sum(
+    1
+    for ccy in core_currencies
+    if sum(1 for status in status_by_currency.get(ccy, {}).values() if status == "OK") >= 4
+)
+core_ok_count = sum(
+    1
+    for row in observations
+    if str(row.get("currency") or "").upper() in CORE_CURRENCIES and row.get("data_status") == "OK"
+)
 critical_coverage = critical_ok_count / max(1, len(currencies) * len(critical_factors))
 currency_coverage = currency_ok_count / max(1, len(currencies))
+core_critical_coverage = core_critical_ok_count / max(1, len(core_currencies) * len(critical_factors))
+core_currency_coverage = core_currency_ok_count / max(1, len(core_currencies))
 macro_data_degraded = (
-    ok_count < max(3, len(currencies) * 3)
-    or critical_coverage < 0.50
-    or currency_coverage < 0.75
+    core_ok_count < max(3, len(core_currencies) * 3)
+    or core_critical_coverage < 0.75
+    or core_currency_coverage < 0.75
 )
 macro_quality = {
     "ok_count": ok_count,
@@ -343,17 +731,31 @@ macro_quality = {
     "critical_ok_count": critical_ok_count,
     "critical_total": len(currencies) * len(critical_factors),
     "critical_coverage": critical_coverage,
+    "core_critical_ok_count": core_critical_ok_count,
+    "core_critical_total": len(core_currencies) * len(critical_factors),
+    "core_critical_coverage": core_critical_coverage,
     "currency_ok_count": currency_ok_count,
     "currency_total": len(currencies),
     "currency_coverage": currency_coverage,
+    "core_currency_ok_count": core_currency_ok_count,
+    "core_currency_total": len(core_currencies),
+    "core_currency_coverage": core_currency_coverage,
+    "core_ok_count": core_ok_count,
+    "core_total_observations": len(core_currencies) * len(FACTOR_DEFAULTS),
+    "extended_incomplete_currencies": [
+        ccy
+        for ccy in currencies
+        if ccy not in CORE_CURRENCIES
+        and sum(1 for status in status_by_currency.get(ccy, {}).values() if status == "OK") < 4
+    ],
     "degraded_reasons": [],
 }
-if ok_count < max(3, len(currencies) * 3):
-    macro_quality["degraded_reasons"].append("LOW_TOTAL_MACRO_COVERAGE")
-if critical_coverage < 0.50:
-    macro_quality["degraded_reasons"].append("LOW_POLICY_RATE_REAL_YIELD_COVERAGE")
-if currency_coverage < 0.75:
-    macro_quality["degraded_reasons"].append("LOW_CURRENCY_FACTOR_COVERAGE")
+if core_ok_count < max(3, len(core_currencies) * 3):
+    macro_quality["degraded_reasons"].append("LOW_CORE_MACRO_COVERAGE")
+if core_critical_coverage < 0.75:
+    macro_quality["degraded_reasons"].append("LOW_CORE_POLICY_RATE_REAL_YIELD_COVERAGE")
+if core_currency_coverage < 0.75:
+    macro_quality["degraded_reasons"].append("LOW_CORE_CURRENCY_FACTOR_COVERAGE")
 
 return [{
     "json": {
@@ -361,6 +763,7 @@ return [{
         "macro_observations": observations,
         "macro_observation_ok_count": ok_count,
         "macro_quality": macro_quality,
+        "macro_data_snapshot_quality": macro_data_quality,
         "macro_fetch_errors": fetch_errors,
         "macro_data_degraded": macro_data_degraded,
     }

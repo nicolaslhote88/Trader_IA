@@ -1,7 +1,11 @@
 import duckdb
+import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 DB_PATH = "/files/duckdb/ag4_forex_v1.duckdb"
+LOCK_RETRY_ATTEMPTS = 12
+LOCK_RETRY_BASE_DELAY = 0.75
 
 
 def urgency_score(v):
@@ -51,6 +55,33 @@ def init_schema(con):
     con.execute("CREATE INDEX IF NOT EXISTS idx_fxnh_origin ON main.fx_news_history(origin)")
 
 
+def is_retryable_duckdb_error(exc):
+    msg = str(exc).lower()
+    return any(token in msg for token in ("lock", "locked", "conflict", "busy", "timeout"))
+
+
+@contextmanager
+def duckdb_connect_retry(db_path):
+    con = None
+    for attempt in range(LOCK_RETRY_ATTEMPTS):
+        try:
+            con = duckdb.connect(db_path)
+            break
+        except Exception as exc:
+            if is_retryable_duckdb_error(exc) and attempt < LOCK_RETRY_ATTEMPTS - 1:
+                time.sleep(LOCK_RETRY_BASE_DELAY * (1.6 ** attempt))
+                continue
+            raise
+    try:
+        yield con
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+
+
 def ts(v):
     if not v:
         return None
@@ -69,7 +100,7 @@ if not items:
 
 db_path = next((str((it.get("json") or {}).get("db_path")) for it in items if (it.get("json") or {}).get("db_path")), DB_PATH)
 
-with duckdb.connect(db_path) as con:
+with duckdb_connect_retry(db_path) as con:
     init_schema(con)
     for it in items:
         j = it.get("json", {}) or {}
@@ -102,6 +133,9 @@ with duckdb.connect(db_path) as con:
                 ts(j.get("firstSeenAt")) or now, ts(j.get("seenNowAt")) or now, ts(j.get("analyzedAt")) or now,
             ],
         )
+    try:
+        con.execute("CHECKPOINT")
+    except Exception:
+        pass
 
 return items
-
