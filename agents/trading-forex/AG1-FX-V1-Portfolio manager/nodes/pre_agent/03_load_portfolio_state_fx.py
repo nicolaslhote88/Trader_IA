@@ -161,6 +161,45 @@ def get_broker_json(path, timeout=12):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def post_broker_json(path, payload=None, timeout=12):
+    req = urllib.request.Request(
+        f"{broker_url}{path}",
+        data=json.dumps(payload or {}).encode("utf-8"),
+        headers={"Accept": "application/json", "Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
+# n8n's Python task-runner sandbox does not expose __build_class__, so custom
+# exception classes fail at runtime. Use a rarely-raised built-in as a sentinel.
+BrokerPreflightBlocked = LookupError
+
+
+def broker_auth_reason(health):
+    monitor = health.get("session_monitor") if isinstance(health, dict) else {}
+    error = str((health or {}).get("error") or monitor.get("last_tickle_error") or "").lower()
+    if monitor.get("manual_login_required") or any(token in error for token in ("401", "unauthorized", "login", "sso", "session")):
+        return "IBKR_MANUAL_LOGIN_REQUIRED"
+    return "IBKR_BROKER_NOT_AUTHENTICATED"
+
+
+def refresh_broker_health(health):
+    if health.get("authenticated"):
+        return health
+    if (health.get("session_monitor") or {}).get("manual_login_required"):
+        return health
+    try:
+        init = post_broker_json("/auth/initialize", {}, timeout=15)
+        refreshed = get_broker_json("/health")
+        refreshed["auth_initialize"] = init
+        return refreshed
+    except Exception as exc:
+        health["auth_initialize_error"] = str(exc)
+        return health
+
+
 def paper_account_ids(positions_payload):
     ids = []
     for row in positions_payload or []:
@@ -168,6 +207,50 @@ def paper_account_ids(positions_payload):
         if acct and acct not in ids:
             ids.append(acct)
     return ids
+
+
+def account_ids_from_payload(payload):
+    ids = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            candidates = [
+                value.get("acctcode"),
+                value.get("acctCode"),
+                value.get("accountcode"),
+                value.get("accountCode"),
+                value.get("accountId"),
+                value.get("acctId"),
+                value.get("account"),
+            ]
+            for candidate in candidates:
+                if isinstance(candidate, dict):
+                    candidate = candidate.get("value") or candidate.get("amount")
+                acct = str(candidate or "").strip().upper()
+                if acct and acct not in ids:
+                    ids.append(acct)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return ids
+
+
+def merge_account_ids(*groups):
+    ids = []
+    for group in groups:
+        for acct in group or []:
+            acct = str(acct or "").strip().upper()
+            if acct and acct not in ids:
+                ids.append(acct)
+    return ids
+
+
+def paper_account_guard_failed(accounts):
+    return require_paper and (not accounts or not all(acct.startswith(paper_prefixes) for acct in accounts))
 
 
 def norm_pair(text):
@@ -339,14 +422,13 @@ def cash_balance_reconciliation(lots, cfg, ledger_payload):
 def cash_ledger_confirms_open_fx_lots(cash_summary):
     if not cash_summary or not cash_summary.get("enabled"):
         return False
-    db_effects = cash_summary.get("db_cash_effect_by_currency") or {}
-    deltas = cash_summary.get("currency_deltas") or {}
-    tracked_ccys = [
-        str(ccy).upper()
-        for ccy, value in db_effects.items()
-        if str(ccy).upper() != portfolio_base_ccy and abs(to_float(value, 0.0)) > 1e-9
-    ]
-    return bool(tracked_ccys) and not any(ccy in deltas for ccy in tracked_ccys)
+    if cash_summary.get("error"):
+        return False
+    # IBKR CPAPI usually exposes spot-FX as currency cash balances, not as
+    # portfolio positions. When the ledger is readable, it is the authoritative
+    # source for FX CASH exposure; cash deltas remain separately auditable and
+    # only block when IBKR_BLOCK_ON_CASH_DIVERGENCE=true.
+    return bool(cash_summary.get("ibkr_cash_by_currency"))
 
 
 def fx_units_from_recent_fills(fills_payload, universe_pairs):
@@ -384,26 +466,26 @@ def reconcile_ibkr_state(lots, cfg):
     }
     if ibkr_dry_run:
         return summary
+    universe_pairs = sorted({str(r.get("pair") or "").upper() for r in ctx.get("universe_fx", []) if r.get("pair")})
+    db_units = db_units_by_pair(lots)
+    summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
     try:
-        health = get_broker_json("/health")
-        positions = get_broker_json("/positions")
-        fills_payload = get_broker_json("/fills")
+        health = refresh_broker_health(get_broker_json("/health"))
         summary["health"] = health
-        accounts = paper_account_ids(positions)
-        summary["paper_account_guard"]["detected_accounts"] = accounts
         if not health.get("authenticated"):
-            summary["reasons"].append("IBKR_BROKER_NOT_AUTHENTICATED")
+            summary["reasons"].append(broker_auth_reason(health))
+            raise BrokerPreflightBlocked()
         if health.get("dry_run"):
             summary["reasons"].append("IBKR_BROKER_STILL_IN_DRY_RUN")
-        if require_paper and (not accounts or not all(acct.startswith(paper_prefixes) for acct in accounts)):
-            summary["reasons"].append(f"IBKR_PAPER_ACCOUNT_GUARD_FAILED:{accounts}")
-        universe_pairs = sorted({str(r.get("pair") or "").upper() for r in ctx.get("universe_fx", []) if r.get("pair")})
-        db_units = db_units_by_pair(lots)
+            raise BrokerPreflightBlocked()
+        positions = get_broker_json("/positions")
+        fills_payload = get_broker_json("/fills")
+        accounts = paper_account_ids(positions)
+        summary["paper_account_guard"]["detected_accounts"] = accounts
         ibkr_units, fx_rows = ibkr_units_by_pair(positions, universe_pairs)
         fill_units = fx_units_from_recent_fills(fills_payload, universe_pairs)
         for pair, qty in fill_units.items():
             ibkr_units[pair] = qty
-        summary["db_units_by_pair"] = {k: round(v, 4) for k, v in sorted(db_units.items()) if abs(v) > 1e-9}
         summary["ibkr_units_by_pair"] = {k: round(v, 4) for k, v in sorted(ibkr_units.items()) if abs(v) > 1e-9}
         summary["ibkr_units_source"] = "positions_plus_recent_fills"
         summary["ibkr_fx_positions_count"] = len(fx_rows)
@@ -415,6 +497,8 @@ def reconcile_ibkr_state(lots, cfg):
         if reconcile_cash_balances_enabled:
             try:
                 ledger_payload = get_broker_json("/account/ledger")
+                accounts = merge_account_ids(accounts, account_ids_from_payload(ledger_payload))
+                summary["paper_account_guard"]["detected_accounts"] = accounts
                 cash_summary = cash_balance_reconciliation(lots, cfg, ledger_payload)
                 summary["cash_balances"] = cash_summary
                 if cash_summary.get("currency_deltas") and block_on_cash_divergence:
@@ -428,12 +512,16 @@ def reconcile_ibkr_state(lots, cfg):
                 }
                 if block_on_cash_divergence:
                     summary["reasons"].append(f"IBKR_LEDGER_RECONCILIATION_FAILED:{ledger_exc}")
+        if paper_account_guard_failed(accounts):
+            summary["reasons"].append(f"IBKR_PAPER_ACCOUNT_GUARD_FAILED:{accounts}")
         if summary["deltas"]:
             if cash_ledger_confirms_open_fx_lots(summary.get("cash_balances")):
                 summary["position_reconciliation_mode"] = "cash_ledger_authoritative_for_fx_cash"
                 summary["position_deltas_audited_only"] = True
             else:
                 summary["reasons"].append("IBKR_DUCKDB_POSITION_DIVERGENCE")
+    except BrokerPreflightBlocked:
+        pass
     except Exception as exc:
         summary["ok"] = False
         summary["reasons"].append(f"IBKR_RECONCILIATION_FAILED:{exc}")

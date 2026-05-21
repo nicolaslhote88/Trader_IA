@@ -143,6 +143,7 @@ YF_ENRICH_DUCKDB_PATH = _resolve_duckdb_path("YF_ENRICH_DUCKDB_PATH", "yf_enrich
 AG4_FOREX_DUCKDB_PATH = _resolve_duckdb_path("AG4_FOREX_DUCKDB_PATH", "ag4_forex_v1.duckdb")
 AG2_FX_V1_DUCKDB_PATH = _resolve_duckdb_path("AG2_FX_V1_DUCKDB_PATH", "ag2_fx_v1.duckdb")
 AG4_FX_V1_DUCKDB_PATH = _resolve_duckdb_path("AG4_FX_V1_DUCKDB_PATH", "ag4_fx_v1.duckdb")
+MACRO_DUCKDB_PATH = _resolve_duckdb_path("MACRO_DUCKDB_PATH", "macro_data.duckdb")
 AG1_FX_V1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_CHATGPT52_DUCKDB_PATH", "ag1_fx_v1_chatgpt52.duckdb")
 AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH", "ag1_fx_v1_grok41_reasoning.duckdb")
 AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH", "ag1_fx_v1_gemini30_pro.duckdb")
@@ -805,6 +806,240 @@ def _build_fx_pair_signal_matrix(pair_overview: pd.DataFrame) -> tuple[go.Figure
         ),
     )
     return fig, wk
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _load_latest_fx_pillar_scores(db_path: str, db_sig: object) -> pd.DataFrame:
+    del db_sig
+    if not db_path or not os.path.exists(db_path):
+        return pd.DataFrame()
+    conn = None
+    try:
+        conn = duckdb.connect(db_path, read_only=True)
+        tables = conn.execute(
+            "SELECT table_schema, table_name FROM information_schema.tables"
+        ).fetchdf()
+        if tables is None or tables.empty:
+            return pd.DataFrame()
+        has_scores = (
+            (tables["table_schema"].astype(str).str.lower() == "pillars")
+            & (tables["table_name"].astype(str).str.lower() == "currency_scores")
+        ).any()
+        if not has_scores:
+            return pd.DataFrame()
+        return conn.execute(
+            """
+            SELECT DISTINCT ON (currency)
+                currency, as_of,
+                macro_score, valuation_score, positioning_score, composite_score,
+                all_pillars_aligned, crowded_flag,
+                macro_growth_score, macro_inflation_score, macro_policy_score, macro_ca_score,
+                carry_score, ppp_deviation, cot_z_score
+            FROM pillars.currency_scores
+            ORDER BY currency, as_of DESC
+            """
+        ).fetchdf()
+    except Exception:
+        return pd.DataFrame()
+    finally:
+        try:
+            if conn is not None:
+                conn.close()
+        except Exception:
+            pass
+
+
+def _fx_pillar_score_or_na(scores_by_ccy: dict[str, dict[str, object]], ccy: str, column: str) -> float | None:
+    row = scores_by_ccy.get(str(ccy or "").upper())
+    if not row:
+        return None
+    val = pd.to_numeric(pd.Series([row.get(column, pd.NA)]), errors="coerce").iloc[0]
+    return float(val) if pd.notna(val) else None
+
+
+def _fx_cube_zone(short_bias: float, pillar_impact: float) -> str:
+    if abs(short_bias) < 0.15 or abs(pillar_impact) < 0.15:
+        return "Zone neutre / information incomplete"
+    if short_bias >= 0.15 and pillar_impact >= 0.15:
+        return "Base favorisee multi-horizon"
+    if short_bias <= -0.15 and pillar_impact <= -0.15:
+        return "Cotation favorisee multi-horizon"
+    return "Divergence court terme / long terme"
+
+
+def _fx_add_three_pillar_axis(pair_overview: pd.DataFrame, pillar_scores: pd.DataFrame) -> pd.DataFrame:
+    if pair_overview is None or pair_overview.empty:
+        return pd.DataFrame()
+    wk = _augment_fx_pair_matrix_coordinates(pair_overview.copy())
+    wk["Paire"] = wk["Paire"].fillna("").astype(str).str.upper()
+    wk = wk[wk["Paire"].str.len().eq(6)].copy()
+    if wk.empty:
+        return pd.DataFrame()
+
+    scores = pillar_scores.copy() if pillar_scores is not None else pd.DataFrame()
+    if scores.empty or "currency" not in scores.columns:
+        wk["_pillar_impact"] = 0.0
+        wk["_pillar_status"] = "Scores 3 piliers indisponibles"
+        wk["_pillar_base_score"] = pd.NA
+        wk["_pillar_quote_score"] = pd.NA
+        wk["_pillar_zone"] = "Zone neutre / information incomplete"
+        return wk
+
+    scores["currency"] = scores["currency"].fillna("").astype(str).str.upper()
+    scores_by_ccy = {str(r.get("currency")): r.to_dict() for _, r in scores.iterrows()}
+
+    base_scores: list[float | None] = []
+    quote_scores: list[float | None] = []
+    impacts: list[float] = []
+    statuses: list[str] = []
+    zones: list[str] = []
+    for _, row in wk.iterrows():
+        pair = str(row.get("Paire") or "").upper()
+        base = pair[:3]
+        quote = pair[3:6]
+        base_score = _fx_pillar_score_or_na(scores_by_ccy, base, "composite_score")
+        quote_score = _fx_pillar_score_or_na(scores_by_ccy, quote, "composite_score")
+        base_scores.append(base_score)
+        quote_scores.append(quote_score)
+        if base_score is None or quote_score is None:
+            impact = 0.0
+            missing = [c for c, v in [(base, base_score), (quote, quote_score)] if v is None]
+            statuses.append(f"Score manquant: {', '.join(missing)}")
+        else:
+            impact = max(-1.0, min(1.0, (base_score - quote_score) / 2.0))
+            statuses.append("OK")
+        impacts.append(impact)
+        short_bias = (float(row.get("_momentum_plot") or 0.0) + float(row.get("_bias_plot") or 0.0)) / 2.0
+        zones.append(_fx_cube_zone(short_bias, impact))
+
+    wk["_pillar_base_score"] = base_scores
+    wk["_pillar_quote_score"] = quote_scores
+    wk["_pillar_impact"] = impacts
+    wk["_pillar_status"] = statuses
+    wk["_pillar_zone"] = zones
+    return wk
+
+
+def _fx_add_cube_edges(fig: go.Figure) -> None:
+    corners = [-1.0, 1.0]
+    edges: list[tuple[tuple[float, float, float], tuple[float, float, float]]] = []
+    for y in corners:
+        for z in corners:
+            edges.append(((-1.0, y, z), (1.0, y, z)))
+    for x in corners:
+        for z in corners:
+            edges.append(((x, -1.0, z), (x, 1.0, z)))
+    for x in corners:
+        for y in corners:
+            edges.append(((x, y, -1.0), (x, y, 1.0)))
+    for start, end in edges:
+        fig.add_trace(
+            go.Scatter3d(
+                x=[start[0], end[0]],
+                y=[start[1], end[1]],
+                z=[start[2], end[2]],
+                mode="lines",
+                line=dict(color="rgba(255,255,255,0.24)", width=3),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+    for axis in ("x", "y", "z"):
+        coords = {
+            "x": ([-1, 1], [0, 0], [0, 0]),
+            "y": ([0, 0], [-1, 1], [0, 0]),
+            "z": ([0, 0], [0, 0], [-1, 1]),
+        }[axis]
+        fig.add_trace(
+            go.Scatter3d(
+                x=coords[0],
+                y=coords[1],
+                z=coords[2],
+                mode="lines",
+                line=dict(color="rgba(255,255,255,0.58)", width=5, dash="dash"),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+
+
+def _build_fx_three_pillar_cube(pair_overview: pd.DataFrame, pillar_scores: pd.DataFrame) -> tuple[go.Figure | None, pd.DataFrame]:
+    cube_df = _fx_add_three_pillar_axis(pair_overview, pillar_scores)
+    if cube_df.empty:
+        return None, cube_df
+
+    zone_colors = {
+        "Base favorisee multi-horizon": "#00d084",
+        "Cotation favorisee multi-horizon": "#ff4d5e",
+        "Divergence court terme / long terme": "#f59e0b",
+        "Zone neutre / information incomplete": "#94a3b8",
+    }
+    custom_cols = [
+        "Paire", "_state", "_setup", "_technique", "_sources_state",
+        "_tech_momentum", "_news_bias", "_event_risk", "_pillar_impact",
+        "_pillar_base_score", "_pillar_quote_score", "_pillar_status",
+        "_pillar_zone", "_open_lots", "_pnl", "Top sources",
+    ]
+    for col in custom_cols:
+        if col not in cube_df.columns:
+            cube_df[col] = pd.NA
+
+    fig = go.Figure()
+    _fx_add_cube_edges(fig)
+    for zone, color in zone_colors.items():
+        part = cube_df[cube_df["_pillar_zone"] == zone].copy()
+        if part.empty:
+            continue
+        fig.add_trace(
+            go.Scatter3d(
+                x=part["_momentum_plot"],
+                y=part["_bias_plot"],
+                z=part["_pillar_impact"],
+                mode="markers+text",
+                name=zone,
+                text=part["Paire"],
+                textposition="top center",
+                customdata=part[custom_cols].values,
+                marker=dict(
+                    size=(10 + pd.to_numeric(part["_event_risk"], errors="coerce").fillna(0.0).clip(0, 100) / 4.0).clip(8, 34),
+                    color=color,
+                    opacity=0.84,
+                    line=dict(color="rgba(255,255,255,0.82)", width=1.4),
+                ),
+                hovertemplate=(
+                    "<b>%{customdata[0]}</b><br>"
+                    "Zone: %{customdata[12]}<br>"
+                    "Technique court terme: %{customdata[5]:+.2f}<br>"
+                    "News/event court terme: %{customdata[6]:+.2f} | event risk %{customdata[7]:.0f}/100<br>"
+                    "Axe 3 piliers: %{customdata[8]:+.2f}<br>"
+                    "Composite base: %{customdata[9]:+.2f} | composite cotation: %{customdata[10]:+.2f}<br>"
+                    "Couverture: %{customdata[11]}<br>"
+                    "Lots ouverts: %{customdata[13]:.0f} | P&L clos: %{customdata[14]:+.2f} EUR<br>"
+                    "Top sources: %{customdata[15]}<extra></extra>"
+                ),
+            )
+        )
+
+    annotations = [
+        dict(x=1.05, y=1.05, z=1.05, text="Base forte: court terme + long terme", showarrow=False, font=dict(color="#00d084", size=12)),
+        dict(x=-1.05, y=-1.05, z=-1.05, text="Cotation forte: court terme + long terme", showarrow=False, font=dict(color="#ff4d5e", size=12)),
+        dict(x=1.05, y=1.05, z=-1.05, text="Rally court terme contre piliers", showarrow=False, font=dict(color="#f59e0b", size=12)),
+        dict(x=-1.05, y=-1.05, z=1.05, text="Selloff court terme contre piliers", showarrow=False, font=dict(color="#f59e0b", size=12)),
+    ]
+    fig.update_layout(
+        height=780,
+        margin=dict(l=0, r=0, t=28, b=0),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0, title_text="Zones du cube"),
+        scene=dict(
+            xaxis=dict(title="Technique AG2-FX: short base <- 0 -> long base", range=[-1.08, 1.08], dtick=0.5, gridcolor="rgba(255,255,255,0.12)"),
+            yaxis=dict(title="News/event AG4-Forex: base bearish <- 0 -> base bullish", range=[-1.08, 1.08], dtick=0.5, gridcolor="rgba(255,255,255,0.12)"),
+            zaxis=dict(title="3 piliers: cotation favorisee <- 0 -> base favorisee", range=[-1.08, 1.08], dtick=0.5, gridcolor="rgba(255,255,255,0.12)"),
+            aspectmode="cube",
+            annotations=annotations,
+            camera=dict(eye=dict(x=1.65, y=1.55, z=1.35)),
+        ),
+    )
+    return fig, cube_df
 
 
 def _fx_pair_history_news_snapshot(pair: str, news: pd.DataFrame, as_of: pd.Timestamp) -> dict[str, object]:
@@ -1912,7 +2147,7 @@ from app_modules.core import (
     safe_json_parse,
     truthy_series,
 )
-from app_modules.tables import render_interactive_table
+from app_modules.tables import render_interactive_table, render_wrapped_dataframe
 from app_modules.visualizations import _prefetch_histories, render_fx_pair_sparklines, render_portfolio_sparklines
 
 # ============================================================
@@ -6765,7 +7000,7 @@ def render_symbol_news(
             "Flag Breaking": sb.get("breaking_flag", pd.Series(False, index=sb.index)).map(lambda x: "YES" if bool(x) else "—"),
         }
     )
-    st.dataframe(sb_show.head(120), use_container_width=True, hide_index=True, height=360)
+    render_wrapped_dataframe(sb_show.head(120), use_container_width=True, hide_index=True, height=360)
 
     symbol_choices = [s for s in sb["symbol_primary"].dropna().astype(str).tolist() if s]
     if not symbol_choices:
@@ -6882,7 +7117,7 @@ def render_news_runs_history(df_macro: pd.DataFrame, df_spe: pd.DataFrame, df_ma
             cols = [c for c in ["run_id", "status", "started_at", "finished_at", "articles_count", "articles_ingested", "high_alerts", "top_theme", "regime"] if c in wk.columns]
             if not cols:
                 cols = wk.columns.tolist()[:12]
-            st.dataframe(wk[cols], use_container_width=True, hide_index=True, height=320)
+            render_wrapped_dataframe(wk[cols], use_container_width=True, hide_index=True, height=320)
     with t2:
         if df_spe_runs is None or df_spe_runs.empty:
             st.info("Aucun run AG4-SPE.")
@@ -6891,7 +7126,7 @@ def render_news_runs_history(df_macro: pd.DataFrame, df_spe: pd.DataFrame, df_ma
             cols = [c for c in ["run_id", "status", "started_at", "finished_at", "events_count", "relevant_count", "high_urgency_count", "top_theme", "regime"] if c in wk.columns]
             if not cols:
                 cols = wk.columns.tolist()[:12]
-            st.dataframe(wk[cols], use_container_width=True, hide_index=True, height=320)
+            render_wrapped_dataframe(wk[cols], use_container_width=True, hide_index=True, height=320)
 
 
 def _news_health_metrics(df_news: pd.DataFrame, label: str, fresh_warn_h: float) -> dict[str, object]:
@@ -6970,7 +7205,7 @@ def render_news_health(df_macro: pd.DataFrame, df_spe: pd.DataFrame) -> None:
     c3.metric("Freshness spe", _news_fmt_age_h(spe_metrics.get("Age_h")))
     c4.caption(f"Raisons: {reasons}")
 
-    st.dataframe(health_df, use_container_width=True, hide_index=True, height=220)
+    render_wrapped_dataframe(health_df, use_container_width=True, hide_index=True, height=220)
 def _load_fundamentals_for_dashboard(duckdb_data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     df = duckdb_data.get("df_funda_latest", pd.DataFrame())
     if df is None or df.empty:
@@ -8805,7 +9040,6 @@ NAV_GROUPS = {
     ],
     "Forex": [
         "Dashboard Forex",
-        "Forex",
         "Three Pillars Monitor",
     ],
 }
@@ -8826,6 +9060,7 @@ yf_db_sig = duckdb_file_signature(YF_ENRICH_DUCKDB_PATH)
 ag4_forex_db_sig = duckdb_file_signature(AG4_FOREX_DUCKDB_PATH)
 ag2_fx_db_sig = duckdb_file_signature(AG2_FX_V1_DUCKDB_PATH)
 ag4_fx_db_sig = duckdb_file_signature(AG4_FX_V1_DUCKDB_PATH)
+macro_db_sig = duckdb_file_signature(MACRO_DUCKDB_PATH)
 ag1_fx_db_sigs = {
     key: duckdb_file_signature(cfg["db_path"])
     for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items()
@@ -9719,6 +9954,65 @@ def _fx_top_pair_rows_html(rows: list[dict[str, object]]) -> list[str]:
     return out
 
 
+def _fx_current_open_notional_eur(df_open: pd.DataFrame, df_orders: pd.DataFrame) -> float:
+    if df_open is None or df_open.empty:
+        return 0.0
+    if df_orders is None or df_orders.empty:
+        df_orders = pd.DataFrame()
+
+    orders = df_orders.copy()
+    if not orders.empty:
+        orders["_pair_norm"] = orders.get("pair", pd.Series("", index=orders.index)).fillna("").astype(str).str.upper()
+        orders["_run_norm"] = orders.get("run_id", pd.Series("", index=orders.index)).fillna("").astype(str)
+        orders["_side_norm"] = orders.get("side", pd.Series("", index=orders.index)).fillna("").astype(str).str.lower()
+        orders["_status_norm"] = orders.get("status", pd.Series("", index=orders.index)).fillna("").astype(str).str.lower()
+        orders["_notional_eur"] = pd.to_numeric(orders.get("notional_eur", pd.Series(0.0, index=orders.index)), errors="coerce").fillna(0.0)
+        if "requested_at" in orders.columns:
+            orders["_requested_at"] = pd.to_datetime(orders["requested_at"], errors="coerce", utc=True)
+        else:
+            orders["_requested_at"] = pd.NaT
+
+    used: set[int] = set()
+    total = 0.0
+    for _, lot in df_open.iterrows():
+        pair = str(lot.get("pair") or "").upper()
+        run_id = str(lot.get("run_id_open") or "")
+        side = str(lot.get("side") or "").lower()
+        side_candidates = ["buy_base", "buy"] if side == "long" else ["sell_base", "sell"] if side == "short" else []
+
+        matched = pd.DataFrame()
+        if not orders.empty and pair:
+            mask = (
+                orders["_pair_norm"].eq(pair)
+                & orders["_notional_eur"].gt(0)
+                & orders["_status_norm"].isin(["filled", "submitted"])
+            )
+            if run_id:
+                mask &= orders["_run_norm"].eq(run_id)
+            if side_candidates:
+                mask &= orders["_side_norm"].isin(side_candidates)
+            if "lot_id_to_close" in orders.columns:
+                mask &= orders["lot_id_to_close"].isna() | orders["lot_id_to_close"].astype(str).str.strip().eq("")
+            matched = orders[mask & ~orders.index.isin(used)].sort_values("_requested_at", ascending=False)
+
+        if not matched.empty:
+            idx = int(matched.index[0])
+            used.add(idx)
+            total += float(matched.iloc[0]["_notional_eur"])
+            continue
+
+        # Conservative fallback for EUR-base/EUR-quote pairs when the order row
+        # is unavailable. Non-EUR crosses need an FX conversion, so do not guess.
+        size_lots = abs(float(safe_float(lot.get("size_lots"), 0.0)))
+        open_price = float(safe_float(lot.get("open_price"), 0.0))
+        if pair.startswith("EUR"):
+            total += size_lots * 100000.0
+        elif pair.endswith("EUR") and open_price > 0:
+            total += size_lots * 100000.0 * open_price
+
+    return float(total)
+
+
 def _load_ag1_fx_dashboard_payloads() -> dict[str, dict[str, object]]:
     payloads: dict[str, dict[str, object]] = {}
     for key, cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.items():
@@ -9869,7 +10163,9 @@ def _load_ag1_fx_dashboard_payloads() -> dict[str, dict[str, object]]:
             latest_run = df_runs.iloc[0].to_dict() if df_runs is not None and not df_runs.empty else {}
             equity = float(safe_float(latest_snap.get("equity_eur", init_cap))) if latest_snap else init_cap
             cash = float(safe_float(latest_snap.get("cash_eur", init_cap))) if latest_snap else init_cap
-            margin_used = float(safe_float(latest_snap.get("margin_used_eur", 0.0))) if latest_snap else 0.0
+            current_notional_eur = _fx_current_open_notional_eur(df_open, df_orders)
+            margin_used = current_notional_eur if current_notional_eur > 0 else (float(safe_float(latest_snap.get("margin_used_eur", 0.0))) if latest_snap else 0.0)
+            leverage_effective = (margin_used / equity) if equity > 0 else 0.0
             pnl_total = (
                 float(safe_float(latest_snap.get("pnl_total_eur")))
                 if latest_snap and latest_snap.get("pnl_total_eur") is not None
@@ -9884,7 +10180,7 @@ def _load_ag1_fx_dashboard_payloads() -> dict[str, dict[str, object]]:
                 "pnl_total": pnl_total,
                 "roi_pct": (pnl_total / init_cap * 100.0) if init_cap else 0.0,
                 "open_lots_count": int(safe_float(latest_snap.get("open_lots_count", len(df_open))) if latest_snap else len(df_open)),
-                "leverage_effective": latest_snap.get("leverage_effective"),
+                "leverage_effective": leverage_effective,
                 "leverage_max": leverage_max,
                 "drawdown_total_pct": latest_snap.get("drawdown_total_pct"),
                 "kill_switch_active": kill_switch_active,
@@ -11454,7 +11750,7 @@ if page == "Dashboard Trading":
                 ascending = False
                 if sort_col in comp_df.columns:
                     comp_df = comp_df.sort_values(sort_col, ascending=ascending, na_position="last")
-                st.dataframe(comp_df, use_container_width=True)
+                render_wrapped_dataframe(comp_df, use_container_width=True)
 
         # Focused details zone (same tabs below) uses selected portfolio if healthy, otherwise fallback to first healthy.
         details_key = selected_portfolio_key if selected_portfolio_key in available_keys else (available_keys[0] if available_keys else None)
@@ -15195,7 +15491,7 @@ elif page == "Analyse Technique V2":
                         df_src,
                         quality_warn_threshold=max(1.0, float(quality_min if quality_min > 0 else 4.0)),
                     )
-                    st.dataframe(styled_df, use_container_width=True, hide_index=True, height=420)
+                    render_wrapped_dataframe(styled_df, use_container_width=True, hide_index=True, height=420)
 
                 with top_buy_tab:
                     buy_df = (
@@ -15250,7 +15546,7 @@ elif page == "Analyse Technique V2":
                         df_filtered,
                         quality_warn_threshold=max(1.0, float(quality_min if quality_min > 0 else 4.0)),
                     )
-                    st.dataframe(styled_display, use_container_width=True, hide_index=True, height=560)
+                    render_wrapped_dataframe(styled_display, use_container_width=True, hide_index=True, height=560)
 
     # ================================================================
     # TAB 2: VUE DETAILLEE
@@ -16379,7 +16675,7 @@ elif page == "Dashboard Forex":
             sort_col = sort_col_map.get(fx_winner_kpi, "ROI %")
             if sort_col in comp_df.columns:
                 comp_df = comp_df.sort_values(sort_col, ascending=False, na_position="last")
-            st.dataframe(comp_df, use_container_width=True, hide_index=True)
+            render_wrapped_dataframe(comp_df, use_container_width=True, hide_index=True)
         else:
             st.info("Aucun portefeuille FX charge.")
 
@@ -16406,9 +16702,10 @@ elif page == "Dashboard Forex":
     if pair_overview is not None and not pair_overview.empty and not pair_llm_summary.empty and "Paire" in pair_overview.columns:
         pair_llm_display = pair_llm_summary.groupby("pair")["Synthese LLM"].apply(lambda s: " | ".join(s.astype(str))).to_dict()
         pair_overview["Detail LLM"] = pair_overview["Paire"].astype(str).str.upper().map(pair_llm_display).fillna("-")
+    pillar_scores = _load_latest_fx_pillar_scores(MACRO_DUCKDB_PATH, macro_db_sig)
 
-    tab_pairs, tab_perf, tab_risk, tab_sources = st.tabs(
-        ["Radar paires", "Performance", "Risk manager", "Sources"]
+    tab_pairs, tab_cube, tab_perf, tab_risk, tab_sources = st.tabs(
+        ["Radar paires", "Cube 3 piliers", "Performance", "Risk manager", "Sources"]
     )
 
     with tab_pairs:
@@ -16694,6 +16991,92 @@ elif page == "Dashboard Forex":
                 else:
                     st.caption("Aucun lot clos pour ce LLM.")
 
+    with tab_cube:
+        st.subheader("Cube 3 axes - court terme vs. 3 piliers")
+        st.markdown(
+            """
+Ce cube ajoute le chaînon manquant entre le radar de paires et le framework macro long terme. La matrice 2D actuelle dit si le **prix** et les **news recentes** pointent dans le même sens; le troisième axe ajoute l'écart de score des **3 piliers** entre la devise de base et la devise de cotation.
+
+- **X - technique AG2-FX** : gauche = setup short sur la devise de base, droite = setup long sur la devise de base.
+- **Y - news/event AG4-Forex** : bas = news défavorables à la devise de base, haut = news favorables à la devise de base.
+- **Z - 3 piliers macro** : bas = avantage structurel à la devise de cotation, haut = avantage structurel à la devise de base.
+- **Taille des points** : risque événementiel. Une grosse bulle demande plus de prudence, même si la zone est directionnellement propre.
+"""
+        )
+        if pair_overview.empty:
+            st.info("Aucune paire FX exploitable pour construire le cube.")
+        else:
+            fig_cube, cube_df = _build_fx_three_pillar_cube(pair_overview, pillar_scores)
+            if fig_cube is None:
+                st.info("Cube indisponible: il manque les donnees de paires ou les scores 3 piliers.")
+            else:
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Paires dans le cube", int(len(cube_df)))
+                ok_coverage = int((cube_df.get("_pillar_status", pd.Series(dtype=str)).astype(str) == "OK").sum())
+                c2.metric("Couverture 3 piliers", f"{ok_coverage}/{len(cube_df)}")
+                aligned_multi = int(cube_df.get("_pillar_zone", pd.Series(dtype=str)).astype(str).isin(["Base favorisee multi-horizon", "Cotation favorisee multi-horizon"]).sum())
+                c3.metric("Convergences multi-horizon", aligned_multi)
+                divergent = int((cube_df.get("_pillar_zone", pd.Series(dtype=str)).astype(str) == "Divergence court terme / long terme").sum())
+                c4.metric("Divergences", divergent)
+                st.plotly_chart(
+                    fig_cube,
+                    use_container_width=True,
+                    config={"scrollZoom": True, "displaylogo": False},
+                    key="fx_dashboard_three_pillar_cube",
+                )
+                st.markdown("#### Lecture des zones")
+                render_wrapped_dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Zone": "Base favorisee multi-horizon",
+                                "Position dans le cube": "X>0, Y>0, Z>0",
+                                "Interpretation": "Technique, news recentes et 3 piliers soutiennent la devise de base. C'est la zone la plus propre pour chercher un biais long base/quote.",
+                                "Consequence trading": "Prioriser les setups longs si le risque evenementiel reste acceptable et si le portefeuille n'est pas deja concentre.",
+                            },
+                            {
+                                "Zone": "Cotation favorisee multi-horizon",
+                                "Position dans le cube": "X<0, Y<0, Z<0",
+                                "Interpretation": "Technique, news recentes et 3 piliers favorisent la devise de cotation. La paire est structurellement plus lisible en short base/quote.",
+                                "Consequence trading": "Chercher des shorts ou eviter les longs contraires, sauf catalyseur tres clair.",
+                            },
+                            {
+                                "Zone": "Divergence court terme / long terme",
+                                "Position dans le cube": "Court terme oppose a Z",
+                                "Interpretation": "Le marche ou les news court terme bougent contre le signal structurel. Cela peut etre un pullback exploitable ou un debut de changement de regime.",
+                                "Consequence trading": "Reduire la taille, exiger confirmation, surveiller les news high impact et les niveaux techniques.",
+                            },
+                            {
+                                "Zone": "Zone neutre / information incomplete",
+                                "Position dans le cube": "Un axe proche de 0 ou score manquant",
+                                "Interpretation": "Pas assez de separation entre les devises ou couverture incomplete sur une jambe de la paire.",
+                                "Consequence trading": "Ne pas sur-interpreter; completer les donnees ou attendre un signal plus net.",
+                            },
+                        ]
+                    ),
+                    hide_index=True,
+                    height=320,
+                )
+                missing = cube_df[cube_df.get("_pillar_status", pd.Series("", index=cube_df.index)).astype(str) != "OK"].copy()
+                if not missing.empty:
+                    with st.expander("Paires avec axe 3 piliers incomplet", expanded=False):
+                        show_missing = missing[["Paire", "_pillar_status", "_pillar_base_score", "_pillar_quote_score"]].rename(
+                            columns={
+                                "_pillar_status": "Statut",
+                                "_pillar_base_score": "Composite devise base",
+                                "_pillar_quote_score": "Composite devise cotation",
+                            }
+                        )
+                        render_interactive_table(show_missing, key_suffix="fx_dashboard_cube_missing", height=220)
+                with st.expander("Pourquoi certaines devises de l'univers Forex ne sont pas dans les 3 piliers ?", expanded=True):
+                    st.markdown(
+                        """
+Le périmètre actuel des scores 3 piliers est volontairement restreint au panier macro liquide couvert par les agents `AG5` à `AG8`: `USD, EUR, JPY, GBP, CHF, CAD, AUD, NZD`. Ce n'est pas une contrainte de trading de la matrice Forex: le dashboard peut suivre davantage de paires actives, mais l'axe structurel du cube n'est fiable que si les deux devises ont des données macro, valorisation et positionnement comparables.
+
+Pour être complet sur des devises supplémentaires comme `MXN`, `SEK`, `NOK` ou `KRW`, il faut ajouter trois familles de données: séries macro/politique monétaire compatibles dans `macro.country_indicators` et `macro.policy_rates`, mapping COT ou proxy de positionnement dans `cot.speculative_positions`, et courbes 2Y/10Y dans `rates.yield_curve`. Sans ces trois couches, on peut afficher la paire, mais le point doit rester proche de `Z=0` ou marqué comme incomplet.
+"""
+                    )
+
     with tab_perf:
         st.subheader("Performance AG1-FX comparee")
         if not all_snap.empty and {"as_of", "equity_eur", "LLM"}.issubset(all_snap.columns):
@@ -16726,7 +17109,7 @@ elif page == "Dashboard Forex":
             matrix_src["pnl_eur"] = pd.to_numeric(matrix_src["pnl_eur"], errors="coerce").fillna(0.0)
             pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="pnl_eur", aggfunc="sum", fill_value=0.0)
             vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
-            st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
+            render_wrapped_dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
         else:
             st.caption("Aucun trade clos sur la periode.")
 
@@ -17261,7 +17644,7 @@ elif page == "Forex":
             matrix_src["pair"] = matrix_src["pair"].fillna("").astype(str).str.upper()
             pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="_pnl_eur", aggfunc="sum", fill_value=0.0)
             vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
-            st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
+            render_wrapped_dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
 
             color_map = {cfg["label"]: cfg["accent"] for cfg in AG1_FX_MULTI_PORTFOLIO_CONFIG.values()}
             fig_hist = px.histogram(
@@ -17621,9 +18004,9 @@ elif page == "Forex P&L (LLM x Paire)":
             )
             with st.expander("Matrice P&L net (€) — LLM x paire", expanded=True):
                 try:
-                    st.dataframe(_signed_pnl_styler(pivot), use_container_width=True)
+                    render_wrapped_dataframe(_signed_pnl_styler(pivot), use_container_width=True)
                 except Exception:
-                    st.dataframe(pivot.round(2), use_container_width=True)
+                    render_wrapped_dataframe(pivot.round(2), use_container_width=True)
 
             # Detail trades agreges
             detail = gb.rename(
@@ -18404,7 +18787,7 @@ elif page == "Forex Trading (AG1-FX)":
         matrix_src["pnl_eur"] = pd.to_numeric(matrix_src.get("pnl_eur"), errors="coerce").fillna(0)
         pivot = matrix_src.pivot_table(index="LLM", columns="pair", values="pnl_eur", aggfunc="sum", fill_value=0)
         vmax = max(1.0, float(abs(pivot.values).max())) if pivot.size else 1.0
-        st.dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
+        render_wrapped_dataframe(_signed_pnl_styler(pivot, vmax=vmax), use_container_width=True)
 
     st.subheader("Distribution des trades clos")
     if not df_closed.empty and "pnl_eur" in df_closed.columns:

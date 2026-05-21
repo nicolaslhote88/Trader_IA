@@ -1,10 +1,31 @@
 import os
+import math
+from datetime import date, datetime
+
 import duckdb
 
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 path = ctx.get("ag2_fx_path") or "/files/duckdb/ag2_fx_v1.duckdb"
 rows = []
 latest_ag2_run_id = ""
+
+
+def json_safe(value):
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, (str, int, bool)):
+        return value
+    try:
+        if hasattr(value, "item"):
+            return json_safe(value.item())
+    except Exception:
+        pass
+    return str(value)
+
 
 if os.path.exists(path):
     try:
@@ -19,7 +40,7 @@ if os.path.exists(path):
             ).fetchone()
             latest_ag2_run_id = row[0] if row else ""
             if latest_ag2_run_id:
-                rows = con.execute(
+                cur = con.execute(
                     """
                     SELECT *
                     FROM main.technical_signals_fx
@@ -27,7 +48,12 @@ if os.path.exists(path):
                     ORDER BY pair
                     """,
                     [latest_ag2_run_id],
-                ).fetchdf().to_dict("records")
+                )
+                cols = [desc[0] for desc in cur.description]
+                rows = [
+                    {col: json_safe(value) for col, value in zip(cols, rec)}
+                    for rec in cur.fetchall()
+                ]
     except Exception as exc:
         ctx["technical_error"] = str(exc)
 

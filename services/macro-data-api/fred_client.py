@@ -26,6 +26,10 @@ FRED_SERIES = {
         "CAD": "IRSTCI01CAM156N", # Bank of Canada
         "AUD": "IRSTCI01AUM156N", # Reserve Bank of Australia
         "NZD": "IRSTCI01NZM156N", # RBNZ
+        "MXN": "INTDSRMXM193N",    # Banco de Mexico
+        "SEK": "INTDSRSEM193N",    # Riksbank
+        "NOK": "INTDSRNOM193N",    # Norges Bank
+        "KRW": "INTDSRKRM193N",    # Bank of Korea
     },
     # PIB réel (croissance QoQ annualisée)
     "gdp_growth": {
@@ -34,7 +38,10 @@ FRED_SERIES = {
         "JPY": "JPNRGDPEXP",         # Japan Real GDP
         "GBP": "UKNGDP",             # UK Real GDP
         "CAD": "NAEXKP01CAQ189S",    # Canada Real GDP
-        "AUD": "AUSRGDPEXPGSCA",     # Australia Real GDP
+        "AUD": "NGDPRNSAXDCAUQ",     # Australia Real GDP
+        "MXN": "NGDPRSAXDCMXQ",       # Mexico Real GDP
+        "SEK": "NGDPRSAXDCSEQ",       # Sweden Real GDP
+        "NOK": "NGDPRSAXDCNOQ",       # Norway Real GDP
     },
     # CPI (Inflation YoY %)
     "cpi_yoy": {
@@ -44,8 +51,16 @@ FRED_SERIES = {
         "GBP": "GBRCPIALLMINMEI",     # UK CPI
         "CHF": "CHECPIALLMINMEI",     # Switzerland CPI
         "CAD": "CANCPIALLMINMEI",     # Canada CPI
-        "AUD": "AUSCPIALLMINMEI",     # Australia CPI
-        "NZD": "NZLCPIALLMINMEI",     # New Zealand CPI
+        "AUD": "AUSCPIALLQINMEI",     # Australia CPI
+        "NZD": "NZLCPIALLQINMEI",     # New Zealand CPI
+        "MXN": "MEXCPALTT01IXOBM",    # Mexico CPI all items
+        "SEK": "SWECPIALLMINMEI",     # Sweden CPI all items
+        "NOK": "NORCPIALLMINMEI",     # Norway CPI all items
+        "KRW": "KORCPIALLMINMEI",     # Korea CPI all items
+    },
+    # Chômage (macro contextuel, pas encore pondéré dans le score pilier 1)
+    "unemployment": {
+        "MXN": "LRHUTTTTMXM156S",
     },
     # Balance du compte courant (Milliards USD, trimestriel)
     "current_account": {
@@ -68,6 +83,9 @@ FRED_SERIES = {
     "yield_10y_cad": {"CAD": "IRLTLT01CAM156N"},
     "yield_10y_aud": {"AUD": "IRLTLT01AUM156N"},
     "yield_10y_chf": {"CHF": "IRLTLT01CHM156N"},
+    "yield_10y_sek": {"SEK": "IRLTLT01SEM156N"},
+    "yield_10y_nok": {"NOK": "IRLTLT01NOM156N"},
+    "yield_10y_krw": {"KRW": "IRLTLT01KRM156N"},
     "yield_2y_eur": {"EUR": "IRLTST01EZM156N"},
 }
 
@@ -104,7 +122,11 @@ class FREDClient:
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             r = await client.get(f"{FRED_BASE}/series/observations", params=params)
-            r.raise_for_status()
+            try:
+                r.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                detail = exc.response.text[:300].replace(self.api_key, "***")
+                raise RuntimeError(f"FRED series {series_id} failed with HTTP {exc.response.status_code}: {detail}") from None
             data = r.json()
             obs = data.get("observations", [])
             result = []
@@ -118,7 +140,11 @@ class FREDClient:
 
     async def get_latest(self, series_id: str) -> Optional[dict]:
         """Retourne la dernière observation disponible."""
-        obs = await self.get_series(series_id, limit=5)
+        try:
+            obs = await self.get_series(series_id, limit=5)
+        except RuntimeError as exc:
+            logger.warning("%s", exc)
+            return None
         return obs[0] if obs else None
 
     async def get_policy_rates(self) -> dict[str, dict]:
@@ -138,7 +164,11 @@ class FREDClient:
         """Croissance PIB réel pour les principales économies."""
         results = {}
         for currency, series_id in FRED_SERIES["gdp_growth"].items():
-            obs = await self.get_series(series_id, limit=8)
+            try:
+                obs = await self.get_series(series_id, limit=8)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
             if len(obs) >= 2:
                 latest = obs[0]["value"]
                 prev = obs[1]["value"]
@@ -155,7 +185,11 @@ class FREDClient:
         """Inflation CPI YoY pour les principales devises."""
         results = {}
         for currency, series_id in FRED_SERIES["cpi_yoy"].items():
-            obs = await self.get_series(series_id, limit=14)
+            try:
+                obs = await self.get_series(series_id, limit=14)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
             if len(obs) >= 13:
                 latest = obs[0]["value"]
                 year_ago = obs[12]["value"] if len(obs) > 12 else None
@@ -172,12 +206,33 @@ class FREDClient:
         """Balance du compte courant (déficit/excédent) en Mds USD."""
         results = {}
         for currency, series_id in FRED_SERIES["current_account"].items():
-            obs = await self.get_series(series_id, limit=8)
+            try:
+                obs = await self.get_series(series_id, limit=8)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
             if obs:
                 latest = obs[0]["value"]
                 results[currency] = {
                     "balance_bn_usd": latest,
                     "surplus": latest > 0,
+                    "as_of": obs[0]["date"],
+                    "series_id": series_id,
+                }
+        return results
+
+    async def get_unemployment(self) -> dict[str, dict]:
+        """Taux de chômage pour les devises hors G8 suivies en contexte macro."""
+        results = {}
+        for currency, series_id in FRED_SERIES.get("unemployment", {}).items():
+            try:
+                obs = await self.get_series(series_id, limit=5)
+            except RuntimeError as exc:
+                logger.warning("%s", exc)
+                continue
+            if obs:
+                results[currency] = {
+                    "unemployment_pct": obs[0]["value"],
                     "as_of": obs[0]["date"],
                     "series_id": series_id,
                 }
@@ -204,6 +259,9 @@ class FREDClient:
             "CAD": ("yield_10y_cad", "CAD"),
             "AUD": ("yield_10y_aud", "AUD"),
             "CHF": ("yield_10y_chf", "CHF"),
+            "SEK": ("yield_10y_sek", "SEK"),
+            "NOK": ("yield_10y_nok", "NOK"),
+            "KRW": ("yield_10y_krw", "KRW"),
         }
         results = {}
         for currency, (key, ccy) in mapping.items():

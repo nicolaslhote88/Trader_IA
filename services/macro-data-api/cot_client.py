@@ -7,21 +7,43 @@ Utilise le rapport Disaggregated Futures Only (format legacy compatible).
 import io
 import logging
 import zipfile
-from datetime import date, timedelta
-from typing import Optional
+from dataclasses import dataclass
+from datetime import date
+from typing import Literal, Optional
 
 import httpx
 import pandas as pd
 
 logger = logging.getLogger("cot_client")
 
-# URL des données COT CFTC (Disaggregated, Futures Only, année courante + historique)
-COT_CURRENT_YEAR_URL = "https://www.cftc.gov/files/dea/newcot/f_disagg.zip"
-COT_HISTORICAL_URLS = [
-    "https://www.cftc.gov/files/dea/newcot/disaggregated_futonly_2024_2025.zip",
-    "https://www.cftc.gov/files/dea/newcot/disaggregated_futonly_2022_2023.zip",
-    "https://www.cftc.gov/files/dea/newcot/disaggregated_futonly_2020_2021.zip",
-]
+# FX futures live in the CFTC "Traders in Financial Futures" report, not in the
+# commodity-focused disaggregated report. Annual files include the current year
+# to date and have stable headers.
+COT_FINANCIAL_FUTURES_URL = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
+
+PositioningSource = Literal["CFTC_COT", "OPTION_RR_25D", "ETF_FLOWS", "CME_OI"]
+PositioningConfidence = Literal["high", "medium", "low"]
+
+
+@dataclass(frozen=True)
+class PositioningRecord:
+    currency: str
+    net_specs: float
+    timestamp: date
+    source: PositioningSource
+    confidence: PositioningConfidence
+
+
+SOURCE_CONFIDENCE: dict[str, PositioningConfidence] = {
+    "CFTC_COT": "high",
+    "OPTION_RR_25D": "medium",
+    "CME_OI": "medium",
+    "ETF_FLOWS": "low",
+}
+
+
+def confidence_for_source(source: str) -> PositioningConfidence:
+    return SOURCE_CONFIDENCE.get(str(source or "").upper(), "low")
 
 # Mapping nom de marché CFTC → devise ISO
 CFTC_MARKET_TO_CURRENCY = {
@@ -32,24 +54,43 @@ CFTC_MARKET_TO_CURRENCY = {
     "CANADIAN DOLLAR":       "CAD",
     "AUSTRALIAN DOLLAR":     "AUD",
     "NEW ZEALAND DOLLAR":    "NZD",
+    "NZ DOLLAR":             "NZD",
     "MEXICAN PESO":          "MXN",
     "SOUTH KOREAN WON":      "KRW",
     "CHINESE RENMINBI":      "CNH",
 }
 
-# Colonnes importantes dans le rapport
+CFTC_MARKET_CODE_TO_CURRENCY = {
+    "095741": "MXN",
+}
+
+# Colonnes importantes dans les rapports CFTC. Keep legacy names as fallback,
+# but prefer the underscored TFF headers from fut_fin_txt_YYYY.zip.
 COT_COLUMNS = {
     "Market and Exchange Names":         "market_name",
+    "Market_and_Exchange_Names":         "market_name",
+    "CFTC Contract Market Code":         "market_code",
+    "CFTC_Contract_Market_Code":         "market_code",
     "As of Date in Form YYYY-MM-DD":     "report_date",
+    "Report_Date_as_YYYY-MM-DD":         "report_date",
     "Open Interest (All)":               "open_interest",
+    "Open_Interest_All":                 "open_interest",
     "Asset Mgr. Positions-Long (All)":   "asset_mgr_long",
+    "Asset_Mgr_Positions_Long_All":      "asset_mgr_long",
     "Asset Mgr. Positions-Short (All)":  "asset_mgr_short",
+    "Asset_Mgr_Positions_Short_All":     "asset_mgr_short",
     "Lev Money Positions-Long (All)":    "lev_money_long",
+    "Lev_Money_Positions_Long_All":      "lev_money_long",
     "Lev Money Positions-Short (All)":   "lev_money_short",
+    "Lev_Money_Positions_Short_All":     "lev_money_short",
     "Other Rept. Positions-Long (All)":  "other_long",
+    "Other_Rept_Positions_Long_All":     "other_long",
     "Other Rept. Positions-Short (All)": "other_short",
+    "Other_Rept_Positions_Short_All":    "other_short",
     "Nonrept. Positions-Long (All)":     "nonrept_long",
+    "NonRept_Positions_Long_All":        "nonrept_long",
     "Nonrept. Positions-Short (All)":    "nonrept_short",
+    "NonRept_Positions_Short_All":       "nonrept_short",
 }
 
 
@@ -57,23 +98,67 @@ class COTClient:
     def __init__(self):
         pass
 
-    async def _download_zip(self, url: str) -> Optional[pd.DataFrame]:
-        """Télécharge et parse un zip COT CFTC."""
+    def build_proxy_positioning_record(
+        self,
+        currency: str,
+        net_spec: float,
+        report_date: str,
+        source: PositioningSource,
+        open_interest: int = 0,
+    ) -> dict:
+        """
+        Normalise un proxy de positionnement non-CFTC.
+
+        Les fetchers provider-specific (option risk reversal, CME OI, ETF flows)
+        doivent produire ce format avant persistence, afin que le scoring puisse
+        appliquer le gating via source/confidence.
+        """
+        source_value = str(source or "").upper()
+        return {
+            "report_date": report_date,
+            "currency": str(currency or "").upper(),
+            "net_spec": float(net_spec),
+            "lev_money_long": 0,
+            "lev_money_short": 0,
+            "asset_mgr_long": 0,
+            "asset_mgr_short": 0,
+            "open_interest": int(open_interest or 0),
+            "source": source_value,
+            "confidence": confidence_for_source(source_value),
+        }
+
+    async def _download_file(self, url: str) -> Optional[pd.DataFrame]:
+        """Télécharge et parse un fichier COT CFTC zip/csv/txt."""
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
                 r = await client.get(url)
                 r.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(r.content)) as z:
-                csv_files = [f for f in z.namelist() if f.endswith(".csv")]
-                if not csv_files:
-                    logger.warning("No CSV in COT zip: %s", url)
-                    return None
-                with z.open(csv_files[0]) as f:
-                    df = pd.read_csv(f, low_memory=False)
+            content = io.BytesIO(r.content)
+            if zipfile.is_zipfile(content):
+                content.seek(0)
+                with zipfile.ZipFile(content) as z:
+                    data_files = [
+                        f for f in z.namelist()
+                        if f.lower().endswith((".csv", ".txt"))
+                    ]
+                    if not data_files:
+                        logger.warning("No data file in COT zip: %s", url)
+                        return None
+                    with z.open(data_files[0]) as f:
+                        df = pd.read_csv(f, low_memory=False)
+            else:
+                content.seek(0)
+                df = pd.read_csv(content, low_memory=False)
             return df
         except Exception as exc:
             logger.error("COT download failed %s: %s", url, exc)
             return None
+
+    @staticmethod
+    def _normalize_market_name(value: object) -> str:
+        text = str(value or "").strip().upper()
+        # CFTC rows look like "EURO FX - CHICAGO MERCANTILE EXCHANGE".
+        return text.split(" - ", 1)[0].strip()
 
     def _parse_df(self, df: pd.DataFrame) -> list[dict]:
         """Parse le dataframe COT en liste de dicts par devise."""
@@ -87,8 +172,9 @@ class COTClient:
         df = df.dropna(subset=["report_date"])
 
         for _, row in df.iterrows():
-            mkt = str(row.get("market_name", "")).strip().upper()
-            currency = CFTC_MARKET_TO_CURRENCY.get(mkt)
+            mkt = self._normalize_market_name(row.get("market_name", ""))
+            market_code = str(row.get("market_code") or "").strip()
+            currency = CFTC_MARKET_TO_CURRENCY.get(mkt) or CFTC_MARKET_CODE_TO_CURRENCY.get(market_code)
             if not currency:
                 continue
 
@@ -118,12 +204,15 @@ class COTClient:
                 "asset_mgr_long": am_long,
                 "asset_mgr_short": am_short,
                 "open_interest": safe_int(row.get("open_interest", 0)),
+                "source": "CFTC_COT",
+                "confidence": confidence_for_source("CFTC_COT"),
             })
         return results
 
     async def get_current_cot(self) -> list[dict]:
         """Récupère le dernier rapport COT (semaine courante)."""
-        df = await self._download_zip(COT_CURRENT_YEAR_URL)
+        year = date.today().year
+        df = await self._download_file(COT_FINANCIAL_FUTURES_URL.format(year=year))
         if df is None:
             return []
         return self._parse_df(df)
@@ -131,9 +220,11 @@ class COTClient:
     async def get_historical_cot(self, years_back: int = 2) -> list[dict]:
         """Récupère l'historique COT pour calculer les z-scores."""
         all_records = []
-        urls = [COT_CURRENT_YEAR_URL] + COT_HISTORICAL_URLS[:years_back]
-        for url in urls:
-            df = await self._download_zip(url)
+        current_year = date.today().year
+        years = range(current_year, current_year - max(0, years_back) - 1, -1)
+        for year in years:
+            url = COT_FINANCIAL_FUTURES_URL.format(year=year)
+            df = await self._download_file(url)
             if df is not None:
                 all_records.extend(self._parse_df(df))
         # Déduplique par (report_date, currency)
@@ -181,5 +272,7 @@ class COTClient:
                     "crowded_flag": crowded,
                     "crowded_direction": ("long" if z > 1.5 else "short" if z < -1.5 else "neutral"),
                     "positioning_score": round(positioning_score, 3),
+                    "source": row.get("source", "CFTC_COT"),
+                    "confidence": row.get("confidence", confidence_for_source(row.get("source", "CFTC_COT"))),
                 })
         return result

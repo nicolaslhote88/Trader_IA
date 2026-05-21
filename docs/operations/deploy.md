@@ -148,7 +148,39 @@ docker compose logs -f n8n
 docker compose logs -f task-runners
 ```
 
-### 4.a Dashboard Streamlit uniquement
+### 4.a Publication des workflows n8n
+
+Sur n8n 2.x, un workflow actif execute la version publiee
+(`workflow_entity.activeVersionId`), pas seulement le contenu courant de
+`workflow_entity.nodes`. Apres une mise a jour de workflow par import/injection
+DB, verifier que la version publiee pointe sur le nouveau `versionId`.
+
+```bash
+docker exec root-n8n-1 n8n publish:workflow --id=<workflow_id>
+docker restart root-n8n-1 root-task-runners-1 root-task-runners-2 root-task-runners-3
+```
+
+Verification SQLite minimale:
+
+```bash
+docker exec root-n8n-1 python3 - <<'PY'
+import sqlite3
+wid = '<workflow_id>'
+conn = sqlite3.connect('/home/node/.n8n/database.sqlite')
+print(conn.execute(
+    'select id,name,active,versionId,activeVersionId,updatedAt '
+    'from workflow_entity where id=?',
+    (wid,),
+).fetchone())
+conn.close()
+PY
+```
+
+Pour AG1-FX, le workflow actif doit contenir les marqueurs de garde paper et de
+prefunding (`account_ids_from_payload`, `prefund_non_eur_fx`) dans la version
+publiee avant de laisser repartir le cron.
+
+### 4.b Dashboard Streamlit uniquement
 
 Sur le VPS actuel, le dashboard live est monte depuis `/opt/trading-dashboard/app`
 dans le conteneur `root-trading-dashboard-1`. Pour deploiement rapide d'une

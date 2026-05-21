@@ -1,0 +1,79 @@
+# Audit AG1-FX GPT - rejets ordres
+
+Date: 2026-05-18
+
+## Constat VPS
+
+- Workflow actif: `AG1-FX-V1 Portfolio Manager - chatgpt52`.
+- Workflows comparatifs `grok41_reasoning` et `gemini30_pro`: inactifs.
+- Broker IBKR: `IBKR_DRY_RUN=false`, compte paper `DUQ816375`.
+- Les 18 ordres problematiques dans `core.orders` se decomposent en:
+  - 14 ordres `rejected / KILL_SWITCH_ACTIVE`;
+  - 4 ordres `broker_error / IBKR_BROKER_ERROR`.
+
+## Causes
+
+1. Les 14 rejets `KILL_SWITCH_ACTIVE` ne sont pas des rejets broker. Le pre-run
+   AG1-FX bloquait les nouvelles ouvertures quand la reconciliation IBKR
+   echouait avec `HTTP Error 502: Bad Gateway`, typiquement pendant une session
+   Client Portal expiree ou non authentifiee.
+
+2. Les 4 erreurs broker incluent des refus IBKR du type:
+   `FX trade would expose account to currency leverage`. Le compte paper actuel
+   accepte des trades FX financables par la devise de base, mais refuse les
+   ouvertures qui empruntent une devise non-EUR comme `GBPUSD`, `USDCAD` ou
+   `GBPJPY`.
+
+## Correctifs
+
+- Le pre-run AG1-FX et le workflow `AG1-FX-PF-V1` tentent maintenant une
+  reinitialisation brokerage ponctuelle via `/auth/initialize` quand c'est
+  possible, puis journalisent `IBKR_MANUAL_LOGIN_REQUIRED` si un relogin
+  navigateur/2FA est necessaire.
+- Les logs de reconciliation conservent les lots DuckDB attendus meme si le
+  broker est indisponible, ce qui evite les payloads vides peu actionnables.
+- Correction de suivi: la reconciliation FX traite maintenant `/account/ledger`
+  comme source autoritaire pour les contrats spot-FX CASH lorsque le ledger est
+  lisible. Les deltas de pseudo-position CPAPI restent audites, mais ne bloquent
+  plus les nouvelles ouvertures si le ledger cash est disponible. Les ecarts
+  cash ne bloquent que si `IBKR_BLOCK_ON_CASH_DIVERGENCE=true`.
+- `AG1_FX_CASH_ONLY_BASE_CCY_MODE=true` bloque avant broker les nouvelles
+  ouvertures qui exposeraient le compte a du levier de devise non-EUR. Avec
+  `AG1_FX_PORTFOLIO_BASE_CCY=EUR`, seules les nouvelles ouvertures `SELL_BASE`
+  sur `EURxxx` et `BUY_BASE` sur `xxxEUR` passent. Les clotures/reductions de
+  lots existants restent autorisees.
+- Correction de suivi 2026-05-19: les derniers rejets observes etaient encore
+  `KILL_SWITCH_ACTIVE` avant broker, pas des refus IBKR directs. Le garde
+  paper-account ne depend plus uniquement de `/positions` lorsque les positions
+  spot-FX sont absentes; il accepte aussi l'`acctcode` DU present dans
+  `/account/ledger`. Les nouvelles ouvertures non-EUR peuvent maintenant etre
+  prefundees: le validateur cree d'abord une conversion cash EUR vers la devise
+  qui sera vendue par l'ordre cible, puis l'ordre cible n'est envoye que si la
+  conversion est confirmee.
+- Correction operationnelle 2026-05-19 14:39 UTC: le run
+  `AG1FX_chatgpt52_20260519143006` a encore execute l'ancienne version publiee
+  n8n, bien que `workflow_entity.nodes` contienne le patch. Cause: la mise a
+  jour DB avait change `versionId` sans creer/publier l'entree correspondante
+  dans `workflow_history`; le cron actif utilisait donc l'ancien
+  `activeVersionId`. Correctif applique sur VPS: creation des entrees
+  `workflow_history`, publication via `n8n publish:workflow` pour AG1-FX et
+  AG1-FX-PF, puis redemarrage de n8n et des task-runners.
+- Correction operationnelle 2026-05-19 19:30 UTC: le run n8n `9312`
+  (20:30 Europe/Paris) a bien utilise la version publiee corrigee, mais a
+  echoue dans `03 Load Portfolio State FX` avec `__build_class__ not found`.
+  Cause: le runner Python sandbox de n8n ne supporte pas les definitions de
+  classes Python; les nodes AG1-FX et AG1-FX-PF definissaient
+  `BrokerPreflightBlocked(Exception)`. Correctif: remplacement par le sentinel
+  integre `BrokerPreflightBlocked = LookupError`, regeneration des workflows,
+  publication n8n, puis redemarrage de n8n et des task-runners.
+- Le brief compact donne cette contrainte au LLM pour reduire les propositions
+  non executables.
+
+## Verification attendue
+
+- `core.reconciliation_log.reasons_json` doit afficher `IBKR_MANUAL_LOGIN_REQUIRED`
+  quand la session CPAPI expire.
+- Les prochaines propositions hors contrainte cash-only doivent etre rejetees
+  par le validateur avec `IBKR_CASH_ONLY_EUR_LEG_REQUIRED`, sans appel broker.
+- Apres relogin IBKR et reconciliation OK, les ouvertures compatibles EUR
+  peuvent continuer a etre envoyees au compte paper.

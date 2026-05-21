@@ -65,7 +65,7 @@ try:
                          carry_score = EXCLUDED.carry_score,
                          ppp_deviation = EXCLUDED.ppp_deviation,
                          valuation_score = EXCLUDED.valuation_score,
-                         updated_at = CURRENT_TIMESTAMP""",
+                         updated_at = now()""",
                     [today, s["currency"], s["carry_score"], s["ppp_deviation"], s["valuation_score"]],
                 )
     written = len(valuation_scores)

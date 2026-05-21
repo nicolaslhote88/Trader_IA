@@ -10,7 +10,8 @@ ctx = (_items or [{"json": {}}])[0].get("json", {})
 db_path = ctx.get("macro_duckdb_path", os.environ.get("MACRO_DUCKDB_PATH", "/files/duckdb/macro_data.duckdb"))
 threshold = ctx.get("three_pillars_threshold", 0.20)
 
-G10 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
+CORE_G8 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
+EXTENDED_WATCH = ["MXN", "SEK", "NOK", "KRW"]
 pillar_scores_by_ccy = {}
 yield_curves = {}
 cot_by_ccy = {}
@@ -36,6 +37,10 @@ if os.path.exists(db_path):
                     "composite_score": r.get("composite_score"),
                     "crowded_flag": bool(r.get("crowded_flag", False)),
                     "all_pillars_aligned": bool(r.get("all_pillars_aligned", False)),
+                    "data_completeness": r.get("data_completeness", "complete"),
+                    "score_status": r.get("score_status", "scored"),
+                    "confidence_floor": r.get("confidence_floor", "high"),
+                    "missing_inputs": r.get("missing_inputs"),
                     "as_of": str(r.get("as_of", "")),
                 }
 
@@ -72,6 +77,8 @@ if os.path.exists(db_path):
                     "crowded_flag": bool(r.get("crowded_flag", False)),
                     "crowded_direction": r.get("crowded_direction", "neutral"),
                     "positioning_score": float(r.get("positioning_score", 0)) if r.get("positioning_score") is not None else None,
+                    "source": r.get("source", "CFTC_COT"),
+                    "confidence": r.get("confidence", "high"),
                     "report_date": str(r.get("report_date", "")),
                 }
     except Exception as exc:
@@ -87,7 +94,13 @@ three_pillars = {
     "data_available": bool(pillar_scores_by_ccy),
 }
 
-for ccy in G10:
+universe_ccys = set(CORE_G8 + EXTENDED_WATCH)
+for row in ctx.get("universe_fx", []) or []:
+    pair = str(row.get("pair") or "").upper()
+    if len(pair) >= 6:
+        universe_ccys.add(pair[:3])
+        universe_ccys.add(pair[3:6])
+for ccy in sorted(universe_ccys | set(pillar_scores_by_ccy) | set(yield_curves) | set(cot_by_ccy)):
     p = pillar_scores_by_ccy.get(ccy, {})
     y = yield_curves.get(ccy, {})
     c = cot_by_ccy.get(ccy, {})
@@ -104,9 +117,15 @@ for ccy in G10:
         "positioning_score": pos_s,
         "composite_score": composite,
         "all_pillars_aligned": aligned,
+        "data_completeness": p.get("data_completeness", "data_incomplete" if not p else "complete"),
+        "score_status": p.get("score_status", "data_incomplete" if not p else "scored"),
+        "confidence_floor": p.get("confidence_floor"),
+        "missing_inputs": p.get("missing_inputs"),
         "crowded_flag": c.get("crowded_flag", False),
         "crowded_direction": c.get("crowded_direction", "neutral"),
         "cot_z_score": c.get("net_z_score"),
+        "positioning_source": c.get("source"),
+        "positioning_confidence": c.get("confidence"),
         "yield_slope": y.get("slope_10y2y"),
         "rates_signal": y.get("rates_signal", "neutral"),
     }

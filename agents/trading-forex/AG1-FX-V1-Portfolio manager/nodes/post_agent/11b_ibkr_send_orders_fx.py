@@ -72,7 +72,7 @@ def broker_result_error(result):
 
 def normalize_order_type(value):
     text = str(value or "MKT").strip().upper()
-    if text == "MARKET":
+    if text in {"MARKET", "CASH_CONVERSION"}:
         return "MKT"
     if text == "LIMIT":
         return "LMT"
@@ -85,12 +85,63 @@ def get_json(path: str, timeout: int = 12):
         return json.loads(resp.read().decode("utf-8"))
 
 
+def post_json(path: str, payload: dict, timeout: int = 15):
+    req = urllib.request.Request(
+        f"{BROKER_URL}{path}",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read().decode("utf-8"))
+
+
 def paper_account_ids(positions_payload):
     ids = []
     for row in positions_payload or []:
         acct = str(row.get("acctId") or row.get("accountId") or "").strip().upper()
         if acct and acct not in ids:
             ids.append(acct)
+    return ids
+
+
+def account_ids_from_payload(payload):
+    ids = []
+
+    def visit(value):
+        if isinstance(value, dict):
+            candidates = [
+                value.get("acctcode"),
+                value.get("acctCode"),
+                value.get("accountcode"),
+                value.get("accountCode"),
+                value.get("accountId"),
+                value.get("acctId"),
+                value.get("account"),
+            ]
+            for candidate in candidates:
+                if isinstance(candidate, dict):
+                    candidate = candidate.get("value") or candidate.get("amount")
+                acct = str(candidate or "").strip().upper()
+                if acct and acct not in ids:
+                    ids.append(acct)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(payload)
+    return ids
+
+
+def merge_account_ids(*groups):
+    ids = []
+    for group in groups:
+        for acct in group or []:
+            acct = str(acct or "").strip().upper()
+            if acct and acct not in ids:
+                ids.append(acct)
     return ids
 
 
@@ -139,6 +190,25 @@ def poll_recent_fills(order_keys):
         time.sleep(min(FILL_POLL_INTERVAL_SECONDS, max(0.0, deadline - time.time())))
 
 
+def broker_payload_for_orders(orders):
+    return {
+        "orders": [
+            {
+                "pair": o["pair"],
+                "side": o["side"],
+                "size_lots": float(o.get("size_lots", 0)),
+                "order_id": o["order_id"],
+                "client_order_id": o["client_order_id"],
+                "order_type": normalize_order_type(o.get("order_type")),
+                "limit_price": o.get("limit_price"),
+                "is_currency_conversion": bool(o.get("is_currency_conversion")),
+            }
+            for o in orders
+        ],
+        "run_id": run_id,
+    }
+
+
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 executable_orders = ctx.get("executable_orders") or []
 run_id = ctx.get("run_id") or ""
@@ -166,6 +236,7 @@ broker_positions = []
 broker_fills = []
 matched_fills = {}
 broker_dry_run = None
+broker_account_ids = []
 
 pending_orders = [o for o in executable_orders if o.get("status") == "pending"]
 
@@ -196,6 +267,16 @@ if pending_orders and (not DRY_RUN or SEND_DRY_RUN_TO_BROKER):
             if REQUIRE_PAPER_ACCOUNT and not DRY_RUN:
                 broker_positions = get_json("/positions")
                 account_ids = paper_account_ids(broker_positions)
+                if not account_ids:
+                    try:
+                        account_ids = merge_account_ids(account_ids, account_ids_from_payload(get_json("/account/ledger")))
+                    except Exception:
+                        pass
+                if not account_ids:
+                    try:
+                        account_ids = merge_account_ids(account_ids, account_ids_from_payload(get_json("/account/summary")))
+                    except Exception:
+                        pass
                 if not account_ids or not all(acct.startswith(PAPER_ACCOUNT_PREFIXES) for acct in account_ids):
                     ibkr_errors.extend(
                         {
@@ -205,33 +286,63 @@ if pending_orders and (not DRY_RUN or SEND_DRY_RUN_TO_BROKER):
                         }
                         for o in pending_orders
                     )
+                broker_account_ids = account_ids
 
             if not ibkr_errors:
-                payload = {
-                    "orders": [
+                broker_called = True
+                has_prefunding = any(o.get("is_currency_conversion") or o.get("requires_funding_order_id") for o in pending_orders)
+                if has_prefunding:
+                    order_state = {o.get("order_id"): o for o in pending_orders}
+                    for o in pending_orders:
+                        funding_id = o.get("requires_funding_order_id")
+                        if funding_id and order_state.get(funding_id, {}).get("status") != "filled":
+                            ibkr_errors.append(
+                                {
+                                    "order_id": o.get("order_id"),
+                                    "client_order_id": o.get("client_order_id"),
+                                    "error": f"PREFUNDING_NOT_CONFIRMED:{funding_id}",
+                                }
+                            )
+                            continue
+                        response_data = post_json("/orders/fx", broker_payload_for_orders([o]))
+                        broker_dry_run = bool(response_data.get("dry_run"))
+                        ibkr_results.extend(response_data.get("results", []))
+                        ibkr_errors.extend(response_data.get("errors", []))
+                        if not DRY_RUN and broker_dry_run:
+                            ibkr_results = []
+                            ibkr_errors.append(
+                                {
+                                    "order_id": o.get("order_id"),
+                                    "client_order_id": o.get("client_order_id"),
+                                    "error": "IBKR_BROKER_STILL_IN_DRY_RUN",
+                                }
+                            )
+                            continue
+                        order_keys = {str(o.get("order_id") or ""), str(o.get("client_order_id") or "")}
+                        order_keys.discard("")
+                        new_matches, latest_fills = poll_recent_fills(order_keys)
+                        broker_fills = latest_fills or broker_fills
+                        matched_fills.update(new_matches)
+                        if new_matches:
+                            o["status"] = "filled"
+                            o["ibkr_status"] = "filled"
+                            o["ibkr_fill"] = next(iter(new_matches.values()))
+                            o["ibkr_filled_at"] = o["ibkr_fill"].get("trade_time") or o["ibkr_fill"].get("tradeTime") or o["ibkr_fill"].get("time")
+                        elif o.get("is_currency_conversion") and not DRY_RUN:
+                            # Do not send the dependent target order until the cash
+                            # conversion fill is visible in IBKR.
+                            o["status"] = "submitted"
+                    ibkr_errors.extend(
                         {
-                            "pair": o["pair"],
-                            "side": o["side"],
-                            "size_lots": float(o.get("size_lots", 0)),
-                            "order_id": o["order_id"],
-                            "client_order_id": o["client_order_id"],
-                            "order_type": normalize_order_type(o.get("order_type")),
-                            "limit_price": o.get("limit_price"),
+                            "order_id": o.get("order_id"),
+                            "client_order_id": o.get("client_order_id"),
+                            "error": f"PREFUNDING_NOT_CONFIRMED:{o.get('requires_funding_order_id')}",
                         }
                         for o in pending_orders
-                    ],
-                    "run_id": run_id,
-                }
-
-                broker_called = True
-                req = urllib.request.Request(
-                    f"{BROKER_URL}/orders/fx",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    response_data = json.loads(resp.read().decode("utf-8"))
+                        if o.get("requires_funding_order_id") and order_state.get(o.get("requires_funding_order_id"), {}).get("status") != "filled"
+                    )
+                else:
+                    response_data = post_json("/orders/fx", broker_payload_for_orders(pending_orders))
                     broker_dry_run = bool(response_data.get("dry_run"))
                     ibkr_results = response_data.get("results", [])
                     ibkr_errors = response_data.get("errors", [])
@@ -336,7 +447,7 @@ return [
                 "paper_account_guard": {
                     "required": REQUIRE_PAPER_ACCOUNT,
                     "prefixes": list(PAPER_ACCOUNT_PREFIXES),
-                    "detected_accounts": paper_account_ids(broker_positions),
+                    "detected_accounts": broker_account_ids or paper_account_ids(broker_positions),
                 },
             },
         }

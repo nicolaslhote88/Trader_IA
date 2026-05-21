@@ -21,6 +21,7 @@ from rates_client import RatesClient
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 logger = logging.getLogger("macro-data-api")
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 fred = FREDClient()
 cot = COTClient()
@@ -65,9 +66,11 @@ async def get_country_macro(currency: str, refresh: bool = Query(False)):
         gdp = await fred.get_gdp_growth()
         cpi = await fred.get_cpi()
         ca = await fred.get_current_account()
+        unemployment = await fred.get_unemployment()
         db.upsert_gdp_data(gdp)
         db.upsert_cpi_data(cpi)
         db.upsert_current_account_data(ca)
+        db.upsert_unemployment_data(unemployment)
     rows = db.get_indicators(currency=currency)
     if not rows:
         raise HTTPException(status_code=404, detail=f"No macro data for {currency}")
@@ -83,13 +86,18 @@ async def refresh_all_macro():
         gdp = await fred.get_gdp_growth()
         cpi_data = await fred.get_cpi()
         ca = await fred.get_current_account()
+        unemployment = await fred.get_unemployment()
         yields_10y = await fred.get_g10_yields_10y()
         yields_2y = await fred.get_g10_yields_2y()
+        banxico_10y, banxico_2y = await rates.get_banxico_yields()
+        yields_10y.update(banxico_10y)
+        yields_2y.update(banxico_2y)
 
         db.upsert_policy_rates(policy_rates)
         db.upsert_gdp_data(gdp)
         db.upsert_cpi_data(cpi_data)
         db.upsert_current_account_data(ca)
+        db.upsert_unemployment_data(unemployment)
 
         # Courbe des taux
         curves = rates.build_yield_curve(policy_rates, yields_10y, yields_2y)
@@ -104,6 +112,7 @@ async def refresh_all_macro():
             "gdp_updated": len(gdp),
             "cpi_updated": len(cpi_data),
             "ca_updated": len(ca),
+            "unemployment_updated": len(unemployment),
             "yield_curves_updated": len(enriched),
         }
     except Exception as exc:
@@ -135,10 +144,14 @@ async def refresh_cot():
     try:
         # Récupérer l'historique complet (2 ans) pour calculer les z-scores
         records = await cot.get_historical_cot(years_back=2)
+        if not records:
+            raise RuntimeError("COT refresh returned zero records from CFTC")
         # Calculer les z-scores sur 52 semaines
         records_with_z = cot.compute_z_scores(records, lookback_weeks=52)
         db.upsert_cot_positions(records_with_z)
         latest = db.get_latest_cot()
+        if not latest:
+            raise RuntimeError("COT refresh wrote zero latest currency rows")
         return {
             "run_id": run_id,
             "status": "ok",
@@ -255,6 +268,10 @@ async def get_macro_summary():
             "valuation_score": p.get("valuation_score"),
             "composite_score": p.get("composite_score"),
             "all_pillars_aligned": p.get("all_pillars_aligned", False),
+            "data_completeness": p.get("data_completeness"),
+            "score_status": p.get("score_status"),
+            "confidence_floor": p.get("confidence_floor"),
+            "missing_inputs": p.get("missing_inputs"),
         }
         if y.get("rates_signal") == "steepener":
             summary["steepening_opportunities"].append(ccy)

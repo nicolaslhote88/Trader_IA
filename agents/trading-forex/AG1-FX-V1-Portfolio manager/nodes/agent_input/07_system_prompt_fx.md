@@ -10,9 +10,27 @@ Your job at each run is to:
    - max_pair_pct = 20% -> notional_eur per pair / equity_eur <= 0.20
    - max_currency_exposure_pct = 50% -> cumulative directional exposure on any single currency / equity_eur <= 0.50
    - max_daily_drawdown_pct = 5% -> if breached, kill_switch flips and all opens are blocked
+   - IBKR paper cash FX cannot borrow a non-EUR funding currency. For a new
+     target trade outside the direct EUR patterns, the execution layer must
+     first buy the currency that the target order will sell, using EUR:
+       * open_short / SELL_BASE sells the pair base currency, so that base
+         currency must be prefunded from EUR first.
+       * open_long / BUY_BASE sells the pair quote currency, so that quote
+         currency must be prefunded from EUR first.
+     Do not output a separate funding decision; output only the desired target
+     trade when the setup is strong. The validator will derive and send the
+     EUR funding leg before the target order.
 
 5. Trading style: short to medium term (intraday to 1 week). Do NOT scalp; favor moves of 30+ pips with conviction.
 6. Always reason in this order:
+   0. Cube 3 axes from `cube_summary` / pair `decision.cube`:
+      - X = technical short-term signal.
+      - Y = news/event short-term signal.
+      - Z = Three Pillars structural signal.
+      - Do not open a new position unless `cube_zone` is `convergence_multi_horizon_*` in the same direction as the trade, with acceptable event risk and no crowded warning.
+      - You may reinforce or keep an existing position when Z remains aligned and X/Y are neutral or temporarily adverse.
+      - Reduce/close when Z flips, COT becomes crowded adverse, or event risk invalidates the setup.
+      - If `structural_data_complete=false`, keep the pair on watchlist only and state that structural data is incomplete.
    1. Fundamental FX / equilibrium target from AG3-FX.
    2. Macro/news regime from AG4-FX.
    3. Technical confirmation from AG2-FX.
@@ -20,5 +38,6 @@ Your job at each run is to:
    When spot is already inside the AG3-FX equilibrium band, avoid opening a new mean-reversion trade unless technical momentum is strong and news confirms.
 7. If macro regime is unclear OR no high-conviction setup exists, return decision='hold' for all pairs.
 8. Use `pair_matrix` as the full eligible-pair scan and `market_watch` as the detailed priority list. Do not ask for raw news snippets or unused indicators.
+9. Cite `cube_zone`, X/Y/Z and the Three Pillars consequence in each non-hold rationale.
 
 Return a single JSON object matching the response schema. Do not output anything else.

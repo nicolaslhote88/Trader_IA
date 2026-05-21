@@ -14,7 +14,7 @@ Structure de l'onglet :
   Section 3 : AG6 — Détail valorisation (carry + PPP)
   Section 4 : AG7 — COT positionnement (z-scores + historique)
   Section 5 : AG8 — Courbe des taux (slopes + signaux)
-  Section 6 : Historique des scores (tendance 30j)
+  Section 6 : Historique des scores (7j, 30j, 90j, all)
 """
 
 import os
@@ -22,6 +22,8 @@ from datetime import date, datetime, timedelta, timezone
 
 import duckdb
 import pandas as pd
+
+from app_modules.tables import render_wrapped_dataframe
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
@@ -79,10 +81,67 @@ def _score_color(score: float | None) -> str:
     return "darkred"
 
 
+PILLAR_UNIVERSE = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
+
+
+def _render_score_reading_guide(st):
+    st.markdown(
+        """
+Les scores sont normalisés entre `-1` et `+1`. Une valeur positive soutient la devise, une valeur négative la pénalise, et la zone `-0.20 / +0.20` doit être lue comme du bruit ou une absence de signal fort. Le composite n'est pas une prévision de prix: c'est une mesure de **pression macro relative** qui sert à cadrer les décisions Forex avec un horizon plus long que les news intraday.
+"""
+    )
+
+
+def _render_data_universe_note(st):
+    with st.expander("Périmètre devises et données manquantes", expanded=False):
+        st.markdown(
+            """
+Le monitor 3 piliers couvre aujourd'hui le panier liquide pour lequel les trois familles de données sont comparables: `USD, EUR, JPY, GBP, CHF, CAD, AUD, NZD`. L'univers Forex du dashboard peut contenir davantage de devises ou de paires, mais une paire ne peut recevoir un vrai score structurel que si **les deux devises** ont:
+
+- des données macro et taux directeurs (`macro.country_indicators`, `macro.policy_rates`),
+- un score de valorisation/carry (`pillars.currency_scores` via AG6),
+- un positionnement COT ou un proxy robuste (`cot.speculative_positions`),
+- et, pour l'onglet taux, des rendements souverains 2Y/10Y (`rates.yield_curve`).
+
+Pour compléter des devises comme `MXN`, `SEK`, `NOK` ou `KRW`, il faut ajouter les mappings de séries dans les clients de données (`fred_client`, `cot_client`, `rates_client`), puis élargir la constante de scoring côté `services/macro-data-api/scoring.py`. Sans cette couverture, afficher la devise donnerait une impression de précision qui n'existe pas encore.
+"""
+        )
+
+
+def _render_coverage_table(st, con: duckdb.DuckDBPyConnection):
+    rows = []
+    queries = [
+        ("Scores 3 piliers", "SELECT DISTINCT currency FROM pillars.currency_scores"),
+        ("Indicateurs macro", "SELECT DISTINCT currency FROM macro.country_indicators"),
+        ("Taux directeurs", "SELECT DISTINCT currency FROM macro.policy_rates"),
+        ("COT positionnement", "SELECT DISTINCT currency FROM cot.speculative_positions"),
+        ("Courbes 2Y/10Y", "SELECT DISTINCT currency FROM rates.yield_curve"),
+    ]
+    for label, query in queries:
+        df = _safe_df(con, query)
+        currencies = sorted(df["currency"].dropna().astype(str).str.upper().unique().tolist()) if not df.empty and "currency" in df.columns else []
+        missing = [c for c in PILLAR_UNIVERSE if c not in currencies]
+        extra = [c for c in currencies if c not in PILLAR_UNIVERSE]
+        rows.append(
+            {
+                "Bloc": label,
+                "Devises couvertes": ", ".join(currencies) if currencies else "-",
+                "Manquantes G10 monitor": ", ".join(missing) if missing else "Aucune",
+                "Hors périmètre vues mais non scorées": ", ".join(extra) if extra else "-",
+            }
+        )
+    render_wrapped_dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
 # ── Section 0 : Santé pipeline ─────────────────────────────────────────────────
 
 def _render_pipeline_health(st, con: duckdb.DuckDBPyConnection):
     st.subheader("🔧 Santé du Pipeline — Agents Intermédiaires")
+    st.markdown(
+        """
+Cet onglet répond à une question opérationnelle simple: **est-ce que les données qui alimentent les piliers sont fraîches, complètes et utilisables ?** Un score macro ancien peut être acceptable sur certains indicateurs trimestriels, mais un COT ou une courbe de taux périmés changent directement la confiance à accorder au composite.
+"""
+    )
 
     run_df = _safe_df(con, """
         SELECT run_id, started_at, finished_at, status, error_msg, records_written
@@ -123,7 +182,7 @@ def _render_pipeline_health(st, con: duckdb.DuckDBPyConnection):
     # Tableau complet des runs récents
     with st.expander("Voir tous les runs récents"):
         if not run_df.empty:
-            st.dataframe(run_df.head(20), use_container_width=True)
+            render_wrapped_dataframe(run_df.head(20), use_container_width=True)
         else:
             st.caption("Aucun run enregistré — les agents n'ont pas encore été exécutés.")
 
@@ -132,6 +191,8 @@ def _render_pipeline_health(st, con: duckdb.DuckDBPyConnection):
 
 def _render_summary(st, con: duckdb.DuckDBPyConnection):
     st.subheader("📊 Vue Synthèse — Scores des 3 Piliers G10")
+    _render_score_reading_guide(st)
+    _render_data_universe_note(st)
 
     scores_df = _safe_df(con, """
         SELECT DISTINCT ON (currency) currency, as_of,
@@ -143,9 +204,8 @@ def _render_summary(st, con: duckdb.DuckDBPyConnection):
         ORDER BY currency, as_of DESC
     """)
 
-    G10 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
     if not scores_df.empty:
-        scores_df = scores_df[scores_df["currency"].isin(G10)]
+        scores_df = scores_df[scores_df["currency"].isin(PILLAR_UNIVERSE)]
 
     if scores_df.empty:
         st.info("Aucun score calculé. Lancez AG5 → AG6 → AG7 → `/pillars/compute`.")
@@ -163,7 +223,7 @@ def _render_summary(st, con: duckdb.DuckDBPyConnection):
             import plotly.graph_objects as go
             pivot = scores_df.set_index("currency")[
                 ["macro_score", "valuation_score", "positioning_score"]
-            ].reindex(G10).fillna(float("nan"))
+            ].reindex(PILLAR_UNIVERSE).fillna(float("nan"))
             pivot.columns = ["P1 Macro/Flows", "P2 Valorisation", "P3 Positionnement"]
 
             fig = go.Figure(data=go.Heatmap(
@@ -181,7 +241,7 @@ def _render_summary(st, con: duckdb.DuckDBPyConnection):
                               margin=dict(l=10, r=10, t=40, b=10))
             st.plotly_chart(fig, use_container_width=True)
         except ImportError:
-            st.dataframe(scores_df.set_index("currency")[
+            render_wrapped_dataframe(scores_df.set_index("currency")[
                 ["macro_score", "valuation_score", "positioning_score"]
             ])
 
@@ -212,7 +272,7 @@ def _render_summary(st, con: duckdb.DuckDBPyConnection):
     show_cols = ["currency", "as_of", "macro_score", "valuation_score", "positioning_score",
                  "composite_score", "all_pillars_aligned", "crowded_flag"]
     show_cols = [c for c in show_cols if c in scores_df.columns]
-    st.dataframe(
+    render_wrapped_dataframe(
         scores_df[show_cols].rename(columns={
             "currency": "Devise", "as_of": "Date", "macro_score": "P1 Macro",
             "valuation_score": "P2 Valeur", "positioning_score": "P3 Position",
@@ -221,12 +281,21 @@ def _render_summary(st, con: duckdb.DuckDBPyConnection):
         }),
         use_container_width=True, hide_index=True
     )
+    with st.expander("Couverture des données par bloc", expanded=False):
+        _render_coverage_table(st, con)
 
 
 # ── Section 2 : AG5 — Détail Macro/Flows ──────────────────────────────────────
 
 def _render_ag5_macro(st, con: duckdb.DuckDBPyConnection):
     st.subheader("🌍 AG5 — Pilier 1 : Macro/Flows par Pays")
+    st.markdown(
+        """
+Le Pilier 1 mesure la **qualité fondamentale des flux macro** qui soutiennent une devise: croissance, inflation, politique monétaire et balance courante. Une devise est mieux notée quand l'économie reste robuste, que la banque centrale offre un rendement réel crédible, et que les flux externes ne créent pas de pression vendeuse structurelle.
+
+Les graphiques ne doivent pas être lus isolément. Un taux directeur élevé peut attirer du carry, mais il devient moins positif si l'inflation est hors contrôle ou si la croissance ralentit vite. La table des sous-scores permet donc de comprendre **pourquoi** le composite monte ou baisse.
+"""
+    )
 
     # Taux directeurs
     rates_df = _safe_df(con, """
@@ -245,6 +314,7 @@ def _render_ag5_macro(st, con: duckdb.DuckDBPyConnection):
 
     with col1:
         st.markdown("**Taux Directeurs Banques Centrales**")
+        st.caption("Plus le taux est élevé relativement au taux neutre estimé, plus le capital court terme est rémunéré. Attention: un taux élevé peut aussi refléter un risque inflationniste.")
         if not rates_df.empty:
             rates_sorted = rates_df.sort_values("rate_pct", ascending=False)
             try:
@@ -261,12 +331,13 @@ def _render_ag5_macro(st, con: duckdb.DuckDBPyConnection):
                 fig.update_layout(title="Taux directeurs (%)", height=280, showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
             except ImportError:
-                st.dataframe(rates_sorted[["currency", "rate_pct", "as_of"]])
+                render_wrapped_dataframe(rates_sorted[["currency", "rate_pct", "as_of"]])
         else:
             st.caption("Aucune donnée — AG5 non exécuté")
 
     with col2:
         st.markdown("**Indicateurs Macro (dernière valeur)**")
+        st.caption("Croissance et momentum renseignent le cycle; CPI mesure la pression inflationniste; balance courante mesure les flux externes structurels.")
         if not inds_df.empty:
             # Pivot : currency × indicator
             pivot_inds = inds_df.pivot_table(
@@ -280,7 +351,7 @@ def _render_ag5_macro(st, con: duckdb.DuckDBPyConnection):
                 "gdp_momentum": "Momentum PIB",
             }
             pivot_inds = pivot_inds.rename(columns=rename_map)
-            st.dataframe(pivot_inds, use_container_width=True, hide_index=True)
+            render_wrapped_dataframe(pivot_inds, use_container_width=True, hide_index=True)
 
             # Highlight la balance courante
             if "Balance CA (Mds$)" in pivot_inds.columns:
@@ -297,7 +368,7 @@ def _render_ag5_macro(st, con: duckdb.DuckDBPyConnection):
     """)
     if not sub_df.empty:
         with st.expander("Voir le détail des sous-scores Pilier 1"):
-            st.dataframe(
+            render_wrapped_dataframe(
                 sub_df.rename(columns={
                     "currency": "Devise", "as_of": "Date",
                     "macro_growth_score": "Score Croissance",
@@ -308,12 +379,27 @@ def _render_ag5_macro(st, con: duckdb.DuckDBPyConnection):
                 }),
                 use_container_width=True, hide_index=True
             )
+            st.markdown(
+                """
+- `Score Croissance`: positif si le PIB accélère ou reste au-dessus du régime neutre.
+- `Score Inflation`: positif quand l'inflation est proche de la cible; négatif en inflation excessive ou déflation.
+- `Score CB Policy`: compare le taux directeur au taux neutre estimé par devise.
+- `Score Balance CA`: excédent courant = soutien structurel; déficit important = pression vendeuse potentielle.
+"""
+            )
 
 
 # ── Section 3 : AG6 — Détail Valorisation ─────────────────────────────────────
 
 def _render_ag6_valuation(st, con: duckdb.DuckDBPyConnection):
     st.subheader("💱 AG6 — Pilier 2 : Valorisation (Carry + PPP)")
+    st.markdown(
+        """
+Le Pilier 2 répond à la question: **la devise est-elle suffisamment rémunératrice ou décotée pour justifier un biais structurel ?** Il combine le carry, qui attire les capitaux tant que le risque reste maîtrisé, et une approximation PPP, qui signale les devises potentiellement sous/surévaluées par rapport à l'inflation relative.
+
+Un score élevé ne veut pas dire "acheter immédiatement": il indique que le prix payé pour détenir la devise est plus favorable. Une devise peut rester chère ou bon marché longtemps; l'intérêt du pilier est surtout de filtrer les trades qui vont contre la valeur.
+"""
+    )
 
     val_df = _safe_df(con, """
         SELECT DISTINCT ON (currency) currency, as_of,
@@ -347,7 +433,7 @@ def _render_ag6_valuation(st, con: duckdb.DuckDBPyConnection):
             fig.update_layout(title="Carry Score par Devise", height=280, yaxis_range=[-1.1, 1.1])
             st.plotly_chart(fig, use_container_width=True)
         except ImportError:
-            st.dataframe(carry_sorted[["currency", "carry_score"]])
+            render_wrapped_dataframe(carry_sorted[["currency", "carry_score"]])
 
     with col2:
         st.markdown("**Déviation PPP (sous/surévaluation relative)**")
@@ -368,9 +454,9 @@ def _render_ag6_valuation(st, con: duckdb.DuckDBPyConnection):
             fig.update_layout(title="Déviation PPP (+ = sous-évalué)", height=280, yaxis_range=[-1.1, 1.1])
             st.plotly_chart(fig, use_container_width=True)
         except ImportError:
-            st.dataframe(ppp_sorted[["currency", "ppp_deviation"]])
+            render_wrapped_dataframe(ppp_sorted[["currency", "ppp_deviation"]])
 
-    st.dataframe(
+    render_wrapped_dataframe(
         val_df.rename(columns={
             "currency": "Devise", "as_of": "Date",
             "carry_score": "Score Carry", "ppp_deviation": "PPP Déviation",
@@ -378,12 +464,23 @@ def _render_ag6_valuation(st, con: duckdb.DuckDBPyConnection):
         }),
         use_container_width=True, hide_index=True
     )
+    with st.expander("Comment compléter le Pilier 2", expanded=False):
+        st.markdown(
+            """
+La version actuelle utilise `carry_score` et `ppp_deviation`. Pour être plus complète, il faudrait ajouter un vrai proxy REER/NEER ou un indice de taux de change effectif réel par devise. Cela permettrait de mieux distinguer une devise simplement rémunératrice d'une devise réellement décotée face à son panier commercial.
+"""
+        )
 
 
 # ── Section 4 : AG7 — COT Positionnement ──────────────────────────────────────
 
 def _render_ag7_positioning(st, con: duckdb.DuckDBPyConnection):
     st.subheader("📋 AG7 — Pilier 3 : COT Positionnement Spéculatif")
+    st.markdown(
+        """
+Le Pilier 3 mesure le **positionnement spéculatif**: quand trop d'acteurs sont déjà du même côté, le risque de squeeze ou de prise de profit augmente. Le COT est hebdomadaire, donc il ne sert pas à timer une entrée intraday; il sert à éviter de poursuivre un trade déjà saturé ou, au contraire, à repérer une devise détestée qui peut rebondir si le narratif change.
+"""
+    )
 
     # Dernière snapshot
     cot_latest = _safe_df(con, """
@@ -401,6 +498,7 @@ def _render_ag7_positioning(st, con: duckdb.DuckDBPyConnection):
     latest_date = cot_latest["report_date"].max()
     badge, msg = _freshness_badge(str(latest_date), warn_days=7, error_days=14)
     st.caption(f"Rapport COT au : {badge} {latest_date} — {msg} (données hebdomadaires CFTC)")
+    st.caption("Lecture: z-score positif = marché déjà long la devise; z-score négatif = marché short/hated. Le score P3 inverse ce signal: crowded long devient plutôt négatif, hated short devient plutôt positif.")
 
     # Graphique principal z-scores
     try:
@@ -477,7 +575,12 @@ def _render_ag7_positioning(st, con: duckdb.DuckDBPyConnection):
             "asset_mgr_short": "AssMgr Short", "net_z_score": "Z-Score 52S",
             "crowded_direction": "Direction", "positioning_score": "Score P3"
         })
-        st.dataframe(display, use_container_width=True, hide_index=True)
+        render_wrapped_dataframe(display, use_container_width=True, hide_index=True)
+        st.markdown(
+            """
+`Leveraged Money` reflète les acteurs spéculatifs rapides; `Asset Managers` reflète des positions plus institutionnelles. Le `net_spec` agrège long moins short, puis le z-score compare la position actuelle à son historique 52 semaines. Les seuils `+/-1.5` marquent les zones où le positionnement devient suffisamment extrême pour influencer le risque du trade.
+"""
+        )
 
     # Historique COT pour les 3 devises les plus extrêmes
     if not cot_latest.empty:
@@ -502,13 +605,18 @@ def _render_ag7_positioning(st, con: duckdb.DuckDBPyConnection):
                     fig.add_hline(y=-1.5, line_dash="dash", line_color="green")
                     st.plotly_chart(fig, use_container_width=True)
                 except ImportError:
-                    st.dataframe(hist_df)
+                    render_wrapped_dataframe(hist_df)
 
 
 # ── Section 5 : AG8 — Courbe des Taux ─────────────────────────────────────────
 
 def _render_ag8_rates(st, con: duckdb.DuckDBPyConnection):
     st.subheader("📈 AG8 — Courbe des Taux Souverains G10")
+    st.markdown(
+        """
+L'onglet AG8 isole la **structure de courbe souveraine**. La pente `10Y-2Y` résume l'équilibre entre politique monétaire court terme, attentes de croissance et prime de terme. Une courbe très inversée peut signaler un stress de cycle; une pentification après inversion peut marquer un changement de régime important pour la devise et les obligations.
+"""
+    )
 
     yc_df = _safe_df(con, """
         SELECT DISTINCT ON (currency) currency, as_of,
@@ -526,7 +634,7 @@ def _render_ag8_rates(st, con: duckdb.DuckDBPyConnection):
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("**Slope 10Y-2Y par Pays**")
-        st.caption("Négatif = courbe inversée → récession probable → signal steepener")
+        st.caption("Négatif = courbe inversée; retour vers le haut = pentification. Le signal steepener surveille surtout le changement de régime, pas seulement le niveau.")
         try:
             import plotly.graph_objects as go
             yc_sorted = yc_df.sort_values("slope_10y2y", ascending=True)
@@ -550,7 +658,7 @@ def _render_ag8_rates(st, con: duckdb.DuckDBPyConnection):
             )
             st.plotly_chart(fig, use_container_width=True)
         except ImportError:
-            st.dataframe(yc_df[["currency", "slope_10y2y", "rates_signal"]])
+            render_wrapped_dataframe(yc_df[["currency", "slope_10y2y", "rates_signal"]])
 
     with col2:
         st.markdown("**Yields 2Y vs. 10Y par Pays**")
@@ -595,7 +703,16 @@ def _render_ag8_rates(st, con: duckdb.DuckDBPyConnection):
         "slope_change_30d": "Δ Slope 30j", "steepening": "Pentification",
         "rates_signal": "Signal Taux"
     })
-    st.dataframe(display_yc, use_container_width=True, hide_index=True)
+    render_wrapped_dataframe(display_yc, use_container_width=True, hide_index=True)
+    with st.expander("Comment interpréter les tendances de courbe", expanded=False):
+        st.markdown(
+            """
+- Pente qui baisse: le marché price davantage de ralentissement ou de politique restrictive.
+- Pente très négative: stress de cycle; risque de récession ou de future détente monétaire.
+- Pente qui remonte depuis un niveau négatif: possible steepener; souvent associé à un changement d'anticipations sur la banque centrale ou la croissance.
+- Conséquence FX: la courbe aide à distinguer un carry encore solide d'un carry qui devient dangereux parce que le cycle se retourne.
+"""
+        )
 
     # Contexte thèse USD
     usd = yc_df[yc_df["currency"] == "USD"]
@@ -611,21 +728,30 @@ def _render_ag8_rates(st, con: duckdb.DuckDBPyConnection):
 # ── Section 6 : Historique des scores ─────────────────────────────────────────
 
 def _render_score_history(st, con: duckdb.DuckDBPyConnection):
-    st.subheader("📅 Historique des Scores — Tendance 30 Jours")
+    st.subheader("📅 Historique des Scores")
+    st.markdown(
+        """
+Cet onglet sert à vérifier la **direction de voyage** des piliers. Une photographie quotidienne peut être trompeuse; une série historique montre si un avantage macro se renforce, se tasse ou bascule. Les seuils `+0.20` et `-0.20` matérialisent la zone où le signal commence à devenir exploitable.
+"""
+    )
 
-    cutoff = (date.today() - timedelta(days=35)).isoformat()
+    window = st.radio("Fenêtre d'observation", ["7j", "30j", "90j", "all"], index=1, horizontal=True, key="score_hist_window")
+    where_clause = ""
+    if window != "all":
+        days = int(window.replace("j", ""))
+        cutoff = (date.today() - timedelta(days=days + 2)).isoformat()
+        where_clause = f"WHERE as_of >= '{cutoff}'"
     hist_df = _safe_df(con,
         f"""SELECT currency, as_of, macro_score, valuation_score, positioning_score, composite_score
             FROM pillars.currency_scores
-            WHERE as_of >= '{cutoff}'
+            {where_clause}
             ORDER BY currency, as_of""")
 
     if hist_df.empty:
         st.info("Historique non disponible — les agents doivent avoir tourné pendant plusieurs jours.")
         return
 
-    G10 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
-    currencies_with_data = [c for c in G10 if c in hist_df["currency"].unique()]
+    currencies_with_data = [c for c in PILLAR_UNIVERSE if c in hist_df["currency"].unique()]
     if not currencies_with_data:
         st.info("Aucune devise avec historique")
         return
@@ -633,7 +759,7 @@ def _render_score_history(st, con: duckdb.DuckDBPyConnection):
     selected = st.multiselect(
         "Devises à afficher",
         options=currencies_with_data,
-        default=currencies_with_data[:4],
+        default=currencies_with_data,
         key="score_hist_select"
     )
     metric = st.selectbox(
@@ -646,17 +772,49 @@ def _render_score_history(st, con: duckdb.DuckDBPyConnection):
     if not filtered.empty:
         try:
             import plotly.express as px
-            fig = px.line(
-                filtered, x="as_of", y=metric, color="currency",
-                title=f"Historique {metric} par devise",
-                height=300,
-            )
-            fig.add_hline(y=0.20, line_dash="dot", line_color="green", annotation_text="Seuil alignement")
-            fig.add_hline(y=-0.20, line_dash="dot", line_color="red")
-            fig.update_yaxes(range=[-1.1, 1.1])
-            st.plotly_chart(fig, use_container_width=True)
+            chart_col, guide_col = st.columns([1.15, 0.85])
+            with chart_col:
+                fig = px.line(
+                    filtered, x="as_of", y=metric, color="currency",
+                    title=f"Historique {metric} par devise - {window}",
+                    height=820,
+                    markers=True,
+                )
+                fig.add_hline(y=0.20, line_dash="dot", line_color="green", annotation_text="Seuil bullish")
+                fig.add_hline(y=-0.20, line_dash="dot", line_color="red", annotation_text="Seuil bearish")
+                fig.add_hline(y=0.0, line_dash="dash", line_color="rgba(255,255,255,0.45)")
+                fig.update_yaxes(range=[-1.1, 1.1])
+                fig.update_layout(
+                    margin=dict(l=10, r=10, t=52, b=10),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            with guide_col:
+                st.markdown("#### Interprétation")
+                st.markdown(
+                    """
+- Ligne qui monte: la devise gagne du soutien sur la métrique sélectionnée.
+- Ligne qui baisse: le soutien se détériore ou le risque structurel augmente.
+- Passage au-dessus de `+0.20`: signal positif exploitable si les autres piliers confirment.
+- Passage sous `-0.20`: signal négatif exploitable ou alerte de dégradation.
+- Lignes plates: soit stabilité réelle, soit manque de nouvelles observations dans les agents.
+"""
+                )
+                st.markdown("#### Métriques")
+                render_wrapped_dataframe(
+                    pd.DataFrame(
+                        [
+                            {"Métrique": "composite_score", "Lecture": "Moyenne des 3 piliers; meilleur résumé multi-horizon."},
+                            {"Métrique": "macro_score", "Lecture": "Croissance, inflation, politique monétaire, balance courante."},
+                            {"Métrique": "valuation_score", "Lecture": "Carry + PPP; indique si la devise est rémunératrice ou décotée."},
+                            {"Métrique": "positioning_score", "Lecture": "Signal contrarian issu du COT; positif quand le marché est trop short."},
+                        ]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
         except ImportError:
-            st.dataframe(filtered[["currency", "as_of", metric]])
+            render_wrapped_dataframe(filtered[["currency", "as_of", metric]])
 
 
 # ── Entry point ────────────────────────────────────────────────────────────────

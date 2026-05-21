@@ -6,6 +6,8 @@ Variables d'environnement :
   IBKR_DRY_RUN       "true" → log sans envoyer        (défaut: "true")
   IBKR_SSL_VERIFY    "false" → ignore cert auto-signé  (défaut: "false")
   IBKR_ACCOUNT_ID    ID compte IBKR (optionnel, auto-détecté sinon)
+  IBKR_AUTO_REAUTH_ENABLED  "true" → reinit /iserver/auth/ssodh/init si possible
+  IBKR_AUTO_REAUTH_COMPETE  "false" → true deconnecte une session concurrente
 
 Endpoints exposés à n8n :
   GET  /health                  → statut session IBKR
@@ -17,6 +19,7 @@ Endpoints exposés à n8n :
   GET  /account/summary         → synthèse compte IBKR
   GET  /account/ledger          → cash balances réelles par devise
   POST /auth/tickle             → keepalive manuel
+  POST /auth/initialize         → tentative de reinit brokerage session
 """
 
 import asyncio
@@ -45,14 +48,43 @@ from cpapi_client import CPAPIClient, CPAPIError
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("ibkr_broker")
 
+
+def _env_int(name: str, default: int, minimum: int | None = None) -> int:
+    raw = os.environ.get(name, "")
+    try:
+        value = int(raw) if raw else default
+    except ValueError:
+        logger.warning("Invalid integer for %s=%r, using %s", name, raw, default)
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
 # ─── Config ──────────────────────────────────────────────────────────────────
 GATEWAY_URL = os.environ.get("IBKR_GATEWAY_URL", "https://ibkr-gateway:5000")
 DRY_RUN = os.environ.get("IBKR_DRY_RUN", "true").lower() != "false"
 SSL_VERIFY = os.environ.get("IBKR_SSL_VERIFY", "false").lower() == "true"
 ACCOUNT_ID_OVERRIDE = os.environ.get("IBKR_ACCOUNT_ID", "")
+KEEPALIVE_INTERVAL_SECONDS = _env_int("IBKR_KEEPALIVE_INTERVAL_SECONDS", 55, minimum=15)
+AUTO_REAUTH_ENABLED = os.environ.get("IBKR_AUTO_REAUTH_ENABLED", "true").lower() != "false"
+AUTO_REAUTH_COMPETE = os.environ.get("IBKR_AUTO_REAUTH_COMPETE", "false").lower() == "true"
 
 # ─── Global client ───────────────────────────────────────────────────────────
 _cpapi: CPAPIClient | None = None
+_session_monitor: dict[str, Any] = {
+    "last_check_at": None,
+    "last_tickle_at": None,
+    "last_tickle_ok": None,
+    "last_tickle_error": None,
+    "last_auth_status": None,
+    "last_reauth_at": None,
+    "last_reauth_ok": None,
+    "last_reauth_error": None,
+    "reauth_attempts": 0,
+    "manual_login_required": False,
+    "message": "Session monitor not started",
+}
 
 
 def get_client() -> CPAPIClient:
@@ -61,17 +93,125 @@ def get_client() -> CPAPIClient:
     return _cpapi
 
 
+def _extract_auth_status(payload: Any) -> dict | None:
+    if not isinstance(payload, dict):
+        return None
+    nested = payload.get("iserver")
+    if isinstance(nested, dict):
+        auth_status = nested.get("authStatus")
+        if isinstance(auth_status, dict):
+            return auth_status
+    if {"authenticated", "connected"}.intersection(payload.keys()):
+        return payload
+    return None
+
+
+def _is_authenticated(status: dict | None) -> bool:
+    return bool(status and status.get("authenticated") and status.get("connected"))
+
+
+def _needs_manual_login(status: dict | None, error: str | None = None) -> bool:
+    if error:
+        lowered = error.lower()
+        return any(marker in lowered for marker in ("401", "unauthorized", "login", "sso", "session"))
+    return bool(status and not status.get("connected"))
+
+
+def _remember_auth_status(status: dict | None) -> None:
+    if status is not None:
+        _session_monitor["last_auth_status"] = status
+        _session_monitor["manual_login_required"] = _needs_manual_login(status)
+
+
+async def _initialize_brokerage_session(client: CPAPIClient, reason: str) -> dict:
+    _session_monitor["reauth_attempts"] = int(_session_monitor.get("reauth_attempts") or 0) + 1
+    _session_monitor["last_reauth_at"] = now_iso()
+    try:
+        response = await client.initialize_brokerage_session(
+            publish=True,
+            compete=AUTO_REAUTH_COMPETE,
+        )
+        status = _extract_auth_status(response) or response
+        _remember_auth_status(status if isinstance(status, dict) else None)
+        ok = _is_authenticated(status if isinstance(status, dict) else None)
+        _session_monitor["last_reauth_ok"] = ok
+        _session_monitor["last_reauth_error"] = None
+        _session_monitor["message"] = (
+            f"Brokerage session reinitialized ({reason})"
+            if ok
+            else f"Brokerage session reinit returned unauthenticated ({reason})"
+        )
+        logger.info("IBKR brokerage session reinit | reason=%s | ok=%s", reason, ok)
+        return {"ok": ok, "response": response}
+    except Exception as exc:
+        error = str(exc)
+        _session_monitor["last_reauth_ok"] = False
+        _session_monitor["last_reauth_error"] = error
+        _session_monitor["manual_login_required"] = _needs_manual_login(None, error)
+        _session_monitor["message"] = (
+            "Manual Client Portal login required"
+            if _session_monitor["manual_login_required"]
+            else f"Brokerage session reinit failed: {error}"
+        )
+        logger.warning("IBKR brokerage session reinit failed | reason=%s | error=%s", reason, error)
+        return {"ok": False, "error": error}
+
+
+async def _maintain_ibkr_session(client: CPAPIClient, reason: str) -> dict:
+    _session_monitor["last_check_at"] = now_iso()
+    try:
+        tickle_response = await client.tickle()
+        _session_monitor["last_tickle_at"] = now_iso()
+        _session_monitor["last_tickle_ok"] = True
+        _session_monitor["last_tickle_error"] = None
+        status = _extract_auth_status(tickle_response)
+        if status is None:
+            status = await client.auth_status()
+        _remember_auth_status(status)
+        if _is_authenticated(status):
+            _session_monitor["message"] = "IBKR session authenticated"
+            return {"ok": True, "authenticated": True, "tickle": tickle_response, "status": status}
+        if AUTO_REAUTH_ENABLED and status.get("connected"):
+            reauth = await _initialize_brokerage_session(client, reason)
+            return {
+                "ok": bool(reauth.get("ok")),
+                "authenticated": bool(reauth.get("ok")),
+                "tickle": tickle_response,
+                "status": _session_monitor.get("last_auth_status"),
+                "reauth": reauth,
+            }
+        _session_monitor["manual_login_required"] = _needs_manual_login(status)
+        _session_monitor["message"] = (
+            "Manual Client Portal login required"
+            if _session_monitor["manual_login_required"]
+            else "IBKR session is connected but not authenticated"
+        )
+        return {"ok": False, "authenticated": False, "tickle": tickle_response, "status": status}
+    except Exception as exc:
+        error = str(exc)
+        _session_monitor["last_tickle_ok"] = False
+        _session_monitor["last_tickle_error"] = error
+        _session_monitor["manual_login_required"] = _needs_manual_login(None, error)
+        _session_monitor["message"] = (
+            "Manual Client Portal login required"
+            if _session_monitor["manual_login_required"]
+            else f"IBKR keepalive failed: {error}"
+        )
+        logger.warning("IBKR keepalive failed | reason=%s | error=%s", reason, error)
+        return {"ok": False, "authenticated": False, "error": error}
+
+
 # ─── Background keepalive ─────────────────────────────────────────────────────
 async def _keepalive_loop():
-    """Envoie un tickle IBKR toutes les 55 secondes pour maintenir la session."""
+    """Maintient la session IBKR et tente la reinit brokerage quand possible."""
     while True:
-        await asyncio.sleep(55)
         try:
             client = get_client()
-            await client.tickle()
-            logger.debug("Tickle OK")
+            result = await _maintain_ibkr_session(client, "background_keepalive")
+            logger.debug("IBKR keepalive result: %s", result.get("message") or result.get("ok"))
         except Exception as exc:
-            logger.warning("Tickle failed: %s", exc)
+            logger.warning("IBKR keepalive loop failed: %s", exc)
+        await asyncio.sleep(max(15, KEEPALIVE_INTERVAL_SECONDS))
 
 
 @asynccontextmanager
@@ -99,6 +239,7 @@ class FXOrder(BaseModel):
     client_order_id: str | None = None  # devient cOID pour idempotence IBKR
     order_type: str = "MKT"
     limit_price: float | None = None
+    is_currency_conversion: bool = False
 
 
 class EquityOrder(BaseModel):
@@ -129,7 +270,7 @@ def now_iso() -> str:
 
 def normalize_order_type(value: str) -> str:
     text = str(value or "MKT").strip().upper()
-    if text == "MARKET":
+    if text in {"MARKET", "CASH_CONVERSION"}:
         return "MKT"
     if text == "LIMIT":
         return "LMT"
@@ -237,19 +378,32 @@ async def health() -> dict:
     client = get_client()
     try:
         status = await client.auth_status()
+        _remember_auth_status(status)
         authenticated = bool(status.get("authenticated") and status.get("connected"))
         return {
             "dry_run": DRY_RUN,
             "gateway_url": GATEWAY_URL,
             "authenticated": authenticated,
             "ibkr_status": status,
+            "session_monitor": _session_monitor,
+            "auto_reauth_enabled": AUTO_REAUTH_ENABLED,
+            "auto_reauth_compete": AUTO_REAUTH_COMPETE,
         }
     except Exception as exc:
+        _session_monitor["manual_login_required"] = _needs_manual_login(None, str(exc))
+        _session_monitor["message"] = (
+            "Manual Client Portal login required"
+            if _session_monitor["manual_login_required"]
+            else f"IBKR auth status failed: {exc}"
+        )
         return {
             "dry_run": DRY_RUN,
             "gateway_url": GATEWAY_URL,
             "authenticated": False,
             "error": str(exc),
+            "session_monitor": _session_monitor,
+            "auto_reauth_enabled": AUTO_REAUTH_ENABLED,
+            "auto_reauth_compete": AUTO_REAUTH_COMPETE,
         }
 
 
@@ -258,10 +412,19 @@ async def manual_tickle() -> dict:
     """Keepalive manuel de la session IBKR."""
     client = get_client()
     try:
-        r = await client.tickle()
-        return {"ok": True, "response": r}
+        return await _maintain_ibkr_session(client, "manual_tickle")
     except CPAPIError as exc:
         raise HTTPException(502, f"Tickle failed: {exc}") from exc
+
+
+@app.post("/auth/initialize")
+async def manual_initialize_brokerage_session() -> dict:
+    """Tente de reinitialiser la session brokerage sans relogin navigateur."""
+    client = get_client()
+    result = await _initialize_brokerage_session(client, "manual_endpoint")
+    if not result.get("ok"):
+        raise HTTPException(502, result)
+    return result
 
 
 @app.get("/fills")
@@ -484,9 +647,10 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
             "quantity": quantity,
             "tif": "DAY",
             "cOID": order.client_order_id or order.order_id,
-            # Explicitly mark AG1-FX orders as speculative spot-FX trades, not
-            # cash-conversion tickets. IBKR conversion orders use isCcyConv=true.
-            "isCcyConv": False,
+            # Target AG1-FX orders are speculative spot-FX trades. Prefunding
+            # legs are explicit cash conversions so they do not create a
+            # leveraged non-base-currency borrow before the target order.
+            "isCcyConv": bool(order.is_currency_conversion),
         }
         if ibkr_payload["orderType"] == "LMT" and order.limit_price:
             ibkr_payload["price"] = order.limit_price

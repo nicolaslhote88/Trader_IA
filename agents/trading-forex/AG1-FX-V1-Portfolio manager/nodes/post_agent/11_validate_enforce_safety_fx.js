@@ -9,6 +9,13 @@ function envNum(name, fallback) {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
+function envBool(name, fallback) {
+  const env = typeof $env !== 'undefined' ? $env : {};
+  const raw = env[name];
+  if (raw == null || raw === '') return fallback;
+  return ['1', 'true', 'yes', 'y', 'on'].includes(String(raw).trim().toLowerCase());
+}
+
 function pairMeta(brief, pair) {
   return (brief.universe?.metadata || []).find((x) => x.pair === pair) || { pair, base_ccy: pair.slice(0, 3), quote_ccy: pair.slice(3), pip_size: pair.endsWith('JPY') ? 0.01 : 0.0001 };
 }
@@ -74,6 +81,18 @@ function closeSideForLot(lot) {
   return '';
 }
 
+function signalSign(v, threshold = 0.20) {
+  const n = num(v, 0);
+  if (Math.abs(n) < threshold) return 0;
+  return n > 0 ? 1 : -1;
+}
+
+function sideToCubeDirection(side) {
+  if (side === 'buy_base') return 'BUY_BASE';
+  if (side === 'sell_base') return 'SELL_BASE';
+  return 'WAIT';
+}
+
 function llmDecisionProfile(ctx, pair) {
   const p = String(pair || '').toUpperCase();
   const compact = ctx.llm_brief || {};
@@ -106,6 +125,15 @@ function applySizeCap(order, sizeCapPct, equity, px, quoteToEurRate, reason) {
   order.risk_check_notes = `${order.risk_check_notes || ''} [Risk sizing: capped to ${(sizeCapPct * 100).toFixed(1)}% equity for ${reason}.]`.trim();
 }
 
+function cashOnlyBrokerOpenAllowed(pair, side, baseCcy) {
+  const p = String(pair || '').toUpperCase();
+  const b = String(baseCcy || 'EUR').toUpperCase();
+  if (p.length !== 6) return false;
+  const base = p.slice(0, 3);
+  const quote = p.slice(3, 6);
+  return (side === 'sell_base' && base === b) || (side === 'buy_base' && quote === b);
+}
+
 const j = $json || {};
 const brief = j.brief || {};
 const cfg = brief.config || {};
@@ -119,10 +147,103 @@ const maxPairPct = num(limits.max_pair_pct, 0.20);
 const maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);
 const maxDd = num(limits.max_daily_drawdown_pct, 0.05);
 const reducedSizeMaxPairPct = Math.min(maxPairPct, envNum('AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT', 0.10));
+const cashOnlyBaseCcyMode = envBool('AG1_FX_CASH_ONLY_BASE_CCY_MODE', true);
+const prefundNonEurFx = envBool('AG1_FX_PREFUND_NON_EUR_FX', true);
+const prefundBufferPct = Math.max(0, envNum('AG1_FX_PREFUND_BUFFER_PCT', 0.005));
+const portfolioBaseCcy = String(cfg.portfolio_base_ccy || (typeof $env !== 'undefined' ? $env.AG1_FX_PORTFOLIO_BASE_CCY : '') || 'EUR').toUpperCase();
 const openLots = portfolio.open_lots || [];
 const projected = [];
 const orders = [];
 const alerts = [];
+
+function ibkrCashByCurrency(ctx) {
+  return ctx.ibkr_reconciliation?.cash_balances?.ibkr_cash_by_currency
+    || ctx.portfolio_state?.reconciliation?.cash_balances?.ibkr_cash_by_currency
+    || ctx.brief?.portfolio_state?.reconciliation?.cash_balances?.ibkr_cash_by_currency
+    || {};
+}
+
+function fundingNeedForOrder(order, px) {
+  const pair = String(order.pair || '').toUpperCase();
+  if (pair.length !== 6) return null;
+  const base = pair.slice(0, 3);
+  const quote = pair.slice(3, 6);
+  const unitsBase = num(order.size_lots, 0) * 100000;
+  if (unitsBase <= 0 || px <= 0) return null;
+  if (order.side === 'sell_base') {
+    return { currency: base, units: unitsBase, reason: `sell ${base} in ${pair}` };
+  }
+  if (order.side === 'buy_base') {
+    return { currency: quote, units: unitsBase * px, reason: `sell ${quote} in ${pair}` };
+  }
+  return null;
+}
+
+function fundingPairForCurrency(ccy) {
+  const target = String(ccy || '').toUpperCase();
+  if (!target || target === portfolioBaseCcy) return null;
+  const direct = `${portfolioBaseCcy}${target}`;
+  const inverse = `${target}${portfolioBaseCcy}`;
+  if (universe.has(direct) && lastPrice(brief, direct) > 0) {
+    return { pair: direct, side: 'sell_base', px: lastPrice(brief, direct) };
+  }
+  if (universe.has(inverse) && lastPrice(brief, inverse) > 0) {
+    return { pair: inverse, side: 'buy_base', px: lastPrice(brief, inverse) };
+  }
+  return null;
+}
+
+function buildPrefundingOrder(targetOrder, need, availableUnits) {
+  if (!need || need.currency === portfolioBaseCcy) return null;
+  const deficitUnits = Math.max(0, need.units * (1 + prefundBufferPct) - Math.max(0, availableUnits));
+  if (deficitUnits <= 1e-6) return null;
+  const funding = fundingPairForCurrency(need.currency);
+  if (!funding) {
+    targetOrder.rejection_reason = 'PREFUNDING_PAIR_UNAVAILABLE';
+    targetOrder.risk_check_notes = `${targetOrder.risk_check_notes || ''} [Prefunding unavailable: no ${portfolioBaseCcy}/${need.currency} conversion pair with price.]`.trim();
+    return null;
+  }
+  const fundingMeta = pairMeta(brief, funding.pair);
+  const fundingSizeLots = funding.side === 'buy_base'
+    ? deficitUnits / 100000
+    : deficitUnits / Math.max(1, 100000 * funding.px);
+  const fundingQuoteToEur = quoteToEur(brief, fundingMeta.quote_ccy);
+  const fundingNotionalQuote = Math.abs(fundingSizeLots * 100000 * funding.px);
+  const fundingNotionalEur = Math.abs(fundingNotionalQuote * fundingQuoteToEur);
+  const fundingOrder = {
+    ...targetOrder,
+    order_id: `${targetOrder.order_id}_FUND`,
+    client_order_id: `${targetOrder.client_order_id}::FUND`,
+    pair: funding.pair,
+    side: funding.side,
+    order_type: 'cash_conversion',
+    size_lots: fundingSizeLots,
+    notional_quote: fundingNotionalQuote,
+    notional_eur: fundingNotionalEur,
+    limit_price: null,
+    stop_loss_price: null,
+    take_profit_price: null,
+    status: 'pending',
+    rejection_reason: '',
+    risk_check_passed: true,
+    risk_check_notes: `Prefund ${need.currency} via ${funding.pair} before ${targetOrder.pair}: ${need.reason}.`,
+    decision: 'cash_prefund',
+    horizon: 'intraday',
+    lot_id_to_close: '',
+    is_currency_conversion: true,
+    funding_for_order_id: targetOrder.order_id,
+    prefund_currency: need.currency,
+    prefund_required_units: need.units,
+    prefund_available_units: availableUnits,
+    prefund_deficit_units: deficitUnits,
+  };
+  targetOrder.requires_funding_order_id = fundingOrder.order_id;
+  targetOrder.prefund_currency = need.currency;
+  targetOrder.prefund_required_units = need.units;
+  targetOrder.prefund_available_units = availableUnits;
+  targetOrder.risk_check_notes = `${targetOrder.risk_check_notes || ''} [Prefunding: ${fundingOrder.order_id} buys ${need.currency} before target order.]`.trim();
+  return fundingOrder;
+}
 
 let killSwitch = Boolean(cfg.kill_switch_active);
 const drawdownDayFrac = num(portfolio.drawdown_day_frac, num(portfolio.drawdown_day_pct, 0));
@@ -200,11 +321,19 @@ for (const d of decisions) {
   const quoteToEurRate = quoteToEur(brief, meta.quote_ccy);
   const profile = action.startsWith('open_') ? llmDecisionProfile(j, pair) : {};
   const tradePermission = String(profile.trade_permission || 'ALLOW').toUpperCase();
+  const cube = profile.cube || {};
   const effectivePairPct = tradePermission === 'REDUCED_SIZE_ONLY' ? reducedSizeMaxPairPct : maxPairPct;
   if (action.startsWith('open_')) {
     base.trade_permission = tradePermission;
     base.decision_alignment = profile.decision_alignment || '';
     base.preferred_action = profile.preferred_action || '';
+    base.cube_check = {
+      zone: cube.cube_zone || '',
+      x_technical: cube.x_technical,
+      y_news_event: cube.y_news_event,
+      z_three_pillars: cube.z_three_pillars,
+      action_hint: cube.portfolio_action_hint,
+    };
   }
   let sizeLots = num(d.size_lots, 0);
   if (sizeLots <= 0 && num(d.size_pct_equity, 0) > 0) {
@@ -216,7 +345,13 @@ for (const d of decisions) {
   base.notional_eur = Math.abs(base.notional_quote * quoteToEurRate);
 
   if (action.startsWith('open_')) {
-    if (tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
+    if (!base.rejection_reason && tradePermission === 'NO_NEW_POSITION') base.rejection_reason = 'TRADE_PERMISSION_NO_NEW_POSITION';
+    if (!base.rejection_reason && cube.structural_data_complete === false) base.rejection_reason = 'CUBE_STRUCTURAL_DATA_INCOMPLETE';
+    if (!base.rejection_reason && cube.crowded_warning) base.rejection_reason = 'CUBE_CROWDED_WARNING';
+    if (!base.rejection_reason && num(cube.event_risk_score, 0) >= 0.75) base.rejection_reason = 'CUBE_EVENT_RISK_TOO_HIGH';
+    if (!base.rejection_reason && !String(cube.cube_zone || '').startsWith('convergence_multi_horizon')) base.rejection_reason = 'CUBE_NOT_MULTI_HORIZON_CONVERGENCE';
+    if (!base.rejection_reason && cube.cube_direction && cube.cube_direction !== sideToCubeDirection(side)) base.rejection_reason = 'CUBE_DIRECTION_MISMATCH';
+    if (!base.rejection_reason && signalSign(cube.z_three_pillars) === 0) base.rejection_reason = 'CUBE_Z_TOO_WEAK';
     if (!base.rejection_reason && sizeLots <= 0) base.rejection_reason = 'INVALID_SIZE';
     if (!base.rejection_reason && tradePermission === 'REDUCED_SIZE_ONLY') {
       applySizeCap(base, reducedSizeMaxPairPct, equity, px, quoteToEurRate, 'REDUCED_SIZE_ONLY');
@@ -237,6 +372,24 @@ for (const d of decisions) {
     if (!base.rejection_reason && action === 'open_short' && base.stop_loss_price && base.stop_loss_price <= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';
     if (!base.rejection_reason && action === 'open_short' && base.take_profit_price && base.take_profit_price >= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';
     if (!base.rejection_reason) {
+      let fundingOrder = null;
+      if (cashOnlyBaseCcyMode && !cashOnlyBrokerOpenAllowed(pair, side, portfolioBaseCcy)) {
+        if (!prefundNonEurFx) {
+          base.rejection_reason = `IBKR_CASH_ONLY_${portfolioBaseCcy}_LEG_REQUIRED`;
+          base.risk_check_notes = `${base.risk_check_notes || ''} [Broker guard: live IBKR paper account rejects new FX orders that borrow non-${portfolioBaseCcy} currency.]`.trim();
+        } else {
+          const need = fundingNeedForOrder(base, px);
+          const available = num(ibkrCashByCurrency(j)[need?.currency], 0);
+          fundingOrder = buildPrefundingOrder(base, need, available);
+        }
+      }
+      if (base.rejection_reason) {
+        orders.push(base);
+        continue;
+      }
+      if (fundingOrder) {
+        orders.push(fundingOrder);
+      }
       base.status = 'pending';
       base.risk_check_passed = true;
       projected.push(base);

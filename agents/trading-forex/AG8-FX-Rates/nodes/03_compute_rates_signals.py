@@ -94,7 +94,7 @@ try:
                          slope_change_30d = EXCLUDED.slope_change_30d,
                          steepening = EXCLUDED.steepening,
                          rates_signal = EXCLUDED.rates_signal,
-                         updated_at = CURRENT_TIMESTAMP""",
+                         updated_at = now()""",
                     [today, s["currency"], s["yield_2y_pct"], s["yield_10y_pct"],
                      s["slope_10y2y"], s["slope_change_30d"], s["steepening"], s["rates_signal"]],
                 )

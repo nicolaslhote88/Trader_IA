@@ -24,10 +24,33 @@ const maxDailyDd = Number(cfg.max_daily_drawdown_pct || 0.05);
 const killSwitch = Boolean(cfg.kill_switch_active);
 const PILLAR_THRESHOLD = Number(j.three_pillars_threshold || 0.20);
 const COT_CROWDED_THRESHOLD = 1.5;
+const EVENT_RISK_BLOCK_THRESHOLD = Number(j.cube_event_risk_block_threshold || 0.75);
 
 const validated = [];
 const rejected = [];
 const warnings = [];
+
+function signalSign(v, threshold = PILLAR_THRESHOLD) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || Math.abs(n) < threshold) return 0;
+  return n > 0 ? 1 : -1;
+}
+
+function sideSign(side) {
+  if (side === 'buy_base') return 1;
+  if (side === 'sell_base') return -1;
+  return 0;
+}
+
+function cubeDirectionMatchesSide(pairSignal, side) {
+  const wanted = sideSign(side);
+  const z = signalSign(pairSignal.z_three_pillars);
+  return wanted !== 0 && z !== 0 && wanted === z;
+}
+
+function isCubeConvergence(pairSignal) {
+  return String(pairSignal.cube_zone || '').startsWith('convergence_multi_horizon');
+}
 
 // Déviation drawdown quotidien
 const navToday = Number((j.portfolio_state || {}).nav_eur || capitalEur);
@@ -90,6 +113,8 @@ for (const action of actions) {
     const pairSignal = byPair[pair] || {};
     const allAligned = pairSignal.all_three_pillars_aligned;
     const crowdedWarning = pairSignal.crowded_warning;
+    const eventRisk = Number(pairSignal.event_risk_score || 0);
+    const structuralComplete = pairSignal.structural_data_complete !== false;
 
     // Bloquer si crowded warning sur la paire
     if (crowdedWarning && intent === 'OPEN') {
@@ -98,29 +123,55 @@ for (const action of actions) {
       continue;
     }
 
-    // Pour OPEN : requérir alignement des 3 piliers
-    if (intent === 'OPEN' && !allAligned) {
+    if (!structuralComplete) {
+      rejected.push({ ...action, reject_reason: 'CUBE_STRUCTURAL_DATA_INCOMPLETE', pair_signal: pairSignal });
+      warnings.push(`REJECTED_CUBE_INCOMPLETE: ${pair} — axe Z trois piliers incomplet`);
+      continue;
+    }
+
+    if (eventRisk >= EVENT_RISK_BLOCK_THRESHOLD && intent === 'OPEN') {
+      rejected.push({ ...action, reject_reason: 'CUBE_EVENT_RISK_TOO_HIGH', pair_signal: pairSignal });
+      warnings.push(`REJECTED_EVENT_RISK: ${pair} — event risk ${eventRisk.toFixed(2)} trop élevé`);
+      continue;
+    }
+
+    // Pour OPEN : requérir convergence du cube dans le sens demandé.
+    if (intent === 'OPEN' && (!allAligned || !isCubeConvergence(pairSignal) || !cubeDirectionMatchesSide(pairSignal, side))) {
       // Exception : si données piliers non disponibles, autoriser avec warning
       const dataAvailable = (j.three_pillars || {}).data_available;
       if (dataAvailable) {
-        rejected.push({ ...action, reject_reason: 'THREE_PILLARS_NOT_ALIGNED', pair_signal: pairSignal });
-        warnings.push(`REJECTED_PILLARS: ${pair} — 3 piliers non alignés (macro:${pairSignal.macro_signal}, val:${pairSignal.valuation_signal}, pos:${pairSignal.positioning_signal})`);
+        rejected.push({ ...action, reject_reason: 'CUBE_NOT_MULTI_HORIZON_CONVERGENCE', pair_signal: pairSignal });
+        warnings.push(`REJECTED_CUBE: ${pair} — cube non convergent dans le sens demandé (zone:${pairSignal.cube_zone}, x:${pairSignal.x_technical}, y:${pairSignal.y_news_event}, z:${pairSignal.z_three_pillars})`);
         continue;
       } else {
         warnings.push(`WARNING_NO_PILLAR_DATA: ${pair} — données macro non disponibles, ordre passé sans vérification piliers`);
       }
     }
 
-    // INCREASE contrarian : autoriser si prix baisse ET piliers intacts (même non-parfaitement alignés)
+    // INCREASE contrarian : autoriser uniquement si l'axe Z reste dans le sens de la position.
     if (intent === 'INCREASE') {
-      const pairMacro = Math.abs(pairSignal.macro_signal || 0);
-      const pairVal = Math.abs(pairSignal.valuation_signal || 0);
-      if (pairMacro < PILLAR_THRESHOLD && pairVal < PILLAR_THRESHOLD) {
-        warnings.push(`INCREASE_WEAK_PILLARS: ${pair} — renforcement avec piliers faibles, vérifier thèse`);
+      if (!cubeDirectionMatchesSide(pairSignal, side)) {
+        rejected.push({ ...action, reject_reason: 'CUBE_Z_NOT_ALIGNED_FOR_INCREASE', pair_signal: pairSignal });
+        warnings.push(`REJECTED_INCREASE_Z: ${pair} — Z trois piliers n'est pas aligné avec ${side}`);
+        continue;
+      }
+      if (eventRisk >= EVENT_RISK_BLOCK_THRESHOLD) {
+        warnings.push(`INCREASE_EVENT_RISK: ${pair} — renforcement validé mais event risk élevé (${eventRisk.toFixed(2)}), taille prudente requise`);
       }
     }
 
-    validated.push({ ...action, validated: true, three_pillars_check: allAligned ? 'passed' : 'bypassed' });
+    validated.push({
+      ...action,
+      validated: true,
+      three_pillars_check: allAligned ? 'passed' : 'bypassed',
+      cube_check: {
+        zone: pairSignal.cube_zone,
+        x_technical: pairSignal.x_technical,
+        y_news_event: pairSignal.y_news_event,
+        z_three_pillars: pairSignal.z_three_pillars,
+        action_hint: pairSignal.portfolio_action_hint,
+      },
+    });
     continue;
   }
 

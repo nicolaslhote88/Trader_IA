@@ -190,6 +190,8 @@ def fill_from_ibkr(order):
         "filled_at": filled_at,
         "fill_source": "ibkr_confirmed",
         "lot_id_to_close": order.get("lot_id_to_close") or "",
+        "is_currency_conversion": bool(order.get("is_currency_conversion")),
+        "funding_for_order_id": order.get("funding_for_order_id") or "",
     }
 
 
@@ -226,6 +228,8 @@ if dry_run:
             "filled_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"),
             "fill_source": "simulated_yfinance",
             "lot_id_to_close": o.get("lot_id_to_close") or "",
+            "is_currency_conversion": bool(o.get("is_currency_conversion")),
+            "funding_for_order_id": o.get("funding_for_order_id") or "",
         })
 else:
     for o in orders:

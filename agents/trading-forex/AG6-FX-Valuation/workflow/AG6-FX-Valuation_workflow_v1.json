@@ -1,0 +1,153 @@
+{
+  "id": "AG6FXValuationPillarsV1",
+  "name": "AG6-FX-Valuation",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "15 3 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -920,
+        -120
+      ],
+      "id": "schedule",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -920,
+        80
+      ],
+      "id": "manual",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "// AG6-FX-Valuation — Init Run\n// Pilier 2 : Valorisation des devises (Carry, PPP)\nconst runId = `AG6VAL_${new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)}`;\n\nreturn [{\n  json: {\n    run_id: runId,\n    as_of: new Date().toISOString(),\n    macro_api_url: $env.MACRO_DATA_API_URL || 'http://macro-data-api:8081',\n    macro_duckdb_path: $env.MACRO_DUCKDB_PATH || '/files/duckdb/macro_data.duckdb',\n  },\n}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -680,
+        -20
+      ],
+      "id": "01-init-run",
+      "name": "01 Init Run"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"\nAG6-FX-Valuation — Pilier 2 : Fetch des données de valorisation.\nRécupère les taux directeurs et CPI historiques depuis macro-data-api.\n\"\"\"\nimport os\nimport urllib.request\nimport json\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\napi_url = ctx.get(\"macro_api_url\", os.environ.get(\"MACRO_DATA_API_URL\", \"http://macro-data-api:8081\"))\n\nerror = None\npolicy_rates = []\ncpi_history = []\n\ntry:\n    # Taux directeurs\n    with urllib.request.urlopen(f\"{api_url}/macro/policy_rates\", timeout=15) as resp:\n        policy_rates = json.loads(resp.read())\nexcept Exception as exc:\n    error = f\"policy_rates: {exc}\"\n\ntry:\n    # Indicateurs macro (inclut CPI)\n    with urllib.request.urlopen(f\"{api_url}/pillars/scores\", timeout=15) as resp:\n        existing_scores = json.loads(resp.read())\nexcept Exception as exc:\n    existing_scores = []\n\nreturn [{\"json\": {\n    **ctx,\n    \"policy_rates\": policy_rates,\n    \"existing_pillar_scores\": existing_scores,\n    \"fetch_error\": error,\n}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        -20
+      ],
+      "id": "02-fetch-valuation-data",
+      "name": "02 Fetch Valuation Data"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"\nAG6-FX-Valuation — Pilier 2 : Calcul des scores de valorisation.\nCarry (différentiel de taux) + PPP (déviation de parité de pouvoir d'achat).\nSauvegarde dans macro_data.duckdb.pillars.currency_scores.\n\"\"\"\nimport os\nimport math\nimport duckdb\nfrom datetime import date\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"macro_duckdb_path\", os.environ.get(\"MACRO_DUCKDB_PATH\", \"/files/duckdb/macro_data.duckdb\"))\npolicy_rates = ctx.get(\"policy_rates\", [])\n\nG10 = [\"USD\", \"EUR\", \"JPY\", \"GBP\", \"CHF\", \"CAD\", \"AUD\", \"NZD\"]\ntoday = date.today().isoformat()\n\ndef clamp(v, lo=-1.0, hi=1.0):\n    return max(lo, min(hi, v))\n\n# Carry score : normalisation des taux directeurs vs. moyenne G10\nrates_dict = {r[\"currency\"]: float(r.get(\"rate_pct\") or 0) for r in policy_rates if r.get(\"currency\") in G10}\navg = sum(rates_dict.values()) / len(rates_dict) if rates_dict else 0\nstd = max(math.sqrt(sum((v - avg) ** 2 for v in rates_dict.values()) / len(rates_dict)) if rates_dict else 0, 0.5)\ncarry_scores = {ccy: clamp((r - avg) / std / 2) for ccy, r in rates_dict.items()}\n\n# Récupérer PPP depuis la DB (déjà calculé dans scoring.py via AG5)\nppp_scores = {}\ntry:\n    if os.path.exists(db_path):\n        with duckdb.connect(db_path, read_only=True) as con:\n            rows = con.execute(\n                \"\"\"SELECT DISTINCT ON (currency) currency, ppp_deviation\n                   FROM pillars.currency_scores\n                   WHERE ppp_deviation IS NOT NULL\n                   ORDER BY currency, as_of DESC\"\"\"\n            ).fetchall()\n            ppp_scores = {r[0]: float(r[1]) for r in rows}\nexcept Exception:\n    pass\n\n# Calculer scores de valorisation\nvaluation_scores = []\nfor ccy in G10:\n    carry = carry_scores.get(ccy, 0.0)\n    ppp = ppp_scores.get(ccy, 0.0)\n    valuation = clamp(carry * 0.60 + ppp * 0.40)\n    valuation_scores.append({\n        \"currency\": ccy,\n        \"carry_score\": round(carry, 3),\n        \"ppp_deviation\": round(ppp, 3),\n        \"valuation_score\": round(valuation, 3),\n    })\n\n# Mettre à jour les scores de valorisation dans la DB\ntry:\n    if os.path.exists(db_path):\n        with duckdb.connect(db_path) as con:\n            for s in valuation_scores:\n                con.execute(\n                    \"\"\"INSERT INTO pillars.currency_scores\n                       (as_of, currency, carry_score, ppp_deviation, valuation_score)\n                       VALUES (?, ?, ?, ?, ?)\n                       ON CONFLICT (as_of, currency) DO UPDATE SET\n                         carry_score = EXCLUDED.carry_score,\n                         ppp_deviation = EXCLUDED.ppp_deviation,\n                         valuation_score = EXCLUDED.valuation_score,\n                         updated_at = now()\"\"\",\n                    [today, s[\"currency\"], s[\"carry_score\"], s[\"ppp_deviation\"], s[\"valuation_score\"]],\n                )\n    written = len(valuation_scores)\nexcept Exception as exc:\n    written = 0\n    ctx[\"write_error\"] = str(exc)\n\nreturn [{\"json\": {**ctx, \"valuation_scores\": valuation_scores, \"records_written\": written}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        -20
+      ],
+      "id": "03-compute-valuation-scores",
+      "name": "03 Compute Valuation Scores"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "\"\"\"AG6-FX-Valuation — Log du run.\"\"\"\nimport os\nimport duckdb\nfrom datetime import datetime, timezone\n\nctx = (_items or [{\"json\": {}}])[0].get(\"json\", {})\ndb_path = ctx.get(\"macro_duckdb_path\", os.environ.get(\"MACRO_DUCKDB_PATH\", \"/files/duckdb/macro_data.duckdb\"))\nrun_id = ctx.get(\"run_id\", \"unknown\")\nscores = ctx.get(\"valuation_scores\", [])\nerror = ctx.get(\"fetch_error\") or ctx.get(\"write_error\")\nstatus = \"error\" if error else \"ok\"\n\ntry:\n    if os.path.exists(db_path):\n        with duckdb.connect(db_path) as con:\n            con.execute(\n                \"\"\"INSERT OR REPLACE INTO pillars.run_log\n                   (run_id, finished_at, status, error_msg, records_written)\n                   VALUES (?, ?, ?, ?, ?)\"\"\",\n                [run_id, datetime.now(timezone.utc).isoformat(), status, error, len(scores)],\n            )\nexcept Exception:\n    pass\n\nreturn [{\"json\": {\"run_id\": run_id, \"status\": status, \"currencies_scored\": len(scores), \"error\": error}}]\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        100,
+        -20
+      ],
+      "id": "04-log-run",
+      "name": "04 Log Run"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "01 Init Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01 Init Run": {
+      "main": [
+        [
+          {
+            "node": "02 Fetch Valuation Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Fetch Valuation Data": {
+      "main": [
+        [
+          {
+            "node": "03 Compute Valuation Scores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Compute Valuation Scores": {
+      "main": [
+        [
+          {
+            "node": "04 Log Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Europe/Paris"
+  }
+}

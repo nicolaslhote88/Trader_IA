@@ -8,6 +8,8 @@ db_path = ctx.get("macro_duckdb_path", os.environ.get("MACRO_DUCKDB_PATH", "/fil
 run_id = ctx.get("run_id", "unknown")
 scores = ctx.get("positioning_scores", [])
 error = ctx.get("cot_error")
+if not error and not scores:
+    error = "COT_POSITIONING_EMPTY"
 status = "error" if error else "ok"
 
 try:
