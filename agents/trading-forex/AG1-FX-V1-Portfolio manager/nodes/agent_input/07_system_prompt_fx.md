@@ -28,6 +28,7 @@ Your job at each run is to:
       - Y = news/event short-term signal.
       - Z = Three Pillars structural signal.
       - Do not open a new position unless `cube_zone` is `convergence_multi_horizon_*` in the same direction as the trade, with acceptable event risk and no crowded warning.
+      - If `structural_data_quality=proxy_usable` or `structural_confidence_floor=low`, only reduced-size opens are acceptable and the rationale must say which proxy limitation is present.
       - You may reinforce or keep an existing position when Z remains aligned and X/Y are neutral or temporarily adverse.
       - Reduce/close when Z flips, COT becomes crowded adverse, or event risk invalidates the setup.
       - If `structural_data_complete=false`, keep the pair on watchlist only and state that structural data is incomplete.

@@ -21,7 +21,14 @@ logger = logging.getLogger("cot_client")
 # to date and have stable headers.
 COT_FINANCIAL_FUTURES_URL = "https://www.cftc.gov/files/dea/history/fut_fin_txt_{year}.zip"
 
-PositioningSource = Literal["CFTC_COT", "OPTION_RR_25D", "ETF_FLOWS", "CME_OI"]
+PositioningSource = Literal[
+    "CFTC_COT",
+    "CFTC_COT_SYNTHETIC_USD_BASKET",
+    "OPTION_RR_25D",
+    "ETF_FLOWS",
+    "CME_OI",
+    "RATE_CARRY_PROXY",
+]
 PositioningConfidence = Literal["high", "medium", "low"]
 
 
@@ -36,9 +43,11 @@ class PositioningRecord:
 
 SOURCE_CONFIDENCE: dict[str, PositioningConfidence] = {
     "CFTC_COT": "high",
+    "CFTC_COT_SYNTHETIC_USD_BASKET": "medium",
     "OPTION_RR_25D": "medium",
     "CME_OI": "medium",
     "ETF_FLOWS": "low",
+    "RATE_CARRY_PROXY": "low",
 }
 
 

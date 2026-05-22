@@ -5,7 +5,7 @@ Toutes les séries macroéconomiques clés pour le framework 3 piliers.
 
 import os
 import logging
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import httpx
@@ -26,9 +26,9 @@ FRED_SERIES = {
         "CAD": "IRSTCI01CAM156N", # Bank of Canada
         "AUD": "IRSTCI01AUM156N", # Reserve Bank of Australia
         "NZD": "IRSTCI01NZM156N", # RBNZ
-        "MXN": "INTDSRMXM193N",    # Banco de Mexico
-        "SEK": "INTDSRSEM193N",    # Riksbank
-        "NOK": "INTDSRNOM193N",    # Norges Bank
+        "MXN": "IRSTCI01MXM156N", # Mexico overnight/interbank rate
+        "SEK": "IRSTCI01SEM156N", # Sweden overnight/interbank rate
+        "NOK": "IRSTCI01NOM156N", # Norway overnight/interbank rate
         "KRW": "INTDSRKRM193N",    # Bank of Korea
     },
     # PIB réel (croissance QoQ annualisée)
@@ -38,10 +38,12 @@ FRED_SERIES = {
         "JPY": "JPNRGDPEXP",         # Japan Real GDP
         "GBP": "UKNGDP",             # UK Real GDP
         "CAD": "NAEXKP01CAQ189S",    # Canada Real GDP
-        "AUD": "NGDPRNSAXDCAUQ",     # Australia Real GDP
-        "MXN": "NGDPRSAXDCMXQ",       # Mexico Real GDP
-        "SEK": "NGDPRSAXDCSEQ",       # Sweden Real GDP
-        "NOK": "NGDPRSAXDCNOQ",       # Norway Real GDP
+        "AUD": "NGDPRNSAXDCAUQ",      # Australia Real GDP
+        "CHF": "NAEXKP01CHQ657S",     # Switzerland GDP QoQ growth rate
+        "NZD": "NAEXKP01NZQ657S",     # New Zealand GDP QoQ growth rate
+        "MXN": "NAEXKP01MXQ657S",     # Mexico GDP QoQ growth rate
+        "SEK": "NAEXKP01SEQ657S",     # Sweden GDP QoQ growth rate
+        "NOK": "NAEXKP01NOQ657S",     # Norway GDP QoQ growth rate
     },
     # CPI (Inflation YoY %)
     "cpi_yoy": {
@@ -53,7 +55,7 @@ FRED_SERIES = {
         "CAD": "CANCPIALLMINMEI",     # Canada CPI
         "AUD": "AUSCPIALLQINMEI",     # Australia CPI
         "NZD": "NZLCPIALLQINMEI",     # New Zealand CPI
-        "MXN": "MEXCPALTT01IXOBM",    # Mexico CPI all items
+        "MXN": "MEXCPIALLMINMEI",     # Mexico CPI all items
         "SEK": "SWECPIALLMINMEI",     # Sweden CPI all items
         "NOK": "NORCPIALLMINMEI",     # Norway CPI all items
         "KRW": "KORCPIALLMINMEI",     # Korea CPI all items
@@ -82,12 +84,46 @@ FRED_SERIES = {
     "yield_10y_jpy": {"JPY": "IRLTLT01JPM156N"},
     "yield_10y_cad": {"CAD": "IRLTLT01CAM156N"},
     "yield_10y_aud": {"AUD": "IRLTLT01AUM156N"},
+    "yield_10y_nzd": {"NZD": "IRLTLT01NZM156N"},
     "yield_10y_chf": {"CHF": "IRLTLT01CHM156N"},
+    "yield_10y_mxn": {"MXN": "IRLTLT01MXM156N"},
     "yield_10y_sek": {"SEK": "IRLTLT01SEM156N"},
     "yield_10y_nok": {"NOK": "IRLTLT01NOM156N"},
     "yield_10y_krw": {"KRW": "IRLTLT01KRM156N"},
     "yield_2y_eur": {"EUR": "IRLTST01EZM156N"},
 }
+
+# Official static fallback used only when FRED exposes no usable observations.
+# Keep these dated and auditable; environment variables can override them in
+# production if the central-bank source changes before the next code release.
+OFFICIAL_POLICY_RATE_FALLBACKS = {
+    "SEK": {
+        "rate_pct": 1.75,
+        "as_of": "2026-05-13",
+        "series_id": "RIKSBANK_POLICY_RATE",
+        "source": "Riksbank_official_static",
+    },
+}
+
+
+def _year_ago_index(observations: list[dict]) -> Optional[int]:
+    """
+    Return the observation index that is roughly one year before latest.
+
+    FRED returns mixed frequencies here: most CPI series are monthly, while
+    AUD/NZD are quarterly. A fixed 12-row lookback makes quarterly CPI compare
+    against three years ago and materially overstates inflation.
+    """
+    if len(observations) < 2:
+        return None
+    try:
+        latest = datetime.fromisoformat(str(observations[0]["date"]))
+        previous = datetime.fromisoformat(str(observations[1]["date"]))
+    except (KeyError, TypeError, ValueError):
+        return 12 if len(observations) > 12 else None
+    months_gap = max(1, abs((latest.year - previous.year) * 12 + latest.month - previous.month))
+    idx = max(1, round(12 / months_gap))
+    return idx if len(observations) > idx else None
 
 
 class FREDClient:
@@ -157,7 +193,22 @@ class FREDClient:
                     "rate_pct": latest["value"],
                     "as_of": latest["date"],
                     "series_id": series_id,
+                    "source": "FRED",
                 }
+            env_value = os.environ.get(f"{currency}_POLICY_RATE_PCT")
+            if env_value not in (None, ""):
+                try:
+                    results[currency] = {
+                        "rate_pct": float(env_value),
+                        "as_of": os.environ.get(f"{currency}_POLICY_RATE_AS_OF", date.today().isoformat()),
+                        "series_id": f"{currency}_POLICY_RATE_PCT",
+                        "source": os.environ.get(f"{currency}_POLICY_RATE_SOURCE", "manual_override"),
+                    }
+                except ValueError:
+                    logger.warning("Invalid %s_POLICY_RATE_PCT override", currency)
+        for currency, fallback in OFFICIAL_POLICY_RATE_FALLBACKS.items():
+            if currency not in results:
+                results[currency] = dict(fallback)
         return results
 
     async def get_gdp_growth(self) -> dict[str, dict]:
@@ -178,6 +229,7 @@ class FREDClient:
                     "momentum": latest - prev,
                     "as_of": obs[0]["date"],
                     "series_id": series_id,
+                    "source": "FRED",
                 }
         return results
 
@@ -190,15 +242,17 @@ class FREDClient:
             except RuntimeError as exc:
                 logger.warning("%s", exc)
                 continue
-            if len(obs) >= 13:
+            year_idx = _year_ago_index(obs)
+            if year_idx is not None:
                 latest = obs[0]["value"]
-                year_ago = obs[12]["value"] if len(obs) > 12 else None
+                year_ago = obs[year_idx]["value"]
                 yoy = round((latest / year_ago - 1) * 100, 2) if year_ago else None
                 results[currency] = {
                     "cpi_index": latest,
                     "yoy_pct": yoy,
                     "as_of": obs[0]["date"],
                     "series_id": series_id,
+                    "source": "FRED",
                 }
         return results
 
@@ -218,6 +272,7 @@ class FREDClient:
                     "surplus": latest > 0,
                     "as_of": obs[0]["date"],
                     "series_id": series_id,
+                    "source": "FRED",
                 }
         return results
 
@@ -235,6 +290,7 @@ class FREDClient:
                     "unemployment_pct": obs[0]["value"],
                     "as_of": obs[0]["date"],
                     "series_id": series_id,
+                    "source": "FRED",
                 }
         return results
 
@@ -258,7 +314,9 @@ class FREDClient:
             "JPY": ("yield_10y_jpy", "JPY"),
             "CAD": ("yield_10y_cad", "CAD"),
             "AUD": ("yield_10y_aud", "AUD"),
+            "NZD": ("yield_10y_nzd", "NZD"),
             "CHF": ("yield_10y_chf", "CHF"),
+            "MXN": ("yield_10y_mxn", "MXN"),
             "SEK": ("yield_10y_sek", "SEK"),
             "NOK": ("yield_10y_nok", "NOK"),
             "KRW": ("yield_10y_krw", "KRW"),
@@ -269,7 +327,7 @@ class FREDClient:
             if series_id:
                 latest = await self.get_latest(series_id)
                 if latest:
-                    results[currency] = {"yield_10y_pct": latest["value"], "as_of": latest["date"]}
+                    results[currency] = {"yield_10y_pct": latest["value"], "as_of": latest["date"], "source": "FRED"}
         return results
 
     async def get_g10_yields_2y(self) -> dict[str, dict]:
@@ -284,7 +342,7 @@ class FREDClient:
             if series_id:
                 latest = await self.get_latest(series_id)
                 if latest:
-                    results[currency] = {"yield_2y_pct": latest["value"], "as_of": latest["date"]}
+                    results[currency] = {"yield_2y_pct": latest["value"], "as_of": latest["date"], "source": "FRED"}
         return results
 
     async def get_historical_cpi(self, currency: str, years: int = 5) -> list[dict]:

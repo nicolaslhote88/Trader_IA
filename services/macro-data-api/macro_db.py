@@ -178,9 +178,8 @@ class MacroDB:
     # ── Policy Rates ──────────────────────────────────────────────────────────
 
     def upsert_policy_rates(self, rates: dict[str, dict]):
-        today = date.today().isoformat()
         rows = [
-            (today, ccy, d.get("rate_pct"), "Central Bank", "FRED")
+            (d.get("as_of", date.today().isoformat()), ccy, d.get("rate_pct"), "Central Bank", d.get("source", "FRED"))
             for ccy, d in rates.items()
             if d.get("rate_pct") is not None
         ]
@@ -205,30 +204,30 @@ class MacroDB:
 
     # ── Country Indicators ────────────────────────────────────────────────────
 
-    def upsert_country_indicator(self, currency: str, indicator: str, value: float, as_of: str, unit: str = ""):
+    def upsert_country_indicator(self, currency: str, indicator: str, value: float, as_of: str, unit: str = "", source: str = "FRED"):
         with self._connect() as con:
             con.execute(
                 """INSERT OR REPLACE INTO macro.country_indicators
-                   (as_of, currency, indicator, value, unit)
-                   VALUES (?, ?, ?, ?, ?)""",
-                [as_of, currency, indicator, value, unit],
+                   (as_of, currency, indicator, value, unit, source)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [as_of, currency, indicator, value, unit, source],
             )
 
     def upsert_gdp_data(self, gdp_data: dict[str, dict]):
         for currency, d in gdp_data.items():
             if d.get("latest_qoq") is not None:
-                self.upsert_country_indicator(currency, "gdp_growth_qoq", d["latest_qoq"], d.get("as_of", date.today().isoformat()), "pct_qoq_saar")
-                self.upsert_country_indicator(currency, "gdp_momentum", d.get("momentum", 0.0), d.get("as_of", date.today().isoformat()), "delta_qoq")
+                self.upsert_country_indicator(currency, "gdp_growth_qoq", d["latest_qoq"], d.get("as_of", date.today().isoformat()), "pct_qoq_saar", d.get("source", "FRED"))
+                self.upsert_country_indicator(currency, "gdp_momentum", d.get("momentum", 0.0), d.get("as_of", date.today().isoformat()), "delta_qoq", d.get("source", "FRED"))
 
     def upsert_cpi_data(self, cpi_data: dict[str, dict]):
         for currency, d in cpi_data.items():
             if d.get("yoy_pct") is not None:
-                self.upsert_country_indicator(currency, "cpi_yoy", d["yoy_pct"], d.get("as_of", date.today().isoformat()), "pct_yoy")
+                self.upsert_country_indicator(currency, "cpi_yoy", d["yoy_pct"], d.get("as_of", date.today().isoformat()), "pct_yoy", d.get("source", "FRED"))
 
     def upsert_current_account_data(self, ca_data: dict[str, dict]):
         for currency, d in ca_data.items():
             if d.get("balance_bn_usd") is not None:
-                self.upsert_country_indicator(currency, "current_account_bn_usd", d["balance_bn_usd"], d.get("as_of", date.today().isoformat()), "bn_usd")
+                self.upsert_country_indicator(currency, "current_account_bn_usd", d["balance_bn_usd"], d.get("as_of", date.today().isoformat()), "bn_usd", d.get("source", "FRED"))
 
     def upsert_unemployment_data(self, unemployment_data: dict[str, dict]):
         for currency, d in unemployment_data.items():
@@ -239,6 +238,7 @@ class MacroDB:
                     d["unemployment_pct"],
                     d.get("as_of", date.today().isoformat()),
                     "pct",
+                    d.get("source", "FRED"),
                 )
 
     def get_indicators(self, currency: Optional[str] = None, indicator: Optional[str] = None) -> list[dict]:
