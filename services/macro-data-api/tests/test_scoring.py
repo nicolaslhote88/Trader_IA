@@ -183,9 +183,11 @@ def test_mxn_scores_when_all_input_families_are_complete():
     assert mxn["composite_score"] is not None
 
 
-def test_sek_is_data_incomplete_without_positioning_proxy():
+def test_sek_uses_low_confidence_positioning_proxy_without_native_feed():
     scores = compute_all_pillar_scores(FakeMacroDB())
     sek = next(s for s in scores if s["currency"] == "SEK")
-    assert sek["score_status"] == "data_incomplete"
-    assert sek["composite_score"] is None
-    assert "positioning" in sek["missing_inputs"]
+    assert sek["score_status"] == "scored_proxy"
+    assert sek["data_completeness"] == "proxy_complete"
+    assert sek["confidence_floor"] == "low"
+    assert sek["composite_score"] is not None
+    assert "positioning_low_confidence" in sek["missing_inputs"]

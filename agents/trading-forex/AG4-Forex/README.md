@@ -34,6 +34,13 @@ The `dedupe_key` primary key and `INSERT OR REPLACE` in `05_write_fx_news_duckdb
 remain as the final write-side safety net, but duplicate suppression is expected to
 happen before the LLM node.
 
+## DuckDB write locks
+
+`05_write_fx_news_duckdb.py` opens `ag4_forex_v1.duckdb` through a retry/backoff
+wrapper. This prevents transient DuckDB lock conflicts from failing the whole run
+when another AG4 process or reader briefly holds the database. The writer also
+closes the connection explicitly and attempts a `CHECKPOINT` after the batch.
+
 ## Regeneration
 
 ```bash

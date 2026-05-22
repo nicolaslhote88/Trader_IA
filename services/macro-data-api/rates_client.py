@@ -28,6 +28,7 @@ IBKR_BOND_CONIDS = {
 # En l'absence de yields souverains directs IBKR, on utilise les taux directeurs +
 # spread vs. policy rate (estimé empiriquement)
 POLICY_RATE_TO_2Y_SPREAD = 0.25  # spread moyen historique (bps → %)
+POLICY_RATE_TO_10Y_SPREAD = 0.75  # fallback defensif quand la jambe 10Y manque
 
 # G10 pairs pour la stratégie de pentification
 G10_COUNTRIES = {
@@ -143,6 +144,14 @@ class RatesClient:
             if y2 is None and policy is not None:
                 # Proxy : taux directeur + spread moyen historique
                 y2 = round(policy + POLICY_RATE_TO_2Y_SPREAD, 3)
+                if source == "FRED":
+                    source = "FRED+policy_2y_proxy"
+
+            if y10 is None and policy is not None:
+                # Proxy de dernier recours : preserve le cube avec une confiance
+                # degradee au lieu de supprimer totalement la devise.
+                y10 = round(policy + POLICY_RATE_TO_10Y_SPREAD, 3)
+                source = "policy_curve_proxy" if source == "FRED" else f"{source}+policy_curve_proxy"
 
             if y10 is None or y2 is None:
                 continue

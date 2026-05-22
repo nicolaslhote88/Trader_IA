@@ -57,6 +57,11 @@ a separate broker account or a broker-side portfolio namespace.
 - Node `11_validate_enforce_safety_fx.js` caps `REDUCED_SIZE_ONLY` openings to
   `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` of equity, default `0.10`. Oversized LLM
   requests are resized before pair, leverage, margin and currency checks.
+- The 3-axis cube exposes `structural_data_quality`,
+  `structural_confidence_floor` and `structural_proxy_used`. New opens still
+  require `convergence_multi_horizon_*`; when the structural leg is
+  `proxy_usable`, AG1 may only propose reduced-size trades and must cite the
+  proxy limitation.
 - Node `17_log_run_fx.py` releases the global lock at the end of the run.
 - `AG1-FX-PF-V1 - Hourly Portfolio Valuation` reconciles the GPT ledger hourly,
   imports confirmed fills for submitted orders, and writes

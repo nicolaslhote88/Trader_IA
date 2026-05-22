@@ -26,6 +26,13 @@ function signalSign(v, threshold = 0.20) {
   return n > 0 ? 1 : -1;
 }
 
+const CONFIDENCE_RANK = { missing: 0, low: 1, medium: 2, high: 3 };
+function confidenceFloor(values) {
+  const ranks = (values || []).map((v) => CONFIDENCE_RANK[String(v || 'missing').toLowerCase()] ?? 0);
+  const minRank = ranks.length ? Math.min(...ranks) : 0;
+  return Object.entries(CONFIDENCE_RANK).find(([, rank]) => rank === minRank)?.[0] || 'missing';
+}
+
 function truncate(v, max = 160) {
   const s = String(v || '').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 1).trim()}...` : s;
@@ -242,6 +249,16 @@ function pairCubeSignal(pair) {
   const baseComplete = basePillar.score_status !== 'data_incomplete' && basePillar.composite_score !== null && basePillar.composite_score !== undefined;
   const quoteComplete = quotePillar.score_status !== 'data_incomplete' && quotePillar.composite_score !== null && quotePillar.composite_score !== undefined;
   const structuralComplete = Boolean(baseComplete && quoteComplete);
+  const structuralConfidenceFloor = structuralComplete
+    ? confidenceFloor([basePillar.confidence_floor || 'missing', quotePillar.confidence_floor || 'missing'])
+    : 'missing';
+  const structuralProxyUsed = structuralComplete && (
+    basePillar.score_status === 'scored_proxy' ||
+    quotePillar.score_status === 'scored_proxy' ||
+    basePillar.data_completeness === 'proxy_complete' ||
+    quotePillar.data_completeness === 'proxy_complete' ||
+    structuralConfidenceFloor === 'low'
+  );
   const macroSignal = num(basePillar.macro_score, 0) - num(quotePillar.macro_score, 0);
   const valuationSignal = num(basePillar.valuation_score, 0) - num(quotePillar.valuation_score, 0);
   const positioningSignal = num(basePillar.positioning_score, 0) - num(quotePillar.positioning_score, 0);
@@ -276,13 +293,16 @@ function pairCubeSignal(pair) {
     valuation_signal: rounded(valuationSignal, 2),
     positioning_signal: rounded(positioningSignal, 2),
     structural_data_complete: structuralComplete,
+    structural_data_quality: structuralProxyUsed ? 'proxy_usable' : structuralComplete ? 'official_or_medium' : 'incomplete',
+    structural_confidence_floor: structuralConfidenceFloor,
+    structural_proxy_used: structuralProxyUsed,
     structural_missing: structuralComplete ? [] : [base, quote].filter((ccy) => {
       const row = byPillarCcy[ccy] || {};
       return row.score_status === 'data_incomplete' || row.composite_score === null || row.composite_score === undefined;
     }),
     event_risk_score: rounded(news.event_risk_score, 3),
     crowded_warning: crowdedWarning,
-    portfolio_action_hint: actionHint,
+    portfolio_action_hint: structuralProxyUsed && actionHint === 'OPEN_CANDIDATE' ? 'OPEN_CANDIDATE_REDUCED_CONFIDENCE' : actionHint,
   };
 }
 
@@ -516,6 +536,9 @@ function pairDecisionProfile(pair) {
       preferredAction = 'WAIT';
     } else if (cube.cube_zone.startsWith('convergence_multi_horizon')) {
       preferredAction = cube.cube_direction;
+      if (cube.structural_proxy_used || cube.structural_confidence_floor === 'low') {
+        tradePermission = tradePermission === 'NO_NEW_POSITION' ? tradePermission : 'REDUCED_SIZE_ONLY';
+      }
     } else if (cube.cube_zone === 'short_term_hype_against_pillars') {
       tradePermission = 'NO_NEW_POSITION';
       preferredAction = 'WAIT';
@@ -558,6 +581,8 @@ const cubeSummary = {
       side: lot.side,
       cube_zone: p.cube_zone,
       z_three_pillars: p.z_three_pillars,
+      structural_data_quality: p.structural_data_quality,
+      structural_confidence_floor: p.structural_confidence_floor,
       event_risk_score: p.event_risk_score,
       crowded_warning: p.crowded_warning,
       portfolio_action_hint: p.cube_direction !== 'WAIT' && p.cube_direction !== lotSide ? 'REDUCE_OR_CLOSE_Z_FLIPPED' : p.portfolio_action_hint,
@@ -628,6 +653,7 @@ const llmBrief = {
     'broker_execution_constraints are hard live-execution constraints. If prefund_non_eur_fx=true, non-EUR target opens may be proposed only when their setup is strong; the validator will derive the required EUR funding leg.',
     'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
     'Cube 3 axes is mandatory for new opens: X=technical, Y=news/event, Z=3 Pillars structural. Open only in convergence_multi_horizon_* and cite cube_zone in rationale.',
+    'When cube structural_data_quality=proxy_usable or structural_confidence_floor=low, only reduced-size opens are allowed and the proxy limitation must be cited.',
     'If cube zone is structural_data_incomplete, keep the pair on watchlist only. If short-term X/Y conflicts with Z, explain why the trade is ignored or reduced.',
   ],
 };

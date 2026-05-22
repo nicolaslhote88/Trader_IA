@@ -332,6 +332,8 @@ for (const d of decisions) {
       x_technical: cube.x_technical,
       y_news_event: cube.y_news_event,
       z_three_pillars: cube.z_three_pillars,
+      structural_data_quality: cube.structural_data_quality,
+      structural_confidence_floor: cube.structural_confidence_floor,
       action_hint: cube.portfolio_action_hint,
     };
   }

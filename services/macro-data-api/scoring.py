@@ -44,6 +44,19 @@ G10 = CORE_G8
 CONFIDENCE_RANK = {"missing": 0, "low": 1, "medium": 2, "high": 3}
 RANK_CONFIDENCE = {v: k for k, v in CONFIDENCE_RANK.items()}
 
+USD_SYNTHETIC_COT_WEIGHTS = {
+    "EUR": 0.30,
+    "JPY": 0.18,
+    "GBP": 0.12,
+    "CAD": 0.10,
+    "AUD": 0.08,
+    "CHF": 0.08,
+    "NZD": 0.04,
+    "MXN": 0.10,
+}
+
+LOW_CONFIDENCE_POSITIONING_SOURCES = {"RATE_CARRY_PROXY"}
+
 
 def clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
     return max(lo, min(hi, v))
@@ -63,6 +76,73 @@ def _confidence_floor(*values: str) -> str:
 
 def _is_complete_enough(confidence: str) -> bool:
     return CONFIDENCE_RANK.get(str(confidence or "missing").lower(), 0) >= CONFIDENCE_RANK["medium"]
+
+
+def _positioning_score_from_z(z_score: float) -> float:
+    # Contrarian convention: hated/short positioning is bullish, crowded long is bearish.
+    return clamp(-float(z_score) / 2.0)
+
+
+def _enrich_positioning_with_proxies(
+    cot_by_ccy: dict[str, dict],
+    carry_scores: dict[str, float],
+    policy_rates_by_ccy: dict[str, float],
+) -> dict[str, dict]:
+    """
+    Fill useful-but-labelled positioning gaps.
+
+    1. USD has no direct COT currency contract. It is inferred as the inverse
+       of a liquid COT basket.
+    2. SEK/NOK can keep the cube usable through a low-confidence carry proxy
+       until a real option-RR/CME-OI feed is wired.
+    """
+    enriched = dict(cot_by_ccy)
+
+    if "USD" not in enriched:
+        weighted_z = 0.0
+        used_weight = 0.0
+        contributors = []
+        for currency, weight in USD_SYNTHETIC_COT_WEIGHTS.items():
+            row = enriched.get(currency)
+            z = row.get("net_z_score") if row else None
+            if _has_number(z):
+                weighted_z += float(z) * weight
+                used_weight += weight
+                contributors.append(currency)
+        if used_weight > 0:
+            usd_z = -(weighted_z / used_weight)
+            enriched["USD"] = {
+                "currency": "USD",
+                "net_z_score": round(usd_z, 3),
+                "positioning_score": round(_positioning_score_from_z(usd_z), 3),
+                "crowded_flag": abs(usd_z) >= 1.5,
+                "crowded_direction": "long" if usd_z >= 1.5 else "short" if usd_z <= -1.5 else "neutral",
+                "source": "CFTC_COT_SYNTHETIC_USD_BASKET",
+                "confidence": "medium",
+                "proxy_contributors": contributors,
+            }
+
+    for currency in ("SEK", "NOK"):
+        if currency in enriched:
+            continue
+        carry = carry_scores.get(currency)
+        policy = policy_rates_by_ccy.get(currency)
+        if _has_number(carry) and _has_number(policy):
+            # High positive carry tends to attract crowded longs; this is not a
+            # true positioning feed, so keep it low-confidence and size-aware.
+            positioning_score = clamp(-float(carry) * 0.50)
+            z_score = -2.0 * positioning_score
+            enriched[currency] = {
+                "currency": currency,
+                "net_z_score": round(z_score, 3),
+                "positioning_score": round(positioning_score, 3),
+                "crowded_flag": abs(z_score) >= 1.5,
+                "crowded_direction": "long" if z_score >= 1.5 else "short" if z_score <= -1.5 else "neutral",
+                "source": "RATE_CARRY_PROXY",
+                "confidence": "low",
+            }
+
+    return enriched
 
 
 def score_gdp_growth(growth_qoq: Optional[float], momentum: Optional[float]) -> float:
@@ -314,6 +394,7 @@ def compute_input_confidence(
         valuation_conf = "missing"
 
     cot = cot_by_ccy.get(currency, {})
+    positioning_source = str(cot.get("source") or "").upper()
     if cot:
         positioning_conf = str(cot.get("confidence") or "high").lower()
     else:
@@ -322,7 +403,11 @@ def compute_input_confidence(
     curve = yield_by_ccy.get(currency, {})
     has_y2 = _has_number(curve.get("yield_2y_pct") or curve.get("yield_2y"))
     has_y10 = _has_number(curve.get("yield_10y_pct") or curve.get("yield_10y"))
-    rates_conf = "high" if has_y2 and has_y10 else "missing"
+    curve_source = str(curve.get("source") or "").lower()
+    if has_y2 and has_y10:
+        rates_conf = "medium" if "proxy" in curve_source or "manual" in curve_source else "high"
+    else:
+        rates_conf = "missing"
 
     floor = _confidence_floor(macro_conf, valuation_conf, positioning_conf, rates_conf)
     missing = []
@@ -335,14 +420,28 @@ def compute_input_confidence(
     if not _is_complete_enough(rates_conf):
         missing.append("yield_curve")
 
+    proxy_usable = (
+        floor == "low"
+        and positioning_conf == "low"
+        and positioning_source in LOW_CONFIDENCE_POSITIONING_SOURCES
+        and _is_complete_enough(macro_conf)
+        and _is_complete_enough(valuation_conf)
+        and _is_complete_enough(rates_conf)
+    )
+    if proxy_usable:
+        missing = [m for m in missing if m != "positioning"]
+        missing.append("positioning_low_confidence")
+
+    is_complete = _is_complete_enough(floor)
+
     return {
         "macro_confidence": macro_conf,
         "valuation_confidence": valuation_conf,
         "positioning_confidence": positioning_conf,
         "rates_confidence": rates_conf,
         "confidence_floor": floor,
-        "data_completeness": "complete" if _is_complete_enough(floor) else "data_incomplete",
-        "score_status": "scored" if _is_complete_enough(floor) else "data_incomplete",
+        "data_completeness": "complete" if is_complete else "proxy_complete" if proxy_usable else "data_incomplete",
+        "score_status": "scored" if is_complete else "scored_proxy" if proxy_usable else "data_incomplete",
         "missing_inputs": missing,
     }
 
@@ -379,6 +478,7 @@ def compute_all_pillar_scores(db) -> list[dict]:
     # COT positioning scores
     cot_by_ccy = {r["currency"]: r for r in cot_latest}
     yield_by_ccy = {r["currency"]: r for r in yield_curves}
+    cot_by_ccy = _enrich_positioning_with_proxies(cot_by_ccy, carry_scores, policy_by_ccy)
 
     results = []
     for ccy in SCORING_CURRENCIES:
@@ -400,7 +500,7 @@ def compute_all_pillar_scores(db) -> list[dict]:
             cot_by_ccy,
             yield_by_ccy,
         )
-        can_score = completeness["score_status"] == "scored" or ccy in CORE_G8
+        can_score = completeness["score_status"] in ("scored", "scored_proxy") or ccy in CORE_G8
 
         # Composite (pondération égale des 3 piliers)
         composite = clamp((macro_s + valuation_s + positioning_s) / 3.0)
@@ -426,7 +526,7 @@ def compute_all_pillar_scores(db) -> list[dict]:
             "composite_score": round(composite, 3) if can_score else None,
             "all_pillars_aligned": all_aligned,
             "data_completeness": completeness["data_completeness"],
-            "score_status": "scored_legacy" if completeness["score_status"] != "scored" and ccy in CORE_G8 else completeness["score_status"],
+            "score_status": "scored_legacy" if completeness["score_status"] == "data_incomplete" and ccy in CORE_G8 else completeness["score_status"],
             "confidence_floor": completeness["confidence_floor"],
             "macro_confidence": completeness["macro_confidence"],
             "valuation_confidence": completeness["valuation_confidence"],
