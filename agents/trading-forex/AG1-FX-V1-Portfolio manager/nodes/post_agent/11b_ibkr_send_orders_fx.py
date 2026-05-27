@@ -31,8 +31,14 @@ PAPER_ACCOUNT_PREFIXES = tuple(
     for p in os.environ.get("IBKR_PAPER_ACCOUNT_PREFIXES", "DU").split(",")
     if p.strip()
 )
-FILL_CONFIRM_SECONDS = max(0, int(float(os.environ.get("IBKR_FILL_CONFIRM_SECONDS", "25") or 25)))
-FILL_POLL_INTERVAL_SECONDS = max(1, int(float(os.environ.get("IBKR_FILL_POLL_INTERVAL_SECONDS", "5") or 5)))
+FILL_CONFIRM_SECONDS = max(0, int(float(os.environ.get("IBKR_FILL_CONFIRM_SECONDS", "6") or 6)))
+FILL_POLL_INTERVAL_SECONDS = max(1, int(float(os.environ.get("IBKR_FILL_POLL_INTERVAL_SECONDS", "2") or 2)))
+NODE_TIME_BUDGET_SECONDS = max(15, int(float(os.environ.get("IBKR_SEND_NODE_TIME_BUDGET_SECONDS", "50") or 50)))
+NODE_STARTED_AT = time.time()
+
+
+def remaining_node_seconds(buffer_seconds: float = 4.0) -> float:
+    return max(0.0, NODE_TIME_BUDGET_SECONDS - (time.time() - NODE_STARTED_AT) - buffer_seconds)
 
 
 def deterministic_client_order_id(seed: str) -> str:
@@ -79,13 +85,13 @@ def normalize_order_type(value):
     return text or "MKT"
 
 
-def get_json(path: str, timeout: int = 12):
+def get_json(path: str, timeout: int = 8):
     req = urllib.request.Request(f"{BROKER_URL}{path}", headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def post_json(path: str, payload: dict, timeout: int = 15):
+def post_json(path: str, payload: dict, timeout: int = 10):
     req = urllib.request.Request(
         f"{BROKER_URL}{path}",
         data=json.dumps(payload).encode("utf-8"),
@@ -175,11 +181,15 @@ def build_fill_map(fills_payload):
 def poll_recent_fills(order_keys):
     if not order_keys or FILL_CONFIRM_SECONDS <= 0:
         return {}, []
-    deadline = time.time() + FILL_CONFIRM_SECONDS
+    poll_seconds = min(float(FILL_CONFIRM_SECONDS), remaining_node_seconds())
+    if poll_seconds <= 0:
+        return {}, []
+    deadline = time.time() + poll_seconds
     last_payload = []
     while True:
         try:
-            last_payload = get_json("/fills", timeout=15)
+            timeout = max(1, min(6, int(max(1.0, deadline - time.time()))))
+            last_payload = get_json("/fills", timeout=timeout)
             fill_map = build_fill_map(last_payload)
             matched = {key: fill_map[key] for key in order_keys if key in fill_map}
             if matched or time.time() >= deadline:
@@ -441,6 +451,9 @@ return [
                 "errors": len(ibkr_errors),
                 "fills_matched": len(matched_fills),
                 "fills_seen": len(broker_fills),
+                "fill_confirm_seconds": FILL_CONFIRM_SECONDS,
+                "node_time_budget_seconds": NODE_TIME_BUDGET_SECONDS,
+                "node_elapsed_seconds": round(time.time() - NODE_STARTED_AT, 3),
                 "broker_url": BROKER_URL,
                 "errors_detail": ibkr_errors,
                 "health": broker_health,

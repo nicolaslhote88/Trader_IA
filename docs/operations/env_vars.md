@@ -39,8 +39,9 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_CASH_RECON_THRESHOLD_UNITS` | Seuil absolu par devise pour signaler une divergence de cash balance, par defaut `5` unites de devise. |
 | `AG1_FX_PORTFOLIO_BASE_CCY` | Devise de base du portefeuille FX pour la reconciliation cash, par defaut `EUR`. |
 | `AG1_FX_CASH_ONLY_BASE_CCY_MODE` | `true` par defaut en paper live CPAPI. Bloque les nouvelles ouvertures qui emprunteraient une devise non-base; avec `EUR`, seules les ouvertures `SELL_BASE` sur paires `EURxxx` et `BUY_BASE` sur paires `xxxEUR` passent. Les clotures restent autorisees. |
-| `IBKR_FILL_CONFIRM_SECONDS` | Temps maximal de polling des fills apres soumission d'ordres FX. |
-| `IBKR_FILL_POLL_INTERVAL_SECONDS` | Intervalle de polling `/fills` pendant la fenetre de confirmation. |
+| `IBKR_FILL_CONFIRM_SECONDS` | Temps maximal de polling des fills apres soumission d'ordres FX, par defaut `6` secondes pour rester sous le timeout n8n de 60s. |
+| `IBKR_FILL_POLL_INTERVAL_SECONDS` | Intervalle de polling `/fills` pendant la fenetre de confirmation, par defaut `2` secondes. |
+| `IBKR_SEND_NODE_TIME_BUDGET_SECONDS` | Budget global du noeud AG1-FX `IBKR Send Orders FX`, par defaut `50` secondes. Le polling des fills est raccourci automatiquement si ce budget est presque consomme. |
 | `IBKR_KEEPALIVE_INTERVAL_SECONDS` | Frequence du superviseur de session `ibkr-broker`, par defaut 55 secondes. |
 | `IBKR_AUTO_REAUTH_ENABLED` | `true` par defaut : tente `/iserver/auth/ssodh/init` quand la session brokerage tombe mais que Gateway/SSO reste valide. |
 | `IBKR_AUTO_REAUTH_COMPETE` | `false` par defaut. Si `true`, peut deconnecter une session concurrente du meme username IBKR; a reserver a un username dedie au robot. |
