@@ -129,6 +129,18 @@ pas etre considere comme un contournement garanti du 2FA. Le broker ne journalis
 jamais ces secrets et ne les renvoie pas dans `/health`; il indique seulement si
 les variables sont configurees.
 
+En production VPS, le service `ibkr-gateway` peut etre remplace par l'image
+`voyz/ibeam:latest`. Le nom de service reste `ibkr-gateway`, donc
+`ibkr-broker` continue d'appeler `https://ibkr-gateway:5000`. IBeam lance le
+Client Portal Gateway, injecte `IBEAM_ACCOUNT` / `IBEAM_PASSWORD` dans la page
+login et maintient la session. Le fichier `services/ibkr-gateway/conf.yaml` est
+monte dans `/srv/inputs/conf.yaml` afin de conserver la whitelist IP Docker du
+projet.
+
+Par securite, le compose de reference utilise `restart: "no"` pour IBeam. Cela
+evite une boucle de redemarrage qui pourrait consommer les tentatives de login
+IBKR si les credentials ou le 2FA echouent.
+
 Le broker envoie les ordres au format Web API actuel : `POST
 /v1/api/iserver/account/{accountId}/orders` avec un objet `{ "orders": [...] }`.
 Les confirmations IBKR renvoyant un `id` sont confirmees via

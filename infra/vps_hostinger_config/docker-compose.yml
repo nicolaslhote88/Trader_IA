@@ -263,21 +263,33 @@ services:
   # AUTHENTIFICATION INITIALE (manuelle, une seule fois) :
   #   ssh -L 5000:localhost:5000 user@vps   → https://localhost:5000 dans navigateur
   ibkr-gateway:
-    build:
-      context: ../../services/ibkr-gateway
-      dockerfile: Dockerfile
-    restart: unless-stopped
+    image: voyz/ibeam:latest
+    restart: "no"
     # Port 5000 accessible uniquement depuis le réseau Docker interne (pas exposé publiquement)
     expose:
       - "5000"
+      - "5001"
+    environment:
+      - IBEAM_ACCOUNT=${IBEAM_ACCOUNT:-}
+      - IBEAM_PASSWORD=${IBEAM_PASSWORD:-}
+      - IBEAM_LOG_LEVEL=${IBEAM_LOG_LEVEL:-INFO}
+      - IBEAM_LOG_TO_FILE=${IBEAM_LOG_TO_FILE:-True}
+      - IBEAM_ERROR_SCREENSHOTS=${IBEAM_ERROR_SCREENSHOTS:-True}
+      - IBEAM_GATEWAY_BASE_URL=${IBEAM_GATEWAY_BASE_URL:-https://localhost:5000}
+      - IBEAM_MAINTENANCE_INTERVAL=${IBEAM_MAINTENANCE_INTERVAL:-60}
+      - IBEAM_MAX_FAILED_AUTH=${IBEAM_MAX_FAILED_AUTH:-3}
+      - IBEAM_RESTART_FAILED_SESSIONS=${IBEAM_RESTART_FAILED_SESSIONS:-True}
+    volumes:
+      - ../../services/ibkr-gateway/conf.yaml:/srv/inputs/conf.yaml:ro
+      - ibeam_outputs:/srv/outputs
     networks:
       - web
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/demo >/dev/null || exit 1"]
+      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/v1/api/iserver/auth/status >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
 
   # ── IBKR Broker microservice (FastAPI) ────────────────────────────────────
   # Wrapper REST autour du CPAPI. Appelé par les nodes n8n pour envoyer les ordres.
@@ -327,3 +339,4 @@ volumes:
     external: true
   n8n_data:
     external: true
+  ibeam_outputs:

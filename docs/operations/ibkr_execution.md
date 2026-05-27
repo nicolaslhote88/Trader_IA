@@ -104,6 +104,40 @@ curl -sS http://127.0.0.1:18080/auth/operator-action
 relogin, l'endpoint renvoie `operator_action` au lieu de masquer le probleme par
 une erreur broker generique.
 
+### IBeam
+
+Le stack VPS peut utiliser `voyz/ibeam:latest` a la place du container
+`clientportal.gw` maison. IBeam est un wrapper non officiel du Client Portal
+Gateway : il lance le gateway, ouvre la page d'authentification en headless,
+injecte `IBEAM_ACCOUNT` / `IBEAM_PASSWORD`, puis maintient la session. La
+documentation IBeam recommande de fournir les credentials par variables
+d'environnement et rappelle que le 2FA IBKR peut toujours intervenir.
+
+Dans notre compose, le service conserve le nom `ibkr-gateway`; `ibkr-broker`
+continue donc d'utiliser `IBKR_GATEWAY_URL=https://ibkr-gateway:5000`. Le
+fichier `services/ibkr-gateway/conf.yaml` est monte dans `/srv/inputs/conf.yaml`
+pour garder la whitelist Docker `172.*`, `10.*`, `100.*` et `127.0.0.1`.
+
+Variables IBeam utiles :
+
+```bash
+IBEAM_ACCOUNT=
+IBEAM_PASSWORD=
+IBEAM_LOG_LEVEL=INFO
+IBEAM_LOG_TO_FILE=True
+IBEAM_ERROR_SCREENSHOTS=True
+IBEAM_GATEWAY_BASE_URL=https://localhost:5000
+IBEAM_MAINTENANCE_INTERVAL=60
+IBEAM_MAX_FAILED_AUTH=3
+IBEAM_RESTART_FAILED_SESSIONS=True
+```
+
+Le compose met `restart: "no"` sur `ibkr-gateway` quand IBeam est actif. C'est
+volontaire : en cas de mauvais mot de passe ou de blocage 2FA, une boucle de
+redemarrage pourrait accumuler des echecs de login IBKR. En exploitation, il
+vaut mieux consulter `docker logs ibkr-gateway` puis redemarrer explicitement le
+service apres correction.
+
 ## Intention FX IBKR
 
 Les ordres AG1-FX sont des **trades Forex spot speculatifs**, pas de simples
@@ -218,6 +252,13 @@ grep -q '^IBKR_USERNAME=' .env || echo 'IBKR_USERNAME=' >> .env
 grep -q '^IBKR_PASSWORD=' .env || echo 'IBKR_PASSWORD=' >> .env
 grep -q '^IBEAM_ACCOUNT=' .env || echo 'IBEAM_ACCOUNT=' >> .env
 grep -q '^IBEAM_PASSWORD=' .env || echo 'IBEAM_PASSWORD=' >> .env
+grep -q '^IBEAM_LOG_LEVEL=' .env || echo 'IBEAM_LOG_LEVEL=INFO' >> .env
+grep -q '^IBEAM_LOG_TO_FILE=' .env || echo 'IBEAM_LOG_TO_FILE=True' >> .env
+grep -q '^IBEAM_ERROR_SCREENSHOTS=' .env || echo 'IBEAM_ERROR_SCREENSHOTS=True' >> .env
+grep -q '^IBEAM_GATEWAY_BASE_URL=' .env || echo 'IBEAM_GATEWAY_BASE_URL=https://localhost:5000' >> .env
+grep -q '^IBEAM_MAINTENANCE_INTERVAL=' .env || echo 'IBEAM_MAINTENANCE_INTERVAL=60' >> .env
+grep -q '^IBEAM_MAX_FAILED_AUTH=' .env || echo 'IBEAM_MAX_FAILED_AUTH=3' >> .env
+grep -q '^IBEAM_RESTART_FAILED_SESSIONS=' .env || echo 'IBEAM_RESTART_FAILED_SESSIONS=True' >> .env
 docker compose config --quiet
 docker compose up -d --build yfinance-api yf-enrichment ibkr-gateway ibkr-broker
 docker compose ps yfinance-api yf-enrichment ibkr-gateway ibkr-broker

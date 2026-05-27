@@ -51,6 +51,12 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_ASSISTED_LOGIN_ENABLED` | `false` par defaut. Indique qu'un flux credentials assistes est branche; ne contourne pas le 2FA IBKR. |
 | `IBKR_USERNAME` / `IBKR_PASSWORD` | Credentials optionnels pour un flux assiste externe. Ne jamais versionner de vraies valeurs. |
 | `IBEAM_ACCOUNT` / `IBEAM_PASSWORD` | Variante de credentials pour un wrapper type IBeam si active ulterieurement. |
+| `IBEAM_LOG_LEVEL` | Niveau de logs IBeam, par defaut `INFO`. Passer a `DEBUG` uniquement pour diagnostic court. |
+| `IBEAM_ERROR_SCREENSHOTS` | `True` par defaut. Capture les erreurs d'auth IBeam dans le volume de sorties. |
+| `IBEAM_GATEWAY_BASE_URL` | Base URL interne IBeam vers son gateway, par defaut `https://localhost:5000`. |
+| `IBEAM_MAINTENANCE_INTERVAL` | Frequence de maintenance IBeam, par defaut `60` secondes. |
+| `IBEAM_MAX_FAILED_AUTH` | Garde-fou anti-lockout IBKR, par defaut `3` echecs consecutifs. |
+| `IBEAM_RESTART_FAILED_SESSIONS` | `True` par defaut : IBeam redemarre le gateway si la session devient invalide. |
 | `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` | Cap d'exposition par ordre pour les ouvertures AG1-FX marquees `REDUCED_SIZE_ONLY`. Defaut `0.10`, toujours borne par `max_pair_pct`. |
 | `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
 | `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |
