@@ -44,6 +44,13 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_KEEPALIVE_INTERVAL_SECONDS` | Frequence du superviseur de session `ibkr-broker`, par defaut 55 secondes. |
 | `IBKR_AUTO_REAUTH_ENABLED` | `true` par defaut : tente `/iserver/auth/ssodh/init` quand la session brokerage tombe mais que Gateway/SSO reste valide. |
 | `IBKR_AUTO_REAUTH_COMPETE` | `false` par defaut. Si `true`, peut deconnecter une session concurrente du meme username IBKR; a reserver a un username dedie au robot. |
+| `IBKR_ALERT_WEBHOOK_URL` | Webhook optionnel appele quand IBKR impose un relogin navigateur/2FA. Laisser vide si non branche. |
+| `IBKR_ALERT_COOLDOWN_SECONDS` | Cooldown minimal entre deux alertes relogin, par defaut `900`. |
+| `IBKR_LOGIN_URL` | URL affichee par `/auth/operator-action`, par defaut `https://localhost:5000`. |
+| `IBKR_LOGIN_TUNNEL_COMMAND` | Commande de tunnel affichee par `/auth/operator-action`. |
+| `IBKR_ASSISTED_LOGIN_ENABLED` | `false` par defaut. Indique qu'un flux credentials assistes est branche; ne contourne pas le 2FA IBKR. |
+| `IBKR_USERNAME` / `IBKR_PASSWORD` | Credentials optionnels pour un flux assiste externe. Ne jamais versionner de vraies valeurs. |
+| `IBEAM_ACCOUNT` / `IBEAM_PASSWORD` | Variante de credentials pour un wrapper type IBeam si active ulterieurement. |
 | `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` | Cap d'exposition par ordre pour les ouvertures AG1-FX marquees `REDUCED_SIZE_ONLY`. Defaut `0.10`, toujours borne par `max_pair_pct`. |
 | `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
 | `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |

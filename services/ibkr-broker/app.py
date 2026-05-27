@@ -8,6 +8,8 @@ Variables d'environnement :
   IBKR_ACCOUNT_ID    ID compte IBKR (optionnel, auto-détecté sinon)
   IBKR_AUTO_REAUTH_ENABLED  "true" → reinit /iserver/auth/ssodh/init si possible
   IBKR_AUTO_REAUTH_COMPETE  "false" → true deconnecte une session concurrente
+  IBKR_ALERT_WEBHOOK_URL    webhook optionnel quand un relogin navigateur/2FA est requis
+  IBKR_ASSISTED_LOGIN_ENABLED  expose si des credentials assistés sont configurés
 
 Endpoints exposés à n8n :
   GET  /health                  → statut session IBKR
@@ -20,15 +22,19 @@ Endpoints exposés à n8n :
   GET  /account/ledger          → cash balances réelles par devise
   POST /auth/tickle             → keepalive manuel
   POST /auth/initialize         → tentative de reinit brokerage session
+  POST /auth/recover            → tickle + reinit + action opérateur si besoin
+  GET  /auth/operator-action    → instruction relogin/2FA sans envoyer d'ordre
 """
 
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
@@ -61,6 +67,13 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     return value
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 # ─── Config ──────────────────────────────────────────────────────────────────
 GATEWAY_URL = os.environ.get("IBKR_GATEWAY_URL", "https://ibkr-gateway:5000")
 DRY_RUN = os.environ.get("IBKR_DRY_RUN", "true").lower() != "false"
@@ -69,6 +82,16 @@ ACCOUNT_ID_OVERRIDE = os.environ.get("IBKR_ACCOUNT_ID", "")
 KEEPALIVE_INTERVAL_SECONDS = _env_int("IBKR_KEEPALIVE_INTERVAL_SECONDS", 55, minimum=15)
 AUTO_REAUTH_ENABLED = os.environ.get("IBKR_AUTO_REAUTH_ENABLED", "true").lower() != "false"
 AUTO_REAUTH_COMPETE = os.environ.get("IBKR_AUTO_REAUTH_COMPETE", "false").lower() == "true"
+ALERT_WEBHOOK_URL = os.environ.get("IBKR_ALERT_WEBHOOK_URL", "").strip()
+ALERT_COOLDOWN_SECONDS = _env_int("IBKR_ALERT_COOLDOWN_SECONDS", 900, minimum=60)
+LOGIN_URL = os.environ.get("IBKR_LOGIN_URL", "https://localhost:5000").strip()
+LOGIN_TUNNEL_COMMAND = os.environ.get(
+    "IBKR_LOGIN_TUNNEL_COMMAND",
+    "ssh -L 5000:127.0.0.1:5000 root@100.104.236.78",
+).strip()
+ASSISTED_LOGIN_ENABLED = _env_bool("IBKR_ASSISTED_LOGIN_ENABLED", False)
+IBKR_USERNAME_CONFIGURED = bool(os.environ.get("IBKR_USERNAME") or os.environ.get("IBEAM_ACCOUNT"))
+IBKR_PASSWORD_CONFIGURED = bool(os.environ.get("IBKR_PASSWORD") or os.environ.get("IBEAM_PASSWORD"))
 
 # ─── Global client ───────────────────────────────────────────────────────────
 _cpapi: CPAPIClient | None = None
@@ -83,6 +106,10 @@ _session_monitor: dict[str, Any] = {
     "last_reauth_error": None,
     "reauth_attempts": 0,
     "manual_login_required": False,
+    "manual_login_since": None,
+    "last_manual_login_alert_at": None,
+    "last_manual_login_alert_error": None,
+    "operator_action": None,
     "message": "Session monitor not started",
 }
 
@@ -117,10 +144,94 @@ def _needs_manual_login(status: dict | None, error: str | None = None) -> bool:
     return bool(status and not status.get("connected"))
 
 
+def _assisted_login_status() -> dict[str, Any]:
+    configured = ASSISTED_LOGIN_ENABLED and IBKR_USERNAME_CONFIGURED and IBKR_PASSWORD_CONFIGURED
+    return {
+        "enabled": ASSISTED_LOGIN_ENABLED,
+        "credentials_configured": configured,
+        "username_configured": IBKR_USERNAME_CONFIGURED,
+        "password_configured": IBKR_PASSWORD_CONFIGURED,
+        "mode": "credential_assisted_gateway" if configured else "manual_gateway_login",
+        "note": (
+            "Credentials are present for an assisted gateway login flow. IBKR 2FA may still require approval."
+            if configured
+            else "No assisted login credentials are active; use browser login plus IBKR 2FA."
+        ),
+    }
+
+
+def _operator_action(reason: str, error: str | None = None) -> dict[str, Any]:
+    return {
+        "required": True,
+        "reason": reason,
+        "error": error,
+        "login_url": LOGIN_URL,
+        "tunnel_command": LOGIN_TUNNEL_COMMAND,
+        "assisted_login": _assisted_login_status(),
+        "next_steps": [
+            "Open the SSH tunnel to the VPS gateway.",
+            "Open the IBKR Client Portal Gateway login URL.",
+            "Validate IBKR credentials and 2FA.",
+            "Call POST /auth/recover or wait for the background keepalive.",
+        ],
+    }
+
+
+def _clear_operator_action() -> None:
+    _session_monitor["manual_login_required"] = False
+    _session_monitor["manual_login_since"] = None
+    _session_monitor["operator_action"] = None
+
+
+async def _send_manual_login_alert(reason: str, error: str | None = None) -> None:
+    if not ALERT_WEBHOOK_URL:
+        return
+    now = datetime.now(timezone.utc)
+    last_raw = _session_monitor.get("last_manual_login_alert_at")
+    if last_raw:
+        try:
+            last = datetime.fromisoformat(str(last_raw))
+            if (now - last).total_seconds() < ALERT_COOLDOWN_SECONDS:
+                return
+        except Exception:
+            pass
+
+    payload = {
+        "event": "IBKR_MANUAL_LOGIN_REQUIRED",
+        "severity": "critical",
+        "at": now.isoformat(),
+        "reason": reason,
+        "error": error,
+        "gateway_url": GATEWAY_URL,
+        "dry_run": DRY_RUN,
+        "operator_action": _operator_action(reason, error),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.post(ALERT_WEBHOOK_URL, json=payload)
+            response.raise_for_status()
+        _session_monitor["last_manual_login_alert_at"] = now.isoformat()
+        _session_monitor["last_manual_login_alert_error"] = None
+    except Exception as exc:
+        _session_monitor["last_manual_login_alert_error"] = str(exc)
+        logger.warning("IBKR manual-login alert failed: %s", exc)
+
+
+async def _mark_manual_login_required(reason: str, error: str | None = None) -> None:
+    _session_monitor["manual_login_required"] = True
+    if not _session_monitor.get("manual_login_since"):
+        _session_monitor["manual_login_since"] = now_iso()
+    _session_monitor["operator_action"] = _operator_action(reason, error)
+    _session_monitor["message"] = "Manual Client Portal login required"
+    await _send_manual_login_alert(reason, error)
+
+
 def _remember_auth_status(status: dict | None) -> None:
     if status is not None:
         _session_monitor["last_auth_status"] = status
-        _session_monitor["manual_login_required"] = _needs_manual_login(status)
+        if _is_authenticated(status):
+            _clear_operator_action()
+            _session_monitor["message"] = "IBKR session authenticated"
 
 
 async def _initialize_brokerage_session(client: CPAPIClient, reason: str) -> dict:
@@ -136,23 +247,21 @@ async def _initialize_brokerage_session(client: CPAPIClient, reason: str) -> dic
         ok = _is_authenticated(status if isinstance(status, dict) else None)
         _session_monitor["last_reauth_ok"] = ok
         _session_monitor["last_reauth_error"] = None
-        _session_monitor["message"] = (
-            f"Brokerage session reinitialized ({reason})"
-            if ok
-            else f"Brokerage session reinit returned unauthenticated ({reason})"
-        )
+        if ok:
+            _clear_operator_action()
+            _session_monitor["message"] = f"Brokerage session reinitialized ({reason})"
+        else:
+            _session_monitor["message"] = f"Brokerage session reinit returned unauthenticated ({reason})"
         logger.info("IBKR brokerage session reinit | reason=%s | ok=%s", reason, ok)
         return {"ok": ok, "response": response}
     except Exception as exc:
         error = str(exc)
         _session_monitor["last_reauth_ok"] = False
         _session_monitor["last_reauth_error"] = error
-        _session_monitor["manual_login_required"] = _needs_manual_login(None, error)
-        _session_monitor["message"] = (
-            "Manual Client Portal login required"
-            if _session_monitor["manual_login_required"]
-            else f"Brokerage session reinit failed: {error}"
-        )
+        if _needs_manual_login(None, error):
+            await _mark_manual_login_required("reauth_failed", error)
+        else:
+            _session_monitor["message"] = f"Brokerage session reinit failed: {error}"
         logger.warning("IBKR brokerage session reinit failed | reason=%s | error=%s", reason, error)
         return {"ok": False, "error": error}
 
@@ -169,7 +278,6 @@ async def _maintain_ibkr_session(client: CPAPIClient, reason: str) -> dict:
             status = await client.auth_status()
         _remember_auth_status(status)
         if _is_authenticated(status):
-            _session_monitor["message"] = "IBKR session authenticated"
             return {"ok": True, "authenticated": True, "tickle": tickle_response, "status": status}
         if AUTO_REAUTH_ENABLED and status.get("connected"):
             reauth = await _initialize_brokerage_session(client, reason)
@@ -180,23 +288,19 @@ async def _maintain_ibkr_session(client: CPAPIClient, reason: str) -> dict:
                 "status": _session_monitor.get("last_auth_status"),
                 "reauth": reauth,
             }
-        _session_monitor["manual_login_required"] = _needs_manual_login(status)
-        _session_monitor["message"] = (
-            "Manual Client Portal login required"
-            if _session_monitor["manual_login_required"]
-            else "IBKR session is connected but not authenticated"
-        )
+        if _needs_manual_login(status):
+            await _mark_manual_login_required("gateway_disconnected", json.dumps(status, ensure_ascii=False))
+        else:
+            _session_monitor["message"] = "IBKR session is connected but not authenticated"
         return {"ok": False, "authenticated": False, "tickle": tickle_response, "status": status}
     except Exception as exc:
         error = str(exc)
         _session_monitor["last_tickle_ok"] = False
         _session_monitor["last_tickle_error"] = error
-        _session_monitor["manual_login_required"] = _needs_manual_login(None, error)
-        _session_monitor["message"] = (
-            "Manual Client Portal login required"
-            if _session_monitor["manual_login_required"]
-            else f"IBKR keepalive failed: {error}"
-        )
+        if _needs_manual_login(None, error):
+            await _mark_manual_login_required("keepalive_failed", error)
+        else:
+            _session_monitor["message"] = f"IBKR keepalive failed: {error}"
         logger.warning("IBKR keepalive failed | reason=%s | error=%s", reason, error)
         return {"ok": False, "authenticated": False, "error": error}
 
@@ -388,14 +492,14 @@ async def health() -> dict:
             "session_monitor": _session_monitor,
             "auto_reauth_enabled": AUTO_REAUTH_ENABLED,
             "auto_reauth_compete": AUTO_REAUTH_COMPETE,
+            "assisted_login": _assisted_login_status(),
+            "operator_action": _session_monitor.get("operator_action"),
         }
     except Exception as exc:
-        _session_monitor["manual_login_required"] = _needs_manual_login(None, str(exc))
-        _session_monitor["message"] = (
-            "Manual Client Portal login required"
-            if _session_monitor["manual_login_required"]
-            else f"IBKR auth status failed: {exc}"
-        )
+        if _needs_manual_login(None, str(exc)):
+            await _mark_manual_login_required("auth_status_failed", str(exc))
+        else:
+            _session_monitor["message"] = f"IBKR auth status failed: {exc}"
         return {
             "dry_run": DRY_RUN,
             "gateway_url": GATEWAY_URL,
@@ -404,6 +508,8 @@ async def health() -> dict:
             "session_monitor": _session_monitor,
             "auto_reauth_enabled": AUTO_REAUTH_ENABLED,
             "auto_reauth_compete": AUTO_REAUTH_COMPETE,
+            "assisted_login": _assisted_login_status(),
+            "operator_action": _session_monitor.get("operator_action"),
         }
 
 
@@ -425,6 +531,44 @@ async def manual_initialize_brokerage_session() -> dict:
     if not result.get("ok"):
         raise HTTPException(502, result)
     return result
+
+
+@app.post("/auth/recover")
+async def recover_ibkr_session() -> dict:
+    """
+    Lance la sequence de recuperation non destructive.
+
+    1. tickle + auth/status
+    2. /iserver/auth/ssodh/init si la session Gateway est encore connectee
+    3. sinon renvoie l'action operateur attendue pour login navigateur + 2FA
+    """
+    client = get_client()
+    result = await _maintain_ibkr_session(client, "manual_recover_endpoint")
+    if result.get("authenticated"):
+        return {
+            "ok": True,
+            "authenticated": True,
+            "session_monitor": _session_monitor,
+            "operator_action": None,
+        }
+    return {
+        "ok": False,
+        "authenticated": False,
+        "session_monitor": _session_monitor,
+        "operator_action": _session_monitor.get("operator_action")
+        or _operator_action("recover_failed", json.dumps(result, default=str, ensure_ascii=False)),
+    }
+
+
+@app.get("/auth/operator-action")
+async def ibkr_operator_action() -> dict:
+    """Retourne l'action humaine attendue si IBKR impose un relogin/2FA."""
+    return {
+        "manual_login_required": bool(_session_monitor.get("manual_login_required")),
+        "operator_action": _session_monitor.get("operator_action"),
+        "assisted_login": _assisted_login_status(),
+        "session_monitor": _session_monitor,
+    }
 
 
 @app.get("/fills")

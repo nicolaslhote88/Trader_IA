@@ -29,7 +29,9 @@ References IBKR utilisees :
 - Le broker supervise la session CPAPI : `/tickle` toutes les 55 secondes,
   puis tentative `/iserver/auth/ssodh/init` si IBKR indique
   `connected=true/authenticated=false`. Si la session Gateway/SSO a expire,
-  `/health` expose `session_monitor.manual_login_required=true`.
+  `/health` expose `session_monitor.manual_login_required=true` et
+  `operator_action` avec la commande de tunnel, l'URL de login et les etapes
+  de validation 2FA.
 - Sur le VPS actuel, les deux services sont integres directement dans le stack
   `/docker/yfinance`. Le fichier de reference a copier comme compose principal
   est `infra/vps_hostinger_config/docker-compose.yfinance.yml`.
@@ -55,6 +57,9 @@ SSO. La solution de production retenue est donc :
   quand la session Gateway/SSO est encore valide;
 - signaler explicitement `manual_login_required=true` quand IBKR impose un
   relogin navigateur;
+- envoyer une alerte webhook optionnelle quand un relogin/2FA est requis;
+- exposer `/auth/recover` et `/auth/operator-action` pour lancer une
+  recuperation non destructive et guider l'operateur;
 - utiliser un username IBKR dedie au robot pour eviter les sessions concurrentes
   Client Portal/TWS/mobile.
 
@@ -62,6 +67,42 @@ SSO. La solution de production retenue est donc :
 session ouverte avec le meme username. Si le robot utilise un username dedie,
 `IBKR_AUTO_REAUTH_COMPETE=true` peut etre active pour reprendre la priorite sur
 une session concurrente accidentelle.
+
+### Credentials en environnement
+
+Le broker accepte les variables `IBKR_USERNAME` / `IBKR_PASSWORD`, ainsi que
+`IBEAM_ACCOUNT` / `IBEAM_PASSWORD`, uniquement comme signal de configuration
+pour un flux d'auto-login assiste. Il ne les affiche jamais dans `/health` et ne
+les journalise pas. Sur Client Portal Gateway, ces credentials ne remplacent pas
+la validation Secure Login System / 2FA imposee par IBKR; ils servent surtout a
+preparer un wrapper headless type IBeam ou Playwright, qui saisit login/password
+et laisse le 2FA etre approuve si IBKR le demande.
+
+Variables utiles :
+
+```bash
+IBKR_ALERT_WEBHOOK_URL=
+IBKR_ALERT_COOLDOWN_SECONDS=900
+IBKR_LOGIN_URL=https://localhost:5000
+IBKR_LOGIN_TUNNEL_COMMAND="ssh -L 5000:127.0.0.1:5000 root@100.104.236.78"
+IBKR_ASSISTED_LOGIN_ENABLED=false
+IBKR_USERNAME=
+IBKR_PASSWORD=
+IBEAM_ACCOUNT=
+IBEAM_PASSWORD=
+```
+
+Endpoints de controle :
+
+```bash
+curl -sS -X POST http://127.0.0.1:18080/auth/recover
+curl -sS http://127.0.0.1:18080/auth/operator-action
+```
+
+`/auth/recover` est non destructif : il tente `tickle`, lit `auth/status`, puis
+`ssodh/init` seulement si la session Gateway reste connectee. Si IBKR exige un
+relogin, l'endpoint renvoie `operator_action` au lieu de masquer le probleme par
+une erreur broker generique.
 
 ## Intention FX IBKR
 
@@ -168,6 +209,15 @@ grep -q '^AG1_FX_PREFUND_BUFFER_PCT=' .env || echo 'AG1_FX_PREFUND_BUFFER_PCT=0.
 grep -q '^IBKR_KEEPALIVE_INTERVAL_SECONDS=' .env || echo 'IBKR_KEEPALIVE_INTERVAL_SECONDS=55' >> .env
 grep -q '^IBKR_AUTO_REAUTH_ENABLED=' .env || echo 'IBKR_AUTO_REAUTH_ENABLED=true' >> .env
 grep -q '^IBKR_AUTO_REAUTH_COMPETE=' .env || echo 'IBKR_AUTO_REAUTH_COMPETE=false' >> .env
+grep -q '^IBKR_ALERT_WEBHOOK_URL=' .env || echo 'IBKR_ALERT_WEBHOOK_URL=' >> .env
+grep -q '^IBKR_ALERT_COOLDOWN_SECONDS=' .env || echo 'IBKR_ALERT_COOLDOWN_SECONDS=900' >> .env
+grep -q '^IBKR_LOGIN_URL=' .env || echo 'IBKR_LOGIN_URL=https://localhost:5000' >> .env
+grep -q '^IBKR_LOGIN_TUNNEL_COMMAND=' .env || echo 'IBKR_LOGIN_TUNNEL_COMMAND=ssh -L 5000:127.0.0.1:5000 root@100.104.236.78' >> .env
+grep -q '^IBKR_ASSISTED_LOGIN_ENABLED=' .env || echo 'IBKR_ASSISTED_LOGIN_ENABLED=false' >> .env
+grep -q '^IBKR_USERNAME=' .env || echo 'IBKR_USERNAME=' >> .env
+grep -q '^IBKR_PASSWORD=' .env || echo 'IBKR_PASSWORD=' >> .env
+grep -q '^IBEAM_ACCOUNT=' .env || echo 'IBEAM_ACCOUNT=' >> .env
+grep -q '^IBEAM_PASSWORD=' .env || echo 'IBEAM_PASSWORD=' >> .env
 docker compose config --quiet
 docker compose up -d --build yfinance-api yf-enrichment ibkr-gateway ibkr-broker
 docker compose ps yfinance-api yf-enrichment ibkr-gateway ibkr-broker
@@ -187,6 +237,7 @@ Controle apres login :
 ```bash
 curl -sS http://127.0.0.1:18080/health
 curl -sS -X POST http://127.0.0.1:18080/auth/initialize
+curl -sS -X POST http://127.0.0.1:18080/auth/recover
 ```
 
 Le second appel doit repondre `ok=true` uniquement si la session Gateway/SSO est
