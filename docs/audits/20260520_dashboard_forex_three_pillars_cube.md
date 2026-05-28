@@ -7,13 +7,14 @@
 - Enrichissement des explications dans `Three Pillars Monitor` pour la sante pipeline, la vue synthese, AG5, AG6, AG7, AG8 et l'historique.
 - Amelioration de l'onglet `Historique Scores` : toutes les devises disponibles sont selectionnees par defaut, fenetre reglable `7j / 30j / 90j / all`, graphe plus haut et zone d'aide d'interpretation.
 - Note complementaire : tous les tableaux du dashboard passent par un rendu HTML wrappé (`render_wrapped_dataframe`) afin d'eviter la troncature des textes longs et de laisser les colonnes courtes se compacter automatiquement.
+- Mise a jour 2026-05-28 : le renderer de tableaux ajoute une ligne `Total` sticky en pied de table. Les colonnes additives (`pnl`, frais, lots, expositions, montants, compteurs, news, etc.) sont sommees; les colonnes non additives comme prix, scores, taux ou dates restent vides.
 
 ## Cube 3 piliers
 
 Le cube met en perspective le court terme et le long terme:
 
 - Axe X: momentum technique AG2-FX.
-- Axe Y: biais news/event AG4-Forex.
+- Axe Y: biais news/event AG4-Forex signe relativement a la devise de base. Une intensite positive brute AG4 ne suffit pas: `bearish_NZD` sur `NZDUSD` doit etre converti en signal negatif pour la base.
 - Axe Z: impact structurel des 3 piliers, calcule par paire comme `(composite_score devise base - composite_score devise cotation) / 2`.
 
 Les zones explicites sont:
@@ -53,3 +54,5 @@ AG1-FX-V2 consomme maintenant le cube dans le brief:
 - `cube_summary.pullback_reinforcement_candidates` pour les renforcements si Z reste intact.
 - `cube_summary.short_term_hype_to_avoid` pour eviter de courir apres X/Y quand Z contredit.
 - `cube_summary.missing_structural_data` pour signaler les paires non jugeables structurellement.
+
+Mise a jour 2026-05-28: AG1-FX-V1 et AG1-FX-V2 signent l'axe news du cube a partir du libelle directionnel (`bullish_<ccy>` / `bearish_<ccy>`) avant d'utiliser l'intensite numerique. Cela evite les faux positifs ou le dashboard voit une convergence alors que le detail AG4 est en conflit avec la devise de base.
