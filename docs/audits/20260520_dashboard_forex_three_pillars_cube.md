@@ -7,7 +7,7 @@
 - Enrichissement des explications dans `Three Pillars Monitor` pour la sante pipeline, la vue synthese, AG5, AG6, AG7, AG8 et l'historique.
 - Amelioration de l'onglet `Historique Scores` : toutes les devises disponibles sont selectionnees par defaut, fenetre reglable `7j / 30j / 90j / all`, graphe plus haut et zone d'aide d'interpretation.
 - Note complementaire : tous les tableaux du dashboard passent par un rendu HTML wrappé (`render_wrapped_dataframe`) afin d'eviter la troncature des textes longs et de laisser les colonnes courtes se compacter automatiquement.
-- Mise a jour 2026-05-28 : le renderer de tableaux ajoute une ligne `Total` sticky en pied de table. Les colonnes additives (`pnl`, frais, lots, expositions, montants, compteurs, news, etc.) sont sommees; les colonnes non additives comme prix, scores, taux ou dates restent vides.
+- Mise a jour 2026-05-28 : le renderer de tableaux ajoute une ligne `Total` sticky en pied de table. Les colonnes additives (`pnl`, frais, lots, expositions, montants, compteurs, news, etc.) sont sommees; les colonnes non additives comme prix, scores, taux ou dates restent vides. Les tableaux `Lots ouverts` et `Derniers lots clos` du focus LLM utilisent des totaux metier: PnL/frais/lots en somme simple, prix et pourcentages en moyenne ponderee.
 
 ## Cube 3 piliers
 

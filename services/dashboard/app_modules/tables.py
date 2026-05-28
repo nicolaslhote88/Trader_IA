@@ -271,6 +271,7 @@ def render_wrapped_dataframe(
     height: int | None = 420,
     key_suffix: str = "wrapped",
     fit_columns: list[str] | None = None,
+    total_row_func=None,
     **_,
 ) -> None:
     """Render a dataframe-like object with readable wrapped text cells.
@@ -325,7 +326,7 @@ def render_wrapped_dataframe(
             cls = "fit" if str(col) in compact else "wrap"
             cells.append(f'<td class="{cls}">{html.escape(_format_cell_value(row.get(col)))}</td>')
         rows.append(f"<tr>{''.join(cells)}</tr>")
-    total_row = _build_total_row(df)
+    total_row = total_row_func(df) if total_row_func is not None else _build_total_row(df)
     total_cells = []
     for col in df.columns:
         cls = "fit" if str(col) in compact else "wrap"
@@ -354,6 +355,7 @@ def render_interactive_table(
     height: int = 420,
     enable_controls: bool = True,
     styler_func=None,
+    total_row_func=None,
 ) -> None:
     if df is None or df.empty:
         st.info("Aucune donnée.")
@@ -382,4 +384,4 @@ def render_interactive_table(
 
     st.caption(f"{len(df_show)} ligne(s) affichée(s) / {len(df)}")
     display_obj = styler_func(df_show) if styler_func is not None else df_show
-    render_wrapped_dataframe(display_obj, hide_index=hide_index, height=height, key_suffix=key_suffix)
+    render_wrapped_dataframe(display_obj, hide_index=hide_index, height=height, key_suffix=key_suffix, total_row_func=total_row_func)

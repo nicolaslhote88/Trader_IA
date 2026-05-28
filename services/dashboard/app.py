@@ -11326,6 +11326,11 @@ def _fx_open_lots_enriched(df_open: pd.DataFrame, cards_by_label: dict[str, dict
         ),
         axis=1,
     )
+    out["P&L courant EUR net"] = (
+        pd.to_numeric(out["_notional_est"], errors="coerce").fillna(0.0)
+        * pd.to_numeric(out["Gain/perte courant % net"], errors="coerce").fillna(0.0)
+        / 100.0
+    ).round(2)
     return out
 
 
@@ -11345,7 +11350,7 @@ def _fx_open_lots_display_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fx_open_lots_styler(df: pd.DataFrame):
-    signed_cols = {"Stop loss % net", "Take profit % net", "Gain/perte courant % net", "Part portefeuille %"}
+    signed_cols = {"Stop loss % net", "Take profit % net", "Gain/perte courant % net", "P&L courant EUR net", "Part portefeuille %"}
 
     def _style_col(col: pd.Series) -> list[str]:
         styles = []
@@ -11366,11 +11371,58 @@ def _fx_open_lots_styler(df: pd.DataFrame):
         "size_lots": "{:.3f}",
         "Part portefeuille %": "{:.2f}",
         "fees_eur": "{:.2f}",
+        "P&L courant EUR net": "{:.2f}",
         "Gain/perte courant % net": "{:.2f}",
         "Stop loss % net": "{:.2f}",
         "Take profit % net": "{:.2f}",
     }
     return df.style.apply(_style_col, axis=0).format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="")
+
+
+def _fx_weighted_average(df: pd.DataFrame, value_col: str, weight_col: str) -> float | pd.NA:
+    if df is None or df.empty or value_col not in df.columns or weight_col not in df.columns:
+        return pd.NA
+    values = pd.to_numeric(df[value_col], errors="coerce")
+    weights = pd.to_numeric(df[weight_col], errors="coerce")
+    mask = values.notna() & weights.notna() & (weights.abs() > 0)
+    if not mask.any():
+        return pd.NA
+    return float((values[mask] * weights[mask]).sum() / weights[mask].sum())
+
+
+def _fx_focus_open_total_row(df: pd.DataFrame) -> dict[str, object]:
+    total = {str(col): "" for col in df.columns}
+    if df is None or df.empty:
+        return total
+    first = str(df.columns[0])
+    total[first] = "Total"
+    if len(df.columns) > 1:
+        total[str(df.columns[1])] = f"{len(df)} lignes"
+    for col in ["size_lots", "Part portefeuille %", "fees_eur", "P&L courant EUR net"]:
+        if col in df.columns:
+            total[col] = pd.to_numeric(df[col], errors="coerce").sum(skipna=True)
+    weight_col = "Part portefeuille %" if "Part portefeuille %" in df.columns else "size_lots"
+    for col in ["open_price", "Derniere valo", "stop_loss_price", "take_profit_price", "Gain/perte courant % net", "Stop loss % net", "Take profit % net"]:
+        if col in df.columns:
+            total[col] = _fx_weighted_average(df, col, weight_col)
+    return total
+
+
+def _fx_closed_lots_total_row(df: pd.DataFrame) -> dict[str, object]:
+    total = {str(col): "" for col in df.columns}
+    if df is None or df.empty:
+        return total
+    first = str(df.columns[0])
+    total[first] = "Total"
+    if len(df.columns) > 1:
+        total[str(df.columns[1])] = f"{len(df)} lignes"
+    for col in ["size_lots", "pnl_eur", "fees_eur"]:
+        if col in df.columns:
+            total[col] = pd.to_numeric(df[col], errors="coerce").sum(skipna=True)
+    for col in ["open_price", "close_price"]:
+        if col in df.columns:
+            total[col] = _fx_weighted_average(df, col, "size_lots")
+    return total
 
 
 FX_REJECTION_HELP = {
@@ -16969,11 +17021,17 @@ elif page == "Dashboard Forex":
                     cols_show = [
                         c for c in [
                             "LLM", "pair", "side", "size_lots", "Part portefeuille %", "open_price", "open_at",
-                            "fees_eur", "Derniere valo", "Gain/perte courant % net",
+                            "fees_eur", "Derniere valo", "P&L courant EUR net", "Gain/perte courant % net",
                             "stop_loss_price", "Stop loss % net", "take_profit_price", "Take profit % net",
                         ] if c in open_enriched.columns
                     ]
-                    render_interactive_table(_fx_open_lots_display_df(open_enriched[cols_show]), key_suffix="fx_dashboard_focus_open", height=300, styler_func=_fx_open_lots_styler)
+                    render_interactive_table(
+                        _fx_open_lots_display_df(open_enriched[cols_show]),
+                        key_suffix="fx_dashboard_focus_open",
+                        height=300,
+                        styler_func=_fx_open_lots_styler,
+                        total_row_func=_fx_focus_open_total_row,
+                    )
                 else:
                     st.caption("Aucun lot ouvert pour ce LLM.")
 
@@ -16987,7 +17045,13 @@ elif page == "Dashboard Forex":
                         closed_show["close_at"] = pd.to_datetime(closed_show["close_at"], errors="coerce", utc=True)
                         closed_show = closed_show.sort_values("close_at", ascending=False)
                     cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "pnl_eur", "fees_eur"] if c in closed_show.columns]
-                    render_interactive_table(closed_show[cols_show].head(60), key_suffix="fx_dashboard_focus_closed", height=320, styler_func=_fx_pair_table_styler)
+                    render_interactive_table(
+                        closed_show[cols_show].head(60),
+                        key_suffix="fx_dashboard_focus_closed",
+                        height=320,
+                        styler_func=_fx_pair_table_styler,
+                        total_row_func=_fx_closed_lots_total_row,
+                    )
                 else:
                     st.caption("Aucun lot clos pour ce LLM.")
 
