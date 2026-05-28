@@ -211,10 +211,16 @@ function compactPairFocus(pair, detail = false) {
 
 function newsEventAxis(pair) {
   const f = pairFocus[pair] || {};
-  const score = Number.isFinite(Number(f.bias_news_score)) ? Number(f.bias_news_score) : 0;
+  const rawScore = Number.isFinite(Number(f.bias_news_score)) ? Number(f.bias_news_score) : 0;
+  const direction = signedDirectionFromNews(pair);
+  let score = rawScore;
+  if (direction === 'BUY_BASE') score = Math.abs(rawScore || 1);
+  else if (direction === 'SELL_BASE') score = -Math.abs(rawScore || 1);
+  else if (Math.abs(rawScore) > 1) score = 0;
   const eventRisk = f.urgent_event_within_4h ? 0.85 : Math.max(num(f.event_risk_score, 0), num(f.urgency_score, 0));
   return {
     score: clamp(score),
+    direction,
     event_risk_score: Math.max(0, Math.min(1, eventRisk > 1 ? eventRisk / 100 : eventRisk)),
   };
 }

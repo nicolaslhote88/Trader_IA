@@ -44,15 +44,32 @@ function textBiasScore(value) {
   return 0;
 }
 
+function newsDirectionFromBias(pair, focus) {
+  const p = String(pair || '').toUpperCase();
+  const base = p.slice(0, 3).toLowerCase();
+  const quote = p.slice(3, 6).toLowerCase();
+  const bias = String(focus.bias_news || focus.bias || focus.direction || focus.sentiment || focus.action || '').toLowerCase();
+  if (!bias || bias === 'unknown' || bias === 'mixed' || bias === 'neutral') return 'NEUTRAL';
+  if (bias.includes('buy_base') || bias.includes('bullish_base') || bias.includes(`bullish_${base}`) || bias.includes(`bearish_${quote}`)) return 'BUY_BASE';
+  if (bias.includes('sell_base') || bias.includes('bearish_base') || bias.includes(`bearish_${base}`) || bias.includes(`bullish_${quote}`)) return 'SELL_BASE';
+  return 'NEUTRAL';
+}
+
 function newsEventAxis(pair) {
   const focus = pairFocusFor(pair);
   const candidates = [
     focus.news_score, focus.bias_score, focus.directional_score, focus.pair_score,
     focus.score, focus.impact_score,
   ];
-  let score = candidates.map(x => Number(x)).find(Number.isFinite);
+  const rawScore = candidates.map(x => Number(x)).find(Number.isFinite);
+  const direction = newsDirectionFromBias(pair, focus);
+  let score = rawScore;
+  if (direction === 'BUY_BASE') score = Math.abs(num(rawScore, 1));
+  else if (direction === 'SELL_BASE') score = -Math.abs(num(rawScore, 1));
   if (!Number.isFinite(score)) {
     score = textBiasScore(focus.bias || focus.direction || focus.sentiment || focus.action || '');
+  } else if (direction === 'NEUTRAL' && Math.abs(score) > 1) {
+    score = 0;
   }
   const eventRisk = Math.max(
     num(focus.event_risk, 0),
@@ -62,6 +79,7 @@ function newsEventAxis(pair) {
   );
   return {
     score: clamp(score),
+    direction,
     event_risk_score: Math.max(0, Math.min(1, eventRisk > 1 ? eventRisk / 100 : eventRisk)),
     summary: truncate(focus.summary || focus.reason || focus.rationale || focus.headline || '', 180),
   };

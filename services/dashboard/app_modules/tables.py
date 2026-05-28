@@ -156,6 +156,49 @@ def _compact_columns(df: pd.DataFrame, max_compact_chars: int = 26) -> set[str]:
     return compact
 
 
+def _is_total_candidate(column: str, series: pd.Series) -> bool:
+    name = str(column).strip().lower()
+    if not pd.to_numeric(series, errors="coerce").notna().any():
+        return False
+    non_additive_tokens = [
+        "id", "prix", "price", "rate", "taux", "yield", "score", "rsi",
+        "macd", "age", "date", "time", "at", "ratio", "leverage",
+        "conviction", "confidence", "risk", "drawdown", "ret ",
+        "return", "open_price", "close_price", "stop_loss_price",
+        "take_profit_price", "last", "mid", "bid", "ask",
+    ]
+    additive_tokens = [
+        "p&l", "pnl", "profit", "loss", "fees", "fee", "commission",
+        "lot", "lots", "size", "qty", "quantity", "notional", "exposure",
+        "solde", "balance", "cash", "equity", "margin", "ordre", "orders",
+        "news", "impact", "source", "count", "nb ", "nombre", "montant",
+        "amount", "valeur", "value", "part portefeuille", "poids portefeuille",
+    ]
+    if any(token in name for token in additive_tokens):
+        return True
+    return not any(token in name for token in non_additive_tokens)
+
+
+def _build_total_row(df: pd.DataFrame) -> dict[str, object]:
+    total: dict[str, object] = {str(col): "" for col in df.columns}
+    if df.empty or len(df.columns) == 0:
+        return total
+
+    total[str(df.columns[0])] = "Total"
+    numeric_total_cols = []
+    for col in df.columns:
+        series = pd.to_numeric(df[col], errors="coerce")
+        if _is_total_candidate(str(col), df[col]):
+            total[str(col)] = series.sum(skipna=True)
+            numeric_total_cols.append(str(col))
+
+    if len(df.columns) > 1:
+        second_col = str(df.columns[1])
+        if second_col not in numeric_total_cols:
+            total[second_col] = f"{len(df)} lignes"
+    return total
+
+
 def _wrapped_table_css(table_id: str, height: int | None = None) -> str:
     max_h = f"max-height: {int(height)}px;" if height else ""
     return f"""
@@ -208,6 +251,15 @@ def _wrapped_table_css(table_id: str, height: int | None = None) -> str:
 #{table_id} tbody tr:nth-child(even) {{
   background: rgba(148, 163, 184, 0.035);
 }}
+#{table_id} tfoot td {{
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  background: rgb(24, 27, 35);
+  color: #f8fafc;
+  font-weight: 700;
+  border-top: 2px solid rgba(148, 163, 184, 0.34);
+}}
 </style>
 """
 
@@ -219,6 +271,7 @@ def render_wrapped_dataframe(
     height: int | None = 420,
     key_suffix: str = "wrapped",
     fit_columns: list[str] | None = None,
+    total_row_func=None,
     **_,
 ) -> None:
     """Render a dataframe-like object with readable wrapped text cells.
@@ -273,6 +326,11 @@ def render_wrapped_dataframe(
             cls = "fit" if str(col) in compact else "wrap"
             cells.append(f'<td class="{cls}">{html.escape(_format_cell_value(row.get(col)))}</td>')
         rows.append(f"<tr>{''.join(cells)}</tr>")
+    total_row = total_row_func(df) if total_row_func is not None else _build_total_row(df)
+    total_cells = []
+    for col in df.columns:
+        cls = "fit" if str(col) in compact else "wrap"
+        total_cells.append(f'<td class="{cls}">{html.escape(_format_cell_value(total_row.get(str(col))))}</td>')
 
     st.markdown(
         f"""
@@ -281,6 +339,7 @@ def render_wrapped_dataframe(
   <table id="{table_id}">
     <thead><tr>{header}</tr></thead>
     <tbody>{''.join(rows)}</tbody>
+    <tfoot><tr>{''.join(total_cells)}</tr></tfoot>
   </table>
 </div>
 """,
@@ -296,6 +355,7 @@ def render_interactive_table(
     height: int = 420,
     enable_controls: bool = True,
     styler_func=None,
+    total_row_func=None,
 ) -> None:
     if df is None or df.empty:
         st.info("Aucune donnée.")
@@ -324,4 +384,4 @@ def render_interactive_table(
 
     st.caption(f"{len(df_show)} ligne(s) affichée(s) / {len(df)}")
     display_obj = styler_func(df_show) if styler_func is not None else df_show
-    render_wrapped_dataframe(display_obj, hide_index=hide_index, height=height, key_suffix=key_suffix)
+    render_wrapped_dataframe(display_obj, hide_index=hide_index, height=height, key_suffix=key_suffix, total_row_func=total_row_func)

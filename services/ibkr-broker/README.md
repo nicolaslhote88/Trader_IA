@@ -33,6 +33,8 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | GET     | `/positions`      | Positions actuelles |
 | POST    | `/auth/tickle`    | Keepalive manuel |
 | POST    | `/auth/initialize` | Reinitialise la session brokerage si la session Gateway/SSO est encore valide |
+| POST    | `/auth/recover` | Lance tickle + reinit puis renvoie l'action operateur si IBKR demande un relogin |
+| GET     | `/auth/operator-action` | Instructions relogin/2FA et statut credentials assistes |
 
 ## Variables d'environnement
 
@@ -45,6 +47,12 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | `IBKR_KEEPALIVE_INTERVAL_SECONDS` | `55` | Frequence du superviseur de session |
 | `IBKR_AUTO_REAUTH_ENABLED` | `true` | Tente `/iserver/auth/ssodh/init` si la session brokerage n'est plus authentifiee mais reste connectee |
 | `IBKR_AUTO_REAUTH_COMPETE` | `false` | Si `true`, peut deconnecter une session IBKR concurrente du meme username |
+| `IBKR_ALERT_WEBHOOK_URL` | *(vide)* | Webhook optionnel appele quand `manual_login_required=true` |
+| `IBKR_ALERT_COOLDOWN_SECONDS` | `900` | Cooldown minimal entre deux alertes relogin |
+| `IBKR_LOGIN_URL` | `https://localhost:5000` | URL affichee dans l'action operateur |
+| `IBKR_LOGIN_TUNNEL_COMMAND` | tunnel VPS | Commande affichee dans l'action operateur |
+| `IBKR_ASSISTED_LOGIN_ENABLED` | `false` | Active le statut "credentials assistes presents" dans `/health` |
+| `IBKR_USERNAME` / `IBKR_PASSWORD` | *(vide)* | Credentials optionnels pour un flux assiste externe. Ne pas exposer dans Git. |
 | `IBKR_SEND_DRY_RUN_TO_BROKER` | `false` | Variable lue par les nodes n8n, pas par le broker. Permet de tester le chemin HTTP en dry-run. |
 
 ## Démarrage et authentification
@@ -74,6 +82,18 @@ maintenir la session. Si IBKR retourne `connected=true` mais
 indique `session_monitor.manual_login_required=true` : il faut alors rouvrir
 `https://localhost:5000` via le tunnel et valider le login/2FA.
 
+Le broker expose aussi :
+
+```bash
+curl -sS -X POST http://localhost:8080/auth/recover
+curl -sS http://localhost:8080/auth/operator-action
+```
+
+`/auth/recover` tente uniquement une recuperation non destructive. Si IBKR
+demande un relogin, la reponse contient `operator_action` avec la commande de
+tunnel, l'URL de login, et l'etat du mode assiste. Si `IBKR_ALERT_WEBHOOK_URL`
+est defini, la meme information est envoyee au webhook avec un cooldown.
+
 ### 3. Vérifier la santé
 
 ```bash
@@ -98,12 +118,28 @@ docker compose up -d ibkr-broker
 
 ## Notes API IBKR
 
-IBKR ne permet pas aux clients individuels d'automatiser le login complet du
-Client Portal Gateway. La reinitialisation automatique ajoutee ici couvre
-uniquement le cas ou la session Gateway/SSO est encore valide mais ou la session
-brokerage `/iserver` est tombee. Pour une exploitation autonome, prevoir une
-fenetre quotidienne de relogin controlee, ou migrer l'execution vers IB Gateway /
-TWS API avec auto-restart si cette contrainte CPAPI devient bloquante.
+IBKR impose le Secure Login System / 2FA sur le Client Portal Gateway. La
+reinitialisation automatique couvre uniquement le cas ou la session Gateway/SSO
+est encore valide mais ou la session brokerage `/iserver` est tombee.
+
+Des credentials peuvent etre injectes via l'environnement pour un flux assiste
+externe (`IBKR_USERNAME`/`IBKR_PASSWORD`, ou `IBEAM_ACCOUNT`/`IBEAM_PASSWORD` si
+un wrapper type IBeam est branche). Cela reduit la saisie manuelle, mais ne doit
+pas etre considere comme un contournement garanti du 2FA. Le broker ne journalise
+jamais ces secrets et ne les renvoie pas dans `/health`; il indique seulement si
+les variables sont configurees.
+
+En production VPS, le service `ibkr-gateway` peut etre remplace par l'image
+`voyz/ibeam:latest`. Le nom de service reste `ibkr-gateway`, donc
+`ibkr-broker` continue d'appeler `https://ibkr-gateway:5000`. IBeam lance le
+Client Portal Gateway, injecte `IBEAM_ACCOUNT` / `IBEAM_PASSWORD` dans la page
+login et maintient la session. Le fichier `services/ibkr-gateway/conf.yaml` est
+monte dans `/srv/inputs/conf.yaml` afin de conserver la whitelist IP Docker du
+projet.
+
+Par securite, le compose de reference utilise `restart: "no"` pour IBeam. Cela
+evite une boucle de redemarrage qui pourrait consommer les tentatives de login
+IBKR si les credentials ou le 2FA echouent.
 
 Le broker envoie les ordres au format Web API actuel : `POST
 /v1/api/iserver/account/{accountId}/orders` avec un objet `{ "orders": [...] }`.

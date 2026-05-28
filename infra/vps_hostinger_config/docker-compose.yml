@@ -87,6 +87,9 @@ services:
       - IBKR_RECONCILE_CASH_BALANCES=${IBKR_RECONCILE_CASH_BALANCES:-true}
       - IBKR_BLOCK_ON_CASH_DIVERGENCE=${IBKR_BLOCK_ON_CASH_DIVERGENCE:-false}
       - IBKR_CASH_RECON_THRESHOLD_UNITS=${IBKR_CASH_RECON_THRESHOLD_UNITS:-5}
+      - IBKR_FILL_CONFIRM_SECONDS=${IBKR_FILL_CONFIRM_SECONDS:-6}
+      - IBKR_FILL_POLL_INTERVAL_SECONDS=${IBKR_FILL_POLL_INTERVAL_SECONDS:-2}
+      - IBKR_SEND_NODE_TIME_BUDGET_SECONDS=${IBKR_SEND_NODE_TIME_BUDGET_SECONDS:-50}
       - AG1_FX_PORTFOLIO_BASE_CCY=${AG1_FX_PORTFOLIO_BASE_CCY:-EUR}
       - AG1_FX_CASH_ONLY_BASE_CCY_MODE=${AG1_FX_CASH_ONLY_BASE_CCY_MODE:-true}
       - AG1_FX_PREFUND_NON_EUR_FX=${AG1_FX_PREFUND_NON_EUR_FX:-true}
@@ -150,6 +153,9 @@ services:
       - IBKR_RECONCILE_CASH_BALANCES=${IBKR_RECONCILE_CASH_BALANCES:-true}
       - IBKR_BLOCK_ON_CASH_DIVERGENCE=${IBKR_BLOCK_ON_CASH_DIVERGENCE:-false}
       - IBKR_CASH_RECON_THRESHOLD_UNITS=${IBKR_CASH_RECON_THRESHOLD_UNITS:-5}
+      - IBKR_FILL_CONFIRM_SECONDS=${IBKR_FILL_CONFIRM_SECONDS:-6}
+      - IBKR_FILL_POLL_INTERVAL_SECONDS=${IBKR_FILL_POLL_INTERVAL_SECONDS:-2}
+      - IBKR_SEND_NODE_TIME_BUDGET_SECONDS=${IBKR_SEND_NODE_TIME_BUDGET_SECONDS:-50}
       - AG1_FX_PORTFOLIO_BASE_CCY=${AG1_FX_PORTFOLIO_BASE_CCY:-EUR}
       - AG1_FX_CASH_ONLY_BASE_CCY_MODE=${AG1_FX_CASH_ONLY_BASE_CCY_MODE:-true}
       - AG1_FX_PREFUND_NON_EUR_FX=${AG1_FX_PREFUND_NON_EUR_FX:-true}
@@ -263,21 +269,33 @@ services:
   # AUTHENTIFICATION INITIALE (manuelle, une seule fois) :
   #   ssh -L 5000:localhost:5000 user@vps   → https://localhost:5000 dans navigateur
   ibkr-gateway:
-    build:
-      context: ../../services/ibkr-gateway
-      dockerfile: Dockerfile
-    restart: unless-stopped
+    image: voyz/ibeam:latest
+    restart: "no"
     # Port 5000 accessible uniquement depuis le réseau Docker interne (pas exposé publiquement)
     expose:
       - "5000"
+      - "5001"
+    environment:
+      - IBEAM_ACCOUNT=${IBEAM_ACCOUNT:-}
+      - IBEAM_PASSWORD=${IBEAM_PASSWORD:-}
+      - IBEAM_LOG_LEVEL=${IBEAM_LOG_LEVEL:-INFO}
+      - IBEAM_LOG_TO_FILE=${IBEAM_LOG_TO_FILE:-True}
+      - IBEAM_ERROR_SCREENSHOTS=${IBEAM_ERROR_SCREENSHOTS:-True}
+      - IBEAM_GATEWAY_BASE_URL=${IBEAM_GATEWAY_BASE_URL:-https://localhost:5000}
+      - IBEAM_MAINTENANCE_INTERVAL=${IBEAM_MAINTENANCE_INTERVAL:-60}
+      - IBEAM_MAX_FAILED_AUTH=${IBEAM_MAX_FAILED_AUTH:-3}
+      - IBEAM_RESTART_FAILED_SESSIONS=${IBEAM_RESTART_FAILED_SESSIONS:-True}
+    volumes:
+      - ../../services/ibkr-gateway/conf.yaml:/srv/inputs/conf.yaml:ro
+      - ibeam_outputs:/srv/outputs
     networks:
       - web
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/demo >/dev/null || exit 1"]
+      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/v1/api/iserver/auth/status >/dev/null || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
+      start_period: 90s
 
   # ── IBKR Broker microservice (FastAPI) ────────────────────────────────────
   # Wrapper REST autour du CPAPI. Appelé par les nodes n8n pour envoyer les ordres.
@@ -297,6 +315,15 @@ services:
       - IBKR_KEEPALIVE_INTERVAL_SECONDS=${IBKR_KEEPALIVE_INTERVAL_SECONDS:-55}
       - IBKR_AUTO_REAUTH_ENABLED=${IBKR_AUTO_REAUTH_ENABLED:-true}
       - IBKR_AUTO_REAUTH_COMPETE=${IBKR_AUTO_REAUTH_COMPETE:-false}
+      - IBKR_ALERT_WEBHOOK_URL=${IBKR_ALERT_WEBHOOK_URL:-}
+      - IBKR_ALERT_COOLDOWN_SECONDS=${IBKR_ALERT_COOLDOWN_SECONDS:-900}
+      - IBKR_LOGIN_URL=${IBKR_LOGIN_URL:-https://localhost:5000}
+      - IBKR_LOGIN_TUNNEL_COMMAND=${IBKR_LOGIN_TUNNEL_COMMAND:-ssh -L 5000:127.0.0.1:5000 root@100.104.236.78}
+      - IBKR_ASSISTED_LOGIN_ENABLED=${IBKR_ASSISTED_LOGIN_ENABLED:-false}
+      - IBKR_USERNAME=${IBKR_USERNAME:-}
+      - IBKR_PASSWORD=${IBKR_PASSWORD:-}
+      - IBEAM_ACCOUNT=${IBEAM_ACCOUNT:-}
+      - IBEAM_PASSWORD=${IBEAM_PASSWORD:-}
     networks:
       - web
     depends_on:
@@ -318,3 +345,4 @@ volumes:
     external: true
   n8n_data:
     external: true
+  ibeam_outputs:

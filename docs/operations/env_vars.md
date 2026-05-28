@@ -39,11 +39,25 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_CASH_RECON_THRESHOLD_UNITS` | Seuil absolu par devise pour signaler une divergence de cash balance, par defaut `5` unites de devise. |
 | `AG1_FX_PORTFOLIO_BASE_CCY` | Devise de base du portefeuille FX pour la reconciliation cash, par defaut `EUR`. |
 | `AG1_FX_CASH_ONLY_BASE_CCY_MODE` | `true` par defaut en paper live CPAPI. Bloque les nouvelles ouvertures qui emprunteraient une devise non-base; avec `EUR`, seules les ouvertures `SELL_BASE` sur paires `EURxxx` et `BUY_BASE` sur paires `xxxEUR` passent. Les clotures restent autorisees. |
-| `IBKR_FILL_CONFIRM_SECONDS` | Temps maximal de polling des fills apres soumission d'ordres FX. |
-| `IBKR_FILL_POLL_INTERVAL_SECONDS` | Intervalle de polling `/fills` pendant la fenetre de confirmation. |
+| `IBKR_FILL_CONFIRM_SECONDS` | Temps maximal de polling des fills apres soumission d'ordres FX, par defaut `6` secondes pour rester sous le timeout n8n de 60s. |
+| `IBKR_FILL_POLL_INTERVAL_SECONDS` | Intervalle de polling `/fills` pendant la fenetre de confirmation, par defaut `2` secondes. |
+| `IBKR_SEND_NODE_TIME_BUDGET_SECONDS` | Budget global du noeud AG1-FX `IBKR Send Orders FX`, par defaut `50` secondes. Le polling des fills est raccourci automatiquement si ce budget est presque consomme. |
 | `IBKR_KEEPALIVE_INTERVAL_SECONDS` | Frequence du superviseur de session `ibkr-broker`, par defaut 55 secondes. |
 | `IBKR_AUTO_REAUTH_ENABLED` | `true` par defaut : tente `/iserver/auth/ssodh/init` quand la session brokerage tombe mais que Gateway/SSO reste valide. |
 | `IBKR_AUTO_REAUTH_COMPETE` | `false` par defaut. Si `true`, peut deconnecter une session concurrente du meme username IBKR; a reserver a un username dedie au robot. |
+| `IBKR_ALERT_WEBHOOK_URL` | Webhook optionnel appele quand IBKR impose un relogin navigateur/2FA. Laisser vide si non branche. |
+| `IBKR_ALERT_COOLDOWN_SECONDS` | Cooldown minimal entre deux alertes relogin, par defaut `900`. |
+| `IBKR_LOGIN_URL` | URL affichee par `/auth/operator-action`, par defaut `https://localhost:5000`. |
+| `IBKR_LOGIN_TUNNEL_COMMAND` | Commande de tunnel affichee par `/auth/operator-action`. |
+| `IBKR_ASSISTED_LOGIN_ENABLED` | `false` par defaut. Indique qu'un flux credentials assistes est branche; ne contourne pas le 2FA IBKR. |
+| `IBKR_USERNAME` / `IBKR_PASSWORD` | Credentials optionnels pour un flux assiste externe. Ne jamais versionner de vraies valeurs. |
+| `IBEAM_ACCOUNT` / `IBEAM_PASSWORD` | Variante de credentials pour un wrapper type IBeam si active ulterieurement. |
+| `IBEAM_LOG_LEVEL` | Niveau de logs IBeam, par defaut `INFO`. Passer a `DEBUG` uniquement pour diagnostic court. |
+| `IBEAM_ERROR_SCREENSHOTS` | `True` par defaut. Capture les erreurs d'auth IBeam dans le volume de sorties. |
+| `IBEAM_GATEWAY_BASE_URL` | Base URL interne IBeam vers son gateway, par defaut `https://localhost:5000`. |
+| `IBEAM_MAINTENANCE_INTERVAL` | Frequence de maintenance IBeam, par defaut `60` secondes. |
+| `IBEAM_MAX_FAILED_AUTH` | Garde-fou anti-lockout IBKR, par defaut `3` echecs consecutifs. |
+| `IBEAM_RESTART_FAILED_SESSIONS` | `True` par defaut : IBeam redemarre le gateway si la session devient invalide. |
 | `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` | Cap d'exposition par ordre pour les ouvertures AG1-FX marquees `REDUCED_SIZE_ONLY`. Defaut `0.10`, toujours borne par `max_pair_pct`. |
 | `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
 | `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |
