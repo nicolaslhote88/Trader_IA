@@ -1280,6 +1280,13 @@ def update_one_portfolio(db_path_cfg, cfg, prices, universe_pairs):
                 "source": "AG1-FX-PF-V1 hourly valuation",
                 "priced_lots": priced_lots,
                 "missing_price_pairs": sorted(set(missing_prices)),
+                "cash_ledger_eur": round(cash, 6),
+                "realized_pnl_eur": round(realized, 6),
+                "floating_pnl_eur": round(floating, 6),
+                "fees_eur": round(fees, 6),
+                "notional_eur": round(notional, 6),
+                "margin_used_eur": round(margin_used, 6),
+                "margin_free_eur": round(margin_free, 6),
             }
 
             con.execute(
@@ -1294,7 +1301,7 @@ def update_one_portfolio(db_path_cfg, cfg, prices, universe_pairs):
                     snapshot_id,
                     run_id,
                     now,
-                    margin_free,
+                    cash,
                     equity,
                     margin_used,
                     margin_free,

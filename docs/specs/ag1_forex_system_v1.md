@@ -742,6 +742,23 @@ Pipeline de checks (un echec -> ordre rejete avec `rejection_reason`, pas crash)
 - En `IBKR_DRY_RUN=false`, aucun fill simule n'est cree. Les fills doivent venir d'IBKR; `fees_eur` est derive des champs de commission IBKR, et `core.fill_costs` conserve montant brut, devise, source et JSON broker. Si IBKR omet la devise sur un fill FX CASH, la devise de commission est inferee depuis la cotation de la paire (`EUR.JPY` -> JPY, `EUR.CHF` -> CHF), puis convertie en EUR.
 - `swap_eur` = 0 si ferme le jour meme, sinon preleve en `19_overnight_swap.py` (hors v1, a laisser en TODO).
 
+### 7.8bis Reconciliation PF horaire
+
+`AG1-FX-PF-V1` ecrit la valeur officielle du portefeuille dans
+`core.portfolio_snapshot` :
+
+```
+equity_eur = cash_ledger_eur + realized_pnl_eur + floating_pnl_eur - SUM(core.fills.fees_eur)
+pnl_total_eur = equity_eur - initial_capital_eur
+```
+
+`pnl_eur` dans `core.position_lots` reste un P&L brut de lot. Les commissions
+doivent etre lues dans `core.fills.fees_eur` / `core.fill_costs`, y compris les
+jambes de prefunding `_FUND` ajoutees pour convertir l'EUR vers les devises non
+EUR. Le dashboard Forex affiche donc une reconciliation dediee : lots clos
+bruts, latent ouvert brut, frais cible, frais prefunding, ecart de prix/arrondi
+avec le dernier snapshot PF, puis P&L net officiel.
+
 ### 7.9 Generation des variants 3 LLMs (v1.1)
 
 `generate_model_variants.py` (calque sur `agents/trading-actions/AG1-V3-Portfolio manager/generate_model_variants.py`) prend le template et produit 3 workflows :

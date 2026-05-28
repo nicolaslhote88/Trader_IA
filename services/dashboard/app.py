@@ -11326,6 +11326,18 @@ def _fx_open_lots_enriched(df_open: pd.DataFrame, cards_by_label: dict[str, dict
         ),
         axis=1,
     )
+    out["P&L courant EUR brut"] = (
+        pd.to_numeric(out["_notional_est"], errors="coerce").fillna(0.0)
+        * (
+            pd.to_numeric(out["Gain/perte courant % net"], errors="coerce").fillna(0.0)
+            + (
+                pd.to_numeric(out["_fees_eur"], errors="coerce").fillna(0.0)
+                / pd.to_numeric(out["_notional_est"], errors="coerce").replace(0, pd.NA)
+                * 100.0
+            ).fillna(0.0)
+        )
+        / 100.0
+    ).round(2)
     out["P&L courant EUR net"] = (
         pd.to_numeric(out["_notional_est"], errors="coerce").fillna(0.0)
         * pd.to_numeric(out["Gain/perte courant % net"], errors="coerce").fillna(0.0)
@@ -11350,7 +11362,10 @@ def _fx_open_lots_display_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _fx_open_lots_styler(df: pd.DataFrame):
-    signed_cols = {"Stop loss % net", "Take profit % net", "Gain/perte courant % net", "P&L courant EUR net", "Part portefeuille %"}
+    signed_cols = {
+        "Stop loss % net", "Take profit % net", "Gain/perte courant % net",
+        "P&L courant EUR brut", "P&L courant EUR net", "Part portefeuille %"
+    }
 
     def _style_col(col: pd.Series) -> list[str]:
         styles = []
@@ -11371,6 +11386,7 @@ def _fx_open_lots_styler(df: pd.DataFrame):
         "size_lots": "{:.3f}",
         "Part portefeuille %": "{:.2f}",
         "fees_eur": "{:.2f}",
+        "P&L courant EUR brut": "{:.2f}",
         "P&L courant EUR net": "{:.2f}",
         "Gain/perte courant % net": "{:.2f}",
         "Stop loss % net": "{:.2f}",
@@ -11398,7 +11414,7 @@ def _fx_focus_open_total_row(df: pd.DataFrame) -> dict[str, object]:
     total[first] = "Total"
     if len(df.columns) > 1:
         total[str(df.columns[1])] = f"{len(df)} lignes"
-    for col in ["size_lots", "Part portefeuille %", "fees_eur", "P&L courant EUR net"]:
+    for col in ["size_lots", "Part portefeuille %", "fees_eur", "P&L courant EUR brut", "P&L courant EUR net"]:
         if col in df.columns:
             total[col] = pd.to_numeric(df[col], errors="coerce").sum(skipna=True)
     weight_col = "Part portefeuille %" if "Part portefeuille %" in df.columns else "size_lots"
@@ -11416,12 +11432,105 @@ def _fx_closed_lots_total_row(df: pd.DataFrame) -> dict[str, object]:
     total[first] = "Total"
     if len(df.columns) > 1:
         total[str(df.columns[1])] = f"{len(df)} lignes"
-    for col in ["size_lots", "pnl_eur", "fees_eur"]:
+    for col in ["size_lots", "pnl_eur", "fees_eur", "P&L clos EUR net lot"]:
         if col in df.columns:
             total[col] = pd.to_numeric(df[col], errors="coerce").sum(skipna=True)
     for col in ["open_price", "close_price"]:
         if col in df.columns:
             total[col] = _fx_weighted_average(df, col, "size_lots")
+    return total
+
+
+def _fx_sum_numeric(df: pd.DataFrame, col: str) -> float:
+    if df is None or df.empty or col not in df.columns:
+        return 0.0
+    return float(pd.to_numeric(df[col], errors="coerce").fillna(0.0).sum())
+
+
+def _fx_fee_breakdown_from_fills(df_fills: pd.DataFrame) -> dict[str, float]:
+    if df_fills is None or df_fills.empty or "fees_eur" not in df_fills.columns:
+        return {"total": 0.0, "funding": 0.0, "target": 0.0, "open": 0.0, "close": 0.0}
+    fees = pd.to_numeric(df_fills["fees_eur"], errors="coerce").fillna(0.0)
+    order_ids = df_fills.get("order_id", pd.Series("", index=df_fills.index)).fillna("").astype(str)
+    sides = df_fills.get("side", pd.Series("", index=df_fills.index)).fillna("").astype(str).str.lower()
+    funding_mask = order_ids.str.contains("_FUND", case=False, na=False)
+    close_mask = sides.isin(["close_long", "close_short"])
+    open_mask = sides.isin(["buy_base", "sell_base"]) & ~funding_mask
+    total = float(fees.sum())
+    funding = float(fees[funding_mask].sum())
+    return {
+        "total": total,
+        "funding": funding,
+        "target": total - funding,
+        "open": float(fees[open_mask].sum()),
+        "close": float(fees[close_mask].sum()),
+    }
+
+
+def _fx_focus_pnl_reconciliation_df(
+    focus_card: dict[str, object],
+    open_enriched: pd.DataFrame,
+    df_closed: pd.DataFrame,
+    df_fills: pd.DataFrame,
+) -> pd.DataFrame:
+    snapshot_pnl = safe_float(focus_card.get("pnl_total"))
+    closed_gross = _fx_sum_numeric(df_closed, "pnl_eur")
+    closed_lot_fees = _fx_sum_numeric(df_closed, "fees_eur")
+    open_gross = _fx_sum_numeric(open_enriched, "P&L courant EUR brut")
+    open_net = _fx_sum_numeric(open_enriched, "P&L courant EUR net")
+    fees = _fx_fee_breakdown_from_fills(df_fills)
+    rebuilt = closed_gross + open_gross - fees["total"]
+    residual = snapshot_pnl - rebuilt
+    rows = [
+        {
+            "Bloc": "Lots clos - P&L brut",
+            "Montant EUR": closed_gross,
+            "Lecture": "Somme de core.position_lots.pnl_eur; les commissions sont traitees separement.",
+        },
+        {
+            "Bloc": "Lots ouverts - P&L latent brut",
+            "Montant EUR": open_gross,
+            "Lecture": "Mark-to-market indicatif au prix affiche par le dashboard, avant frais.",
+        },
+        {
+            "Bloc": "Frais executions cible",
+            "Montant EUR": -fees["target"],
+            "Lecture": "Commissions IBKR sur ouvertures/fermetures des paires tradees.",
+        },
+        {
+            "Bloc": "Frais prefunding / conversions",
+            "Montant EUR": -fees["funding"],
+            "Lecture": "Commissions des jambes _FUND utilisees pour prefinancer les devises non EUR.",
+        },
+        {
+            "Bloc": "P&L net reconstruit dashboard",
+            "Montant EUR": rebuilt,
+            "Lecture": "Lots clos bruts + latent brut - tous les frais d'execution connus.",
+        },
+        {
+            "Bloc": "Ecart snapshot / prix / arrondis",
+            "Montant EUR": residual,
+            "Lecture": "Ecart entre les prix du snapshot PF horaire et les derniers prix affiches ici.",
+        },
+        {
+            "Bloc": "P&L net portefeuille snapshot",
+            "Montant EUR": snapshot_pnl,
+            "Lecture": "Valeur officielle du KPI: equity_eur - capital initial.",
+        },
+    ]
+    out = pd.DataFrame(rows)
+    out["Montant EUR"] = out["Montant EUR"].round(2)
+    out["Controle"] = ""
+    out.loc[out["Bloc"] == "Lots clos - P&L brut", "Controle"] = f"Net lots affiches hors close fees: {closed_gross - closed_lot_fees:+.2f} EUR"
+    out.loc[out["Bloc"] == "Lots ouverts - P&L latent brut", "Controle"] = f"Net ouvert affiche: {open_net:+.2f} EUR"
+    out.loc[out["Bloc"] == "P&L net portefeuille snapshot", "Controle"] = f"Frais totaux fills: {fees['total']:.2f} EUR"
+    return out
+
+
+def _fx_no_total_row(df: pd.DataFrame) -> dict[str, object]:
+    total = {str(col): "" for col in df.columns}
+    if df is not None and len(df.columns) > 0:
+        total[str(df.columns[0])] = "Synthese"
     return total
 
 
@@ -17008,20 +17117,58 @@ elif page == "Dashboard Forex":
                 fc3.metric("Lots ouverts", _fmt_number(focus_card.get("open_lots"), 0))
                 fc4.metric("Ordres rejetes", _fmt_number(focus_card.get("rejected_orders"), 0))
 
+                price_by_pair = {}
+                if pair_overview is not None and not pair_overview.empty and {"Paire", "Prix"}.issubset(pair_overview.columns):
+                    price_by_pair = pair_overview.set_index(pair_overview["Paire"].astype(str).str.upper())["Prix"].map(safe_float).to_dict()
+                cards_by_label = {str(c.get("label") or ""): c for c in cards}
                 df_open_focus = focus_payload.get("df_open", pd.DataFrame())
+                open_enriched = pd.DataFrame()
                 if isinstance(df_open_focus, pd.DataFrame) and not df_open_focus.empty:
-                    st.markdown("##### Lots ouverts")
-                    price_by_pair = {}
-                    if pair_overview is not None and not pair_overview.empty and {"Paire", "Prix"}.issubset(pair_overview.columns):
-                        price_by_pair = pair_overview.set_index(pair_overview["Paire"].astype(str).str.upper())["Prix"].map(safe_float).to_dict()
-                    cards_by_label = {str(c.get("label") or ""): c for c in cards}
                     open_enriched = _fx_open_lots_enriched(df_open_focus, cards_by_label, price_by_pair)
                     if selected_dashboard_pair and "pair" in open_enriched.columns:
                         open_enriched = open_enriched[open_enriched["pair"].astype(str).str.upper() == selected_dashboard_pair].copy()
+
+                df_closed_focus = focus_payload.get("df_closed", pd.DataFrame())
+                closed_for_recon = df_closed_focus.copy() if isinstance(df_closed_focus, pd.DataFrame) else pd.DataFrame()
+                if selected_dashboard_pair and "pair" in closed_for_recon.columns:
+                    closed_for_recon = closed_for_recon[closed_for_recon["pair"].astype(str).str.upper() == selected_dashboard_pair].copy()
+
+                focus_fills = focus_payload.get("df_fills", pd.DataFrame())
+                fee_breakdown = _fx_fee_breakdown_from_fills(focus_fills)
+                recon_df = _fx_focus_pnl_reconciliation_df(
+                    focus_card,
+                    open_enriched,
+                    closed_for_recon,
+                    focus_fills,
+                )
+                if not recon_df.empty:
+                    st.markdown("##### Reconciliation P&L")
+                    r1, r2, r3, r4 = st.columns(4)
+                    snapshot_pnl = safe_float(focus_card.get("pnl_total"))
+                    rebuilt_pnl = safe_float(recon_df.loc[recon_df["Bloc"] == "P&L net reconstruit dashboard", "Montant EUR"].iloc[0])
+                    residual_pnl = safe_float(recon_df.loc[recon_df["Bloc"] == "Ecart snapshot / prix / arrondis", "Montant EUR"].iloc[0])
+                    r1.metric("P&L snapshot", _fmt_currency(snapshot_pnl, 2))
+                    r2.metric("Reconstruit dashboard", _fmt_currency(rebuilt_pnl, 2))
+                    r3.metric("Ecart prix/arrondis", _fmt_currency(residual_pnl, 2))
+                    r4.metric("Frais executes", _fmt_currency(fee_breakdown["total"], 2))
+                    st.caption(
+                        "`pnl_eur` des lots clos est brut. Le KPI P&L retire toutes les commissions IBKR, "
+                        "y compris les jambes de prefunding `_FUND`, puis valorise les lots ouverts avec le snapshot PF horaire."
+                    )
+                    render_interactive_table(
+                        recon_df,
+                        key_suffix="fx_dashboard_focus_pnl_reconciliation",
+                        height=280,
+                        styler_func=_fx_pair_table_styler,
+                        total_row_func=_fx_no_total_row,
+                    )
+
+                if isinstance(df_open_focus, pd.DataFrame) and not df_open_focus.empty and not open_enriched.empty:
+                    st.markdown("##### Lots ouverts")
                     cols_show = [
                         c for c in [
                             "LLM", "pair", "side", "size_lots", "Part portefeuille %", "open_price", "open_at",
-                            "fees_eur", "Derniere valo", "P&L courant EUR net", "Gain/perte courant % net",
+                            "fees_eur", "Derniere valo", "P&L courant EUR brut", "P&L courant EUR net", "Gain/perte courant % net",
                             "stop_loss_price", "Stop loss % net", "take_profit_price", "Take profit % net",
                         ] if c in open_enriched.columns
                     ]
@@ -17035,7 +17182,6 @@ elif page == "Dashboard Forex":
                 else:
                     st.caption("Aucun lot ouvert pour ce LLM.")
 
-                df_closed_focus = focus_payload.get("df_closed", pd.DataFrame())
                 if isinstance(df_closed_focus, pd.DataFrame) and not df_closed_focus.empty:
                     st.markdown("##### Derniers lots clos")
                     closed_show = df_closed_focus.copy()
@@ -17044,7 +17190,14 @@ elif page == "Dashboard Forex":
                     if "close_at" in closed_show.columns:
                         closed_show["close_at"] = pd.to_datetime(closed_show["close_at"], errors="coerce", utc=True)
                         closed_show = closed_show.sort_values("close_at", ascending=False)
+                    if {"pnl_eur", "fees_eur"}.issubset(closed_show.columns):
+                        closed_show["P&L clos EUR net lot"] = (
+                            pd.to_numeric(closed_show["pnl_eur"], errors="coerce").fillna(0.0)
+                            - pd.to_numeric(closed_show["fees_eur"], errors="coerce").fillna(0.0)
+                        ).round(2)
                     cols_show = [c for c in ["LLM", "pair", "side", "size_lots", "open_price", "close_price", "open_at", "close_at", "pnl_eur", "fees_eur"] if c in closed_show.columns]
+                    if "P&L clos EUR net lot" in closed_show.columns:
+                        cols_show.append("P&L clos EUR net lot")
                     render_interactive_table(
                         closed_show[cols_show].head(60),
                         key_suffix="fx_dashboard_focus_closed",

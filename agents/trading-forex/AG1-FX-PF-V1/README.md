@@ -13,6 +13,16 @@ Hourly mark-to-market and broker reconciliation workflow for AG1-FX.
 - Falls back to the latest AG2-FX technical prices when `yfinance-api` is
   unavailable.
 - Writes a fresh `core.portfolio_snapshot` row in the target AG1-FX ledger.
+- Snapshot P&L is the official portfolio reconciliation:
+  `equity_eur = cash_ledger_eur + realized_pnl_eur + floating_pnl_eur - all
+  core.fills.fees_eur`, then `pnl_total_eur = equity_eur - initial_capital_eur`.
+- `cash_eur` stores the cash ledger balance. `margin_used_eur` and
+  `margin_free_eur` stay separate; earlier dashboard readings that summed
+  `cash_eur + margin_used_eur` were only valid when `cash_eur` had been
+  populated by the old margin-free bug.
+- `notes` carries the P&L decomposition (`cash_ledger_eur`,
+  `realized_pnl_eur`, `floating_pnl_eur`, `fees_eur`, `notional_eur`) so the
+  dashboard can reconcile snapshot P&L with lot-level tables.
 - Imports confirmed IBKR fills for orders left in `submitted` state by the PM
   workflow.
 - Imports IBKR commission data for those fills into both `core.fills.fees_eur`
