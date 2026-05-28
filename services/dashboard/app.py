@@ -11379,7 +11379,7 @@ def _fx_open_lots_styler(df: pd.DataFrame):
     return df.style.apply(_style_col, axis=0).format({k: v for k, v in fmt.items() if k in df.columns}, na_rep="")
 
 
-def _fx_weighted_average(df: pd.DataFrame, value_col: str, weight_col: str) -> float | pd.NA:
+def _fx_weighted_average(df: pd.DataFrame, value_col: str, weight_col: str):
     if df is None or df.empty or value_col not in df.columns or weight_col not in df.columns:
         return pd.NA
     values = pd.to_numeric(df[value_col], errors="coerce")
