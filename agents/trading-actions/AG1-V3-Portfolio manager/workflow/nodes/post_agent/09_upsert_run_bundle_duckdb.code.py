@@ -407,12 +407,7 @@ try:
     return out
 
 except Exception as e:
-    return [
-        {
-            "json": {
-                "status": "FATAL_ERROR",
-                "error_message": str(e),
-                "traceback": traceback.format_exc(),
-            }
-        }
-    ]
+    raise RuntimeError(
+        "AG1 DuckDB writer failed; aborting workflow so orders/performance cannot "
+        f"look successful while the ledger is not updated: {e}\n{traceback.format_exc()}"
+    ) from e

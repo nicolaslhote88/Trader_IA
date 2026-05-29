@@ -14,11 +14,12 @@ app = FastAPI()
 
 class RunReq(BaseModel):
     yf_enrich_db_path: str = "/files/duckdb/yf_enrichment_v1.duckdb"
-    ag2_db_path: str = "/files/duckdb/ag2_v2.duckdb"
+    ag2_db_path: str = "/files/duckdb/ag2_v3.duckdb"
     yf_api_url: str = "http://yfinance-api:8080"
     target_days: int = 30
-    quote_chunk_size: int = 80
-    timeout_sec: int = 14
+    quote_chunk_size: int = 40
+    timeout_sec: int = 90
+    metadata_max_symbols: int = 40
 
 
 def _pick_script() -> str:
@@ -56,6 +57,8 @@ def run(req: RunReq | None = None):
         str(payload.quote_chunk_size),
         "--timeout-sec",
         str(payload.timeout_sec),
+        "--metadata-max-symbols",
+        str(payload.metadata_max_symbols),
     ]
 
     proc = subprocess.run(cmd, capture_output=True, text=True)

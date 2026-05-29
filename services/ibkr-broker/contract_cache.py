@@ -136,6 +136,20 @@ SUFFIX_TO_EXCHANGE: dict[str, str] = {
     "": "SMART",
 }
 
+SUFFIX_EXCHANGE_ALIASES: dict[str, tuple[str, ...]] = {
+    # CPAPI can expose Paris equities as ENEXT/SMART instead of SBF,
+    # depending on the contract family returned by Client Portal.
+    "PA": ("SBF", "ENEXT", "EUIBS", "SMART"),
+}
+
 
 def yahoo_suffix_to_ibkr_exchange(suffix: str) -> str:
     return SUFFIX_TO_EXCHANGE.get(suffix.upper(), "SMART")
+
+
+def yahoo_suffix_to_ibkr_exchanges(suffix: str) -> tuple[str, ...]:
+    suffix = suffix.upper()
+    if suffix in SUFFIX_EXCHANGE_ALIASES:
+        return SUFFIX_EXCHANGE_ALIASES[suffix]
+    primary = yahoo_suffix_to_ibkr_exchange(suffix)
+    return (primary,) if primary else ("SMART",)

@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS core.market_prices (
   adj_close DOUBLE,
   volume BIGINT,
   source VARCHAR,
-  asof TIMESTAMPTZ,
+  "asof" TIMESTAMPTZ,
   PRIMARY KEY (ts, symbol, source)
 );
 

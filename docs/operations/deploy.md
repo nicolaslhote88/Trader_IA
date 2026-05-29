@@ -136,6 +136,11 @@ Les nodes n8n 07b/11b restent sandbox-only tant que `IBKR_DRY_RUN=true` et
 PM AG1-FX actif par compte IBKR et laisser `AG1-FX-PF-V1` reconcilier le ledger
 toutes les heures.
 
+Les ordres AG1 actions ont un verrou separe:
+`AG1_ACTIONS_LIVE_ORDERS_ENABLED=false` bloque les envois broker actions meme
+si `IBKR_DRY_RUN=false` est active pour le Forex paper. L'activer seulement
+apres une validation explicite des runs actions et du ledger.
+
 ## 4. Mises à jour
 
 ```bash

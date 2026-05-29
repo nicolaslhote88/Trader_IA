@@ -14,9 +14,10 @@ DEFAULT_YF_ENRICH_DB_PATH = "/files/duckdb/yf_enrichment_v1.duckdb"
 DEFAULT_AG2_DB_PATH = "/files/duckdb/ag2_v3.duckdb"
 DEFAULT_YF_API_URL = "http://yfinance-api:8080"
 DEFAULT_OPTIONS_RECHECK_DAYS = 7
-DEFAULT_QUOTE_CHUNK_SIZE = 80
+DEFAULT_QUOTE_CHUNK_SIZE = 40
 DEFAULT_TARGET_DAYS = 30
-DEFAULT_TIMEOUT_SEC = 14.0
+DEFAULT_TIMEOUT_SEC = 90.0
+DEFAULT_METADATA_MAX_SYMBOLS = 40
 WORKFLOW_VERSION = "1.0.0"
 
 
@@ -586,6 +587,7 @@ def run_job(
     quote_chunk_size: int,
     target_days: int,
     timeout_sec: float,
+    metadata_max_symbols: int,
 ) -> dict:
     started = utcnow()
     run_id = f"YFENRICH_{started.strftime('%Y%m%d%H%M%S')}"
@@ -633,9 +635,12 @@ def run_job(
             "options_ok": 0,
             "calendar_ok": 0,
             "options_empty": 0,
+            "metadata_skipped": 0,
         }
 
-        for spec in symbol_rows:
+        metadata_cap = max(0, int(metadata_max_symbols or 0))
+
+        for idx, spec in enumerate(symbol_rows, start=1):
             sym = spec["symbol"]
             asset_class = normalize_asset_class(spec.get("asset_class"), sym)
             quote_row = quote_map.get(sym, {"ok": False, "symbol": sym, "error": "MISSING_QUOTE"})
@@ -648,6 +653,16 @@ def run_job(
                     "fetchedAt": utcnow().isoformat(),
                     "quoteType": "CURRENCY",
                 }
+            elif metadata_cap > 0 and idx > metadata_cap:
+                info_row = {
+                    "ok": False,
+                    "symbol": sym,
+                    "error": "SKIPPED_METADATA_CAP",
+                    "source": "metadata_cap",
+                    "fetchedAt": utcnow().isoformat(),
+                    "quoteType": "EQUITY",
+                }
+                stats["metadata_skipped"] += 1
             else:
                 info_row = fetch_info(
                     api_url=yf_api_url,
@@ -669,6 +684,22 @@ def run_job(
                     "symbol": sym,
                     "error": "SKIPPED_FX",
                     "source": "asset_class_policy",
+                    "fetchedAt": skipped_ts,
+                }
+            elif metadata_cap > 0 and idx > metadata_cap:
+                skipped_ts = utcnow().isoformat()
+                options_row = {
+                    "ok": False,
+                    "symbol": sym,
+                    "error": "SKIPPED_METADATA_CAP",
+                    "source": "metadata_cap",
+                    "fetchedAt": skipped_ts,
+                }
+                calendar_row = {
+                    "ok": False,
+                    "symbol": sym,
+                    "error": "SKIPPED_METADATA_CAP",
+                    "source": "metadata_cap",
                     "fetchedAt": skipped_ts,
                 }
             else:
@@ -774,6 +805,12 @@ def main() -> None:
     parser.add_argument("--quote-chunk-size", type=int, default=int(os.getenv("YF_ENRICH_QUOTE_CHUNK", str(DEFAULT_QUOTE_CHUNK_SIZE))))
     parser.add_argument("--target-days", type=int, default=int(os.getenv("YF_ENRICH_OPTIONS_TARGET_DAYS", str(DEFAULT_TARGET_DAYS))))
     parser.add_argument("--timeout-sec", type=float, default=float(os.getenv("YF_ENRICH_TIMEOUT_SEC", str(DEFAULT_TIMEOUT_SEC))))
+    parser.add_argument(
+        "--metadata-max-symbols",
+        type=int,
+        default=int(os.getenv("YF_ENRICH_METADATA_MAX_SYMBOLS", str(DEFAULT_METADATA_MAX_SYMBOLS))),
+        help="Maximum symbols enriched with info/options/calendar per run. Quotes are still refreshed for all symbols. 0 means no cap.",
+    )
     args = parser.parse_args()
 
     res = run_job(
@@ -786,6 +823,7 @@ def main() -> None:
         quote_chunk_size=args.quote_chunk_size,
         target_days=args.target_days,
         timeout_sec=args.timeout_sec,
+        metadata_max_symbols=args.metadata_max_symbols,
     )
     print(res)
 

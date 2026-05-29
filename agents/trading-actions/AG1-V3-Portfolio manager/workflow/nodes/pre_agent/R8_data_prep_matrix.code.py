@@ -14,7 +14,12 @@ DEFAULTS = {
     "ag4_spe_db_path": os.getenv("AG4_SPE_DUCKDB_PATH", "/files/duckdb/ag4_spe_v2.duckdb"),
     "yf_enrich_db_path": os.getenv("YF_ENRICH_DUCKDB_PATH", "/files/duckdb/yf_enrichment_v1.duckdb"),
 }
-LOOKBACK_NEWS_DAYS = 30
+LOOKBACK_NEWS_DAYS = int(os.getenv("AG1_R8_NEWS_LOOKBACK_DAYS", "30") or "30")
+MAX_MACRO_ROWS = int(os.getenv("AG1_R8_MAX_MACRO_ROWS", "2500") or "2500")
+MAX_SYMBOL_NEWS_ROWS = int(os.getenv("AG1_R8_MAX_SYMBOL_NEWS_ROWS", "6000") or "6000")
+MAX_H1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_H1_AGE_HOURS", "96") or "96")
+MAX_D1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_D1_AGE_HOURS", "240") or "240")
+MAX_YF_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_YF_AGE_HOURS", "72") or "72")
 
 
 def safe_float(v, default=0.0):
@@ -83,6 +88,16 @@ def parse_dt(v):
 def to_iso(v):
     dt = parse_dt(v)
     return dt.isoformat() if dt is not None else ""
+
+
+def age_hours(v, now_dt):
+    dt = parse_dt(v)
+    if dt is None:
+        return None
+    try:
+        return max(0.0, (now_dt - dt).total_seconds() / 3600.0)
+    except Exception:
+        return None
 
 
 def norm_token(v):
@@ -256,59 +271,80 @@ if not funda_rows:
 
 macro_rows = run_query(
     cfg["ag4_db_path"],
-    """
-    SELECT
-      COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,
-      COALESCE(impact_score, 0) AS impactscore,
-      COALESCE(theme, '') AS theme,
-      COALESCE(title, '') AS title,
-      COALESCE(snippet, '') AS snippet,
-      COALESCE(notes, '') AS notes,
-      COALESCE(winners, '') AS winners,
-      COALESCE(losers, '') AS losers,
-      COALESCE(regime, '') AS regime
-    FROM news_history
-    WHERE COALESCE(type, 'macro') = 'macro'
-    ORDER BY publishedat DESC
+    f"""
+    SELECT *
+    FROM (
+      SELECT
+        COALESCE(published_at, first_seen_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,
+        COALESCE(impact_score, 0) AS impactscore,
+        COALESCE(theme, '') AS theme,
+        COALESCE(title, '') AS title,
+        COALESCE(snippet, '') AS snippet,
+        COALESCE(notes, '') AS notes,
+        COALESCE(winners, '') AS winners,
+        COALESCE(losers, '') AS losers,
+        COALESCE(regime, '') AS regime
+      FROM news_history
+      WHERE COALESCE(type, 'macro') = 'macro'
+    )
+    WHERE publishedat >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
+    ORDER BY ABS(impactscore) DESC, publishedat DESC
+    LIMIT {MAX_MACRO_ROWS}
     """,
 )
 
 
 symbol_news_rows = run_query(
     cfg["ag4_spe_db_path"],
-    """
+    f"""
     SELECT
-      UPPER(TRIM(symbol)) AS symbol,
-      COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) AS publishedat,
-      COALESCE(impact_score, 0) AS impactscore,
-      COALESCE(sentiment, '') AS sentiment,
-      COALESCE(urgency, '') AS urgency,
-      COALESCE(confidence, 0) AS confidence,
-      COALESCE(title, '') AS title,
-      COALESCE(summary, '') AS summary
-    FROM news_history
-    WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''
-    ORDER BY publishedat DESC, symbol
+      symbol,
+      SUM(CASE WHEN publishedat >= CURRENT_TIMESTAMP - INTERVAL '7 days' THEN 1 ELSE 0 END) AS count_7d,
+      COUNT(*) AS count_30d,
+      SUM(CASE WHEN publishedat >= CURRENT_TIMESTAMP - INTERVAL '7 days' THEN impactscore ELSE 0 END) AS impact_7d,
+      SUM(impactscore) AS impact_30d,
+      MAX(publishedat) AS last_news_date
+    FROM (
+      SELECT
+        UPPER(TRIM(symbol)) AS symbol,
+        COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) AS publishedat,
+        COALESCE(impact_score, 0) AS impactscore
+      FROM news_history
+      WHERE symbol IS NOT NULL
+        AND TRIM(symbol) <> ''
+        AND COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
+      ORDER BY publishedat DESC
+      LIMIT {MAX_SYMBOL_NEWS_ROWS}
+    )
+    GROUP BY symbol
     """,
 )
 
 if not symbol_news_rows:
     symbol_news_rows = run_query(
         cfg["ag4_db_path"],
-        """
+        f"""
         SELECT
-          UPPER(TRIM(symbol)) AS symbol,
-          COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,
-          COALESCE(impact_score, 0) AS impactscore,
-          COALESCE(sentiment, '') AS sentiment,
-          COALESCE(urgency, '') AS urgency,
-          COALESCE(confidence, 0) AS confidence,
-          COALESCE(title, '') AS title,
-          COALESCE(summary, '') AS summary
-        FROM news_history
-        WHERE COALESCE(type, '') = 'symbol'
-          AND symbol IS NOT NULL AND TRIM(symbol) <> ''
-        ORDER BY publishedat DESC, symbol
+          symbol,
+          SUM(CASE WHEN publishedat >= CURRENT_TIMESTAMP - INTERVAL '7 days' THEN 1 ELSE 0 END) AS count_7d,
+          COUNT(*) AS count_30d,
+          SUM(CASE WHEN publishedat >= CURRENT_TIMESTAMP - INTERVAL '7 days' THEN impactscore ELSE 0 END) AS impact_7d,
+          SUM(impactscore) AS impact_30d,
+          MAX(publishedat) AS last_news_date
+        FROM (
+          SELECT
+            UPPER(TRIM(symbol)) AS symbol,
+            COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,
+            COALESCE(impact_score, 0) AS impactscore
+          FROM news_history
+          WHERE COALESCE(type, '') = 'symbol'
+            AND symbol IS NOT NULL
+            AND TRIM(symbol) <> ''
+            AND COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
+          ORDER BY publishedat DESC
+          LIMIT {MAX_SYMBOL_NEWS_ROWS}
+        )
+        GROUP BY symbol
         """,
     )
 
@@ -443,6 +479,15 @@ for r in symbol_news_rows:
     sym = str(r.get("symbol") or "").strip().upper()
     if not sym:
         continue
+    if "count_30d" in r:
+        sym_news_agg[sym] = {
+            "count_7d": int(safe_float(r.get("count_7d"), 0.0)),
+            "count_30d": int(safe_float(r.get("count_30d"), 0.0)),
+            "impact_7d": safe_float(r.get("impact_7d"), 0.0),
+            "impact_30d": safe_float(r.get("impact_30d"), 0.0),
+            "last_news_date": parse_dt(r.get("last_news_date")),
+        }
+        continue
     dt = parse_dt(r.get("publishedat"))
     impact = safe_float(r.get("impactscore"), 0.0)
     rec = sym_news_agg.get(sym)
@@ -507,6 +552,22 @@ for sym in sorted(symbols):
     name = str(u.get("name") or "").strip() or sym
     sector = str(u.get("sector") or "").strip()
     industry = str(u.get("industry") or "").strip()
+    yf_age = age_hours(yf.get("fetched_at"), now)
+    h1_age = safe_float(t.get("data_age_h1_hours"), 0.0)
+    d1_age = safe_float(t.get("data_age_d1_hours"), 0.0)
+    data_flags = []
+    if not t:
+        data_flags.append("MISSING_TECH")
+    if h1_age > MAX_H1_AGE_HOURS:
+        data_flags.append("STALE_H1")
+    if d1_age > MAX_D1_AGE_HOURS:
+        data_flags.append("STALE_D1")
+    if not yf:
+        data_flags.append("MISSING_YF")
+    elif yf_age is None or yf_age > MAX_YF_AGE_HOURS:
+        data_flags.append("STALE_YF")
+    if not f:
+        data_flags.append("MISSING_FUNDA")
 
     sec_tok = norm_token(sector)
     ind_tok = norm_token(industry)
@@ -558,8 +619,8 @@ for sym in sorted(symbols):
             "AI_RR_Theoretical": safe_float(t.get("ai_rr_theoretical"), 0.0),
             "AI_Alignment": str(t.get("ai_alignment") or "").strip(),
             "AI_Regime_D1": str(t.get("ai_regime_d1") or "").strip(),
-            "Data_Age_H1_Hours": safe_float(t.get("data_age_h1_hours"), 0.0),
-            "Data_Age_D1_Hours": safe_float(t.get("data_age_d1_hours"), 0.0),
+            "Data_Age_H1_Hours": h1_age,
+            "Data_Age_D1_Hours": d1_age,
             "Last_Tech_Date": to_iso(t.get("tech_ts")),
             "Funda_Score": safe_float(f.get("score"), 50.0),
             "Funda_Risk": safe_float(f.get("risk_score"), 50.0),
@@ -588,6 +649,9 @@ for sym in sorted(symbols):
             "Next_Earnings_Date": to_iso(yf.get("next_earnings_date")),
             "Days_To_Earnings": yf.get("days_to_earnings"),
             "YF_Fetched_At": to_iso(yf.get("fetched_at")),
+            "YF_Age_Hours": round(yf_age, 2) if yf_age is not None else None,
+            "Data_Quality_Flags": ", ".join(data_flags),
+            "Data_OK_For_Trading": len(data_flags) == 0,
             "Sector_Weight_Pct": safe_float(sec_weight.get(sector, 0.0), 0.0),
             "Symbol_Weight_Pct": safe_float(sym_weight.get(sym, 0.0), 0.0)
         }

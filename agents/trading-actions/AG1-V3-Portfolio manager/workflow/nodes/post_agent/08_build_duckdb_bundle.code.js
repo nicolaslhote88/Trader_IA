@@ -71,9 +71,16 @@ function brokerOrderId(order) {
 function orderStatus(order) {
   const ibkr = String(order?.ibkrStatus || "").toLowerCase();
   if (ibkr === "submitted") return "SUBMITTED";
+  if (ibkr === "filled" || ibkr === "executed") return "FILLED";
   if (ibkr === "dry_run") return "PLANNED";
   if (ibkr === "error" || ibkr === "not_sent") return "REJECTED";
   return "PLANNED";
+}
+
+function orderHasFillLikeEffect(order) {
+  const ibkr = String(order?.ibkrStatus || "").toLowerCase();
+  const broker = String(order?.broker || "").toUpperCase();
+  return ibkr === "dry_run" || ibkr === "filled" || ibkr === "executed" || broker === "SIM";
 }
 
 function inferRiskStatus(cashPct, cashEUR) {
@@ -119,6 +126,7 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
   }
 
   let cashEUR = startCash;
+  let runFeesEUR = 0;
   for (const order of orders || []) {
     const symbol = normalizeSymbol(order?.symbol);
     const side = String(order?.side || "").trim().toUpperCase();
@@ -129,6 +137,8 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
       toNum(priceMap[symbol], null);
 
     if (!symbol || qty <= 0 || !Number.isFinite(price) || price <= 0) continue;
+    const feesEUR = toNum(order?.expectedFeesEUR ?? order?.feesEUR ?? order?.fees_eur, 0) || 0;
+    runFeesEUR += Math.max(0, feesEUR);
 
     if (side === "BUY") {
       const current = posMap.get(symbol) || {
@@ -144,7 +154,7 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
       current.qty = newQty;
       current.lastPrice = toNum(priceMap[symbol], price);
       posMap.set(symbol, current);
-      cashEUR -= qty * price;
+      cashEUR -= (qty * price) + feesEUR;
       continue;
     }
 
@@ -155,7 +165,7 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
       if (execQty <= 0) continue;
       current.qty -= execQty;
       current.lastPrice = toNum(priceMap[symbol], price);
-      cashEUR += execQty * price;
+      cashEUR += (execQty * price) - feesEUR;
       if (current.qty <= 1e-9) posMap.delete(symbol);
       else posMap.set(symbol, current);
     }
@@ -190,7 +200,7 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
   }
 
   const initialCapitalEUR = toNum(meta?.initialCapitalEUR, 50000);
-  const cumFeesEUR = toNum(meta?.cumFeesEUR, 0);
+  const cumFeesEUR = toNum(meta?.cumFeesEUR, 0) + runFeesEUR;
   const cumAiCostEUR = toNum(meta?.cumAiCostEUR, 0);
   const totalPnLEUR = totalValueEUR - initialCapitalEUR;
   const roi = initialCapitalEUR > 0 ? (totalPnLEUR / initialCapitalEUR) : 0;
@@ -242,6 +252,7 @@ const runCtx = ctx.run || {};
 const meta = input.meta || ctx.meta || {};
 const agentDecision = input.agentDecision || {};
 const ordersIn = Array.isArray(input.orders) ? input.orders : [];
+const fillEffectOrders = ordersIn.filter(orderHasFillLikeEffect);
 const warnings = Array.isArray(input.warnings) ? input.warnings : [];
 const ts_end = new Date().toISOString();
 const run_id = runCtx.runId || `RUN_${Date.now()}`;
@@ -356,7 +367,7 @@ if (String(input.decision || "").toUpperCase() === "NO_TRADE" && warnings.length
   });
 }
 
-const snapshots = buildSnapshotsFromPortfolio(portfolioSummary, ordersIn, priceMap, ts_end, meta);
+const snapshots = buildSnapshotsFromPortfolio(portfolioSummary, fillEffectOrders, priceMap, ts_end, meta);
 
 const bundle = {
   run: {
@@ -387,9 +398,11 @@ const bundle = {
       ibkrStatus: o.ibkrStatus || null,
       ibkrResponse: o.ibkrResponse || null,
       ibkrError: o.ibkrError || null,
+      expectedFeesEUR: o.expectedFeesEUR || 0,
+      riskChecks: o.riskChecks || null,
     },
   })),
-  fills: ordersIn.map((o, i) => {
+  fills: fillEffectOrders.map((o, i) => {
     const sym = String(o.symbol || "").trim();
     const order_id = orderLedgerId(o, run_id, i);
     const orderType = normalizeOrderType(o.orderType);
@@ -404,8 +417,11 @@ const bundle = {
       side: o.side,
       qty: o.quantity,
       price: (Number.isFinite(px) && px > 0) ? px : 1.0,
+      fees_eur: toNum(o.expectedFeesEUR ?? o.feesEUR ?? o.fees_eur, 0) || 0,
+      slippage_bps: toNum(o.slippageBps ?? o.slippage_bps, null),
+      liquidity: clampText(o.liquidity || "UNKNOWN", 32),
       raw_fill_json: {
-        source: o.ibkrStatus === "submitted" ? "simulated_after_ibkr_submit" : "simulated_sandbox",
+        source: o.ibkrStatus === "dry_run" ? "simulated_sandbox" : "confirmed_or_imported",
         clientOrderId: o.clientOrderId || null,
         ibkrStatus: o.ibkrStatus || null,
         ibkrResponse: o.ibkrResponse || null,

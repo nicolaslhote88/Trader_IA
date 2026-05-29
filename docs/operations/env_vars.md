@@ -23,12 +23,22 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 |---|---|
 | `TRANSCRIPT_API_BASE` | URL de base du service de transcripts consommé par les analystes AG4. |
 
+## Yahoo Finance / YF enrichment
+
+| Variable | Rôle |
+|---|---|
+| `YF_MIN_SECONDS_BETWEEN_CALLS` | Delai global entre appels Yahoo dans `yfinance-api`. Defaut VPS recommande: `1`. Augmenter si Yahoo renvoie des 429 repetes. |
+| `YF_ENRICH_METADATA_MAX_SYMBOLS` | Nombre maximal de symboles enrichis en metadata/options/calendar par run. Les quotes restent rafraichies pour tous les symboles charges. Defaut: `40`. |
+| `YF_ENRICH_QUOTE_CHUNK` | Taille des chunks `/quote` pour le job YF. Defaut service: `40`. |
+| `YF_ENRICH_TIMEOUT_SEC` | Timeout par appel au service `yfinance-api`. Defaut service: `90`. |
+
 ## IBKR / Execution live
 
 | Variable | Rôle |
 |---|---|
 | `IBKR_DRY_RUN` | `true` : aucun ordre broker reel n'est envoye. `false` active l'envoi via IBKR. En production Forex actuelle, cette valeur est `false` uniquement sur le compte paper. |
 | `IBKR_SEND_DRY_RUN_TO_BROKER` | `false` par defaut : les nodes n8n restent sandbox-only en dry-run. `true` appelle `ibkr-broker` en dry-run pour valider le chemin HTTP sans ordre live. |
+| `AG1_ACTIONS_LIVE_ORDERS_ENABLED` | `false` par defaut : bloque les ordres actions AG1 meme si `IBKR_DRY_RUN=false` pour le Forex paper. Passer a `true` uniquement apres validation des runs actions, reconciliation broker et controle du ledger. |
 | `IBKR_ACCOUNT_ID` | Compte IBKR cible. Laisser vide pour auto-detection, mais le fixer est recommande avant le live. |
 | `IBKR_BROKER_URL` | URL interne n8n/runners vers le broker. Definie dans compose : `http://ibkr-broker:8080`. |
 | `IBKR_GATEWAY_URL` | URL interne du broker vers Client Portal Gateway. Definie dans compose : `https://ibkr-gateway:5000`. |

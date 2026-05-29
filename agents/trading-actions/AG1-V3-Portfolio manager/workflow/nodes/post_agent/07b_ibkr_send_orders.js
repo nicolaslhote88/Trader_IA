@@ -19,6 +19,7 @@ const DRY_RUN = String($env.IBKR_DRY_RUN || "true").toLowerCase() !== "false";
 const N8N_CONTEXT = this;
 
 const SEND_DRY_RUN_TO_BROKER = String($env.IBKR_SEND_DRY_RUN_TO_BROKER || "false").toLowerCase() === "true";
+const LIVE_ORDERS_ENABLED = String($env.AG1_ACTIONS_LIVE_ORDERS_ENABLED || "false").toLowerCase() === "true";
 const FORCE_IBKR_CONNECTIVITY_TEST_ORDER = false;
 
 function toNum(v, d = 0) {
@@ -150,7 +151,13 @@ if (
   }];
 }
 
-if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
+if (!DRY_RUN && !LIVE_ORDERS_ENABLED && actionableOrders.length > 0) {
+  ibkrErrors = actionableOrders.map((o) => ({
+    order_id: o.orderId,
+    client_order_id: o.clientOrderId,
+    error: "AG1_ACTIONS_LIVE_ORDERS_DISABLED",
+  }));
+} else if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
   const payload = {
     orders: actionableOrders.map((o) => ({
       symbol: o.symbol,
@@ -160,6 +167,8 @@ if (actionableOrders.length > 0 && (!DRY_RUN || SEND_DRY_RUN_TO_BROKER)) {
       client_order_id: o.clientOrderId,
       order_type: normalizeOrderType(o.orderType),
       limit_price: o.limitPrice ?? null,
+      isin: o.isin || null,
+      exchange: o.exchange || null,
     })),
     run_id: runId,
   };
@@ -212,7 +221,7 @@ for (const order of orders) {
 const liveFailedOrderIds = new Set(
   !DRY_RUN
     ? orders
-      .filter((o) => ["error", "not_sent"].includes(String(o.ibkrStatus || "").toLowerCase()))
+      .filter((o) => ["error", "not_sent", "blocked_live_disabled"].includes(String(o.ibkrStatus || "").toLowerCase()))
       .map((o) => o.orderId)
     : []
 );
@@ -233,6 +242,7 @@ return [{
     warnings,
     ibkrSendSummary: {
       dryRun: DRY_RUN,
+      liveOrdersEnabled: LIVE_ORDERS_ENABLED,
       sendDryRunToBroker: SEND_DRY_RUN_TO_BROKER,
       forceConnectivityTestOrder: FORCE_IBKR_CONNECTIVITY_TEST_ORDER,
       connectivityTestInjected,

@@ -60,7 +60,7 @@ La v2 ne déclenche PAS de cooldown dans ce cas si le cache existe.
 | `YF_COOLDOWN_BASE_SEC` | 900 | 300 | Cooldown de base |
 | `YF_COOLDOWN_MAX_SEC` | 14400 | 3600 | Cooldown maximum |
 | `YF_COOLDOWN_RATELIMIT_SEC` | N/A | 1800 | Cooldown spécifique 429 |
-| `YF_MIN_SECONDS_BETWEEN_CALLS` | 2 | 5 | Rate limit global |
+| `YF_MIN_SECONDS_BETWEEN_CALLS` | 2 | 1 | Rate limit global |
 | `YF_CACHE_TTL_JSON` | N/A | {} | Override TTL par intervalle (JSON) |
 
 ## docker-compose.yml - section à modifier
@@ -79,7 +79,7 @@ La v2 ne déclenche PAS de cooldown dans ce cas si le cache existe.
       - YF_COOLDOWN_BASE_SEC=300
       - YF_COOLDOWN_MAX_SEC=3600
       - YF_COOLDOWN_RATELIMIT_SEC=1800
-      - YF_MIN_SECONDS_BETWEEN_CALLS=5
+      - YF_MIN_SECONDS_BETWEEN_CALLS=1
     dns:
       - 1.1.1.1
       - 8.8.8.8

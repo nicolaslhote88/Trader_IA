@@ -18,6 +18,12 @@ contacte pas `ibkr-broker`. Pour tester le chemin HTTP sans ordre live, definir
 `IBKR_SEND_DRY_RUN_TO_BROKER=true`. Le passage live se fait uniquement via
 `IBKR_DRY_RUN=false` cote VPS.
 
+Comme le Forex paper peut tourner avec `IBKR_DRY_RUN=false`, les ordres actions
+ont un garde-fou supplementaire: `AG1_ACTIONS_LIVE_ORDERS_ENABLED=false` bloque
+l'envoi broker des ordres actions meme quand le broker est en mode live/paper.
+Ne passer cette variable a `true` qu'apres validation du ledger AG1, de la
+reconciliation broker et des controles de qualite des donnees.
+
 Utilitaires au niveau parent :
 
 - `rebuild_pack.py` — régénère les fichiers `workflow/nodes/*` et les variants depuis le template.

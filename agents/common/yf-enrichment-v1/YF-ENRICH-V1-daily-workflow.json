@@ -36,6 +36,9 @@
       "parameters": {
         "method": "POST",
         "url": "http://yf-enrichment:8081/run",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{\n  \"yf_enrich_db_path\": \"/files/duckdb/yf_enrichment_v1.duckdb\",\n  \"ag2_db_path\": \"/files/duckdb/ag2_v3.duckdb\",\n  \"yf_api_url\": \"http://yfinance-api:8080\",\n  \"target_days\": 30,\n  \"quote_chunk_size\": 40,\n  \"timeout_sec\": 90,\n  \"metadata_max_symbols\": 40\n}",
         "options": {
           "timeout": 1800000
         }

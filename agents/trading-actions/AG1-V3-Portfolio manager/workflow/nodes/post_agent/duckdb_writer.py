@@ -392,7 +392,7 @@ def _upsert_market_prices(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Mapp
           close = excluded.close,
           adj_close = excluded.adj_close,
           volume = excluded.volume,
-          "asof" = excluded.asof
+          "asof" = excluded."asof"
         """,
         rows,
     )
@@ -775,7 +775,7 @@ def _rebuild_position_lots_from_fills(con: duckdb.DuckDBPyConnection) -> int:
         SELECT
           f.fill_id,
           f.order_id,
-          f.ts_fill,
+          CAST(f.ts_fill AS VARCHAR) AS ts_fill,
           CAST(f.qty AS DOUBLE) AS qty,
           CAST(f.price AS DOUBLE) AS price,
           CAST(COALESCE(f.fees_eur, 0) AS DOUBLE) AS fees_eur,
