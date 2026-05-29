@@ -58,7 +58,14 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBEAM_MAINTENANCE_INTERVAL` | Frequence de maintenance IBeam, par defaut `60` secondes. |
 | `IBEAM_MAX_FAILED_AUTH` | Garde-fou anti-lockout IBKR, par defaut `3` echecs consecutifs. |
 | `IBEAM_RESTART_FAILED_SESSIONS` | `True` par defaut : IBeam redemarre le gateway si la session devient invalide. |
-| `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` | Cap d'exposition par ordre pour les ouvertures AG1-FX marquees `REDUCED_SIZE_ONLY`. Defaut `0.10`, toujours borne par `max_pair_pct`. |
+| `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` | Cap d'exposition par ordre pour les ouvertures AG1-FX marquees `REDUCED_SIZE_ONLY`. Defaut `0.15`, toujours borne par `max_pair_pct`. |
+| `AG1_FX_ESTIMATED_FEE_PER_FILL_EUR` | Estimation prudente du cout minimum par fill IBKR utilisee par le brief et le Risk Manager. Defaut `1.75`. |
+| `AG1_FX_MIN_NEW_TRADE_NOTIONAL_EUR` | Notional minimum d'une nouvelle ouverture AG1-FX. Defaut `1200`, pour eviter les micro-trades detruits par les frais fixes. |
+| `AG1_FX_TARGET_NEW_TRADE_NOTIONAL_EUR` | Taille cible indicative envoyee au LLM pour les setups valides. Defaut `1700`. |
+| `AG1_FX_MIN_EXPECTED_GROSS_PROFIT_EUR` | Profit brut minimum attendu entre prix d'entree et take-profit avant frais. Defaut `8`. |
+| `AG1_FX_MIN_REWARD_TO_FEE` | Ratio minimum profit brut attendu / frais estimes. Defaut `2.0`. |
+| `AG1_FX_MIN_CLOSE_NET_PROFIT_EUR` | Profit net minimum estime apres frais de sortie pour autoriser une cloture discretionnaire. Defaut `2.0`. |
+| `AG1_FX_MIN_DISCRETIONARY_HOLD_HOURS` | Duree minimale avant une cloture discretionnaire perdante nette, sauf stop/TP ou invalidation forte du cube. Defaut `24`. |
 | `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
 | `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |
 

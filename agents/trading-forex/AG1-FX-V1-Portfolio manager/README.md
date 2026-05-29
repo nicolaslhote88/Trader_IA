@@ -55,8 +55,21 @@ a separate broker account or a broker-side portfolio namespace.
   `trade_permission=NO_NEW_POSITION` as a hard broker-blocking rejection
   (`TRADE_PERMISSION_NO_NEW_POSITION`), regardless of the LLM rationale.
 - Node `11_validate_enforce_safety_fx.js` caps `REDUCED_SIZE_ONLY` openings to
-  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` of equity, default `0.10`. Oversized LLM
+  `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT` of equity, default `0.15`. Oversized LLM
   requests are resized before pair, leverage, margin and currency checks.
+- Node `11_validate_enforce_safety_fx.js` is fee-aware. It rejects new opens
+  below `AG1_FX_MIN_NEW_TRADE_NOTIONAL_EUR` (default `1200`) or whose
+  take-profit distance does not clear both `AG1_FX_MIN_EXPECTED_GROSS_PROFIT_EUR`
+  and `AG1_FX_MIN_REWARD_TO_FEE` times the estimated fill fees. This prevents
+  IBKR minimum commissions from turning correct micro-signals into negative
+  net expectancy trades.
+- Close and partial-close decisions are also fee-aware. A discretionary close
+  that would be negative after the estimated exit fee is rejected unless a
+  stop/TP is reached or the cube/Three Pillars setup has genuinely flipped
+  against the lot. A neutral cube alone is not an exit signal.
+- Prefunding rejects self-conflicting conversions such as buying `EURCAD` while
+  trying to prefund CAD by selling `EURCAD`; these are marked
+  `PREFUNDING_SELF_PAIR_CONFLICT` before IBKR.
 - The 3-axis cube exposes `structural_data_quality`,
   `structural_confidence_floor` and `structural_proxy_used`. New opens still
   require `convergence_multi_horizon_*`; when the structural leg is
@@ -101,8 +114,14 @@ Post-agent safety is deterministic and takes precedence over the model output:
 - `NO_NEW_POSITION` from `llm_brief.pair_matrix[].decision` or
   `llm_brief.market_watch[].decision` rejects new opens before IBKR.
 - `REDUCED_SIZE_ONLY` permits only reduced opens and caps notional exposure to
-  10% of equity by default, configurable with
+  15% of equity by default, configurable with
   `AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT`.
+- `TRADE_ECONOMICS_NOTIONAL_TOO_SMALL`,
+  `TRADE_ECONOMICS_REWARD_TOO_SMALL`,
+  `TRADE_ECONOMICS_MISSING_TAKE_PROFIT`, and
+  `CLOSE_ECONOMICS_NEGATIVE_NET` are deterministic fee/friction guards.
+- `PREFUNDING_SELF_PAIR_CONFLICT` blocks conversion legs that would immediately
+  oppose the target order on the same FX pair.
 - Existing portfolio, pair, currency, leverage, margin, SL/TP-side and
   reconciliation gates still run after the compact-pack permission gate.
 
