@@ -5497,7 +5497,7 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     )
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["total_value"])
     out = out.sort_values(["timestamp", "__source_priority"], kind="stable")
-    out = out.groupby("timestamp", as_index=False).last().sort_values("timestamp")
+    out = out.groupby("timestamp", as_index=False).first().sort_values("timestamp")
     out = out.drop(columns=["__source_priority"], errors="ignore")
     out["invested_value"] = out["equity_value"]
     if (out["invested_value"].abs().sum() == 0) and ("cash_value" in out.columns):

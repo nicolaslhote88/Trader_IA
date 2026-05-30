@@ -162,3 +162,47 @@ Controles de validation:
   statut `PARTIAL` limite aux symboles Yahoo invalides/delistings;
 - IBKR broker up et healthy, mais session IBKR non authentifiee au
   2026-05-30 09:18 Europe/Paris (`manual_login_required=true`).
+
+## Reparation des courbes, cash et ecarts du 2026-05-30
+
+Un second controle visuel du dashboard a montre que les courbes et l'allocation
+ne refletaient pas encore la realite economique:
+
+- le dernier snapshot ledger valide etait retombe au 2026-05-08 apres
+  quarantaine du run pollue;
+- le miroir `portfolio_positions_mtm_latest/history` contenait encore un point
+  PFMTM du 2026-05-29 construit avant le nettoyage;
+- l'historique contenait des fills positifs sur des ordres `PLANNED` et
+  `SUBMITTED`, ce qui generait des courbes irrealistes et du cash negatif.
+
+Correction de donnees appliquee sur les trois bases AG1 actions:
+
+- mise en quarantaine de tous les fills dont l'ordre joint n'est pas
+  `FILLED`/`EXECUTED`;
+- reconstruction de `core.cash_ledger` avec un depot initial de 50 000 EUR et
+  les flux cash issus uniquement des fills executes;
+- application d'une contrainte cash-only lors du replay historique: un achat
+  Grok `DSY.PA` a ete reduit de 123 a 106 titres pour eviter un cash negatif,
+  et une vente sans lot disponible a ete neutralisee;
+- reconstruction complete de `core.position_lots`, `core.positions_snapshot`,
+  `core.portfolio_snapshot`, `core.risk_metrics`;
+- reconstruction du miroir `portfolio_positions_mtm_latest/history` depuis les
+  snapshots core repares avec `ag1_source_run_id`.
+
+Etat apres reparation:
+
+- ChatGPT: cash min 7 483,85 EUR; dernier cash 8 219,69 EUR; valeur totale
+  52 049,72 EUR; aucun fill positif non execute;
+- Gemini: cash min 63,15 EUR; dernier cash 76,55 EUR; valeur totale
+  50 692,04 EUR; aucun fill positif non execute;
+- Grok: cash min 17,07 EUR; dernier cash 2 280,27 EUR; valeur totale
+  51 653,31 EUR; aucun fill positif non execute.
+
+Correction dashboard:
+
+- `_prepare_performance_timeseries` choisit maintenant la source de priorite la
+  plus faible lorsqu'un meme timestamp existe dans plusieurs sources, ce qui
+  empeche le MTM de masquer le snapshot ledger repare;
+- le node `10 - Post-Run Health (DuckDB)` renseigne desormais
+  `ag1_source_run_id` et `ag1_source_snapshot_ts` dans le miroir MTM pour les
+  prochains runs.

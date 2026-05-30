@@ -29,6 +29,8 @@ def _ensure_mtm_table(con):
     )
     """
     )
+    con.execute("ALTER TABLE portfolio_positions_mtm_latest ADD COLUMN IF NOT EXISTS ag1_source_run_id VARCHAR")
+    con.execute("ALTER TABLE portfolio_positions_mtm_latest ADD COLUMN IF NOT EXISTS ag1_source_snapshot_ts VARCHAR")
 
 
 def _sync_ledger_to_mtm(con, run_id):
@@ -74,6 +76,8 @@ def _sync_ledger_to_mtm(con, run_id):
     add_cash("unrealized_pnl", "0")
     add_cash("updated_at", "CAST(ts AS VARCHAR)")
     add_cash("run_id", "run_id")
+    add_cash("ag1_source_run_id", "run_id")
+    add_cash("ag1_source_snapshot_ts", "CAST(ts AS VARCHAR)")
 
     if len(cash_insert_cols) > 0:
         con.execute(
@@ -107,6 +111,8 @@ def _sync_ledger_to_mtm(con, run_id):
     add_pos("unrealized_pnl", "pos.unrealized_pnl_eur")
     add_pos("updated_at", "CAST(pos.ts AS VARCHAR)")
     add_pos("run_id", "pos.run_id")
+    add_pos("ag1_source_run_id", "pos.run_id")
+    add_pos("ag1_source_snapshot_ts", "CAST(pos.ts AS VARCHAR)")
 
     if len(insert_cols) > 0:
         con.execute(
