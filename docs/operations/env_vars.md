@@ -139,8 +139,8 @@ Ces variables sont déjà définies dans le docker-compose — elles ne sont **p
 - `AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py`
 - `AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql`
 - `EXECUTIONS_DATA_MAX_AGE=72`
-- `EXECUTIONS_DATA_SAVE_ON_SUCCESS=none`
-- `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false`
+- `EXECUTIONS_DATA_SAVE_ON_SUCCESS=all`
+- `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true`
 - `EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000`
 - `N8N_PROXY_HOPS=1`
 - `DB_SQLITE_VACUUM_ON_STARTUP=true`

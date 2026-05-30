@@ -219,8 +219,9 @@ docker exec root-trading-dashboard-1 python -c "import urllib.request; print(url
 ## 5. Nettoyage
 
 ```bash
-# n8n purge auto ses exécutions à 72h (EXECUTIONS_DATA_MAX_AGE=72)
-# et conserve max 5000 runs (EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000).
+# n8n purge auto ses exécutions à 72h (EXECUTIONS_DATA_MAX_AGE=72),
+# conserve les runs réussis/échoués/manuels pour contrôle, et conserve
+# max 5000 runs (EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000).
 # Au boot: VACUUM SQLite activé (DB_SQLITE_VACUUM_ON_STARTUP=true).
 
 # Logs Traefik (accesslog) : /opt/traefik_logs/access.log — logrotate recommandé.
