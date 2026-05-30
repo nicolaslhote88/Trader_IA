@@ -80,7 +80,12 @@ function orderStatus(order) {
 function orderHasFillLikeEffect(order) {
   const ibkr = String(order?.ibkrStatus || "").toLowerCase();
   const broker = String(order?.broker || "").toUpperCase();
-  return ibkr === "dry_run" || ibkr === "filled" || ibkr === "executed" || broker === "SIM";
+  const status = String(order?.status || order?.orderStatus || order?.executionStatus || "").toUpperCase();
+  const explicitFill = Boolean(order?.ibkrFill || order?.fill || order?.execution || order?.brokerExecutionId);
+  if (ibkr === "filled" || ibkr === "executed") return true;
+  if (status === "FILLED" || status === "EXECUTED") return true;
+  if (broker === "SIM" && ["SIM_FILLED", "SIMULATED_FILLED", "DRY_RUN_FILLED"].includes(status)) return true;
+  return explicitFill && !["REJECTED", "BROKER_ERROR", "ERROR", "SUBMITTED", "PENDING", "PLANNED"].includes(status);
 }
 
 function inferRiskStatus(cashPct, cashEUR) {

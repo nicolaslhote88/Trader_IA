@@ -124,3 +124,41 @@ Apres deploiement, le KPI principal n'est pas le nombre d'ordres proposes mais
 la qualite economique des ordres acceptes: cash disponible, frais estimes,
 spread, taille, exposition sectorielle, fraicheur des donnees, taux de rejet du
 risk manager et reconciliation entre DuckDB et IBKR.
+
+## Verification post-deploiement du 2026-05-30
+
+La verification des runs planifies du 2026-05-29 16:45 Europe/Paris a montre
+que le ledger AG1 actions avait bien repris l'ecriture, mais qu'un garde-fou
+residuel du node `8 - Build DuckDB Bundle` generait encore des fills comptables
+pour des ordres `REJECTED` ou `SUBMITTED`.
+
+Correction appliquee:
+
+- `orderHasFillLikeEffect` n'accepte plus `dry_run` ou `broker=SIM` comme effet
+  de fill par defaut;
+- un fill comptable n'est produit que pour un statut explicitement
+  `FILLED`/`EXECUTED`, ou pour un payload de fill broker reel non rejete;
+- les trois workflows n8n actifs AG1 actions ont ete mis a jour et redemarres.
+
+Nettoyage des donnees:
+
+- les fills invalides des derniers runs ChatGPT, Gemini et Grok ont ete
+  neutralises avec `qty=0`, `fees_eur=0`, `liquidity=QUARANTINED`;
+- les snapshots `portfolio_snapshot`, `positions_snapshot` et `risk_metrics`
+  lies a ces runs ont ete retires pour eviter toute lecture de performance
+  polluee;
+- une alerte `INVALID_FILLS_QUARANTINED` a ete ajoutee dans chaque base pour
+  garder la trace d'audit.
+
+Controles de validation:
+
+- test isole du node 8 dans le conteneur n8n: un lot mixte
+  `REJECTED`/`SUBMITTED`/`dry_run`/`FILLED` ne produit plus qu'un seul fill,
+  celui de l'ordre `FILLED`;
+- verification DuckDB: `invalid_positive_fills=0` sur les trois derniers runs;
+- `AG1_ACTIONS_LIVE_ORDERS_ENABLED=false` confirme sur n8n et les trois
+  task-runners;
+- YF daily du 2026-05-30 06:15 Europe/Paris: 448 quotes OK sur 463 symboles,
+  statut `PARTIAL` limite aux symboles Yahoo invalides/delistings;
+- IBKR broker up et healthy, mais session IBKR non authentifiee au
+  2026-05-30 09:18 Europe/Paris (`manual_login_required=true`).
