@@ -81,20 +81,13 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 
 Voir aussi `docs/operations/ibkr_execution.md`.
 
-## Google Sheets (héritage / dashboard)
-
-| Variable | Rôle |
-|---|---|
-| `GOOGLE_SHEET_ID` | ID du Google Sheet utilisé par le `trading-dashboard` Streamlit. |
-
-Le fichier de compte de service Google doit être monté à `/secrets/service_account.json` côté `trading-dashboard` (déjà câblé dans le docker-compose).
-
 ## Dashboard Streamlit
 
 | Variable | Rôle |
 |---|---|
 | `DASHBOARD_DOMAIN` | Nom d'hôte public du dashboard (ex. `dashboard.trader-ia.com`). |
 | `DASHBOARD_BASIC_AUTH` | Entrée Basic Auth au format `user:hash_apache`. Les `$` doivent être échappés en `$$` pour Docker Compose. |
+| `AG2_DUCKDB_PATH` | Source de l'univers actions du dashboard. Par défaut `/files/duckdb/ag2_v3.duckdb`, table `universe`. |
 
 Génération du hash :
 

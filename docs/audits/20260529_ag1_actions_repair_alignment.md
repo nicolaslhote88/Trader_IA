@@ -206,3 +206,17 @@ Correction dashboard:
 - le node `10 - Post-Run Health (DuckDB)` renseigne desormais
   `ag1_source_run_id` et `ag1_source_snapshot_ts` dans le miroir MTM pour les
   prochains runs.
+
+## Suppression de la dependance Google Sheets du dashboard
+
+Intervention du 2026-05-30:
+
+- le dashboard ne charge plus l'univers actions depuis Google Sheets;
+- l'univers actions est maintenant lu directement dans
+  `ag2_v3.duckdb`, table `universe`, avec filtre `enabled=true`;
+- les dependances Python `gspread` et `oauth2client` ont ete retirees;
+- le service `trading-dashboard` ne recoit plus `SHEET_ID` ni
+  `GOOGLE_APPLICATION_CREDENTIALS`;
+- le montage `/opt/trading-dashboard/secrets:/secrets:ro` a ete supprime;
+- verification VPS: `core/ag2_v3.duckdb.main.universe` expose 463 symboles
+  actives pour le dashboard.
