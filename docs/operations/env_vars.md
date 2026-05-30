@@ -85,7 +85,7 @@ Voir aussi `docs/operations/ibkr_execution.md`.
 
 | Variable | Rôle |
 |---|---|
-| `DASHBOARD_DOMAIN` | Nom d'hôte public du dashboard (ex. `dashboard.trader-ia.com`). |
+| `DASHBOARD_DOMAIN` | Nom d'hôte public du dashboard, sans protocole `https://` (ex. `dashboard.trader-ia.com`). |
 | `DASHBOARD_BASIC_AUTH` | Entrée Basic Auth au format `user:hash_apache`. Les `$` doivent être échappés en `$$` pour Docker Compose. |
 | `AG2_DUCKDB_PATH` | Source de l'univers actions du dashboard. Par défaut `/files/duckdb/ag2_v3.duckdb`, table `universe`. |
 

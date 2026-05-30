@@ -220,3 +220,14 @@ Intervention du 2026-05-30:
 - le montage `/opt/trading-dashboard/secrets:/secrets:ro` a ete supprime;
 - verification VPS: `core/ag2_v3.duckdb.main.universe` expose 463 symboles
   actives pour le dashboard.
+
+Correctif post-deploiement du 2026-05-30:
+
+- apres recreation du conteneur, Traefik a applique la valeur reelle
+  `DASHBOARD_DOMAIN=https://dashboard.nlhconsulting.fr`, invalide dans une
+  regle `Host()`;
+- `/root/.env` a ete corrige en `DASHBOARD_DOMAIN=dashboard.nlhconsulting.fr`
+  et l'ancienne variable `GOOGLE_SHEET_ID` residuelle a ete retiree;
+- verification: label Traefik ``Host(`dashboard.nlhconsulting.fr`)``, route
+  publique `HTTP/2 401` avant authentification, backend Streamlit
+  `HTTP/1.1 200 OK`.
