@@ -93,6 +93,24 @@ function sideToCubeDirection(side) {
   return 'WAIT';
 }
 
+function lotToCubeDirection(lot) {
+  if (lot?.side === 'long') return 'BUY_BASE';
+  if (lot?.side === 'short') return 'SELL_BASE';
+  return 'WAIT';
+}
+
+function oppositeCubeDirection(direction) {
+  if (direction === 'BUY_BASE') return 'SELL_BASE';
+  if (direction === 'SELL_BASE') return 'BUY_BASE';
+  return 'WAIT';
+}
+
+function hoursSince(value) {
+  const ts = Date.parse(value || '');
+  if (!Number.isFinite(ts)) return null;
+  return Math.max(0, (Date.now() - ts) / 3600000);
+}
+
 function llmDecisionProfile(ctx, pair) {
   const p = String(pair || '').toUpperCase();
   const compact = ctx.llm_brief || {};
@@ -146,15 +164,22 @@ const leverageMax = Math.max(0.01, num(cfg.leverage_max, 1));
 const maxPairPct = num(limits.max_pair_pct, 0.20);
 const maxCurrencyPct = num(limits.max_currency_exposure_pct, 0.50);
 const maxDd = num(limits.max_daily_drawdown_pct, 0.05);
-const reducedSizeMaxPairPct = Math.min(maxPairPct, envNum('AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT', 0.10));
+const reducedSizeMaxPairPct = Math.min(maxPairPct, envNum('AG1_FX_REDUCED_SIZE_MAX_PAIR_PCT', 0.15));
 const cashOnlyBaseCcyMode = envBool('AG1_FX_CASH_ONLY_BASE_CCY_MODE', true);
 const prefundNonEurFx = envBool('AG1_FX_PREFUND_NON_EUR_FX', true);
 const prefundBufferPct = Math.max(0, envNum('AG1_FX_PREFUND_BUFFER_PCT', 0.005));
+const estimatedFeePerFillEur = envNum('AG1_FX_ESTIMATED_FEE_PER_FILL_EUR', 1.75);
+const minNewTradeNotionalEur = envNum('AG1_FX_MIN_NEW_TRADE_NOTIONAL_EUR', 1200);
+const minExpectedGrossProfitEur = envNum('AG1_FX_MIN_EXPECTED_GROSS_PROFIT_EUR', 8);
+const minRewardToFee = envNum('AG1_FX_MIN_REWARD_TO_FEE', 2.0);
+const minCloseNetProfitEur = envNum('AG1_FX_MIN_CLOSE_NET_PROFIT_EUR', 2.0);
+const minDiscretionaryHoldHours = envNum('AG1_FX_MIN_DISCRETIONARY_HOLD_HOURS', 24);
 const portfolioBaseCcy = String(cfg.portfolio_base_ccy || (typeof $env !== 'undefined' ? $env.AG1_FX_PORTFOLIO_BASE_CCY : '') || 'EUR').toUpperCase();
 const openLots = portfolio.open_lots || [];
 const projected = [];
 const orders = [];
 const alerts = [];
+const plannedCloseLotIds = new Set();
 
 function ibkrCashByCurrency(ctx) {
   return ctx.ibkr_reconciliation?.cash_balances?.ibkr_cash_by_currency
@@ -203,6 +228,11 @@ function buildPrefundingOrder(targetOrder, need, availableUnits) {
     targetOrder.risk_check_notes = `${targetOrder.risk_check_notes || ''} [Prefunding unavailable: no ${portfolioBaseCcy}/${need.currency} conversion pair with price.]`.trim();
     return null;
   }
+  if (funding.pair === targetOrder.pair && funding.side !== targetOrder.side) {
+    targetOrder.rejection_reason = 'PREFUNDING_SELF_PAIR_CONFLICT';
+    targetOrder.risk_check_notes = `${targetOrder.risk_check_notes || ''} [Prefunding blocked: ${funding.pair} ${funding.side} would immediately oppose target ${targetOrder.side} on the same pair.]`.trim();
+    return null;
+  }
   const fundingMeta = pairMeta(brief, funding.pair);
   const fundingSizeLots = funding.side === 'buy_base'
     ? deficitUnits / 100000
@@ -243,6 +273,65 @@ function buildPrefundingOrder(targetOrder, need, availableUnits) {
   targetOrder.prefund_available_units = availableUnits;
   targetOrder.risk_check_notes = `${targetOrder.risk_check_notes || ''} [Prefunding: ${fundingOrder.order_id} buys ${need.currency} before target order.]`.trim();
   return fundingOrder;
+}
+
+function estimatedOpenEconomics(order, px, quoteToEurRate, needsPrefunding) {
+  const tp = num(order.take_profit_price, 0);
+  const expectedMove = order.side === 'buy_base' ? tp - px : order.side === 'sell_base' ? px - tp : 0;
+  const expectedGrossProfitEur = expectedMove > 0
+    ? Math.abs(num(order.size_lots, 0) * 100000 * expectedMove * quoteToEurRate)
+    : 0;
+  const estimatedFills = needsPrefunding ? 3 : 2;
+  const estimatedTotalFeesEur = estimatedFills * estimatedFeePerFillEur;
+  const requiredGrossProfitEur = Math.max(minExpectedGrossProfitEur, estimatedTotalFeesEur * minRewardToFee);
+  return {
+    notional_eur: order.notional_eur,
+    expected_gross_profit_eur: expectedGrossProfitEur,
+    estimated_total_fees_eur: estimatedTotalFeesEur,
+    required_gross_profit_eur: requiredGrossProfitEur,
+    expected_net_profit_eur: expectedGrossProfitEur - estimatedTotalFeesEur,
+    expected_reward_to_fee: estimatedTotalFeesEur > 0 ? expectedGrossProfitEur / estimatedTotalFeesEur : null,
+    estimated_fills: estimatedFills,
+    needs_prefunding: Boolean(needsPrefunding),
+  };
+}
+
+function closeEconomics(lot, order, px, quoteToEurRate) {
+  const direction = lot.side === 'short' ? -1 : 1;
+  const gross = num(order.size_lots, 0) * 100000 * (px - num(lot.open_price, px)) * direction * quoteToEurRate;
+  return {
+    gross_pnl_eur: gross,
+    estimated_exit_fee_eur: estimatedFeePerFillEur,
+    net_after_exit_fee_eur: gross - estimatedFeePerFillEur,
+    held_hours: hoursSince(lot.open_at),
+  };
+}
+
+function hardExitReason(lot, order, px, profile) {
+  const side = lot.side;
+  const sl = num(lot.stop_loss_price, 0);
+  const tp = num(lot.take_profit_price, 0);
+  if (sl > 0 && ((side === 'long' && px <= sl) || (side === 'short' && px >= sl))) return 'STOP_LOSS_TOUCHED';
+  if (tp > 0 && ((side === 'long' && px >= tp) || (side === 'short' && px <= tp))) return 'TAKE_PROFIT_TOUCHED';
+
+  const cube = profile.cube || {};
+  const lotDir = lotToCubeDirection(lot);
+  const oppositeDir = oppositeCubeDirection(lotDir);
+  if (
+    cube.cube_direction === oppositeDir
+    && Math.abs(num(cube.z_three_pillars, 0)) >= 0.20
+    && (
+      String(cube.cube_zone || '').startsWith('convergence_multi_horizon')
+      || cube.cube_zone === 'short_term_hype_against_pillars'
+      || cube.portfolio_action_hint === 'REDUCE_OR_CLOSE_Z_FLIPPED'
+    )
+  ) {
+    return 'CUBE_STRONG_OPPOSITE';
+  }
+  if (num(cube.event_risk_score, 0) >= 0.85) return 'EVENT_RISK_HIGH';
+  const rationale = String(order.risk_check_notes || '').toLowerCase();
+  if (/(stop|invalid|breach|drawdown|z[_ -]?flipped|hard exit|risk limit)/.test(rationale)) return 'RATIONALE_HARD_EXIT';
+  return '';
 }
 
 let killSwitch = Boolean(cfg.kill_switch_active);
@@ -373,9 +462,20 @@ for (const d of decisions) {
     if (!base.rejection_reason && action === 'open_long' && base.take_profit_price && base.take_profit_price <= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';
     if (!base.rejection_reason && action === 'open_short' && base.stop_loss_price && base.stop_loss_price <= px) base.rejection_reason = 'STOP_LOSS_WRONG_SIDE';
     if (!base.rejection_reason && action === 'open_short' && base.take_profit_price && base.take_profit_price >= px) base.rejection_reason = 'TAKE_PROFIT_WRONG_SIDE';
+    const needsPrefunding = cashOnlyBaseCcyMode && !cashOnlyBrokerOpenAllowed(pair, side, portfolioBaseCcy);
+    const openEconomics = estimatedOpenEconomics(base, px, quoteToEurRate, needsPrefunding);
+    base.economics_check = {
+      ...openEconomics,
+      min_new_trade_notional_eur: minNewTradeNotionalEur,
+      min_expected_gross_profit_eur: minExpectedGrossProfitEur,
+      min_reward_to_fee: minRewardToFee,
+    };
+    if (!base.rejection_reason && !base.take_profit_price) base.rejection_reason = 'TRADE_ECONOMICS_MISSING_TAKE_PROFIT';
+    if (!base.rejection_reason && base.notional_eur < minNewTradeNotionalEur) base.rejection_reason = 'TRADE_ECONOMICS_NOTIONAL_TOO_SMALL';
+    if (!base.rejection_reason && openEconomics.expected_gross_profit_eur < openEconomics.required_gross_profit_eur) base.rejection_reason = 'TRADE_ECONOMICS_REWARD_TOO_SMALL';
     if (!base.rejection_reason) {
       let fundingOrder = null;
-      if (cashOnlyBaseCcyMode && !cashOnlyBrokerOpenAllowed(pair, side, portfolioBaseCcy)) {
+      if (needsPrefunding) {
         if (!prefundNonEurFx) {
           base.rejection_reason = `IBKR_CASH_ONLY_${portfolioBaseCcy}_LEG_REQUIRED`;
           base.risk_check_notes = `${base.risk_check_notes || ''} [Broker guard: live IBKR paper account rejects new FX orders that borrow non-${portfolioBaseCcy} currency.]`.trim();
@@ -404,6 +504,12 @@ for (const d of decisions) {
     }
     if (!lotToClose) {
       base.rejection_reason = 'LOT_TO_CLOSE_NOT_FOUND';
+      orders.push(base);
+      continue;
+    }
+    const closeLotKey = String(lotToClose.lot_id || '').trim();
+    if (plannedCloseLotIds.has(closeLotKey)) {
+      base.rejection_reason = 'DUPLICATE_CLOSE_LOT';
       orders.push(base);
       continue;
     }
@@ -440,6 +546,25 @@ for (const d of decisions) {
     base.size_lots = sizeLots;
     base.notional_quote = Math.abs(sizeLots * 100000 * px);
     base.notional_eur = Math.abs(base.notional_quote * quoteToEur(brief, meta.quote_ccy));
+    const closeProfile = llmDecisionProfile(j, pair);
+    const hardExit = hardExitReason(lotToClose, base, px, closeProfile);
+    const economics = closeEconomics(lotToClose, base, px, quoteToEurRate);
+    base.economics_check = {
+      ...economics,
+      min_close_net_profit_eur: minCloseNetProfitEur,
+      min_discretionary_hold_hours: minDiscretionaryHoldHours,
+      hard_exit_reason: hardExit || '',
+    };
+    if (
+      !hardExit
+      && economics.net_after_exit_fee_eur < minCloseNetProfitEur
+      && (economics.held_hours == null || economics.held_hours < minDiscretionaryHoldHours || economics.gross_pnl_eur >= 0)
+    ) {
+      base.rejection_reason = 'CLOSE_ECONOMICS_NEGATIVE_NET';
+      orders.push(base);
+      continue;
+    }
+    plannedCloseLotIds.add(closeLotKey);
     base.status = 'pending';
     base.risk_check_passed = true;
   }

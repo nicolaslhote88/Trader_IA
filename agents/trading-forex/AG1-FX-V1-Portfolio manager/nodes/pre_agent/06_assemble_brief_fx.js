@@ -61,6 +61,13 @@ const MAX_LLM_DRIVERS = envNum('AG1_FX_LLM_PAIR_DRIVERS_MAX', 2);
 const CASH_ONLY_BASE_CCY_MODE = envBool('AG1_FX_CASH_ONLY_BASE_CCY_MODE', true);
 const PREFUND_NON_EUR_FX = envBool('AG1_FX_PREFUND_NON_EUR_FX', true);
 const PORTFOLIO_BASE_CCY = String((typeof $env !== 'undefined' ? $env.AG1_FX_PORTFOLIO_BASE_CCY : '') || 'EUR').toUpperCase();
+const ESTIMATED_FEE_PER_FILL_EUR = envNum('AG1_FX_ESTIMATED_FEE_PER_FILL_EUR', 1.75);
+const MIN_NEW_TRADE_NOTIONAL_EUR = envNum('AG1_FX_MIN_NEW_TRADE_NOTIONAL_EUR', 1200);
+const TARGET_NEW_TRADE_NOTIONAL_EUR = envNum('AG1_FX_TARGET_NEW_TRADE_NOTIONAL_EUR', 1700);
+const MIN_EXPECTED_GROSS_PROFIT_EUR = envNum('AG1_FX_MIN_EXPECTED_GROSS_PROFIT_EUR', 8);
+const MIN_REWARD_TO_FEE = envNum('AG1_FX_MIN_REWARD_TO_FEE', 2.0);
+const MIN_CLOSE_NET_PROFIT_EUR = envNum('AG1_FX_MIN_CLOSE_NET_PROFIT_EUR', 2.0);
+const MIN_DISCRETIONARY_HOLD_HOURS = envNum('AG1_FX_MIN_DISCRETIONARY_HOLD_HOURS', 24);
 
 const universeRows = j.universe_fx || [];
 const technicalRows = j.technical_signals || [];
@@ -106,6 +113,16 @@ const brief = {
     max_currency_exposure_frac: Number(cfg.max_currency_exposure_pct || 0.50),
     max_daily_drawdown_frac: Number(cfg.max_daily_drawdown_pct || 0.05),
     max_daily_drawdown_pct_display: pct(cfg.max_daily_drawdown_pct || 0.05, 2),
+  },
+  execution_economics: {
+    estimated_fee_per_fill_eur: ESTIMATED_FEE_PER_FILL_EUR,
+    estimated_round_trip_fee_eur: rounded(2 * ESTIMATED_FEE_PER_FILL_EUR, 2),
+    min_new_trade_notional_eur: MIN_NEW_TRADE_NOTIONAL_EUR,
+    target_new_trade_notional_eur: TARGET_NEW_TRADE_NOTIONAL_EUR,
+    min_expected_gross_profit_eur: MIN_EXPECTED_GROSS_PROFIT_EUR,
+    min_reward_to_fee: MIN_REWARD_TO_FEE,
+    min_close_net_profit_eur: MIN_CLOSE_NET_PROFIT_EUR,
+    min_discretionary_hold_hours: MIN_DISCRETIONARY_HOLD_HOURS,
   },
 };
 
@@ -153,6 +170,8 @@ function compactLot(lot) {
     sl_distance_pips: slDistancePips == null ? null : rounded(slDistancePips, 1),
     tp_distance_pips: tpDistancePips == null ? null : rounded(tpDistancePips, 1),
     sl_risk_eur: slRiskEur == null ? null : rounded(slRiskEur, 2),
+    estimated_exit_fee_eur: rounded(ESTIMATED_FEE_PER_FILL_EUR, 2),
+    net_if_closed_now_eur: rounded(num(lot.unrealized_pnl_eur, 0) - ESTIMATED_FEE_PER_FILL_EUR, 2),
   };
 }
 
@@ -605,6 +624,7 @@ const llmBrief = {
   run: brief.run,
   config: brief.config,
   limits: brief.limits,
+  trade_economics: brief.execution_economics,
   broker_execution_constraints: {
     cash_only_base_ccy_mode: CASH_ONLY_BASE_CCY_MODE,
     prefund_non_eur_fx: PREFUND_NON_EUR_FX,
@@ -656,6 +676,8 @@ const llmBrief = {
     'market_watch contains the highest-priority/open pairs with extra technical and news context.',
     'drawdown_*_frac fields are fractions; drawdown_*_pct_display fields are human-readable percentages.',
     'portfolio_risk is precomputed. Do not open new positions if can_open_new_trade=false or trade_permission=NO_NEW_POSITION.',
+    'trade_economics is a hard profitability filter: avoid micro trades. New opens must be large enough and have enough TP distance to overcome IBKR minimum commissions with a positive net expectancy.',
+    'Do not close or partially close only to harvest a tiny gross gain: close only when net_if_closed_now_eur clears min_close_net_profit_eur, a stop/TP is hit, or the cube/Three Pillars setup is genuinely invalidated.',
     'broker_execution_constraints are hard live-execution constraints. If prefund_non_eur_fx=true, non-EUR target opens may be proposed only when their setup is strong; the validator will derive the required EUR funding leg.',
     'Use only universe_pairs. Prefer no trade when fundamental/macro and technicals conflict.',
     'Cube 3 axes is mandatory for new opens: X=technical, Y=news/event, Z=3 Pillars structural. Open only in convergence_multi_horizon_* and cite cube_zone in rationale.',
