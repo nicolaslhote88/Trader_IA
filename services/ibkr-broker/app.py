@@ -47,7 +47,7 @@ from contract_cache import (
     parse_stk_symbol,
     store_stk_conid,
     stk_ibkr_side,
-    yahoo_suffix_to_ibkr_exchange,
+    yahoo_suffix_to_ibkr_exchanges,
 )
 from cpapi_client import CPAPIClient, CPAPIError
 
@@ -354,6 +354,8 @@ class EquityOrder(BaseModel):
     client_order_id: str | None = None  # devient cOID pour idempotence IBKR
     order_type: str = "MKT"
     limit_price: float | None = None
+    isin: str | None = None
+    exchange: str | None = None
 
 
 class FXOrdersRequest(BaseModel):
@@ -440,7 +442,12 @@ def _position_qty_by_conid(positions: list[dict], conid: int) -> float:
     return 0.0
 
 
-async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
+async def _resolve_stk_conid(
+    client: CPAPIClient,
+    symbol: str,
+    isin: str | None = None,
+    exchange_override: str | None = None,
+) -> int:
     """
     Résout le conid IBKR d'un symbole action.
     Utilise le cache en mémoire, sinon appel CPAPI secdef search.
@@ -450,25 +457,53 @@ async def _resolve_stk_conid(client: CPAPIClient, symbol: str) -> int:
         return cached
 
     ticker, suffix = parse_stk_symbol(symbol)
-    exchange = yahoo_suffix_to_ibkr_exchange(suffix)
+    exchange_candidates = tuple(
+        x.strip().upper()
+        for x in str(exchange_override or "").replace(";", ",").split(",")
+        if x.strip()
+    ) or yahoo_suffix_to_ibkr_exchanges(suffix)
 
-    contracts = await client.search_contract(ticker, sec_type="STK")
+    contracts = []
+    if isin:
+        try:
+            contracts = await client.search_contract(str(isin).strip(), sec_type="STK")
+        except Exception:
+            contracts = []
+    if not contracts:
+        contracts = await client.search_contract(ticker, sec_type="STK")
     if not contracts:
         raise HTTPException(404, f"No IBKR contract found for {symbol}")
 
     # Cherche l'exchange correspondant. Pour un symbole suffixe (ex: .PA),
     # on refuse le fallback vers un autre marche afin d'eviter CRI.PA -> CRI US.
     best = None
-    for c in contracts:
-        if exchange.upper() in _contract_exchanges(c):
-            best = {"conid": int(c["conid"]), "exchange": exchange}
+    for wanted_exchange in exchange_candidates:
+        for c in contracts:
+            if wanted_exchange in _contract_exchanges(c):
+                best = {"conid": int(c["conid"]), "exchange": wanted_exchange}
+                break
+        if best:
             break
 
     if not best:
         if suffix:
-            raise HTTPException(404, f"No IBKR contract found for {symbol} on exchange {exchange}")
-        first = contracts[0]
-        best = {"conid": int(first["conid"]), "exchange": "SMART"}
+            # Controlled fallback for suffixed symbols: SMART is acceptable only
+            # when CPAPI advertises it for the returned contract. This fixes
+            # .PA failures caused by SBF not being listed in CPAPI search output.
+            for c in contracts:
+                if "SMART" in _contract_exchanges(c):
+                    best = {"conid": int(c["conid"]), "exchange": "SMART"}
+                    break
+            if not best:
+                available = sorted({ex for c in contracts for ex in _contract_exchanges(c)})
+                raise HTTPException(
+                    404,
+                    f"No IBKR contract found for {symbol} on exchanges {','.join(exchange_candidates)} "
+                    f"(available={','.join(available[:20])})",
+                )
+        if not best:
+            first = contracts[0]
+            best = {"conid": int(first["conid"]), "exchange": "SMART"}
 
     store_stk_conid(symbol, best["conid"])
     return best["conid"]
@@ -851,7 +886,7 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
             if DRY_RUN:
                 conid = 0  # pas besoin en dry-run
             else:
-                conid = await _resolve_stk_conid(client, symbol)
+                conid = await _resolve_stk_conid(client, symbol, order.isin, order.exchange)
         except HTTPException as exc:
             errors.append({
                 "order_id": order.order_id,

@@ -12,23 +12,18 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import duckdb
-import gspread
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
-from oauth2client.service_account import ServiceAccountCredentials
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 
 st.set_page_config(page_title="AI Trading Executor", layout="wide", page_icon="AI")
-
-SHEET_ID = os.getenv("SHEET_ID")
-CREDENTIALS_FILE = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "/secrets/service_account.json")
 
 def _duckdb_default_path(filename: str) -> str:
     base_dir = str(os.getenv("DUCKDB_DIR", "/files/duckdb") or "/files/duckdb").strip()
@@ -2154,89 +2149,15 @@ from app_modules.visualizations import _prefetch_histories, render_fx_pair_spark
 # HELPERS GENERAUX (modules externes)
 # ============================================================
 # ============================================================
-# LOAD DATA - Google Sheets
+# LOAD DATA - Legacy Compatibility
 # ============================================================
-
-
-def validate_configuration() -> bool:
-    missing = []
-    if not SHEET_ID:
-        missing.append("SHEET_ID")
-    if not CREDENTIALS_FILE:
-        missing.append("GOOGLE_APPLICATION_CREDENTIALS")
-
-    if missing:
-        return False
-
-    if not os.path.exists(CREDENTIALS_FILE):
-        return False
-
-    return True
-
-
-@st.cache_resource
-def get_gspread_client() -> gspread.Client:
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_FILE, scope)
-    return gspread.authorize(creds)
 
 
 @st.cache_data(ttl=30)
 def load_data() -> dict[str, pd.DataFrame]:
-    if not validate_configuration():
-        return {}
-
-    client = get_gspread_client()
-
-    try:
-        sh = client.open_by_key(SHEET_ID)
-    except gspread.SpreadsheetNotFound as exc:
-        st.error(f"Sheet introuvable: {exc}")
-        return {}
-    except Exception as exc:
-        st.error(f"Erreur Sheet: {exc}")
-        return {}
-
-    tabs_mapping = {
-        "Universe": "Universe",
-    }
-
-    data = {}
-
-    for key, tab_name in tabs_mapping.items():
-        try:
-            ws = sh.worksheet(tab_name)
-            records = ws.get_all_records()
-            df = pd.DataFrame(records)
-
-            df = normalize_cols(df)
-
-            date_c = next(
-                (
-                    c
-                    for c in [
-                        "timestamp",
-                        "date",
-                        "publishedat",
-                        "updatedat",
-                        "fetchedat",
-                        "created_at",
-                    ]
-                    if c in df.columns
-                ),
-                None,
-            )
-            if date_c and not df.empty:
-                df[date_c] = pd.to_datetime(df[date_c], errors="coerce")
-                df = df.sort_values(by=date_c, ascending=False)
-
-            data[key] = df
-        except gspread.WorksheetNotFound:
-            data[key] = pd.DataFrame()
-        except Exception:
-            data[key] = pd.DataFrame()
-
-    return data
+    # Runtime data is DuckDB-first. This stub keeps older call sites harmless
+    # while removing the legacy spreadsheet dependency from the dashboard.
+    return {}
 
 
 # ============================================================
@@ -2327,7 +2248,23 @@ def _read_duckdb_df(path: str, query: str, params: tuple[object, ...] | None = N
 @st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
 def load_universe_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.DataFrame:
     _ = db_sig
-    return _read_duckdb_df(db_path, "SELECT * FROM universe ORDER BY symbol")
+    df = _read_duckdb_df(
+        db_path,
+        """
+        SELECT *
+        FROM universe
+        WHERE COALESCE(enabled, TRUE)
+        ORDER BY symbol
+        """,
+    )
+    if df is None or df.empty:
+        df = _read_duckdb_df(db_path, "SELECT * FROM universe ORDER BY symbol")
+    if df is not None and not df.empty:
+        df = normalize_cols(df)
+        if "symbol" in df.columns:
+            df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+            df = df[df["symbol"] != ""].drop_duplicates(subset=["symbol"], keep="first")
+    return df
 
 
 @st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
@@ -5497,7 +5434,7 @@ def _prepare_performance_timeseries(df_perf: pd.DataFrame) -> pd.DataFrame:
     )
     out = out.replace([float("inf"), float("-inf")], pd.NA).dropna(subset=["total_value"])
     out = out.sort_values(["timestamp", "__source_priority"], kind="stable")
-    out = out.groupby("timestamp", as_index=False).last().sort_values("timestamp")
+    out = out.groupby("timestamp", as_index=False).first().sort_values("timestamp")
     out = out.drop(columns=["__source_priority"], errors="ignore")
     out["invested_value"] = out["equity_value"]
     if (out["invested_value"].abs().sum() == 0) and ("cash_value" in out.columns):
@@ -9046,10 +8983,6 @@ NAV_GROUPS = {
 nav_group = st.sidebar.radio("Univers", list(NAV_GROUPS.keys()), horizontal=True, index=1)
 page = st.sidebar.radio("Page", NAV_GROUPS[nav_group])
 
-data_dict = load_data()
-if not data_dict:
-    st.warning("Donnees Google Sheets indisponibles. Les vues basees DuckDB (System Health, Vue consolidee, Analyse V2) restent disponibles.")
-
 # Signatures fichiers DuckDB (invalidation cache basee sur mtime/size)
 ag1_db_sig = duckdb_file_signature(AG1_DUCKDB_PATH)
 ag2_db_sig = duckdb_file_signature(DUCKDB_PATH)
@@ -9070,9 +9003,13 @@ ag1_fx_db_sigs = {
 # PRE-CALCULS (ROBUSTES)
 # ------------------------------------------------------------
 
-df_univ = data_dict.get("Universe", pd.DataFrame()) if data_dict else pd.DataFrame()
-if df_univ is None or df_univ.empty:
-    df_univ = load_universe_latest(DUCKDB_PATH, ag2_db_sig)
+df_univ = load_universe_latest(DUCKDB_PATH, ag2_db_sig)
+data_dict = {"Universe": df_univ} if df_univ is not None and not df_univ.empty else {}
+if not data_dict:
+    st.warning(
+        f"Universe DuckDB indisponible ou vide: `{DUCKDB_PATH}`. "
+        "Les vues AG1/AG2 restent accessibles mais les enrichissements de noms/secteurs peuvent etre incomplets."
+    )
 df_yf_enrichment_latest = load_yf_enrichment_latest(YF_ENRICH_DUCKDB_PATH, yf_db_sig)
 # Portfolio source of truth is now DuckDB AG1.
 df_port = load_ag1_portfolio_latest(AG1_DUCKDB_PATH, ag1_db_sig)
@@ -11586,12 +11523,6 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 
 if page == "Dashboard Trading":
-    if not data_dict:
-        st.warning(
-            "Donnees Google Sheets indisponibles: les vues Portfolio (DuckDB) restent accessibles, "
-            "mais certaines sections historiques peuvent etre vides."
-        )
-
     st.title("AI Trading Executor Dashboard")
 
     ag1_multi = load_ag1_multi_portfolios()

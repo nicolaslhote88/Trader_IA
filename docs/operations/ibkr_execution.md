@@ -40,7 +40,8 @@ References IBKR utilisees :
 - Les nodes n8n lisent `IBKR_BROKER_URL`, `IBKR_DRY_RUN`,
   `IBKR_SEND_DRY_RUN_TO_BROKER`, `IBKR_REQUIRE_PAPER_ACCOUNT`,
   `IBKR_PAPER_ACCOUNT_PREFIXES`, `IBKR_RECONCILE_CASH_BALANCES`,
-  `IBKR_BLOCK_ON_CASH_DIVERGENCE`, `IBKR_CASH_RECON_THRESHOLD_UNITS` et
+  `IBKR_BLOCK_ON_CASH_DIVERGENCE`, `IBKR_CASH_RECON_THRESHOLD_UNITS`,
+  `AG1_ACTIONS_LIVE_ORDERS_ENABLED` et
   `AG1_FX_PORTFOLIO_BASE_CCY`. Sans variable explicite, ils restent en dry-run,
   utilisent `http://ibkr-broker:8080`, auditent les balances cash et ne bloquent
   que sur divergence de positions.

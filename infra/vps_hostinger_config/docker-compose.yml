@@ -82,6 +82,7 @@ services:
       - IBKR_BROKER_URL=http://ibkr-broker:8080
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
       - IBKR_SEND_DRY_RUN_TO_BROKER=${IBKR_SEND_DRY_RUN_TO_BROKER:-false}
+      - AG1_ACTIONS_LIVE_ORDERS_ENABLED=${AG1_ACTIONS_LIVE_ORDERS_ENABLED:-false}
       - IBKR_REQUIRE_PAPER_ACCOUNT=${IBKR_REQUIRE_PAPER_ACCOUNT:-true}
       - IBKR_PAPER_ACCOUNT_PREFIXES=${IBKR_PAPER_ACCOUNT_PREFIXES:-DU}
       - IBKR_RECONCILE_CASH_BALANCES=${IBKR_RECONCILE_CASH_BALANCES:-true}
@@ -112,8 +113,8 @@ services:
       - AG1_FX_V2_LEDGER_SCHEMA_PATH=/files/AG1-FX-V2-EXPORT/sql/ag1_fx_v2_schema.sql
       - AG1_FX_V2_LEVERAGE_MAX=${AG1_FX_V2_LEVERAGE_MAX:-2.0}
       - EXECUTIONS_DATA_MAX_AGE=72
-      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=none
-      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=false
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
       - EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000
       - DB_SQLITE_VACUUM_ON_STARTUP=true
     dns:
@@ -156,6 +157,7 @@ services:
       - IBKR_BROKER_URL=http://ibkr-broker:8080
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
       - IBKR_SEND_DRY_RUN_TO_BROKER=${IBKR_SEND_DRY_RUN_TO_BROKER:-false}
+      - AG1_ACTIONS_LIVE_ORDERS_ENABLED=${AG1_ACTIONS_LIVE_ORDERS_ENABLED:-false}
       - IBKR_REQUIRE_PAPER_ACCOUNT=${IBKR_REQUIRE_PAPER_ACCOUNT:-true}
       - IBKR_PAPER_ACCOUNT_PREFIXES=${IBKR_PAPER_ACCOUNT_PREFIXES:-DU}
       - IBKR_RECONCILE_CASH_BALANCES=${IBKR_RECONCILE_CASH_BALANCES:-true}
@@ -202,8 +204,6 @@ services:
     image: python:3.12-slim
     working_dir: /app
     environment:
-      - SHEET_ID=${GOOGLE_SHEET_ID}
-      - GOOGLE_APPLICATION_CREDENTIALS=/secrets/service_account.json
       - TZ=${GENERIC_TIMEZONE:-Europe/Paris}
       - DUCKDB_DIR=/files/duckdb
       - AG2_DUCKDB_PATH=/files/duckdb/ag2_v3.duckdb
@@ -240,7 +240,6 @@ services:
     restart: unless-stopped
     volumes:
       - /opt/trading-dashboard/app:/app:ro
-      - /opt/trading-dashboard/secrets:/secrets:ro
       - /local-files/duckdb:/files/duckdb:ro
     networks:
       - web

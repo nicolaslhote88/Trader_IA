@@ -136,6 +136,11 @@ Les nodes n8n 07b/11b restent sandbox-only tant que `IBKR_DRY_RUN=true` et
 PM AG1-FX actif par compte IBKR et laisser `AG1-FX-PF-V1` reconcilier le ledger
 toutes les heures.
 
+Les ordres AG1 actions ont un verrou separe:
+`AG1_ACTIONS_LIVE_ORDERS_ENABLED=false` bloque les envois broker actions meme
+si `IBKR_DRY_RUN=false` est active pour le Forex paper. L'activer seulement
+apres une validation explicite des runs actions et du ledger.
+
 ## 4. Mises à jour
 
 ```bash
@@ -214,8 +219,9 @@ docker exec root-trading-dashboard-1 python -c "import urllib.request; print(url
 ## 5. Nettoyage
 
 ```bash
-# n8n purge auto ses exécutions à 72h (EXECUTIONS_DATA_MAX_AGE=72)
-# et conserve max 5000 runs (EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000).
+# n8n purge auto ses exécutions à 72h (EXECUTIONS_DATA_MAX_AGE=72),
+# conserve les runs réussis/échoués/manuels pour contrôle, et conserve
+# max 5000 runs (EXECUTIONS_DATA_PRUNE_MAX_COUNT=5000).
 # Au boot: VACUUM SQLite activé (DB_SQLITE_VACUUM_ON_STARTUP=true).
 
 # Logs Traefik (accesslog) : /opt/traefik_logs/access.log — logrotate recommandé.

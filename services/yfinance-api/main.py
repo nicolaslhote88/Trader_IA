@@ -9,6 +9,7 @@ import json
 import time
 import random
 import math
+import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple, Dict, Any, List
 
@@ -220,10 +221,23 @@ def _safe_mkdir(p: str) -> None:
 
 
 def _atomic_write(path: str, data: str) -> None:
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        f.write(data)
-    os.replace(tmp, path)
+    _safe_mkdir(os.path.dirname(path))
+    fd, tmp = tempfile.mkstemp(
+        prefix=f".{os.path.basename(path)}.",
+        suffix=".tmp",
+        dir=os.path.dirname(path),
+        text=True,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    except Exception:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # =========================

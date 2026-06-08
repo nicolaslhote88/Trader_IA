@@ -3,7 +3,7 @@
 Objectif: sortir les appels YFinance du dashboard et pre-calculer une base DuckDB quotidienne pour la vue consolidee.
 
 Le job:
-- lit les symboles depuis `ag2_v2.duckdb` table `universe` (ou `--symbols`)
+- lit les symboles depuis `ag2_v3.duckdb` table `universe` (ou `--symbols`)
 - appelle `yfinance-api` endpoints `/quote`, `/options`, `/calendar`
 - stocke les resultats dans `yf_enrichment_v1.duckdb`
 - expose une vue `v_latest_symbol_enrichment` consommee par le dashboard
@@ -23,19 +23,25 @@ Le job:
 ```bash
 python yf-enrichment-v1/daily_enrichment.py \
   --yf-enrich-db-path /files/duckdb/yf_enrichment_v1.duckdb \
-  --ag2-db-path /files/duckdb/ag2_v2.duckdb \
+  --ag2-db-path /files/duckdb/ag2_v3.duckdb \
   --yf-api-url http://yfinance-api:8080
 ```
 
 ## Variables utiles
 - `YF_ENRICH_DB_PATH` (defaut: `/files/duckdb/yf_enrichment_v1.duckdb`)
-- `AG2_DUCKDB_PATH` (defaut: `/files/duckdb/ag2_v2.duckdb`)
+- `AG2_DUCKDB_PATH` (defaut: `/files/duckdb/ag2_v3.duckdb`)
 - `YFINANCE_API_URL` (defaut: `http://yfinance-api:8080`)
 - `YF_OPTIONS_RECHECK_DAYS` (defaut: `7`)
-- `YF_ENRICH_QUOTE_CHUNK` (defaut: `80`)
+- `YF_ENRICH_QUOTE_CHUNK` (defaut: `40`)
 - `YF_ENRICH_OPTIONS_TARGET_DAYS` (defaut: `30`)
-- `YF_ENRICH_TIMEOUT_SEC` (defaut: `14`)
+- `YF_ENRICH_TIMEOUT_SEC` (defaut: `90` cote service HTTP)
 - `YF_ENRICH_MAX_SYMBOLS` (defaut: `0` = pas de limite)
+- `YF_ENRICH_METADATA_MAX_SYMBOLS` (defaut: `40`; `0` = pas de limite)
+
+Les quotes sont rafraichies pour tous les symboles charges. Les appels
+metadata/options/calendar sont bornes par `YF_ENRICH_METADATA_MAX_SYMBOLS`, car
+ces endpoints sont rate-limites et peuvent transformer un refresh complet en
+run de plusieurs heures sur un univers Euronext large.
 
 ## Optimisation FR (options vides)
 
