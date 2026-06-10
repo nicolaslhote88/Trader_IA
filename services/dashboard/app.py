@@ -99,6 +99,7 @@ DUCKDB_PATH = AG2_DUCKDB_PATH  # Backward compatibility across existing code pat
 AG1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_CHATGPT52_DUCKDB_PATH", "ag1_v3_chatgpt52.duckdb")
 AG1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GROK41_REASONING_DUCKDB_PATH", "ag1_v3_grok41_reasoning.duckdb")
 AG1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GEMINI30_PRO_DUCKDB_PATH", "ag1_v3_gemini30_pro.duckdb")
+AG1_V4_CONSENSUS_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_V4_DUCKDB_PATH", "ag1_v4_consensus.duckdb")
 
 
 def _resolve_ag1_legacy_duckdb_path() -> str:
@@ -159,11 +160,20 @@ AG1_MULTI_PORTFOLIO_CONFIG = {
         "accent": "#f59e0b",
     },
     "gemini30_pro": {
-        "label": "Gemini 3.0 Pro",
+        "label": "Gemini 3.5 Flash",
         "short_label": "Gemini",
         "db_path": AG1_GEMINI30_PRO_DUCKDB_PATH,
         "accent": "#60a5fa",
     },
+}
+
+AG1_V4_CONSENSUS_PORTFOLIO_CONFIG = {
+    "ag1_v4_consensus": {
+        "label": "AG1 V4 Consensus",
+        "short_label": "V4",
+        "db_path": AG1_V4_CONSENSUS_DUCKDB_PATH,
+        "accent": "#14b8a6",
+    }
 }
 
 AG1_FX_MULTI_PORTFOLIO_CONFIG = {
@@ -7914,6 +7924,7 @@ def _ag1_expected_model_tokens(key: str, cfg: dict[str, str]) -> list[str]:
         "chatgpt52": ["chatgpt", "gpt", "openai", "o3", "o4"],
         "grok41_reasoning": ["grok", "xai"],
         "gemini30_pro": ["gemini", "google"],
+        "ag1_v4_consensus": ["ag1_v4_consensus", "consensus", "v4"],
     }
     tokens = list(token_map.get(str(key), []))
     label_blob = f"{cfg.get('label', '')} {cfg.get('short_label', '')}".lower()
@@ -8959,6 +8970,97 @@ def load_ag1_multi_portfolios() -> dict[str, dict[str, object]]:
     return out
 
 
+@st.cache_data(ttl=30)
+def load_ag1_v4_consensus_portfolio() -> dict[str, object]:
+    cfg = AG1_V4_CONSENSUS_PORTFOLIO_CONFIG["ag1_v4_consensus"]
+    return _ag1_load_single_portfolio_ledger("ag1_v4_consensus", cfg)
+
+
+@st.cache_data(ttl=30)
+def load_ag1_v4_consensus_trace(db_path: str, db_sig: tuple[str, float, int]) -> dict[str, pd.DataFrame]:
+    _ = db_sig
+    out = {
+        "decisions": pd.DataFrame(),
+        "votes": pd.DataFrame(),
+        "proposals": pd.DataFrame(),
+    }
+    if not db_path or not os.path.exists(db_path):
+        return out
+    conn = _duckdb_connect_readonly_retry(db_path)
+    if conn is None:
+        return out
+    try:
+        out["decisions"] = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ts,
+              run_id,
+              symbol,
+              intent,
+              action,
+              side,
+              vote_count,
+              valid_model_count,
+              model_keys,
+              status,
+              reason,
+              selected_qty,
+              selected_weight_pct,
+              selected_limit_price,
+              confidence
+            FROM core.consensus_decisions
+            ORDER BY ts DESC
+            LIMIT 100
+            """,
+        )
+        out["votes"] = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ts,
+              run_id,
+              model_key,
+              symbol,
+              intent,
+              action,
+              side,
+              executable,
+              confidence,
+              target_qty,
+              target_weight_pct,
+              limit_price
+            FROM core.consensus_votes
+            ORDER BY ts DESC
+            LIMIT 300
+            """,
+        )
+        out["proposals"] = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ts,
+              run_id,
+              model_key,
+              model_name,
+              extractor_status,
+              parse_ok,
+              error
+            FROM core.model_proposals
+            ORDER BY ts DESC
+            LIMIT 100
+            """,
+        )
+    except Exception:
+        return out
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+    return out
+
+
 # ============================================================
 # MAIN APP
 # ============================================================
@@ -8985,6 +9087,7 @@ page = st.sidebar.radio("Page", NAV_GROUPS[nav_group])
 
 # Signatures fichiers DuckDB (invalidation cache basee sur mtime/size)
 ag1_db_sig = duckdb_file_signature(AG1_DUCKDB_PATH)
+ag1_v4_db_sig = duckdb_file_signature(AG1_V4_CONSENSUS_DUCKDB_PATH)
 ag2_db_sig = duckdb_file_signature(DUCKDB_PATH)
 ag3_db_sig = duckdb_file_signature(AG3_DUCKDB_PATH)
 ag4_db_sig = duckdb_file_signature(AG4_DUCKDB_PATH)
@@ -11535,6 +11638,16 @@ if page == "Dashboard Trading":
                     df_yf_enrichment_latest,
                 )
             )
+    ag1_v4_consensus = load_ag1_v4_consensus_portfolio()
+    if isinstance(ag1_v4_consensus, dict):
+        ag1_v4_consensus["df_portfolio"] = sanitize_allocation_metadata_labels(
+            enrich_portfolio_metadata(
+                ag1_v4_consensus.get("df_portfolio", pd.DataFrame()),
+                df_univ,
+                df_yf_enrichment_latest,
+            )
+        )
+    ag1_v4_trace = load_ag1_v4_consensus_trace(AG1_V4_CONSENSUS_DUCKDB_PATH, ag1_v4_db_sig)
     compare_keys = [k for k in AG1_MULTI_PORTFOLIO_CONFIG.keys() if k in ag1_multi]
     available_keys = [
         k for k, p in ag1_multi.items()
@@ -11583,8 +11696,49 @@ if page == "Dashboard Trading":
             load_data.clear()
             load_dashboard_market_data.clear()
             load_ag1_multi_portfolios.clear()
+            load_ag1_v4_consensus_portfolio.clear()
+            load_ag1_v4_consensus_trace.clear()
             fetch_benchmarks_history.clear()
             st.rerun()
+
+    st.subheader("AG1 V4 Consensus")
+    v4_status = str((ag1_v4_consensus or {}).get("status", "")).lower()
+    if v4_status == "ok":
+        v4_summary = ag1_v4_consensus.get("summary", {}) if isinstance(ag1_v4_consensus, dict) else {}
+        v4_cols = st.columns(5)
+        v4_cols[0].metric("Valeur", f"{safe_float(v4_summary.get('total_val')):,.2f} EUR")
+        v4_cols[1].metric("Cash", f"{safe_float(v4_summary.get('cash')):,.2f} EUR")
+        v4_cols[2].metric("ROI", f"{safe_float(v4_summary.get('roi')) * 100:,.2f}%")
+        v4_cols[3].metric("Positions", int(safe_float(v4_summary.get("positions_count"))))
+        v4_cols[4].metric("Runs", int(safe_float(v4_summary.get("runs_count"))))
+        st.caption(
+            "Source AG1 V4: "
+            f"{AG1_V4_CONSENSUS_DUCKDB_PATH} | "
+            f"last_run={v4_summary.get('last_run_id') or 'n/a'} | "
+            f"decision={v4_summary.get('last_decision_summary') or 'n/a'}"
+        )
+        trace_decisions = ag1_v4_trace.get("decisions", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
+        trace_votes = ag1_v4_trace.get("votes", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
+        trace_proposals = ag1_v4_trace.get("proposals", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
+        with st.expander("AG1 V4 consensus trace", expanded=False):
+            if trace_decisions is not None and not trace_decisions.empty:
+                st.dataframe(trace_decisions, use_container_width=True, hide_index=True)
+            if trace_votes is not None and not trace_votes.empty:
+                st.dataframe(trace_votes, use_container_width=True, hide_index=True)
+            if trace_proposals is not None and not trace_proposals.empty:
+                st.dataframe(trace_proposals, use_container_width=True, hide_index=True)
+            if (
+                (trace_decisions is None or trace_decisions.empty)
+                and (trace_votes is None or trace_votes.empty)
+                and (trace_proposals is None or trace_proposals.empty)
+            ):
+                st.info("Aucun vote consensus V4 en base pour le moment.")
+    elif v4_status == "missing":
+        st.info(f"Base AG1 V4 absente pour le moment: `{AG1_V4_CONSENSUS_DUCKDB_PATH}`")
+    elif v4_status == "error":
+        st.warning(f"AG1 V4 consensus indisponible: {ag1_v4_consensus.get('error')}")
+    else:
+        st.info("AG1 V4 consensus non initialise.")
 
     # Comparative scoreboard (3 AG1 variants) + Focus on one portfolio for detailed tabs below.
     selected_portfolio_key = None

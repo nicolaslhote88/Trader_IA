@@ -25,11 +25,11 @@ broker les nouvelles ouvertures FX qui emprunteraient une devise non-EUR
 | # | Agent | RÃ´le | ImplÃ©mentÃ© dans |
 |---|---|---|---|
 | 1 | **Univers** | Extraction et maintenance de l'univers d'investissement (tickers, mÃ©tadonnÃ©es, secteurs) | `outils/AG0-V1 - extraction universe/` (workflow n8n inactif, utilitaire ponctuel) |
-| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres theoriques. Cote Forex paper, GPT-5.2 est l'unique PM actif ; Grok/Gemini sont gardes inactifs. | `AG1-V3-Portfolio manager/`, `AG1-FX-V1-Portfolio manager/` |
+| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres theoriques. Cote actions, AG1 V4 consolide GPT/Grok/Gemini par consensus 2/3. Cote Forex paper, GPT-5.2 est l'unique PM actif ; Grok/Gemini sont gardes inactifs. | `AG1-V4-Consensus Portfolio manager/`, `AG1-V3-Portfolio manager/`, `AG1-FX-V1-Portfolio manager/` |
 | 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
 | 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
 | 5 | **Analyste Sentiment / News** | Sentiment de marchÃ©, news, transcripts | `AG4-V3/` (macro + geo-tagging), `AG4-SPE-V2/` (par valeur), `AG4-Forex/` (canaux FX dÃ©diÃ©s) |
-| 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exÃ©cution | `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` (nodes 7â†’10) |
+| 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exÃ©cution | `AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` |
 
 > Etat actuel : l'Execution Trader actions reste sandbox par defaut. Cote
 > Forex, `IBKR_DRY_RUN=false` est active uniquement sur l'environnement IBKR
@@ -73,6 +73,7 @@ Trader_IA/
 │   │   └── yf-enrichment-v1/        # Enrichissement Yahoo Finance quotidien
 │   ├── trading-actions/             # Agents du système actions/ETF/crypto
 │   │   ├── AG1-PF-V1/
+│   │   ├── AG1-V4-Consensus Portfolio manager/
 │   │   ├── AG1-V3-Portfolio manager/
 │   │   ├── AG2-V3/
 │   │   ├── AG3-V2/
@@ -96,10 +97,10 @@ Trader_IA/
 ## 5. Flux de donnÃ©es (vue haute)
 
 ```
-AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨les) â”€â”€â–º AG1 (Portfolio Manager)
+AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨les) â”€â”€â–º AG1 V4 (GPT/Grok/Gemini)
                                                                     â”‚
                                                                     â–¼
-                                    Validate & Enforce Safety â”€â”€â–º Build DuckDB Bundle â”€â”€â–º Upsert Run Bundle â”€â”€â–º Post-Run Health
+                                    Consensus 2/3 â”€â”€â–º Validate & Enforce Safety â”€â”€â–º Build DuckDB Bundle â”€â”€â–º Upsert Run Bundle â”€â”€â–º Post-Run Health
                                     (Risk Manager)                 (Execution = SIM)    (ledger atomique)    (health check)
                                                                     â”‚
                                                                     â–¼
@@ -116,6 +117,7 @@ AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨l
 | Comparatif brokers 2026 | `Etude_Comparative_Brokers_Trader_IA.docx` (racine) |
 | Audits (valorisation, segments marchÃ©) | `docs/audits/20260423_audit_valorisation/` |
 | Spec AG4 geo-tagging + AG4_Forex | `docs/specs/ag4_geo_tagging_and_forex_base_v1.md` |
+| Spec AG1 V4 consensus actions | `docs/specs/ag1_v4_consensus_actions.md` |
 | Variables d'environnement | `docs/operations/env_vars.md` |
 | DÃ©ploiement VPS | `docs/operations/deploy.md` |
 | Execution IBKR | `docs/operations/ibkr_execution.md` |

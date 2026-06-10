@@ -39,6 +39,8 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_DRY_RUN` | `true` : aucun ordre broker reel n'est envoye. `false` active l'envoi via IBKR. En production Forex actuelle, cette valeur est `false` uniquement sur le compte paper. |
 | `IBKR_SEND_DRY_RUN_TO_BROKER` | `false` par defaut : les nodes n8n restent sandbox-only en dry-run. `true` appelle `ibkr-broker` en dry-run pour valider le chemin HTTP sans ordre live. |
 | `AG1_ACTIONS_LIVE_ORDERS_ENABLED` | `false` par defaut : bloque les ordres actions AG1 meme si `IBKR_DRY_RUN=false` pour le Forex paper. Passer a `true` uniquement apres validation des runs actions, reconciliation broker et controle du ledger. |
+| `AG1_ACTIONS_IBKR_ENABLED_MODELS` | Liste de tokens de modeles autorises a envoyer des ordres actions via IBKR quand le gate actions est ouvert. Exemple pre-live : `gemini`. |
+| `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS` | Token logique autorise pour AG1 V4 consensus quand le gate actions est ouvert. Defaut : `ag1_v4_consensus`. |
 | `IBKR_ACCOUNT_ID` | Compte IBKR cible. Laisser vide pour auto-detection, mais le fixer est recommande avant le live. |
 | `IBKR_BROKER_URL` | URL interne n8n/runners vers le broker. Definie dans compose : `http://ibkr-broker:8080`. |
 | `IBKR_GATEWAY_URL` | URL interne du broker vers Client Portal Gateway. Definie dans compose : `https://ibkr-gateway:5000`. |
@@ -76,10 +78,26 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `AG1_FX_MIN_REWARD_TO_FEE` | Ratio minimum profit brut attendu / frais estimes. Defaut `2.0`. |
 | `AG1_FX_MIN_CLOSE_NET_PROFIT_EUR` | Profit net minimum estime apres frais de sortie pour autoriser une cloture discretionnaire. Defaut `2.0`. |
 | `AG1_FX_MIN_DISCRETIONARY_HOLD_HOURS` | Duree minimale avant une cloture discretionnaire perdante nette, sauf stop/TP ou invalidation forte du cube. Defaut `24`. |
+| `AG1_FX_LLM_TOP_NEWS_MAX` | Nombre maximum de news dans le brief LLM Forex. Defaut prod `4` pour limiter la taille du prompt et le risque de crash n8n. |
+| `AG1_FX_LLM_MARKET_WATCH_MAX` | Nombre maximum de paires detaillees dans `market_watch`. Defaut prod `10`. |
+| `AG1_FX_LLM_PAIR_DRIVERS_MAX` | Nombre maximum de drivers news par paire dans le brief compact. Defaut prod `1`. |
 | `AG2_FX_IBKR_MARKETDATA_ENABLED` | `true` par defaut. Active l'enrichissement AG2-FX par snapshots FX IBKR bid/ask/mid/spread. |
 | `AG4_FX_OFFICIAL_SOURCES_ENABLED` | `true` par defaut. Active les flux officiels banques centrales/BIS dans AG4-FX. |
 
 Voir aussi `docs/operations/ibkr_execution.md`.
+
+## AG1 V4 Consensus Actions
+
+AG1 V4 actions utilise une base separee et ne reprend pas les historiques V3.
+Le writer initialise `cfg.portfolio_config` et `core.cash_ledger` a 10 000 EUR
+lors de la creation de la base.
+
+| Variable | Rôle |
+|---|---|
+| `AG1_V4_DUCKDB_PATH` | Base ledger consensus actions. Defaut compose : `/files/duckdb/ag1_v4_consensus.duckdb`. |
+| `AG1_V4_DUCKDB_WRITER_PATH` | Writer externe V4 monte dans n8n/runners. |
+| `AG1_V4_LEDGER_SCHEMA_PATH` | Schema SQL V4 avec tables de propositions, votes et decisions consensus. |
+| `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS` | Token logique autorise par le node IBKR V4 quand les ordres actions sont ouverts. |
 
 ## Dashboard Streamlit
 
@@ -102,6 +120,7 @@ Définies dans le docker-compose (pas dans le `.env`). Le volume `/local-files/d
 - `AG1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_v3_chatgpt52.duckdb`
 - `AG1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_v3_grok41_reasoning.duckdb`
 - `AG1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_v3_gemini30_pro.duckdb`
+- `AG1_V4_DUCKDB_PATH=/files/duckdb/ag1_v4_consensus.duckdb`
 - `AG2_DUCKDB_PATH=/files/duckdb/ag2_v3.duckdb`
 - `AG3_DUCKDB_PATH=/files/duckdb/ag3_v2.duckdb`
 - `AG4_DUCKDB_PATH=/files/duckdb/ag4_v3.duckdb`
@@ -138,6 +157,9 @@ Ces variables sont déjà définies dans le docker-compose — elles ne sont **p
 - `AG1_DUCKDB_PATH=/files/duckdb/ag1_v3.duckdb`
 - `AG1_DUCKDB_WRITER_PATH=/files/AG1-V3-EXPORT/nodes/post_agent/duckdb_writer.py`
 - `AG1_LEDGER_SCHEMA_PATH=/files/AG1-V3-EXPORT/sql/portfolio_ledger_schema_v2.sql`
+- `AG1_V4_DUCKDB_PATH=/files/duckdb/ag1_v4_consensus.duckdb`
+- `AG1_V4_DUCKDB_WRITER_PATH=/files/AG1-V4-EXPORT/nodes/post_agent/duckdb_writer.py`
+- `AG1_V4_LEDGER_SCHEMA_PATH=/files/AG1-V4-EXPORT/sql/portfolio_ledger_schema_v4.sql`
 - `EXECUTIONS_DATA_MAX_AGE=72`
 - `EXECUTIONS_DATA_SAVE_ON_SUCCESS=all`
 - `EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true`
