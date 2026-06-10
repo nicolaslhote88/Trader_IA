@@ -10,12 +10,8 @@ ROW_LIMIT = 500
 CANDIDATE_LIMIT = 2000
 
 
-class NewsFetchTimeout(Exception):
-    pass
-
-
 def _timeout_handler(signum, frame):
-    raise NewsFetchTimeout(f"news fetch budget exceeded after {QUERY_BUDGET_SECONDS}s")
+    raise TimeoutError(f"news fetch budget exceeded after {QUERY_BUDGET_SECONDS}s")
 
 
 @contextmanager
@@ -193,8 +189,10 @@ lookback_days = LOOKBACK_DAYS
 
 for it in items:
     j = it.get("json", {}) or {}
-    if j.get("db_path"):
-        db_path = str(j.get("db_path"))
+    if j.get("ag4_db_path"):
+        db_path = str(j.get("ag4_db_path"))
+    elif j.get("AG4_DUCKDB_PATH"):
+        db_path = str(j.get("AG4_DUCKDB_PATH"))
     if j.get("lookbackDays") is not None:
         try:
             lookback_days = max(1, int(float(j.get("lookbackDays"))))
@@ -204,11 +202,18 @@ for it in items:
 cutoff = datetime.now(timezone.utc) - timedelta(days=lookback_days)
 out = []
 
-alarm_enabled = hasattr(signal, "SIGALRM") and hasattr(signal, "setitimer")
+try:
+    _sigalrm = signal.SIGALRM
+    _itimer_real = signal.ITIMER_REAL
+    _setitimer = signal.setitimer
+    alarm_enabled = True
+except Exception:
+    alarm_enabled = False
+
 try:
     if alarm_enabled:
-        signal.signal(signal.SIGALRM, _timeout_handler)
-        signal.setitimer(signal.ITIMER_REAL, QUERY_BUDGET_SECONDS)
+        signal.signal(_sigalrm, _timeout_handler)
+        _setitimer(_itimer_real, QUERY_BUDGET_SECONDS)
 
     with db_con(db_path) as con:
         rows, sector_field_source = fetch_news_rows(con, cutoff)
@@ -217,7 +222,7 @@ except Exception as e:
 finally:
     if alarm_enabled:
         try:
-            signal.setitimer(signal.ITIMER_REAL, 0)
+            _setitimer(_itimer_real, 0)
         except Exception:
             pass
 

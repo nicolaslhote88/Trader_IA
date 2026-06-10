@@ -175,7 +175,11 @@ Ces variables sont déjà définies dans le docker-compose — elles ne sont **p
 - `N8N_BLOCK_RUNNER_ENV_ACCESS=false` lorsque les Code nodes Python doivent lire
   les variables d'environnement IBKR/AG1-FX.
 
-Les mêmes `AG1_DUCKDB_*` sont répliquées côté runners pour accès aux `.duckdb`.
+Les mêmes `AG1_DUCKDB_*` / `AG1_V4_*` sont répliquées côté runners pour accès
+aux `.duckdb`.
 Sur le VPS actuel, les runners externes utilisent aussi
 `/opt/trader-ia/n8n-task-runners.clean.json`; les variables IBKR et AG1-FX
 doivent etre presentes dans `allowed-env` pour etre visibles dans les workflows.
+Pour AG1 V4, ajouter au minimum `AG1_V4_DUCKDB_PATH`,
+`AG1_V4_DUCKDB_WRITER_PATH`, `AG1_V4_LEDGER_SCHEMA_PATH`,
+`AG1_V4_ACTIONS_IBKR_ENABLED_MODELS` et `AG1_V4_INITIAL_CAPITAL_EUR`.

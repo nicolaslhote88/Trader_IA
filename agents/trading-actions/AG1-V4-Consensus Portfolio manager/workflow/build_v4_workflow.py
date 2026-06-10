@@ -37,7 +37,10 @@ CODE_MAP = {
     "2B - Init Run Context": ("jsCode", ROOT / "nodes/pre_agent/2B_init_run_context.code.js"),
     "4B – Build Portfolio Context": ("pythonCode", ROOT / "nodes/pre_agent/4B_build_portfolio_context.code.py"),
     "4C — Enrich Portfolio with Market Prices": ("pythonCode", ROOT / "nodes/pre_agent/4C_enrich_portfolio_with_market_prices.code.py"),
+    "AG4.01 - Récupération des news générales": ("pythonCode", ROOT / "nodes/pre_agent/AG4_01_fetch_macro_news.code.py"),
+    "20J_FINAL — Build MarketNewsPack Final": ("pythonCode", ROOT / "nodes/pre_agent/20J_final_build_market_news_pack.code.py"),
     "R8 — Data Prep for Matrix (Fusion Filter)": ("pythonCode", ROOT / "nodes/pre_agent/R8_data_prep_matrix.code.py"),
+    "Calcul Matrice & Briefing": ("pythonCode", ROOT / "nodes/pre_agent/calcul_matrice_briefing.code.py"),
     "AG1.00 — Assemble Input Packs": ("jsCode", ROOT / "nodes/agent_input/ag1_00_assemble_input_packs.code.js"),
     "7 - Validate & Enforce Safety": ("jsCode", ROOT / "nodes/post_agent/07_validate_enforce_safety_v5.code.js"),
     "07b - IBKR Send Orders": ("jsCode", ROOT / "nodes/post_agent/07b_ibkr_send_orders.js"),
@@ -89,7 +92,7 @@ def patch_code_nodes(workflow: Dict[str, Any]) -> None:
         node = get_node(workflow, name)
         node.setdefault("parameters", {})[param_key] = read_code(path)
         if param_key == "pythonCode":
-            node["parameters"]["language"] = "python"
+            node["parameters"]["language"] = "pythonNative"
 
     extractor_template = read_code(ROOT / "nodes/agent_input/information_extractor_v4.code.js")
     for model_key, branch in MODEL_BRANCHES.items():
@@ -111,8 +114,11 @@ def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
     for branch in MODEL_BRANCHES.values():
         node = get_node(workflow, branch["agent"])
         text = str(node.get("parameters", {}).get("text", ""))
+        text = text[1:] if text.startswith("=") else text
         if "MODE AG1 V4 CONSENSUS" not in text:
-            node["parameters"]["text"] = intro + text
+            text = intro + text
+        text = text.replace("\n=Tu dois produire", "\nTu dois produire")
+        node.setdefault("parameters", {})["text"] = "=" + text
 
 
 def add_consensus_nodes(workflow: Dict[str, Any]) -> None:

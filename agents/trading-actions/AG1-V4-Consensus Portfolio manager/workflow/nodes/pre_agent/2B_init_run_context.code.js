@@ -42,8 +42,10 @@ const timestampUtc = now.toISOString();
 
 const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
 const universeScope = ["EQUITY", "ETF", "CRYPTO"];
-const dbPath = String(cfg.ag1_v4_db_path || cfg.AG1_V4_DUCKDB_PATH || cfg.db_path || "/files/duckdb/ag1_v4_consensus.duckdb");
-const initialCapitalEUR = Number(cfg.initialCapitalEUR || cfg.initial_capital_eur || 10000);
+const envDbPath = (typeof $env !== "undefined" && $env.AG1_V4_DUCKDB_PATH) ? String($env.AG1_V4_DUCKDB_PATH) : "";
+const envInitialCapital = (typeof $env !== "undefined" && $env.AG1_V4_INITIAL_CAPITAL_EUR) ? Number($env.AG1_V4_INITIAL_CAPITAL_EUR) : null;
+const dbPath = String(cfg.ag1_v4_db_path || cfg.AG1_V4_DUCKDB_PATH || cfg.db_path || envDbPath || "/files/duckdb/ag1_v4_consensus.duckdb");
+const initialCapitalEUR = Number(cfg.initialCapitalEUR || cfg.initial_capital_eur || envInitialCapital || 10000);
 
 // run_id: RUN_YYYYMMDD_HHMMSS_<executionId|rand>
 const yyyymmdd = `${parts.year}${parts.month}${parts.day}`;

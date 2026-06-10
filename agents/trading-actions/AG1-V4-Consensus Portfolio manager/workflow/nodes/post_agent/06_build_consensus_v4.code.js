@@ -371,6 +371,23 @@ for (const group of groups.values()) {
 
 if (!approvedActions.length) {
   warnings.push(validModelCount < 2 ? "CONSENSUS_NO_TRADE:LESS_THAN_TWO_VALID_MODELS" : "CONSENSUS_NO_TRADE:NO_2_OF_3_EXECUTABLE_AGREEMENT");
+  if (!consensusDecisions.length) {
+    consensusDecisions.push({
+      consensus_id: `CONS_${runId}_GLOBAL_NO_TRADE`,
+      run_id: runId,
+      ts,
+      symbol: "GLOBAL",
+      intent: "NO_TRADE",
+      action: "NO_TRADE",
+      side: null,
+      vote_count: 0,
+      valid_model_count: validModelCount,
+      model_keys: modelProposals.filter((p) => p.parse_ok).map((p) => p.model_key).sort().join(","),
+      status: "NO_TRADE",
+      reason: warnings[warnings.length - 1],
+      payload_json: { modelProposals, votes },
+    });
+  }
 }
 
 const decision = approvedActions.length ? "TRADE" : "NO_TRADE";

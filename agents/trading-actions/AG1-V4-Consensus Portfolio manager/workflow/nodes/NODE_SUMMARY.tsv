@@ -1,37 +1,37 @@
-key	id	name	type	code_len
+slug	id	name	type	disabled
 1_hourly_trigger	a392eab3-8ab6-4f1b-a6c1-f6846cf0eaa3	1 - Hourly Trigger	n8n-nodes-base.cron	0
-7_validate_enforce_safety	6227fed2-bce6-452f-ac55-62d14067d316	7 - Validate & Enforce Safety	n8n-nodes-base.code	15528
-8_build_duckdb_bundle	5e44caa2-132c-4c2f-a987-56c0591ce018	8 - Build DuckDB Bundle	n8n-nodes-base.code	17267
-4b_build_portfolio_context	bae45771-922b-41c3-989a-39eb8c6dcade	4B – Build Portfolio Context	n8n-nodes-base.code	56777
+7_validate_enforce_safety	6227fed2-bce6-452f-ac55-62d14067d316	7 - Validate & Enforce Safety	n8n-nodes-base.code	0
+8_build_duckdb_bundle	5e44caa2-132c-4c2f-a987-56c0591ce018	8 - Build DuckDB Bundle	n8n-nodes-base.code	0
+4b_build_portfolio_context	bae45771-922b-41c3-989a-39eb8c6dcade	4B – Build Portfolio Context	n8n-nodes-base.code	0
 sticky_note1	dbf30b48-7190-4ba9-94a2-d853d7618a16	Sticky Note1	n8n-nodes-base.stickyNote	0
 sticky_note3	e2b82a58-492c-43cc-958f-8fec0c8a5e02	Sticky Note3	n8n-nodes-base.stickyNote	0
 sticky_note4	912acea7-cf2d-45d2-92b6-223f355f3b20	Sticky Note4	n8n-nodes-base.stickyNote	0
-2b_init_run_context	8beefb94-cbc1-45c9-9662-cabb22d8d85c	2B - Init Run Context	n8n-nodes-base.code	2835
+2b_init_run_context	8beefb94-cbc1-45c9-9662-cabb22d8d85c	2B - Init Run Context	n8n-nodes-base.code	0
 sticky_note5	cc35d336-92b5-46fd-8282-14d2713d6f69	Sticky Note5	n8n-nodes-base.stickyNote	0
-4c_enrich_portfolio_with_market_prices	37e8ffda-d099-4168-b1f7-76ba652754cd	4C — Enrich Portfolio with Market Prices	n8n-nodes-base.code	36444
-20j_final_build_marketnewspack_final	9f3dac04-531d-4d3a-b2ad-e7e50f7ffb96	20J_FINAL — Build MarketNewsPack Final	n8n-nodes-base.code	13954
+4c_enrich_portfolio_with_market_prices	37e8ffda-d099-4168-b1f7-76ba652754cd	4C — Enrich Portfolio with Market Prices	n8n-nodes-base.code	0
+20j_final_build_marketnewspack_final	9f3dac04-531d-4d3a-b2ad-e7e50f7ffb96	20J_FINAL — Build MarketNewsPack Final	n8n-nodes-base.code	0
 when_clicking_execute_workflow	1662b7d5-0c5f-42bc-bba2-93e24d951b03	When clicking ‘Execute workflow’	n8n-nodes-base.manualTrigger	0
 sticky_note6	6ee07bb9-cadc-49bf-b313-0c7db5286843	Sticky Note6	n8n-nodes-base.stickyNote	0
-ag4_01_récupération_des_news_générales	64186756-2813-4b4e-b273-749beb57f7f6	AG4.01 - Récupération des news générales	n8n-nodes-base.code	8593
+ag4_01_récupération_des_news_générales	64186756-2813-4b4e-b273-749beb57f7f6	AG4.01 - Récupération des news générales	n8n-nodes-base.code	0
 agent_1_portfolio_manager	6470a4f6-de6b-4bb6-9eb1-a251a944227b	Agent #1 - Portfolio manager	@n8n/n8n-nodes-langchain.agent	0
-information_extractor	dfa82252-3956-413a-ba26-55a1f6b97c90	Information Extractor	n8n-nodes-base.code	2027
+information_extractor	dfa82252-3956-413a-ba26-55a1f6b97c90	Information Extractor	n8n-nodes-base.code	0
 openai_chat_model_gpt5_2	df70f524-cc8f-4295-88d5-e1dfe9d1c43e	OpenAI Chat Model - GPT5.2	@n8n/n8n-nodes-langchain.lmChatOpenAi	0
 openai_chat_model3	c4c6b89f-fb02-4afd-9309-5df11e4f90d8	OpenAI Chat Model3	@n8n/n8n-nodes-langchain.lmChatOpenAi	0
 news_web_x_scan_grok	1b7205cf-ccdf-4198-b81b-ca5d3a4ab372	news_web_x_scan (Grok)	@n8n/n8n-nodes-langchain.agentTool	0
-r8_data_prep_for_matrix_fusion_filter	7ae6efb0-c933-4b22-9884-29e92b0e3a97	R8 — Data Prep for Matrix (Fusion Filter)	n8n-nodes-base.code	22064
-calcul_matrice_briefing	6c6eaf35-cb7c-4300-9588-17b4c0df3ec3	Calcul Matrice & Briefing	n8n-nodes-base.code	26998
+r8_data_prep_for_matrix_fusion_filter	7ae6efb0-c933-4b22-9884-29e92b0e3a97	R8 — Data Prep for Matrix (Fusion Filter)	n8n-nodes-base.code	0
+calcul_matrice_briefing	6c6eaf35-cb7c-4300-9588-17b4c0df3ec3	Calcul Matrice & Briefing	n8n-nodes-base.code	0
 merge7	38b971ce-7627-4b08-bc89-70a51ac5916d	Merge7	n8n-nodes-base.merge	0
-ag1_00_assemble_input_packs	aecdb9d1-a8c7-4958-82cd-6e8b30f5a54a	AG1.00 — Assemble Input Packs	n8n-nodes-base.code	8638
+ag1_00_assemble_input_packs	aecdb9d1-a8c7-4958-82cd-6e8b30f5a54a	AG1.00 — Assemble Input Packs	n8n-nodes-base.code	0
 sticky_note	d121347c-0a4d-4a69-b4a1-540dd5a3ce7b	Sticky Note	n8n-nodes-base.stickyNote	0
 openai_chat_model8	1de588e5-fbf5-4f07-a25a-3bcba92172da	OpenAI Chat Model8	@n8n/n8n-nodes-langchain.lmChatOpenAi	0
-9_upsert_run_bundle_duckdb	280869c6-b44f-4596-a38f-f68e8af9ea0a	9 - Upsert Run Bundle (DuckDB)	n8n-nodes-base.code	13062
-10_post_run_health_duckdb	4a46de80-f4bd-4162-856b-1f44504db279	10 - Post-Run Health (DuckDB)	n8n-nodes-base.code	6089
+9_upsert_run_bundle_duckdb	280869c6-b44f-4596-a38f-f68e8af9ea0a	9 - Upsert Run Bundle (DuckDB)	n8n-nodes-base.code	0
+10_post_run_health_duckdb	4a46de80-f4bd-4162-856b-1f44504db279	10 - Post-Run Health (DuckDB)	n8n-nodes-base.code	0
 agent_1_portfolio_manager1	b277e6c4-5a8e-4c2f-9744-e6970ae3db99	Agent #1 - Portfolio manager1	@n8n/n8n-nodes-langchain.agent	0
-information_extractor1	f0eb278b-bda2-4767-996d-49f1a651eb1d	Information Extractor1	n8n-nodes-base.code	2042
+information_extractor1	f0eb278b-bda2-4767-996d-49f1a651eb1d	Information Extractor1	n8n-nodes-base.code	0
 openai_chat_model7	72c7a322-96b7-40d6-9886-e89dad73c218	OpenAI Chat Model7	@n8n/n8n-nodes-langchain.lmChatOpenAi	0
 news_web_x_scan_grok_1	1d59404c-8718-43b1-ae79-c30cd4f70cc1	news_web_x_scan (Grok)1	@n8n/n8n-nodes-langchain.agentTool	0
 agent_1_portfolio_manager2	c7990d00-1de0-46d4-a768-cef8b5065e5e	Agent #1 - Portfolio manager2	@n8n/n8n-nodes-langchain.agent	0
-information_extractor2	303b6613-fc6d-4598-8e1a-81ffc4823f96	Information Extractor2	n8n-nodes-base.code	2037
+information_extractor2	303b6613-fc6d-4598-8e1a-81ffc4823f96	Information Extractor2	n8n-nodes-base.code	0
 openai_chat_model13	9912b8c4-4deb-4ea0-9699-617c8c60f915	OpenAI Chat Model13	@n8n/n8n-nodes-langchain.lmChatOpenAi	0
 news_web_x_scan_grok_2	0b4389a7-0823-49df-8b87-85815cd2862e	news_web_x_scan (Grok)2	@n8n/n8n-nodes-langchain.agentTool	0
 openai_chat_model14	41ab5022-8837-4990-b067-567da3090e84	OpenAI Chat Model14	@n8n/n8n-nodes-langchain.lmChatOpenAi	0
@@ -41,6 +41,6 @@ sticky_note7	2cf6be07-97b0-4c50-bac9-0abe86fefa2c	Sticky Note7	n8n-nodes-base.st
 google_gemini_chat_model	b70e22a5-6b81-49a9-9938-fa8595bfd751	Google Gemini Chat Model	@n8n/n8n-nodes-langchain.lmChatGoogleGemini	0
 sticky_note11	965e51ee-6c0f-41c4-80ab-8a5096b1382f	Sticky Note11	n8n-nodes-base.stickyNote	0
 xai_grok_chat_model1	16aea577-d8d8-448e-88c0-fbd6d822334c	xAI Grok Chat Model1	@n8n/n8n-nodes-langchain.lmChatXAiGrok	0
-07b_ibkr_send_orders	07b-ibkr-send-orders	07b - IBKR Send Orders	n8n-nodes-base.code	11318
+07b_ibkr_send_orders	07b-ibkr-send-orders	07b - IBKR Send Orders	n8n-nodes-base.code	0
 ag1_v4_merge_model_proposals	ag1-v4-merge-model-proposals	AG1.V4 — Merge Model Proposals	n8n-nodes-base.merge	0
-ag1_v4_build_consensus	ag1-v4-build-consensus	AG1.V4 — Build Consensus	n8n-nodes-base.code	15208
+ag1_v4_build_consensus	ag1-v4-build-consensus	AG1.V4 — Build Consensus	n8n-nodes-base.code	0
