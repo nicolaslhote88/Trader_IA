@@ -211,6 +211,9 @@ Sur n8n 2.x, un workflow actif execute la version publiee
 (`workflow_entity.activeVersionId`), pas seulement le contenu courant de
 `workflow_entity.nodes`. Apres une mise a jour de workflow par import/injection
 DB, verifier que la version publiee pointe sur le nouveau `versionId`.
+Pour desactiver par maintenance SQL, `active=0` ne suffit pas: il faut aussi
+poser `activeVersionId=NULL` et redemarrer `n8n`/`task-runners`, sinon l'UI peut
+encore afficher le workflow publie et n8n peut conserver ses triggers.
 
 ```bash
 docker exec root-n8n-1 n8n publish:workflow --id=<workflow_id>
