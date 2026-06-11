@@ -4,6 +4,7 @@ ibkr-broker — microservice FastAPI passerelle vers IBKR Client Portal API.
 Variables d'environnement :
   IBKR_GATEWAY_URL   URL interne du clientportal.gw  (défaut: https://ibkr-gateway:5000)
   IBKR_DRY_RUN       "true" → log sans envoyer        (défaut: "true")
+  IBKR_FX_ORDERS_ENABLED  "true" → autorise /orders/fx (défaut: "false")
   IBKR_SSL_VERIFY    "false" → ignore cert auto-signé  (défaut: "false")
   IBKR_ACCOUNT_ID    ID compte IBKR (optionnel, auto-détecté sinon)
   IBKR_AUTO_REAUTH_ENABLED  "true" → reinit /iserver/auth/ssodh/init si possible
@@ -77,6 +78,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 # ─── Config ──────────────────────────────────────────────────────────────────
 GATEWAY_URL = os.environ.get("IBKR_GATEWAY_URL", "https://ibkr-gateway:5000")
 DRY_RUN = os.environ.get("IBKR_DRY_RUN", "true").lower() != "false"
+FX_ORDERS_ENABLED = _env_bool("IBKR_FX_ORDERS_ENABLED", False)
 SSL_VERIFY = os.environ.get("IBKR_SSL_VERIFY", "false").lower() == "true"
 ACCOUNT_ID_OVERRIDE = os.environ.get("IBKR_ACCOUNT_ID", "")
 KEEPALIVE_INTERVAL_SECONDS = _env_int("IBKR_KEEPALIVE_INTERVAL_SECONDS", 55, minimum=15)
@@ -521,6 +523,7 @@ async def health() -> dict:
         authenticated = bool(status.get("authenticated") and status.get("connected"))
         return {
             "dry_run": DRY_RUN,
+            "fx_orders_enabled": FX_ORDERS_ENABLED,
             "gateway_url": GATEWAY_URL,
             "authenticated": authenticated,
             "ibkr_status": status,
@@ -537,6 +540,7 @@ async def health() -> dict:
             _session_monitor["message"] = f"IBKR auth status failed: {exc}"
         return {
             "dry_run": DRY_RUN,
+            "fx_orders_enabled": FX_ORDERS_ENABLED,
             "gateway_url": GATEWAY_URL,
             "authenticated": False,
             "error": str(exc),
@@ -804,6 +808,9 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
     En dry_run=true : logue et retourne des résultats fictifs.
     En dry_run=false : envoie réellement via CPAPI.
     """
+    if not FX_ORDERS_ENABLED:
+        raise HTTPException(403, "FX order endpoint disabled by IBKR_FX_ORDERS_ENABLED=false")
+
     results = []
     errors = []
 

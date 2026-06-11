@@ -85,6 +85,7 @@ services:
     environment:
       - IBKR_GATEWAY_URL=https://ibkr-gateway:5000
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
+      - IBKR_FX_ORDERS_ENABLED=${IBKR_FX_ORDERS_ENABLED:-false}
       - IBKR_SSL_VERIFY=false
       - IBKR_ACCOUNT_ID=${IBKR_ACCOUNT_ID:-}
       - IBKR_KEEPALIVE_INTERVAL_SECONDS=${IBKR_KEEPALIVE_INTERVAL_SECONDS:-55}

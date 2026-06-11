@@ -101,3 +101,30 @@ Un ordre ne peut donc partir que si:
 Les fills ne sont ecrits que pour des executions confirmees ou des fills
 simules explicites; les ordres rejetes, soumis ou en erreur ne creent pas de
 fill ledger.
+
+## Bascule Production IBKR
+
+Etat verifie le 2026-06-11:
+
+- les workflows Forex dedies sont desactives dans n8n;
+- les workflows AG1 V3 actions sont desactives dans n8n;
+- `AG1_ACTIONS_IBKR_ENABLED_MODELS=__disabled_ag1_v3__` bloque l'ancien chemin
+  AG1 V3 meme en cas de reactivation manuelle;
+- `IBKR_FX_ORDERS_ENABLED=false` bloque `POST /orders/fx` au niveau
+  `ibkr-broker`;
+- la base `/files/duckdb/ag1_v4_consensus.duckdb` est propre: 10 000 EUR de
+  cash initial, aucun run, aucune proposition, aucun ordre, aucun fill.
+
+Pour basculer AG1 V4 en trading reel:
+
+1. authentifier la Gateway IBKR sur le compte reel, pas sur le compte paper;
+2. verifier que `/v1/api/iserver/accounts` retourne `isPaper=false` et un
+   compte non prefixe par `DU`;
+3. renseigner `IBKR_ACCOUNT_ID` avec ce compte reel, ou le laisser vide pour
+   auto-detection si un seul compte reel est expose;
+4. poser `IBKR_REQUIRE_PAPER_ACCOUNT=false` cote n8n seulement apres cette
+   verification;
+5. activer `AG1 V4 - Consensus Portfolio Manager` dans n8n.
+
+Ne pas activer le workflow V4 live si la Gateway ne voit que `isPaper=true`:
+le systeme serait alors actif sur le mauvais environnement IBKR.
