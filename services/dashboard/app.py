@@ -8079,7 +8079,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         if not has_ledger:
             payload["status"] = "error"
-            payload["error"] = "Schema AG1-V3 ledger non detecte (core.portfolio_snapshot absent)."
+            payload["error"] = "Schema AG1 ledger non detecte (core.portfolio_snapshot absent)."
             return payload
 
         df_runs = _ag1_fetchdf(
@@ -8705,11 +8705,16 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         cash = safe_float(latest.get("cash_eur"))
         invest = safe_float(latest.get("equity_eur"))
         total_val = safe_float(latest.get("total_value_eur"))
+        has_position_rows = df_pos is not None and not df_pos.empty
+        if init_cap > 0 and total_val <= 0 and cash <= 0 and invest <= 0 and not has_position_rows:
+            cash = init_cap
+            invest = 0.0
+            total_val = init_cap
         if total_val <= 0 and (cash > 0 or invest > 0):
             total_val = cash + invest
         roi = float(latest.get("roi")) if pd.notna(latest.get("roi")) else ((total_val - init_cap) / init_cap if init_cap else 0.0)
         cash_pct = (cash / total_val * 100.0) if total_val > 0 else 0.0
-        positions_count = int(len(df_pos)) if df_pos is not None and not df_pos.empty else 0
+        positions_count = int(len(df_pos)) if has_position_rows else 0
 
         # Synthetise CASH_EUR / __META__ rows for compatibility with existing dashboard widgets.
         if df_pos is None or df_pos.empty:
@@ -11688,16 +11693,7 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 if page == "Dashboard Trading":
     st.title("AI Trading Executor Dashboard")
 
-    ag1_multi = load_ag1_multi_portfolios()
-    for _payload in ag1_multi.values():
-        if isinstance(_payload, dict):
-            _payload["df_portfolio"] = sanitize_allocation_metadata_labels(
-                enrich_portfolio_metadata(
-                    _payload.get("df_portfolio", pd.DataFrame()),
-                    df_univ,
-                    df_yf_enrichment_latest,
-                )
-            )
+    ag1_multi: dict[str, dict[str, object]] = {}
     ag1_v4_consensus = load_ag1_v4_consensus_portfolio()
     if isinstance(ag1_v4_consensus, dict):
         ag1_v4_consensus["df_portfolio"] = sanitize_allocation_metadata_labels(
@@ -11708,11 +11704,8 @@ if page == "Dashboard Trading":
             )
         )
     ag1_v4_trace = load_ag1_v4_consensus_trace(AG1_V4_CONSENSUS_DUCKDB_PATH, ag1_v4_db_sig)
-    compare_keys = [k for k in AG1_MULTI_PORTFOLIO_CONFIG.keys() if k in ag1_multi]
-    available_keys = [
-        k for k, p in ag1_multi.items()
-        if isinstance(p, dict) and str(p.get("status", "")).lower() == "ok"
-    ]
+    compare_keys: list[str] = []
+    available_keys: list[str] = []
     compare_cards: list[dict[str, object]] = []
 
     ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
@@ -11736,7 +11729,7 @@ if page == "Dashboard Trading":
         )
     with ctrl_kpi:
         compare_winner_kpi = st.selectbox(
-            "KPI winner / tri",
+            "KPI analyse",
             options=["ROI", "TotalValue", "MaxDD", "Sharpe"],
             index=["ROI", "TotalValue", "MaxDD", "Sharpe"].index(st.session_state.get("dashboard_compare_winner_kpi", "ROI"))
             if st.session_state.get("dashboard_compare_winner_kpi", "ROI") in ["ROI", "TotalValue", "MaxDD", "Sharpe"] else 0,
@@ -11744,10 +11737,10 @@ if page == "Dashboard Trading":
         )
     with ctrl_bonus:
         compare_show_dd = st.checkbox(
-            "Drawdown compare",
+            "Drawdown",
             value=bool(st.session_state.get("dashboard_compare_show_dd", False)),
             key="dashboard_compare_show_dd",
-            help="Affiche la courbe de drawdown comparee sous les 3 colonnes (bonus).",
+            help="Affiche la courbe de drawdown sur les vues de performance.",
         )
     with ctrl_refresh:
         st.write("")
@@ -11755,7 +11748,6 @@ if page == "Dashboard Trading":
         if st.button("Rafraichir", use_container_width=True):
             load_data.clear()
             load_dashboard_market_data.clear()
-            load_ag1_multi_portfolios.clear()
             load_ag1_v4_consensus_portfolio.clear()
             load_ag1_v4_consensus_trace.clear()
             fetch_benchmarks_history.clear()
@@ -11929,18 +11921,19 @@ if page == "Dashboard Trading":
     else:
         st.info("AG1 V4 consensus non initialise.")
 
-    # Comparative scoreboard (3 AG1 variants) + Focus on one portfolio for detailed tabs below.
+    # AG1 V4 is now the only portfolio management surface. The legacy
+    # comparison block is kept dormant for historical code reference only.
     selected_portfolio_key = None
     active_portfolio = None
     active_positions_source_note = ""
 
-    if compare_keys:
+    if False and compare_keys:
         default_focus = st.session_state.get("dashboard_active_portfolio")
         if default_focus not in compare_keys:
             default_focus = available_keys[0] if available_keys else compare_keys[0]
         selected_portfolio_key = default_focus
 
-        st.caption("Vue comparative AG1-V3 (3 colonnes fixes : portefeuille + qualite agent)")
+        st.caption("Vue comparative historique desactivee")
 
         cards_by_key: dict[str, dict[str, object]] = {}
         for key in compare_keys:
@@ -12252,7 +12245,7 @@ if page == "Dashboard Trading":
                     except Exception:
                         mtm_age_txt = ""
                 active_positions_source_note = (
-                    "Source Positions: AG1-V3 ledger `core.positions_snapshot` "
+                    "Source Positions: ledger historique `core.positions_snapshot` "
                     f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` "
                     f"(run_id={mtm_run}, source_run_id={mtm_source_run}, match_col={mtm_match_col}{mtm_age_txt})"
                 )
@@ -12279,20 +12272,56 @@ if page == "Dashboard Trading":
                         st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
         else:
             st.warning(
-                "Aucune base AG1-V3 exploitable pour la zone details. "
+                "Aucune base historique exploitable pour la zone details. "
                 "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
             )
             df_sig_dashboard = pd.DataFrame()
             df_alt_dashboard = pd.DataFrame()
             active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
     else:
-        st.warning(
-            "Aucun portefeuille AG1-V3 configure pour la vue comparative. "
-            "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
-        )
-        df_sig_dashboard = pd.DataFrame()
-        df_alt_dashboard = pd.DataFrame()
-        active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
+        selected_portfolio_key = "ag1_v4_consensus"
+        active_portfolio = ag1_v4_consensus if isinstance(ag1_v4_consensus, dict) else {}
+        selected_summary = active_portfolio.get("summary", {}) if isinstance(active_portfolio, dict) else {}
+        df_port = active_portfolio.get("df_portfolio", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_perf = active_portfolio.get("df_performance", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_trans = active_portfolio.get("df_transactions", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_realized_open = active_portfolio.get("df_realized_open_lots", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_sig_dashboard = active_portfolio.get("df_ai_signals", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_alt_dashboard = active_portfolio.get("df_alerts", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+
+        df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
+        df_trans = enrich_df_with_name(df_trans, df_univ) if df_trans is not None else pd.DataFrame()
+        df_realized_open = enrich_df_with_name(df_realized_open, df_univ) if df_realized_open is not None else pd.DataFrame()
+
+        init_cap = safe_float(selected_summary.get("init_cap", 10000.0)) or 10000.0
+        total_val = safe_float(selected_summary.get("total_val", 0.0))
+        cash = safe_float(selected_summary.get("cash", 0.0))
+        invest = safe_float(selected_summary.get("invest", 0.0))
+        roi = float(selected_summary.get("roi", 0.0) or 0.0)
+        cash_pct = float(selected_summary.get("cash_pct", 0.0) or 0.0)
+
+        st.session_state["dashboard_active_portfolio"] = selected_portfolio_key
+        st.session_state["active_portfolio_id"] = selected_portfolio_key
+
+        if str(active_portfolio.get("status", "")).lower() == "ok":
+            last_update_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+            last_update_txt = (
+                last_update_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
+                if pd.notna(last_update_ts)
+                else "N/A"
+            )
+            st.info(
+                "Portefeuille actif: AG1 V4 Consensus | "
+                f"Dernier run: {selected_summary.get('last_run_id', 'N/A') or 'N/A'} | "
+                f"MAJ: {last_update_txt}"
+            )
+            active_positions_source_note = (
+                "Source Positions: AG1 V4 consensus ledger `core.positions_snapshot` "
+                f"({active_portfolio.get('db_path', AG1_V4_CONSENSUS_DUCKDB_PATH)})"
+            )
+        else:
+            st.warning("AG1 V4 Consensus n'est pas encore initialise dans le ledger. Les onglets restent prets et se rempliront au premier run.")
+            active_positions_source_note = f"Source Positions: AG1 V4 consensus ledger ({AG1_V4_CONSENSUS_DUCKDB_PATH})"
 
     if active_positions_source_note:
         st.caption(active_positions_source_note)
@@ -12807,7 +12836,7 @@ if page == "Dashboard Trading":
 
         if selected_portfolio_key and active_portfolio:
             st.caption(
-                f"Source AG1-V3: {active_portfolio.get('label', selected_portfolio_key)} "
+                f"Source AG1 V4: {active_portfolio.get('label', selected_portfolio_key)} "
                 f"({active_portfolio.get('db_path', '')})"
             )
         else:
@@ -13047,10 +13076,10 @@ if page == "Dashboard Trading":
     # TAB 5: BENCHMARKS & INDICES
     with t5:
         st.subheader("Benchmarks / Indices")
-        st.caption("Comparaison AG1 (GPT/Grok/Gemini) vs CAC 40 / S&P 500 / EURO STOXX 50 sur la meme fenetre.")
+        st.caption("Comparaison AG1 V4 Consensus vs CAC 40 / S&P 500 / EURO STOXX 50 sur la meme fenetre.")
 
-        if not compare_cards:
-            st.info("Comparatif AG1 indisponible: aucun portefeuille multi-modele charge.")
+        if False and not compare_cards:
+            st.info("Comparatif indisponible: aucun portefeuille charge.")
         else:
             benchmark_labels_all = list(BENCHMARKS_CONFIG.keys())
             if not benchmark_labels_all:
@@ -13088,29 +13117,30 @@ if page == "Dashboard Trading":
             portfolio_missing: list[str] = []
             min_portfolio_starts: list[pd.Timestamp] = []
 
-            for card in compare_cards:
-                p_label = str(card.get("label") or card.get("key") or "").strip()
-                if not p_label:
-                    continue
-                portfolio_accent[p_label] = str(card.get("accent") or "#7c7c7c")
+            p_label = "AG1 V4 Consensus"
+            portfolio_accent[p_label] = "#14b8a6"
 
-                raw_series = pd.DataFrame()
-                perf_df = card.get("df_performance", pd.DataFrame())
-                if isinstance(perf_df, pd.DataFrame) and not perf_df.empty and {"timestamp", "total_value"}.issubset(set(perf_df.columns)):
-                    perf_period = _slice_timeseries_by_period(perf_df.copy(), compare_period)
-                    if perf_period is not None and not perf_period.empty:
-                        raw_series = perf_period[["timestamp", "total_value"]].rename(columns={"total_value": "value"})
+            raw_series = pd.DataFrame()
+            perf_df = _prepare_performance_timeseries(df_perf)
+            if (
+                isinstance(perf_df, pd.DataFrame)
+                and not perf_df.empty
+                and {"timestamp", "total_value"}.issubset(set(perf_df.columns))
+            ):
+                perf_period = _slice_timeseries_by_period(perf_df.copy(), compare_period)
+                if perf_period is not None and not perf_period.empty:
+                    raw_series = perf_period[["timestamp", "total_value"]].rename(columns={"total_value": "value"})
 
-                if raw_series.empty:
-                    curve_df = card.get("curve_df", pd.DataFrame())
-                    if isinstance(curve_df, pd.DataFrame) and not curve_df.empty and {"timestamp", "display_value"}.issubset(set(curve_df.columns)):
-                        raw_series = curve_df[["timestamp", "display_value"]].rename(columns={"display_value": "value"})
+            if raw_series.empty and total_val > 0:
+                current_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+                if pd.isna(current_ts):
+                    current_ts = pd.Timestamp.now(tz="UTC")
+                raw_series = pd.DataFrame([{"timestamp": current_ts, "value": total_val}])
 
-                norm_series = normalize_to_base100(raw_series, ts_col="timestamp", value_col="value")
-                if norm_series.empty:
-                    portfolio_missing.append(p_label)
-                    continue
-
+            norm_series = normalize_to_base100(raw_series, ts_col="timestamp", value_col="value")
+            if norm_series.empty:
+                portfolio_missing.append(p_label)
+            else:
                 portfolio_series_norm[p_label] = norm_series
                 first_ts = pd.to_datetime(norm_series["timestamp"], errors="coerce", utc=True).min()
                 if pd.notna(first_ts):
@@ -13246,7 +13276,7 @@ if page == "Dashboard Trading":
                     )
 
                 fig_cmp.update_layout(
-                    title=f"Portefeuilles AG1 vs Benchmarks ({compare_period})",
+                    title=f"AG1 V4 Consensus vs Benchmarks ({compare_period})",
                     height=460,
                     margin=dict(t=50, b=20, l=20, r=20),
                     yaxis=dict(title=y_title),
