@@ -116,6 +116,19 @@ def _json_text(v: Any) -> Optional[str]:
         return json.dumps(str(v), ensure_ascii=False)
 
 
+def _first_present(row: Mapping[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key not in row:
+            continue
+        value = row.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        return value
+    return None
+
+
 def _parse_ts(v: Any, fallback: Optional[str] = None) -> str:
     if v is None:
         return fallback or _iso_now()
@@ -503,6 +516,111 @@ def _upsert_fills(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Mapping[str,
           slippage_bps = excluded.slippage_bps,
           liquidity = excluded.liquidity,
           raw_fill_json = excluded.raw_fill_json
+        """,
+        rows,
+    )
+    return len(rows)
+
+
+def _upsert_fill_costs(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Mapping[str, Any]], default_ts: str) -> int:
+    rows: List[Tuple[Any, ...]] = []
+    for r in rows_in:
+        fill_id = _clean_text(_first_present(r, "fill_id", "fillId"), 128)
+        order_id = _clean_text(_first_present(r, "order_id", "orderId"), 128)
+        if not fill_id or not order_id:
+            continue
+
+        commission_amount = _to_float(
+            _first_present(
+                r,
+                "commission_amount",
+                "fee_amount",
+                "commission",
+                "ibCommission",
+                "ib_commission",
+                "fees_eur",
+                "fee",
+            ),
+            0.0,
+        ) or 0.0
+        commission_ccy = _clean_text(
+            _first_present(
+                r,
+                "commission_ccy",
+                "commissionCurrency",
+                "commission_currency",
+                "commissionCcy",
+                "fee_ccy",
+                "feeCurrency",
+            ),
+            8,
+        ).upper() or None
+        commission_eur = _to_float(_first_present(r, "commission_eur", "fee_eur", "fees_eur"), None)
+        if commission_eur is None:
+            commission_eur = commission_amount
+
+        commission_source = _clean_text(_first_present(r, "commission_source", "fee_source", "fill_source"), 128)
+        if not commission_source:
+            if commission_amount == 0 and commission_eur == 0:
+                commission_source = "ibkr_commission_missing"
+            elif commission_ccy and commission_ccy != "EUR":
+                commission_source = f"ibkr_reported_{commission_ccy}_assumed_eur"
+            else:
+                commission_source = "ledger_fees_eur"
+
+        rows.append(
+            (
+                fill_id,
+                order_id,
+                _norm_symbol(_first_present(r, "symbol", "ticker")) or None,
+                _norm_symbol(_first_present(r, "pair", "symbol", "ticker")) or None,
+                _clean_text(_first_present(r, "broker", "venue"), 32) or None,
+                _clean_text(
+                    _first_present(
+                        r,
+                        "broker_execution_id",
+                        "brokerExecutionId",
+                        "execution_id",
+                        "executionId",
+                        "execId",
+                        "trade_id",
+                        "tradeId",
+                    ),
+                    128,
+                ) or None,
+                abs(float(commission_amount)),
+                commission_ccy,
+                abs(float(commission_eur or 0.0)),
+                commission_source,
+                _json_text(_first_present(r, "raw_json", "raw_fill_json", "rawFillJson", "raw") or r),
+                _parse_ts(
+                    _first_present(r, "recorded_at", "recordedAt", "ts_fill", "filled_at", "trade_time", "time"),
+                    default_ts,
+                ),
+            )
+        )
+    if not rows:
+        return 0
+    con.executemany(
+        """
+        INSERT INTO core.fill_costs (
+          fill_id, order_id, symbol, pair, broker, broker_execution_id,
+          commission_amount, commission_ccy, commission_eur, commission_source,
+          raw_json, recorded_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (fill_id) DO UPDATE SET
+          order_id = excluded.order_id,
+          symbol = excluded.symbol,
+          pair = excluded.pair,
+          broker = excluded.broker,
+          broker_execution_id = excluded.broker_execution_id,
+          commission_amount = excluded.commission_amount,
+          commission_ccy = excluded.commission_ccy,
+          commission_eur = excluded.commission_eur,
+          commission_source = excluded.commission_source,
+          raw_json = excluded.raw_json,
+          recorded_at = excluded.recorded_at
         """,
         rows,
     )
@@ -1512,6 +1630,7 @@ def upsert_run_bundle(db_path: str, bundle_json: Any) -> Dict[str, Any]:
         "instruments": 0,
         "orders": 0,
         "fills": 0,
+        "fill_costs": 0,
         "cash_ledger": 0,
         "position_lots": 0,
         "market_prices": 0,
@@ -1535,6 +1654,12 @@ def upsert_run_bundle(db_path: str, bundle_json: Any) -> Dict[str, Any]:
             rows["market_prices"] = _upsert_market_prices(con, bundle.get("market_prices") or [], default_ts)
             rows["orders"] = _upsert_orders(con, bundle.get("orders") or [], run_id, default_ts)
             rows["fills"] = _upsert_fills(con, bundle.get("fills") or [], run_id, default_ts)
+            fill_cost_rows = bundle.get("fill_costs")
+            rows["fill_costs"] = _upsert_fill_costs(
+                con,
+                fill_cost_rows if fill_cost_rows is not None else (bundle.get("fills") or []),
+                default_ts,
+            )
             rows["cash_ledger"] = _upsert_cash_ledger(con, bundle.get("cash_ledger") or [], run_id, default_ts)
 
             lots_changes = bundle.get("lots_changes") or []

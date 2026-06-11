@@ -8026,7 +8026,9 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
         },
         "df_portfolio": pd.DataFrame(),
         "df_performance": pd.DataFrame(),
+        "df_orders": pd.DataFrame(),
         "df_transactions": pd.DataFrame(),
+        "df_fill_costs": pd.DataFrame(),
         "df_realized_open_lots": pd.DataFrame(),
         "df_ai_signals": pd.DataFrame(),
         "df_alerts": pd.DataFrame(),
@@ -8268,6 +8270,62 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             LEFT JOIN lot_realized lr ON lr.fill_id = f.fill_id
             LEFT JOIN core.runs r ON r.run_id = f.run_id
             ORDER BY f.ts_fill
+            """,
+        )
+
+        df_orders = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              o.ts_created AS timestamp,
+              o.run_id AS run_id,
+              r.model AS agent,
+              o.order_id AS order_id,
+              o.symbol AS symbol,
+              o.side AS side,
+              o.intent AS intent,
+              o.order_type AS order_type,
+              CAST(o.qty AS DOUBLE) AS quantity,
+              CAST(o.limit_price AS DOUBLE) AS limit_price,
+              o.time_in_force AS time_in_force,
+              o.status AS status,
+              o.broker AS broker,
+              o.broker_order_id AS broker_order_id,
+              o.reason AS reason
+            FROM core.orders o
+            LEFT JOIN core.runs r ON r.run_id = o.run_id
+            ORDER BY o.ts_created DESC
+            LIMIT 1000
+            """,
+        )
+
+        df_fill_costs = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              c.fill_id AS fill_id,
+              c.order_id AS order_id,
+              COALESCE(c.symbol, c.pair, o.symbol) AS symbol,
+              c.pair AS pair,
+              c.broker AS broker,
+              c.broker_execution_id AS broker_execution_id,
+              CAST(c.commission_amount AS DOUBLE) AS commission_amount,
+              c.commission_ccy AS commission_ccy,
+              CAST(c.commission_eur AS DOUBLE) AS commission_eur,
+              c.commission_source AS commission_source,
+              c.raw_json AS raw_json,
+              c.recorded_at AS recorded_at,
+              f.ts_fill AS filled_at,
+              CAST(f.qty AS DOUBLE) AS fill_qty,
+              CAST(f.price AS DOUBLE) AS fill_price,
+              CAST(f.fees_eur AS DOUBLE) AS fill_fees_eur,
+              o.side AS fill_side,
+              o.status AS order_status
+            FROM core.fill_costs c
+            LEFT JOIN core.fills f ON f.fill_id = c.fill_id
+            LEFT JOIN core.orders o ON o.order_id = c.order_id
+            ORDER BY COALESCE(f.ts_fill, c.recorded_at) DESC
+            LIMIT 1000
             """,
         )
 
@@ -8941,7 +8999,9 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 "summary": summary,
                 "df_portfolio": normalize_cols(df_portfolio),
                 "df_performance": normalize_cols(df_perf) if df_perf is not None else pd.DataFrame(),
+                "df_orders": normalize_cols(df_orders) if df_orders is not None else pd.DataFrame(),
                 "df_transactions": normalize_cols(df_transactions) if df_transactions is not None else pd.DataFrame(),
+                "df_fill_costs": normalize_cols(df_fill_costs) if df_fill_costs is not None else pd.DataFrame(),
                 "df_realized_open_lots": normalize_cols(df_realized_open_lots) if df_realized_open_lots is not None else pd.DataFrame(),
                 "df_ai_signals": normalize_cols(df_ai_signals) if df_ai_signals is not None else pd.DataFrame(),
                 "df_alerts": normalize_cols(df_alerts) if df_alerts is not None else pd.DataFrame(),
@@ -11705,18 +11765,147 @@ if page == "Dashboard Trading":
     v4_status = str((ag1_v4_consensus or {}).get("status", "")).lower()
     if v4_status == "ok":
         v4_summary = ag1_v4_consensus.get("summary", {}) if isinstance(ag1_v4_consensus, dict) else {}
+        v4_transactions = ag1_v4_consensus.get("df_transactions", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_costs = ag1_v4_consensus.get("df_fill_costs", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_orders = ag1_v4_consensus.get("df_orders", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_portfolio = ag1_v4_consensus.get("df_portfolio", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+
+        gross_realized_v4 = 0.0
+        fees_v4 = 0.0
+        fills_count_v4 = 0
+        if isinstance(v4_transactions, pd.DataFrame) and not v4_transactions.empty:
+            fills_count_v4 = int(len(v4_transactions))
+            gross_realized_v4 = float(pd.to_numeric(v4_transactions.get("realizedpnl"), errors="coerce").fillna(0.0).sum())
+            fees_v4 = float(pd.to_numeric(v4_transactions.get("fees_eur"), errors="coerce").fillna(0.0).sum())
+
+        cost_rows_v4 = 0
+        missing_costs_v4 = 0
+        assumed_costs_v4 = 0
+        if isinstance(v4_costs, pd.DataFrame) and not v4_costs.empty:
+            v4_costs = v4_costs.copy()
+            v4_costs["_commission_eur"] = pd.to_numeric(v4_costs.get("commission_eur"), errors="coerce").fillna(0.0)
+            v4_costs["_commission_source"] = v4_costs.get("commission_source", pd.Series("", index=v4_costs.index)).fillna("").astype(str)
+            fees_v4 = float(v4_costs["_commission_eur"].sum())
+            cost_rows_v4 = int(len(v4_costs))
+            source_series_v4 = v4_costs["_commission_source"].str.lower()
+            missing_costs_v4 = int((source_series_v4.eq("") | source_series_v4.str.contains("missing", regex=False)).sum())
+            assumed_costs_v4 = int(source_series_v4.str.contains("assumed_eur", regex=False).sum())
+
+        net_realized_v4 = gross_realized_v4 - fees_v4
+        cost_coverage_v4 = (cost_rows_v4 / fills_count_v4 * 100.0) if fills_count_v4 > 0 else None
+        latent_pnl_v4 = 0.0
+        if isinstance(v4_portfolio, pd.DataFrame) and not v4_portfolio.empty and "symbol" in v4_portfolio.columns:
+            visible_positions = v4_portfolio[
+                ~v4_portfolio["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
+            ]
+            latent_pnl_v4 = float(pd.to_numeric(visible_positions.get("unrealizedpnl"), errors="coerce").fillna(0.0).sum())
+        total_net_pnl_v4 = safe_float(v4_summary.get("total_val")) - safe_float(v4_summary.get("init_cap"))
+
         v4_cols = st.columns(5)
         v4_cols[0].metric("Valeur", f"{safe_float(v4_summary.get('total_val')):,.2f} EUR")
         v4_cols[1].metric("Cash", f"{safe_float(v4_summary.get('cash')):,.2f} EUR")
-        v4_cols[2].metric("ROI", f"{safe_float(v4_summary.get('roi')) * 100:,.2f}%")
+        v4_cols[2].metric("P&L total net", _fmt_currency(total_net_pnl_v4, 2), f"{safe_float(v4_summary.get('roi')) * 100:,.2f}%")
         v4_cols[3].metric("Positions", int(safe_float(v4_summary.get("positions_count"))))
         v4_cols[4].metric("Runs", int(safe_float(v4_summary.get("runs_count"))))
+
+        v4_cost_cols = st.columns(5)
+        v4_cost_cols[0].metric("P&L realise brut", _fmt_currency(gross_realized_v4, 2))
+        v4_cost_cols[1].metric("Fees IBKR", _fmt_currency(fees_v4, 2))
+        v4_cost_cols[2].metric("P&L realise net", _fmt_currency(net_realized_v4, 2), _fmt_delta_eur(net_realized_v4 - gross_realized_v4))
+        v4_cost_cols[3].metric("P&L latent", _fmt_currency(latent_pnl_v4, 2))
+        v4_cost_cols[4].metric(
+            "Couverture fees",
+            f"{cost_coverage_v4:.0f}%" if cost_coverage_v4 is not None else "-",
+            f"{cost_rows_v4}/{fills_count_v4} fills",
+        )
         st.caption(
             "Source AG1 V4: "
             f"{AG1_V4_CONSENSUS_DUCKDB_PATH} | "
             f"last_run={v4_summary.get('last_run_id') or 'n/a'} | "
             f"decision={v4_summary.get('last_decision_summary') or 'n/a'}"
         )
+        if fills_count_v4 > 0 and cost_rows_v4 < fills_count_v4:
+            st.warning(f"{fills_count_v4 - cost_rows_v4} fill(s) V4 n'ont pas encore de ligne `core.fill_costs` associee.")
+        if missing_costs_v4 > 0:
+            st.warning(f"{missing_costs_v4} cout(s) V4 ont une commission IBKR manquante ou une source vide.")
+        if assumed_costs_v4 > 0:
+            st.info(f"{assumed_costs_v4} commission(s) V4 sont affichees en EUR par fallback, faute de devise exploitable.")
+
+        with st.expander("AG1 V4 executions & couts IBKR", expanded=False):
+            tab_exec, tab_costs, tab_orders = st.tabs(["Fills", "Couts IBKR", "Ordres"])
+            with tab_exec:
+                if isinstance(v4_transactions, pd.DataFrame) and not v4_transactions.empty:
+                    show_cols = [
+                        c for c in [
+                            "timestamp",
+                            "run_id",
+                            "symbol",
+                            "side",
+                            "quantity",
+                            "price",
+                            "notional",
+                            "realizedpnl",
+                            "fees_eur",
+                            "status",
+                        ] if c in v4_transactions.columns
+                    ]
+                    render_interactive_table(
+                        v4_transactions.sort_values("timestamp", ascending=False, na_position="last")[show_cols],
+                        key_suffix="ag1_v4_fills",
+                        height=320,
+                    )
+                else:
+                    st.caption("Aucun fill V4 en base pour le moment.")
+            with tab_costs:
+                if isinstance(v4_costs, pd.DataFrame) and not v4_costs.empty:
+                    show_cols = [
+                        c for c in [
+                            "filled_at",
+                            "recorded_at",
+                            "symbol",
+                            "fill_id",
+                            "order_id",
+                            "broker",
+                            "broker_execution_id",
+                            "commission_amount",
+                            "commission_ccy",
+                            "commission_eur",
+                            "commission_source",
+                        ] if c in v4_costs.columns
+                    ]
+                    sort_col = "filled_at" if "filled_at" in v4_costs.columns else "recorded_at"
+                    render_interactive_table(
+                        v4_costs.sort_values(sort_col, ascending=False, na_position="last")[show_cols],
+                        key_suffix="ag1_v4_fill_costs",
+                        height=320,
+                    )
+                else:
+                    st.caption("Aucune ligne `core.fill_costs` V4 pour le moment.")
+            with tab_orders:
+                if isinstance(v4_orders, pd.DataFrame) and not v4_orders.empty:
+                    show_cols = [
+                        c for c in [
+                            "timestamp",
+                            "run_id",
+                            "symbol",
+                            "side",
+                            "intent",
+                            "order_type",
+                            "quantity",
+                            "limit_price",
+                            "status",
+                            "broker",
+                            "broker_order_id",
+                            "reason",
+                        ] if c in v4_orders.columns
+                    ]
+                    render_interactive_table(
+                        v4_orders[show_cols],
+                        key_suffix="ag1_v4_orders",
+                        height=320,
+                    )
+                else:
+                    st.caption("Aucun ordre V4 en base pour le moment.")
         trace_decisions = ag1_v4_trace.get("decisions", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
         trace_votes = ag1_v4_trace.get("votes", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
         trace_proposals = ag1_v4_trace.get("proposals", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()

@@ -29,6 +29,8 @@ const PAPER_ACCOUNT_PREFIXES = String($env.IBKR_PAPER_ACCOUNT_PREFIXES || "DU")
   .split(",")
   .map((s) => s.trim().toUpperCase())
   .filter(Boolean);
+const FILL_CONFIRM_SECONDS = Math.max(0, toNum($env.IBKR_FILL_CONFIRM_SECONDS, 20));
+const FILL_POLL_INTERVAL_SECONDS = Math.max(1, toNum($env.IBKR_FILL_POLL_INTERVAL_SECONDS, 3));
 const FORCE_IBKR_CONNECTIVITY_TEST_ORDER = false;
 
 function toNum(v, d = 0) {
@@ -71,6 +73,109 @@ function brokerOrderId(result) {
 
 function orderKey(value) {
   return String(value || "").trim();
+}
+
+function addKey(keys, value) {
+  const key = orderKey(value);
+  if (key) keys.add(key);
+}
+
+function possibleFillKeys(row) {
+  const keys = new Set();
+  if (!row || typeof row !== "object") return keys;
+  [
+    "order_id",
+    "orderId",
+    "orderID",
+    "client_order_id",
+    "clientOrderId",
+    "cOID",
+    "order_ref",
+    "orderRef",
+    "orderReference",
+    "brokerOrderId",
+    "broker_order_id",
+    "id",
+  ].forEach((field) => addKey(keys, row[field]));
+
+  const raw = row.ibkr_response || row.details || row.response;
+  if (Array.isArray(raw)) {
+    raw.forEach((item) => possibleFillKeys(item).forEach((key) => keys.add(key)));
+  } else if (raw && typeof raw === "object") {
+    possibleFillKeys(raw).forEach((key) => keys.add(key));
+  }
+  return keys;
+}
+
+function expectedKeysForOrder(order, result) {
+  const keys = possibleFillKeys(order);
+  possibleFillKeys(result || {}).forEach((key) => keys.add(key));
+  addKey(keys, order?.orderId);
+  addKey(keys, order?.clientOrderId);
+  addKey(keys, order?.brokerOrderId);
+  const resultBrokerOrderId = result ? brokerOrderId(result) : null;
+  addKey(keys, resultBrokerOrderId);
+  return keys;
+}
+
+function tradeMatchesExpected(trade, expectedKeys) {
+  const tradeKeys = possibleFillKeys(trade);
+  for (const key of tradeKeys) {
+    if (expectedKeys.has(key)) return true;
+  }
+  return false;
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function pollRecentFills(ordersToMatch, resultMap) {
+  const out = {
+    enabled: FILL_CONFIRM_SECONDS > 0,
+    attempts: 0,
+    matched: 0,
+    errors: [],
+    byOrderKey: {},
+  };
+  if (FILL_CONFIRM_SECONDS <= 0 || !ordersToMatch.length) return out;
+
+  const descriptors = ordersToMatch.map((order) => {
+    const oid = orderKey(order.orderId);
+    const cid = orderKey(order.clientOrderId);
+    const result = resultMap[oid] || resultMap[cid] || null;
+    return {
+      order,
+      primaryKey: oid || cid,
+      expectedKeys: expectedKeysForOrder(order, result),
+    };
+  }).filter((d) => d.primaryKey && d.expectedKeys.size > 0);
+
+  const deadline = Date.now() + (FILL_CONFIRM_SECONDS * 1000);
+  while (Date.now() <= deadline && out.matched < descriptors.length) {
+    out.attempts += 1;
+    try {
+      const response = await getJson(`${BROKER_URL}/fills`);
+      const trades = Array.isArray(response) ? response : (response?.fills || response?.trades || []);
+      for (const trade of trades || []) {
+        for (const descriptor of descriptors) {
+          if (out.byOrderKey[descriptor.primaryKey]) continue;
+          if (!tradeMatchesExpected(trade, descriptor.expectedKeys)) continue;
+          out.byOrderKey[descriptor.primaryKey] = trade;
+          out.matched += 1;
+          break;
+        }
+      }
+      if (out.matched >= descriptors.length) break;
+    } catch (err) {
+      out.errors.push(String(err?.message || err || ""));
+      break;
+    }
+    if (Date.now() < deadline) {
+      await sleepMs(FILL_POLL_INTERVAL_SECONDS * 1000);
+    }
+  }
+  return out;
 }
 
 async function postJson(url, payload) {
@@ -280,16 +385,27 @@ const errorMap = Object.fromEntries(
     .filter((e) => e?.order_id || e?.client_order_id)
     .map((e) => [orderKey(e.order_id || e.client_order_id), e])
 );
+const ibkrFillPoll = (!DRY_RUN && ibkrResults.length > 0)
+  ? await pollRecentFills(actionableOrders, resultMap)
+  : {
+    enabled: false,
+    attempts: 0,
+    matched: 0,
+    errors: [],
+    byOrderKey: {},
+  };
 
 for (const order of orders) {
   const oid = orderKey(order.orderId);
   const cid = orderKey(order.clientOrderId);
   const result = resultMap[oid] || resultMap[cid];
   const error = errorMap[oid] || errorMap[cid];
+  const fill = ibkrFillPoll.byOrderKey?.[oid] || ibkrFillPoll.byOrderKey?.[cid] || null;
 
   if (result) {
-    order.ibkrStatus = result.status || "unknown";
+    order.ibkrStatus = fill ? "filled" : (result.status || "unknown");
     order.ibkrResponse = result;
+    if (fill) order.ibkrFill = fill;
     order.broker = "IBKR";
     order.brokerOrderId = brokerOrderId(result);
   } else if (error) {
@@ -344,6 +460,12 @@ return [{
       brokerUrl: BROKER_URL,
       errorsDetail: ibkrErrors,
       brokerResults: ibkrResults,
+      fillPoll: {
+        enabled: ibkrFillPoll.enabled,
+        attempts: ibkrFillPoll.attempts,
+        matched: ibkrFillPoll.matched,
+        errors: ibkrFillPoll.errors,
+      },
       dryRunBrokerResults: ibkrResults,
     },
   },

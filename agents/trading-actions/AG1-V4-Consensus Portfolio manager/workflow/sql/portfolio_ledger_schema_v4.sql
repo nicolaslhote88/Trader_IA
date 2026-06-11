@@ -82,6 +82,21 @@ CREATE TABLE IF NOT EXISTS core.fills (
   raw_fill_json JSON
 );
 
+CREATE TABLE IF NOT EXISTS core.fill_costs (
+  fill_id VARCHAR PRIMARY KEY REFERENCES core.fills(fill_id),
+  order_id VARCHAR NOT NULL REFERENCES core.orders(order_id),
+  symbol VARCHAR,
+  pair VARCHAR,
+  broker VARCHAR,
+  broker_execution_id VARCHAR,
+  commission_amount DOUBLE NOT NULL DEFAULT 0,
+  commission_ccy VARCHAR,
+  commission_eur DOUBLE NOT NULL DEFAULT 0,
+  commission_source VARCHAR,
+  raw_json VARCHAR,
+  recorded_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS core.cash_ledger (
   cash_tx_id VARCHAR PRIMARY KEY,
   run_id VARCHAR REFERENCES core.runs(run_id),
@@ -269,6 +284,8 @@ CREATE TABLE IF NOT EXISTS cfg.portfolio_config (
 CREATE INDEX IF NOT EXISTS idx_runs_ts_start ON core.runs(ts_start);
 CREATE INDEX IF NOT EXISTS idx_orders_run_id ON core.orders(run_id);
 CREATE INDEX IF NOT EXISTS idx_fills_run_id ON core.fills(run_id);
+CREATE INDEX IF NOT EXISTS idx_fill_costs_order ON core.fill_costs(order_id);
+CREATE INDEX IF NOT EXISTS idx_fill_costs_symbol ON core.fill_costs(symbol);
 CREATE INDEX IF NOT EXISTS idx_cash_ledger_run_id ON core.cash_ledger(run_id);
 CREATE INDEX IF NOT EXISTS idx_position_lots_symbol_status ON core.position_lots(symbol, status);
 CREATE INDEX IF NOT EXISTS idx_market_prices_symbol_ts ON core.market_prices(symbol, ts);

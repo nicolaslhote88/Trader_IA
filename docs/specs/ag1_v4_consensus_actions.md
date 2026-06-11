@@ -102,12 +102,20 @@ Les fills ne sont ecrits que pour des executions confirmees ou des fills
 simules explicites; les ordres rejetes, soumis ou en erreur ne creent pas de
 fill ledger.
 
+Chaque fill V4 alimente aussi `core.fill_costs`, sur le meme principe que le
+systeme Forex: une ligne par fill, avec commission brute, devise, montant EUR,
+source de commission et JSON broker brut. Le dashboard Actions s'appuie sur
+cette table pour distinguer P&L realise brut, frais IBKR et P&L realise net.
+
 ## Bascule Production IBKR
 
 Etat verifie le 2026-06-11:
 
 - les workflows Forex dedies sont desactives dans n8n;
 - les workflows AG1 V3 actions sont desactives dans n8n;
+- le workflow AG1 V4 consensus est le workflow actions actif;
+- `IBKR_DRY_RUN=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true` et
+  `IBKR_REQUIRE_PAPER_ACCOUNT=false` sont reserves a cette bascule live;
 - `AG1_ACTIONS_IBKR_ENABLED_MODELS=__disabled_ag1_v3__` bloque l'ancien chemin
   AG1 V3 meme en cas de reactivation manuelle;
 - `IBKR_FX_ORDERS_ENABLED=false` bloque `POST /orders/fx` au niveau

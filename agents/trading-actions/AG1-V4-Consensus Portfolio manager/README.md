@@ -15,6 +15,9 @@ deux modeles sur trois votent le meme symbole et le meme intent executable.
 - IBKR reste dry-run par defaut. Le passage paper/live depend des gates
   `IBKR_DRY_RUN`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED` et
   `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS`.
+- Les fills confirmes IBKR alimentent `core.fills` et `core.fill_costs`.
+  `core.fill_costs` reprend le format Forex pour suivre commissions brutes,
+  devises, source IBKR et P&L net dans le dashboard Actions.
 
 ## Contenu
 
@@ -38,3 +41,8 @@ deux modeles sur trois votent le meme symbole et le meme intent executable.
 -> `7 - Validate & Enforce Safety`
 -> `07b - IBKR Send Orders`
 -> `8/9/10 DuckDB`.
+
+En live, `07b - IBKR Send Orders` ne cree pas de fill optimiste: il soumet
+l'ordre puis interroge `/fills` pendant la fenetre `IBKR_FILL_CONFIRM_SECONDS`.
+Un ordre non confirme reste `SUBMITTED` et n'impacte pas le ledger tant qu'un
+fill IBKR n'est pas rattache.

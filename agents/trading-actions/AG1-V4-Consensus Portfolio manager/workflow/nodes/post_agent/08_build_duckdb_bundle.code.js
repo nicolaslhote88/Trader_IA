@@ -88,6 +88,130 @@ function orderHasFillLikeEffect(order) {
   return explicitFill && !["REJECTED", "BROKER_ERROR", "ERROR", "SUBMITTED", "PENDING", "PLANNED"].includes(status);
 }
 
+function rawFill(order) {
+  return order?.ibkrFill || order?.fill || order?.execution || order?.ibkrExecution || {};
+}
+
+function pickWithKey(row, ...keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (value !== undefined && value !== null && String(value).trim() !== "") {
+      return { key, value };
+    }
+  }
+  return { key: "", value: null };
+}
+
+function extractFillTimestamp(order, fallbackTs) {
+  const raw = rawFill(order);
+  const picked = pickWithKey(
+    raw,
+    "filled_at",
+    "filledAt",
+    "trade_time",
+    "tradeTime",
+    "execution_time",
+    "executionTime",
+    "time",
+    "timestamp"
+  ).value;
+  if (!picked) return fallbackTs;
+  const dt = new Date(picked);
+  return Number.isNaN(dt.getTime()) ? fallbackTs : dt.toISOString();
+}
+
+function extractBrokerExecutionId(order) {
+  const raw = rawFill(order);
+  return clampText(
+    pickWithKey(
+      raw,
+      "execution_id",
+      "executionId",
+      "execId",
+      "trade_id",
+      "tradeId",
+      "id"
+    ).value || order?.brokerExecutionId || order?.brokerOrderId || order?.clientOrderId || "",
+    128
+  ) || null;
+}
+
+function extractFillPrice(order, priceMap) {
+  const raw = rawFill(order);
+  const rawPrice = toNum(
+    pickWithKey(raw, "price", "avgPrice", "avg_price", "fill_price", "fillPrice", "execution_price", "executionPrice").value,
+    null
+  );
+  if (rawPrice !== null && rawPrice > 0) return rawPrice;
+  const symbol = String(order?.symbol || "").trim();
+  const orderType = normalizeOrderType(order?.orderType);
+  if (orderType === "LIMIT") {
+    const limitPrice = toNum(order?.limitPrice, null);
+    if (limitPrice !== null && limitPrice > 0) return limitPrice;
+  }
+  const mappedPrice = toNum(priceMap[symbol], null);
+  return (mappedPrice !== null && mappedPrice > 0) ? mappedPrice : 1.0;
+}
+
+function extractFillQty(order) {
+  const raw = rawFill(order);
+  const rawQty = toNum(
+    pickWithKey(raw, "quantity", "qty", "shares", "size", "filledQuantity", "filled_quantity", "fill_size", "fillSize").value,
+    null
+  );
+  if (rawQty !== null && rawQty > 0) return rawQty;
+  return toNum(order?.quantity, 0) || 0;
+}
+
+function extractCommission(order) {
+  const raw = rawFill(order);
+  const picked = pickWithKey(
+    raw,
+    "commission",
+    "ibCommission",
+    "ib_commission",
+    "commission_amount",
+    "commissionAmount",
+    "fees_eur",
+    "fee"
+  );
+  const rawAmount = toNum(picked.value, null);
+  const rawCcy = clampText(
+    pickWithKey(
+      raw,
+      "commissionCurrency",
+      "commission_currency",
+      "commissionCcy",
+      "ibCommissionCurrency",
+      "feeCurrency",
+      "currency"
+    ).value || "",
+    8
+  ).toUpperCase();
+
+  if (rawAmount !== null) {
+    const sourceBase = picked.key ? `ibkr_${picked.key}` : "ibkr_commission";
+    const source = rawCcy && rawCcy !== "EUR"
+      ? `${sourceBase}_reported_${rawCcy}_assumed_eur`
+      : (rawCcy ? sourceBase : `${sourceBase}_fallback_eur_no_ccy`);
+    return {
+      commissionAmount: Math.abs(rawAmount),
+      commissionCcy: rawCcy || "EUR",
+      commissionEUR: Math.abs(rawAmount),
+      commissionSource: source,
+    };
+  }
+
+  const expected = toNum(order?.actualFeesEUR ?? order?.expectedFeesEUR ?? order?.feesEUR ?? order?.fees_eur, 0) || 0;
+  const ibkrStatus = String(order?.ibkrStatus || "").toLowerCase();
+  return {
+    commissionAmount: Math.abs(expected),
+    commissionCcy: "EUR",
+    commissionEUR: Math.abs(expected),
+    commissionSource: ibkrStatus === "dry_run" ? "simulated_bps" : "ibkr_commission_missing",
+  };
+}
+
 function inferRiskStatus(cashPct, cashEUR) {
   if (Number.isFinite(cashEUR) && cashEUR < -0.01) return "RISK_OFF";
   if (Number.isFinite(cashPct) && cashPct >= 0.8) return "DEFENSIVE";
@@ -142,7 +266,7 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
       toNum(priceMap[symbol], null);
 
     if (!symbol || qty <= 0 || !Number.isFinite(price) || price <= 0) continue;
-    const feesEUR = toNum(order?.expectedFeesEUR ?? order?.feesEUR ?? order?.fees_eur, 0) || 0;
+    const feesEUR = extractCommission(order).commissionEUR;
     runFeesEUR += Math.max(0, feesEUR);
 
     if (side === "BUY") {
@@ -381,6 +505,59 @@ if (String(input.decision || "").toUpperCase() === "NO_TRADE" && warnings.length
   });
 }
 
+const fillRecords = fillEffectOrders.map((o, i) => {
+  const sym = String(o.symbol || "").trim();
+  const order_id = orderLedgerId(o, run_id, i);
+  const fee = extractCommission(o);
+  const px = extractFillPrice(o, priceMap);
+  const qty = extractFillQty(o);
+  const brokerExecutionId = extractBrokerExecutionId(o);
+  const tsFill = extractFillTimestamp(o, ts_end);
+  const fillId = brokerExecutionId
+    ? `FIL_${run_id}_${brokerExecutionId}`
+    : `FIL_${run_id}_${i}`;
+
+  return {
+    fill_id: fillId,
+    order_id,
+    symbol: sym,
+    side: o.side,
+    qty,
+    price: (Number.isFinite(px) && px > 0) ? px : 1.0,
+    ts_fill: tsFill,
+    fees_eur: fee.commissionEUR,
+    fee_amount: fee.commissionAmount,
+    fee_ccy: fee.commissionCcy,
+    fee_source: fee.commissionSource,
+    broker: o.broker || (o.ibkrStatus ? "IBKR" : "SIM"),
+    broker_execution_id: brokerExecutionId,
+    slippage_bps: toNum(o.slippageBps ?? o.slippage_bps, null),
+    liquidity: clampText(o.liquidity || "UNKNOWN", 32),
+    raw_fill_json: {
+      source: o.ibkrStatus === "dry_run" ? "simulated_sandbox" : "confirmed_or_imported",
+      clientOrderId: o.clientOrderId || null,
+      ibkrStatus: o.ibkrStatus || null,
+      ibkrResponse: o.ibkrResponse || null,
+      ibkrFill: rawFill(o) || null,
+    },
+  };
+});
+
+const fillCostRecords = fillRecords.map((f) => ({
+  fill_id: f.fill_id,
+  order_id: f.order_id,
+  symbol: f.symbol,
+  pair: f.symbol,
+  broker: f.broker,
+  broker_execution_id: f.broker_execution_id,
+  commission_amount: f.fee_amount,
+  commission_ccy: f.fee_ccy,
+  commission_eur: f.fees_eur,
+  commission_source: f.fee_source,
+  raw_json: f.raw_fill_json,
+  recorded_at: f.ts_fill,
+}));
+
 const snapshots = buildSnapshotsFromPortfolio(portfolioSummary, fillEffectOrders, priceMap, ts_end, meta);
 
 const bundle = {
@@ -416,32 +593,8 @@ const bundle = {
       riskChecks: o.riskChecks || null,
     },
   })),
-  fills: fillEffectOrders.map((o, i) => {
-    const sym = String(o.symbol || "").trim();
-    const order_id = orderLedgerId(o, run_id, i);
-    const orderType = normalizeOrderType(o.orderType);
-    const px =
-      (orderType === "LIMIT" && o.limitPrice) ? Number(o.limitPrice) :
-      (priceMap[sym] ? Number(priceMap[sym]) : null);
-
-    return {
-      fill_id: `FIL_${run_id}_${i}`,
-      order_id,
-      symbol: sym,
-      side: o.side,
-      qty: o.quantity,
-      price: (Number.isFinite(px) && px > 0) ? px : 1.0,
-      fees_eur: toNum(o.expectedFeesEUR ?? o.feesEUR ?? o.fees_eur, 0) || 0,
-      slippage_bps: toNum(o.slippageBps ?? o.slippage_bps, null),
-      liquidity: clampText(o.liquidity || "UNKNOWN", 32),
-      raw_fill_json: {
-        source: o.ibkrStatus === "dry_run" ? "simulated_sandbox" : "confirmed_or_imported",
-        clientOrderId: o.clientOrderId || null,
-        ibkrStatus: o.ibkrStatus || null,
-        ibkrResponse: o.ibkrResponse || null,
-      },
-    };
-  }),
+  fills: fillRecords,
+  fill_costs: fillCostRecords,
   cash_ledger: [],
   instruments: Array.from(instrumentMap.values()),
   market_prices: Object.entries(priceMap).map(([sym, px]) => ({ symbol: sym, close: px })),
