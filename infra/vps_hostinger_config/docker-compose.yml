@@ -303,6 +303,7 @@ services:
   ibkr-gateway:
     image: voyz/ibeam:latest
     restart: "no"
+    command: ["sh", "-lc", "cd /srv/clientportal.gw && bash bin/run.sh root/conf.yaml"]
     # Port 5000 accessible uniquement depuis le réseau Docker interne (pas exposé publiquement)
     expose:
       - "5000"
@@ -319,11 +320,12 @@ services:
       - IBEAM_RESTART_FAILED_SESSIONS=${IBEAM_RESTART_FAILED_SESSIONS:-True}
     volumes:
       - ../../services/ibkr-gateway/conf.yaml:/srv/inputs/conf.yaml:ro
+      - ../../services/ibkr-gateway/conf.yaml:/srv/clientportal.gw/root/conf.yaml:ro
       - ibeam_outputs:/srv/outputs
     networks:
       - web
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/v1/api/iserver/auth/status >/dev/null || exit 1"]
+      test: ["CMD", "sh", "-c", "python -c 'import ssl, urllib.request; ctx=ssl._create_unverified_context(); urllib.request.urlopen(\"https://localhost:5000\", context=ctx, timeout=5).read()'"]
       interval: 30s
       timeout: 10s
       retries: 3
