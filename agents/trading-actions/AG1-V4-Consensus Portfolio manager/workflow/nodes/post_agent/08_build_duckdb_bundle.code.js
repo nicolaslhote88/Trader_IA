@@ -70,7 +70,7 @@ function brokerOrderId(order) {
 
 function orderStatus(order) {
   const ibkr = String(order?.ibkrStatus || "").toLowerCase();
-  if (ibkr === "submitted") return "SUBMITTED";
+  if (ibkr === "submitted" || ibkr === "submitted_after_confirmation") return "SUBMITTED";
   if (ibkr === "filled" || ibkr === "executed") return "FILLED";
   if (ibkr === "dry_run") return "PLANNED";
   if (ibkr === "error" || ibkr === "not_sent") return "REJECTED";
@@ -582,6 +582,7 @@ const bundle = {
     status: orderStatus(o),
     broker: o.broker || (o.ibkrStatus ? "IBKR" : "SIM"),
     broker_order_id: brokerOrderId(o),
+    reason: o.ibkrError || o.reason || null,
     rationale_json: {
       action: o.action,
       assetClass: o.assetClass,

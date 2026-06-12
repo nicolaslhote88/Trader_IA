@@ -47,6 +47,39 @@ const envInitialCapital = (typeof $env !== "undefined" && $env.AG1_V4_INITIAL_CA
 const dbPath = String(cfg.ag1_v4_db_path || cfg.AG1_V4_DUCKDB_PATH || cfg.db_path || envDbPath || "/files/duckdb/ag1_v4_consensus.duckdb");
 const initialCapitalEUR = Number(cfg.initialCapitalEUR || cfg.initial_capital_eur || envInitialCapital || 10000);
 
+const brokerUrl = String((typeof $env !== "undefined" && $env.IBKR_BROKER_URL) || "http://ibkr-broker:8080").replace(/\/+$/, "");
+const ibkrDryRun = String((typeof $env !== "undefined" && $env.IBKR_DRY_RUN) || "true").toLowerCase() !== "false";
+const liveOrdersEnabled = String((typeof $env !== "undefined" && $env.AG1_ACTIONS_LIVE_ORDERS_ENABLED) || "false").toLowerCase() === "true";
+const requireLiveAccountAlignment = String((typeof $env !== "undefined" && $env.AG1_ACTIONS_REQUIRE_LIVE_ACCOUNT_ALIGNMENT) || "true").toLowerCase() !== "false";
+
+if (!ibkrDryRun && liveOrdersEnabled && requireLiveAccountAlignment) {
+  let health = null;
+  try {
+    const response = await fetch(`${brokerUrl}/health`, { method: "GET", headers: { "Accept": "application/json" } });
+    const text = await response.text();
+    health = text ? JSON.parse(text) : {};
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status}: ${text}`);
+    }
+  } catch (err) {
+    throw new Error(`AG1_V4_LIVE_PREFLIGHT_FAILED: unable to read ibkr-broker /health: ${err?.message || err}`);
+  }
+
+  const alignment = health?.account_alignment || {};
+  const configured = String(alignment.configured_account_id || "").trim();
+  const gatewayAccounts = Array.isArray(alignment.gateway_accounts) ? alignment.gateway_accounts : [];
+  const gatewayIsPaper = alignment.gateway_is_paper === true;
+  const aligned = alignment.aligned === true;
+  const configuredLooksLive = configured && !configured.toUpperCase().startsWith("DU");
+  if (!health?.authenticated || !aligned || (configuredLooksLive && gatewayIsPaper)) {
+    throw new Error(
+      `AG1_V4_LIVE_PREFLIGHT_BLOCKED: IBKR account is not aligned for live trading `
+      + `(configured=${configured || "n/a"}, gateway=${gatewayAccounts.join(",") || "n/a"}, `
+      + `selected=${alignment.selected_account || "n/a"}, gateway_is_paper=${gatewayIsPaper}, authenticated=${!!health?.authenticated})`
+    );
+  }
+}
+
 // run_id: RUN_YYYYMMDD_HHMMSS_<executionId|rand>
 const yyyymmdd = `${parts.year}${parts.month}${parts.day}`;
 const hhmmss = `${parts.hour}${parts.minute}${parts.second}`;

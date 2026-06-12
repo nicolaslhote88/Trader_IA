@@ -11,6 +11,10 @@ Variables d'environnement :
   IBKR_AUTO_REAUTH_COMPETE  "false" → true deconnecte une session concurrente
   IBKR_ALERT_WEBHOOK_URL    webhook optionnel quand un relogin navigateur/2FA est requis
   IBKR_ASSISTED_LOGIN_ENABLED  expose si des credentials assistés sont configurés
+  IBKR_AUTO_CONFIRM_PRICE_WARNINGS  confirme uniquement certains prompts prix IBKR apres garde-fou
+  IBKR_PRICE_GUARD_URL             endpoint quote indépendant (défaut: http://yfinance-api:8080/quote)
+  IBKR_PRICE_GUARD_MAX_DEVIATION_PCT  écart max limite/prix de référence
+  IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS  fraîcheur max du prix de référence
 
 Endpoints exposés à n8n :
   GET  /health                  → statut session IBKR
@@ -68,6 +72,18 @@ def _env_int(name: str, default: int, minimum: int | None = None) -> int:
     return value
 
 
+def _env_float(name: str, default: float, minimum: float | None = None) -> float:
+    raw = os.environ.get(name, "")
+    try:
+        value = float(raw) if raw else default
+    except ValueError:
+        logger.warning("Invalid float for %s=%r, using %s", name, raw, default)
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name, "")
     if not raw:
@@ -94,6 +110,14 @@ LOGIN_TUNNEL_COMMAND = os.environ.get(
 ASSISTED_LOGIN_ENABLED = _env_bool("IBKR_ASSISTED_LOGIN_ENABLED", False)
 IBKR_USERNAME_CONFIGURED = bool(os.environ.get("IBKR_USERNAME") or os.environ.get("IBEAM_ACCOUNT"))
 IBKR_PASSWORD_CONFIGURED = bool(os.environ.get("IBKR_PASSWORD") or os.environ.get("IBEAM_PASSWORD"))
+AUTO_CONFIRM_PRICE_WARNINGS = _env_bool("IBKR_AUTO_CONFIRM_PRICE_WARNINGS", False)
+PRICE_GUARD_URL = os.environ.get("IBKR_PRICE_GUARD_URL", "http://yfinance-api:8080/quote").strip()
+PRICE_GUARD_MAX_DEVIATION_PCT = _env_float("IBKR_PRICE_GUARD_MAX_DEVIATION_PCT", 3.0, minimum=0.0)
+PRICE_GUARD_MAX_QUOTE_AGE_SECONDS = _env_int(
+    "IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS",
+    28800,
+    minimum=60,
+)
 
 # ─── Global client ───────────────────────────────────────────────────────────
 _cpapi: CPAPIClient | None = None
@@ -397,15 +421,21 @@ def _dry_run_result(order_id: str, details: dict) -> dict:
     }
 
 
-def _reply_required_items(response: list[dict]) -> list[dict]:
+def _as_list(response: Any) -> list[Any]:
+    if response is None:
+        return []
+    return response if isinstance(response, list) else [response]
+
+
+def _reply_required_items(response: Any) -> list[dict]:
     """Return IBKR prompt/reply objects that still need human confirmation."""
     return [
-        item for item in response
+        item for item in _as_list(response)
         if isinstance(item, dict) and item.get("id") and not item.get("order_id")
     ]
 
 
-def _reply_required_error(order_id: str, client_order_id: str, response: list[dict]) -> dict:
+def _reply_messages(response: Any) -> list[str]:
     messages = []
     for item in _reply_required_items(response):
         raw_message = item.get("message") or item.get("text") or []
@@ -413,13 +443,260 @@ def _reply_required_error(order_id: str, client_order_id: str, response: list[di
             messages.extend(str(m) for m in raw_message)
         elif raw_message:
             messages.append(str(raw_message))
-    return {
+    return [m.strip() for m in messages if m and m.strip()]
+
+
+def _reply_required_error(
+    order_id: str,
+    client_order_id: str,
+    response: Any,
+    extra: dict | None = None,
+) -> dict:
+    messages = _reply_messages(response)
+    out = {
         "order_id": order_id,
         "client_order_id": client_order_id,
         "status": "needs_confirmation",
         "error": "IBKR_ORDER_NEEDS_CONFIRMATION" + (f": {' | '.join(messages)}" if messages else ""),
         "ibkr_response": response,
     }
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _ibkr_error_messages(response: Any) -> list[str]:
+    messages = []
+    for item in _as_list(response):
+        if not isinstance(item, dict):
+            continue
+        for field in ("error", "errorMessage", "error_message"):
+            raw = item.get(field)
+            if raw:
+                messages.append(str(raw))
+        raw_message = item.get("message") or item.get("text")
+        if raw_message and not item.get("order_id") and not item.get("id"):
+            if isinstance(raw_message, list):
+                messages.extend(str(m) for m in raw_message)
+            else:
+                messages.append(str(raw_message))
+    return [m.strip() for m in messages if m and m.strip()]
+
+
+def _ibkr_order_error(
+    order_id: str,
+    client_order_id: str,
+    response: Any,
+    extra: dict | None = None,
+) -> dict:
+    messages = _ibkr_error_messages(response)
+    out = {
+        "order_id": order_id,
+        "client_order_id": client_order_id,
+        "status": "error",
+        "error": "IBKR_ORDER_REJECTED" + (f": {' | '.join(messages)}" if messages else ""),
+        "ibkr_response": response,
+    }
+    if extra:
+        out.update(extra)
+    return out
+
+
+def _is_price_constraint_prompt(messages: list[str]) -> bool:
+    if not messages:
+        return False
+    joined = " | ".join(messages).lower()
+    return (
+        "price" in joined
+        and "percentage constraint" in joined
+        and not any(
+            marker in joined
+            for marker in (
+                "margin",
+                "insufficient",
+                "short sale",
+                "shortable",
+                "locate",
+                "restricted",
+                "not allowed",
+            )
+        )
+    )
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        text = str(value).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _quote_reference_price(quote: dict, side: str) -> tuple[float | None, str]:
+    regular = _num(quote.get("regularMarketPrice"))
+    if regular and regular > 0:
+        return regular, "regularMarketPrice"
+
+    bid = _num(quote.get("bid"))
+    ask = _num(quote.get("ask"))
+    if bid and ask and bid > 0 and ask > 0 and ask >= bid:
+        return (bid + ask) / 2.0, "mid"
+
+    side_u = str(side or "").upper()
+    if side_u == "BUY" and ask and ask > 0:
+        return ask, "ask"
+    if side_u == "SELL" and bid and bid > 0:
+        return bid, "bid"
+
+    for field in ("mid", "ask", "bid"):
+        value = _num(quote.get(field))
+        if value and value > 0:
+            return value, field
+    return None, ""
+
+
+async def _fetch_equity_quote(symbol: str, side: str, qty: float) -> dict:
+    if not PRICE_GUARD_URL:
+        return {"ok": False, "error": "IBKR_PRICE_GUARD_URL_EMPTY"}
+    params = {
+        "symbols": symbol,
+        "side": str(side or "BUY").upper(),
+        "qty": qty,
+        "max_age_seconds": 300,
+    }
+    async with httpx.AsyncClient(timeout=10.0) as http:
+        response = await http.get(PRICE_GUARD_URL, params=params)
+        response.raise_for_status()
+        payload = response.json()
+    quotes = payload.get("quotes") if isinstance(payload, dict) else None
+    if not isinstance(quotes, list) or not quotes:
+        return {"ok": False, "error": "NO_QUOTE_ROW", "payload": payload}
+    return quotes[0] if isinstance(quotes[0], dict) else {"ok": False, "error": "INVALID_QUOTE_ROW"}
+
+
+async def _price_confirmation_guard(order: Any, ibkr_payload: dict, response: Any) -> dict[str, Any]:
+    messages = _reply_messages(response)
+    guard: dict[str, Any] = {
+        "enabled": AUTO_CONFIRM_PRICE_WARNINGS,
+        "ok": False,
+        "reason": "",
+        "prompt_messages": messages,
+        "max_deviation_pct": PRICE_GUARD_MAX_DEVIATION_PCT,
+        "max_quote_age_seconds": PRICE_GUARD_MAX_QUOTE_AGE_SECONDS,
+        "quote_url": PRICE_GUARD_URL,
+    }
+    if not AUTO_CONFIRM_PRICE_WARNINGS:
+        guard["reason"] = "AUTO_CONFIRM_PRICE_WARNINGS_DISABLED"
+        return guard
+    if not _is_price_constraint_prompt(messages):
+        guard["reason"] = "PROMPT_NOT_PRICE_PERCENTAGE_CONSTRAINT"
+        return guard
+    if normalize_order_type(ibkr_payload.get("orderType")) != "LMT":
+        guard["reason"] = "ORDER_TYPE_NOT_LIMIT"
+        return guard
+
+    limit_price = _num(ibkr_payload.get("price"))
+    if not limit_price or limit_price <= 0:
+        guard["reason"] = "MISSING_LIMIT_PRICE"
+        return guard
+
+    symbol = str(getattr(order, "symbol", "") or "").strip()
+    if not symbol:
+        guard["reason"] = "MISSING_SYMBOL"
+        return guard
+
+    try:
+        quote = await _fetch_equity_quote(
+            symbol,
+            str(ibkr_payload.get("side") or "BUY"),
+            float(ibkr_payload.get("quantity") or 0),
+        )
+    except Exception as exc:
+        guard["reason"] = f"QUOTE_FETCH_FAILED:{exc}"
+        return guard
+
+    ref_price, ref_field = _quote_reference_price(quote, str(ibkr_payload.get("side") or "BUY"))
+    guard["quote"] = {
+        "symbol": quote.get("symbol"),
+        "resolvedSymbol": quote.get("resolvedSymbol"),
+        "source": quote.get("source"),
+        "regularMarketPrice": quote.get("regularMarketPrice"),
+        "bid": quote.get("bid"),
+        "ask": quote.get("ask"),
+        "mid": quote.get("mid"),
+        "marketState": quote.get("marketState"),
+        "regularMarketTime": quote.get("regularMarketTime"),
+        "lastTradeTime": quote.get("lastTradeTime"),
+        "fetchedAt": quote.get("fetchedAt"),
+        "isDelayed": quote.get("isDelayed"),
+    }
+    guard["reference_price"] = ref_price
+    guard["reference_field"] = ref_field
+    guard["limit_price"] = limit_price
+
+    if not ref_price or ref_price <= 0:
+        guard["reason"] = "NO_REFERENCE_PRICE"
+        return guard
+
+    quote_ts = (
+        _parse_iso_datetime(quote.get("regularMarketTime"))
+        or _parse_iso_datetime(quote.get("lastTradeTime"))
+        or _parse_iso_datetime(quote.get("fetchedAt"))
+    )
+    if quote_ts:
+        age_seconds = (datetime.now(timezone.utc) - quote_ts).total_seconds()
+        guard["quote_age_seconds"] = age_seconds
+        if age_seconds > PRICE_GUARD_MAX_QUOTE_AGE_SECONDS:
+            guard["reason"] = "QUOTE_TOO_OLD"
+            return guard
+
+    deviation_pct = abs(limit_price - ref_price) / ref_price * 100.0
+    guard["deviation_pct"] = deviation_pct
+    if deviation_pct <= PRICE_GUARD_MAX_DEVIATION_PCT:
+        guard["ok"] = True
+        guard["reason"] = "PRICE_WITHIN_GUARD"
+    else:
+        guard["reason"] = "PRICE_DEVIATION_TOO_HIGH"
+    return {
+        **guard,
+    }
+
+
+async def _account_alignment_status(client: CPAPIClient) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "configured_account_id": ACCOUNT_ID_OVERRIDE or None,
+        "configured_account_type": (
+            "paper" if ACCOUNT_ID_OVERRIDE.upper().startswith("DU")
+            else ("live" if ACCOUNT_ID_OVERRIDE else None)
+        ),
+        "gateway_accounts": [],
+        "selected_account": None,
+        "gateway_is_paper": None,
+        "aligned": None,
+        "error": None,
+    }
+    try:
+        payload = await client._get("/v1/api/iserver/accounts")
+    except Exception as exc:
+        out["aligned"] = False
+        out["error"] = str(exc)
+        return out
+
+    accounts = payload.get("accounts") if isinstance(payload, dict) else []
+    selected = payload.get("selectedAccount") if isinstance(payload, dict) else None
+    out["gateway_accounts"] = accounts if isinstance(accounts, list) else []
+    out["selected_account"] = selected
+    out["gateway_is_paper"] = bool(payload.get("isPaper")) if isinstance(payload, dict) else None
+    if ACCOUNT_ID_OVERRIDE:
+        out["aligned"] = ACCOUNT_ID_OVERRIDE in out["gateway_accounts"]
+    else:
+        out["aligned"] = bool(out["gateway_accounts"])
+    return out
 
 
 def _contract_exchanges(contract: dict) -> set[str]:
@@ -429,9 +706,21 @@ def _contract_exchanges(contract: dict) -> set[str]:
     }
     all_exchanges = str(contract.get("allExchanges") or "")
     exchanges.update(part.strip().upper() for part in all_exchanges.split(",") if part.strip())
+    description = str(contract.get("description") or "").strip()
+    if description:
+        exchanges.add(description.upper())
+    company_header = str(contract.get("companyHeader") or "").strip()
+    if " - " in company_header:
+        suffix = company_header.rsplit(" - ", 1)[-1].strip()
+        if suffix:
+            exchanges.add(suffix.upper())
     for section in contract.get("sections") or []:
         exchanges.add(str(section.get("exchange") or "").upper())
     return {exchange for exchange in exchanges if exchange}
+
+
+def _contract_symbol(contract: dict) -> str:
+    return str(contract.get("symbol") or contract.get("ticker") or "").strip().upper()
 
 
 def _position_qty_by_conid(positions: list[dict], conid: int) -> float:
@@ -475,6 +764,10 @@ async def _resolve_stk_conid(
         contracts = await client.search_contract(ticker, sec_type="STK")
     if not contracts:
         raise HTTPException(404, f"No IBKR contract found for {symbol}")
+
+    exact_symbol_contracts = [c for c in contracts if _contract_symbol(c) == ticker.upper()]
+    if exact_symbol_contracts:
+        contracts = exact_symbol_contracts
 
     # Cherche l'exchange correspondant. Pour un symbole suffixe (ex: .PA),
     # on refuse le fallback vers un autre marche afin d'eviter CRI.PA -> CRI US.
@@ -521,11 +814,19 @@ async def health() -> dict:
         status = await client.auth_status()
         _remember_auth_status(status)
         authenticated = bool(status.get("authenticated") and status.get("connected"))
+        account_alignment = await _account_alignment_status(client)
         return {
             "dry_run": DRY_RUN,
             "fx_orders_enabled": FX_ORDERS_ENABLED,
+            "auto_confirm_price_warnings": AUTO_CONFIRM_PRICE_WARNINGS,
+            "price_guard": {
+                "url": PRICE_GUARD_URL,
+                "max_deviation_pct": PRICE_GUARD_MAX_DEVIATION_PCT,
+                "max_quote_age_seconds": PRICE_GUARD_MAX_QUOTE_AGE_SECONDS,
+            },
             "gateway_url": GATEWAY_URL,
             "authenticated": authenticated,
+            "account_alignment": account_alignment,
             "ibkr_status": status,
             "session_monitor": _session_monitor,
             "auto_reauth_enabled": AUTO_REAUTH_ENABLED,
@@ -541,8 +842,19 @@ async def health() -> dict:
         return {
             "dry_run": DRY_RUN,
             "fx_orders_enabled": FX_ORDERS_ENABLED,
+            "auto_confirm_price_warnings": AUTO_CONFIRM_PRICE_WARNINGS,
+            "price_guard": {
+                "url": PRICE_GUARD_URL,
+                "max_deviation_pct": PRICE_GUARD_MAX_DEVIATION_PCT,
+                "max_quote_age_seconds": PRICE_GUARD_MAX_QUOTE_AGE_SECONDS,
+            },
             "gateway_url": GATEWAY_URL,
             "authenticated": False,
+            "account_alignment": {
+                "configured_account_id": ACCOUNT_ID_OVERRIDE or None,
+                "aligned": False,
+                "error": str(exc),
+            },
             "error": str(exc),
             "session_monitor": _session_monitor,
             "auto_reauth_enabled": AUTO_REAUTH_ENABLED,
@@ -648,6 +960,33 @@ async def get_account_ledger() -> dict:
         return await client.get_account_ledger()
     except CPAPIError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+@app.get("/contracts/equity/resolve")
+async def resolve_equity_contracts(
+    symbols: str = Query(..., description="Comma-separated symbols, e.g. THEP.PA,ELEC.PA"),
+    exchange: str = Query("", description="Optional exchange override, e.g. SBF,SMART"),
+) -> dict[str, Any]:
+    """Résout des contrats actions sans envoyer d'ordre."""
+    client = get_client()
+    requested = [s.strip() for s in symbols.split(",") if s.strip()]
+    results = []
+    errors = []
+    for symbol in requested:
+        try:
+            conid = await _resolve_stk_conid(client, symbol, exchange_override=exchange or None)
+            results.append({"symbol": symbol, "conid": conid})
+        except HTTPException as exc:
+            errors.append({"symbol": symbol, "error": exc.detail})
+        except CPAPIError as exc:
+            errors.append({"symbol": symbol, "error": str(exc)})
+    return {
+        "results": results,
+        "errors": errors,
+        "count": len(requested),
+        "resolved": len(results),
+        "dry_run": DRY_RUN,
+    }
 
 
 # ─── Market Data ─────────────────────────────────────────────────────────────
@@ -857,6 +1196,9 @@ async def place_fx_orders(req: FXOrdersRequest) -> dict[str, Any]:
             if _reply_required_items(ibkr_resp):
                 errors.append(_reply_required_error(order.order_id, client_order_id, ibkr_resp))
                 continue
+            if _ibkr_error_messages(ibkr_resp):
+                errors.append(_ibkr_order_error(order.order_id, client_order_id, ibkr_resp))
+                continue
             results.append({
                 "order_id": order.order_id,
                 "client_order_id": client_order_id,
@@ -956,7 +1298,52 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
             ibkr_resp = await client.place_orders([ibkr_payload])
             client_order_id = order.client_order_id or order.order_id
             if _reply_required_items(ibkr_resp):
-                errors.append(_reply_required_error(order.order_id, client_order_id, ibkr_resp))
+                guard = await _price_confirmation_guard(order, ibkr_payload, ibkr_resp)
+                if guard.get("ok"):
+                    reply_responses: list[dict] = []
+                    for item in _reply_required_items(ibkr_resp):
+                        reply_responses.extend(await client.reply_order(str(item["id"]), confirmed=True))
+                    if _reply_required_items(reply_responses):
+                        errors.append(_reply_required_error(
+                            order.order_id,
+                            client_order_id,
+                            reply_responses,
+                            extra={
+                                "confirmation_guard": guard,
+                                "initial_ibkr_response": ibkr_resp,
+                            },
+                        ))
+                        continue
+                    if _ibkr_error_messages(reply_responses):
+                        errors.append(_ibkr_order_error(
+                            order.order_id,
+                            client_order_id,
+                            reply_responses,
+                            extra={
+                                "confirmation_guard": guard,
+                                "initial_ibkr_response": ibkr_resp,
+                            },
+                        ))
+                        continue
+                    results.append({
+                        "order_id": order.order_id,
+                        "client_order_id": client_order_id,
+                        "status": "submitted_after_confirmation",
+                        "ibkr_response": reply_responses,
+                        "initial_ibkr_response": ibkr_resp,
+                        "confirmation_guard": guard,
+                        "sent_at": now_iso(),
+                    })
+                    continue
+                errors.append(_reply_required_error(
+                    order.order_id,
+                    client_order_id,
+                    ibkr_resp,
+                    extra={"confirmation_guard": guard},
+                ))
+                continue
+            if _ibkr_error_messages(ibkr_resp):
+                errors.append(_ibkr_order_error(order.order_id, client_order_id, ibkr_resp))
                 continue
             results.append({
                 "order_id": order.order_id,

@@ -151,14 +151,25 @@ class CPAPIClient:
         Les champs minimum sont conid, orderType, side, tif et quantity.
 
         Retourne la liste des réponses IBKR (une par ordre).
-        Les confirmations IBKR en 2 temps ne sont jamais auto-acceptees ici.
-        Un item avec "id" doit remonter au caller comme confirmation requise,
-        afin qu'un ordre strategie ne contourne pas une alerte de prix, taille,
-        liquidite ou contrainte IBKR.
+        Les confirmations IBKR en 2 temps ne sont pas auto-acceptees ici.
+        Un item avec "id" doit remonter au caller, qui decide explicitement si
+        une confirmation encadree est admissible.
         """
         account_id = await self.get_account_id()
         response = await self._post(
             f"/v1/api/iserver/account/{account_id}/orders", {"orders": orders}
+        )
+        return response if isinstance(response, list) else [response]
+
+    async def reply_order(self, reply_id: str, confirmed: bool = True) -> list[dict]:
+        """
+        Repond a un prompt de confirmation IBKR.
+
+        Le caller doit avoir qualifie le prompt avant d'appeler cette methode.
+        """
+        response = await self._post(
+            f"/v1/api/iserver/reply/{reply_id}",
+            {"confirmed": bool(confirmed)},
         )
         return response if isinstance(response, list) else [response]
 

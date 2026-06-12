@@ -429,12 +429,12 @@ const liveFailedOrderIds = new Set(
     : []
 );
 
-const ledgerOrders = orders.filter((o) => !liveFailedOrderIds.has(o.orderId));
+const ledgerOrders = orders;
 const warnings = [
   ...(Array.isArray(input.warnings) ? input.warnings : []),
   ...orders
     .filter((o) => liveFailedOrderIds.has(o.orderId))
-    .map((o) => `IBKR_ORDER_NOT_LEDGERED:${o.symbol}:${o.ibkrStatus}:${o.ibkrError || ""}`),
+    .map((o) => `IBKR_ORDER_REJECTED:${o.symbol}:${o.ibkrStatus}:${o.ibkrError || ""}`),
 ];
 
 return [{

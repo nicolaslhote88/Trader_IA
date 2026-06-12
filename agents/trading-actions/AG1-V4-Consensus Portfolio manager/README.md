@@ -46,3 +46,21 @@ En live, `07b - IBKR Send Orders` ne cree pas de fill optimiste: il soumet
 l'ordre puis interroge `/fills` pendant la fenetre `IBKR_FILL_CONFIRM_SECONDS`.
 Un ordre non confirme reste `SUBMITTED` et n'impacte pas le ledger tant qu'un
 fill IBKR n'est pas rattache.
+
+Si IBKR refuse un ordre ou demande une confirmation non admissible, le node garde
+l'ordre dans le bundle DuckDB avec `ibkrStatus=error/not_sent` ; le writer le
+classe en `core.orders.status='REJECTED'` avec le motif dans `reason`. Cela
+permet au dashboard Actions de montrer les tentatives bloquees sans creer de
+position ni de fill.
+
+Le broker peut confirmer automatiquement uniquement les prompts IBKR de
+contrainte prix (`Percentage constraint`) quand
+`IBKR_AUTO_CONFIRM_PRICE_WARNINGS=true` et que le prix limite reste dans le seuil
+configure par `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` par rapport au quote
+`yfinance-api`.
+
+En mode live (`IBKR_DRY_RUN=false` et `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`),
+le node `2B - Init Run Context` interroge `/health` sur `ibkr-broker` avant les
+agents LLM. Si `account_alignment.aligned` n'est pas `true` ou si le gateway
+IBKR expose seulement un compte paper `DU...` alors que `IBKR_ACCOUNT_ID` vise un
+compte réel `U...`, le workflow s'arrete avant toute consommation de tokens IA.
