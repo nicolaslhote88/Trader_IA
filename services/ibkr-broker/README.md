@@ -51,6 +51,7 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | `IBKR_PRICE_GUARD_URL` | `http://yfinance-api:8080/quote` | Endpoint quote independant utilise avant confirmation |
 | `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` | `3.0` | Ecart maximum entre limite et prix de reference pour confirmer |
 | `IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS` | `28800` | Age maximum du prix de reference accepte |
+| `IBKR_AUTO_CONFIRM_MAX_STEPS` | `4` | Nombre maximum de prompts prix confirmes en chaine pour un meme ordre |
 | `IBKR_ALERT_WEBHOOK_URL` | *(vide)* | Webhook optionnel appele quand `manual_login_required=true` |
 | `IBKR_ALERT_COOLDOWN_SECONDS` | `900` | Cooldown minimal entre deux alertes relogin |
 | `IBKR_LOGIN_URL` | `https://localhost:5000` | URL affichee dans l'action operateur |
@@ -160,9 +161,11 @@ Le broker envoie les ordres au format Web API actuel : `POST
 /v1/api/iserver/account/{accountId}/orders` avec un objet `{ "orders": [...] }`.
 Par defaut, les confirmations IBKR renvoyant un `id` ne sont pas confirmees.
 Si `IBKR_AUTO_CONFIRM_PRICE_WARNINGS=true`, le broker confirme seulement les
-prompts de type "price exceeds the Percentage constraint" et seulement si le
-prix limite reste dans `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` du prix de reference
-lu via `IBKR_PRICE_GUARD_URL`. Les autres prompts restent rejetes et remontent
+prompts prix de type "price exceeds the Percentage constraint" ou "Mandatory
+Cap Price", et seulement si le prix limite reste dans
+`IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` du prix de reference lu via
+`IBKR_PRICE_GUARD_URL`. Les confirmations peuvent etre enchainees jusqu'a
+`IBKR_AUTO_CONFIRM_MAX_STEPS`; les autres prompts restent rejetes et remontent
 dans le workflow.
 
 Pour tester la resolution des contrats sans envoyer d'ordre :

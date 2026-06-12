@@ -15,6 +15,7 @@ Variables d'environnement :
   IBKR_PRICE_GUARD_URL             endpoint quote indépendant (défaut: http://yfinance-api:8080/quote)
   IBKR_PRICE_GUARD_MAX_DEVIATION_PCT  écart max limite/prix de référence
   IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS  fraîcheur max du prix de référence
+  IBKR_AUTO_CONFIRM_MAX_STEPS      nombre max de prompts prix confirmes en chaine
 
 Endpoints exposés à n8n :
   GET  /health                  → statut session IBKR
@@ -118,6 +119,7 @@ PRICE_GUARD_MAX_QUOTE_AGE_SECONDS = _env_int(
     28800,
     minimum=60,
 )
+AUTO_CONFIRM_MAX_STEPS = _env_int("IBKR_AUTO_CONFIRM_MAX_STEPS", 4, minimum=1)
 
 # ─── Global client ───────────────────────────────────────────────────────────
 _cpapi: CPAPIClient | None = None
@@ -427,11 +429,15 @@ def _as_list(response: Any) -> list[Any]:
     return response if isinstance(response, list) else [response]
 
 
+def _has_order_identifier(item: dict) -> bool:
+    return any(item.get(key) for key in ("order_id", "orderId", "orderid"))
+
+
 def _reply_required_items(response: Any) -> list[dict]:
     """Return IBKR prompt/reply objects that still need human confirmation."""
     return [
         item for item in _as_list(response)
-        if isinstance(item, dict) and item.get("id") and not item.get("order_id")
+        if isinstance(item, dict) and item.get("id") and not _has_order_identifier(item)
     ]
 
 
@@ -502,24 +508,27 @@ def _ibkr_order_error(
     return out
 
 
-def _is_price_constraint_prompt(messages: list[str]) -> bool:
+def _is_price_confirmation_prompt(messages: list[str]) -> bool:
     if not messages:
         return False
     joined = " | ".join(messages).lower()
+    danger_markers = (
+        "margin",
+        "insufficient",
+        "short sale",
+        "shortable",
+        "locate",
+        "restricted",
+        "not allowed",
+    )
+    if any(marker in joined for marker in danger_markers):
+        return False
     return (
-        "price" in joined
-        and "percentage constraint" in joined
-        and not any(
-            marker in joined
-            for marker in (
-                "margin",
-                "insufficient",
-                "short sale",
-                "shortable",
-                "locate",
-                "restricted",
-                "not allowed",
-            )
+        ("price" in joined and "percentage constraint" in joined)
+        or "mandatory cap price" in joined
+        or (
+            "fair and orderly market" in joined
+            and "may set a cap" in joined
         )
     )
 
@@ -593,8 +602,8 @@ async def _price_confirmation_guard(order: Any, ibkr_payload: dict, response: An
     if not AUTO_CONFIRM_PRICE_WARNINGS:
         guard["reason"] = "AUTO_CONFIRM_PRICE_WARNINGS_DISABLED"
         return guard
-    if not _is_price_constraint_prompt(messages):
-        guard["reason"] = "PROMPT_NOT_PRICE_PERCENTAGE_CONSTRAINT"
+    if not _is_price_confirmation_prompt(messages):
+        guard["reason"] = "PROMPT_NOT_PRICE_CONFIRMATION"
         return guard
     if normalize_order_type(ibkr_payload.get("orderType")) != "LMT":
         guard["reason"] = "ORDER_TYPE_NOT_LIMIT"
@@ -664,6 +673,79 @@ async def _price_confirmation_guard(order: Any, ibkr_payload: dict, response: An
         guard["reason"] = "PRICE_DEVIATION_TOO_HIGH"
     return {
         **guard,
+    }
+
+
+async def _confirm_price_prompt_chain(
+    client: CPAPIClient,
+    order: Any,
+    ibkr_payload: dict,
+    initial_response: Any,
+) -> dict[str, Any]:
+    """Confirm only qualified IBKR price prompts until IBKR returns a terminal response."""
+    current_response = initial_response
+    reply_responses: list[dict] = []
+    attempts: list[dict[str, Any]] = []
+
+    for step in range(1, AUTO_CONFIRM_MAX_STEPS + 1):
+        prompt_items = _reply_required_items(current_response)
+        if not prompt_items:
+            return {
+                "ok": True,
+                "reason": "CONFIRMATION_CHAIN_COMPLETE",
+                "terminal_response": current_response,
+                "reply_responses": reply_responses,
+                "attempts": attempts,
+            }
+
+        guard = await _price_confirmation_guard(order, ibkr_payload, current_response)
+        attempt = {
+            "step": step,
+            "reply_ids": [str(item.get("id")) for item in prompt_items],
+            "prompt_messages": _reply_messages(current_response),
+            "guard": guard,
+        }
+        attempts.append(attempt)
+
+        if not guard.get("ok"):
+            return {
+                "ok": False,
+                "reason": "CONFIRMATION_GUARD_REJECTED",
+                "terminal_response": current_response,
+                "reply_responses": reply_responses,
+                "attempts": attempts,
+            }
+
+        next_response: list[dict] = []
+        for item in prompt_items:
+            next_response.extend(await client.reply_order(str(item["id"]), confirmed=True))
+        reply_responses.extend(next_response)
+        current_response = next_response
+
+        if _ibkr_error_messages(current_response):
+            return {
+                "ok": False,
+                "reason": "IBKR_ERROR_AFTER_CONFIRMATION",
+                "terminal_response": current_response,
+                "reply_responses": reply_responses,
+                "attempts": attempts,
+            }
+
+    if not _reply_required_items(current_response):
+        return {
+            "ok": True,
+            "reason": "CONFIRMATION_CHAIN_COMPLETE",
+            "terminal_response": current_response,
+            "reply_responses": reply_responses,
+            "attempts": attempts,
+        }
+
+    return {
+        "ok": False,
+        "reason": "MAX_CONFIRMATION_STEPS_EXCEEDED",
+        "terminal_response": current_response,
+        "reply_responses": reply_responses,
+        "attempts": attempts,
     }
 
 
@@ -823,6 +905,7 @@ async def health() -> dict:
                 "url": PRICE_GUARD_URL,
                 "max_deviation_pct": PRICE_GUARD_MAX_DEVIATION_PCT,
                 "max_quote_age_seconds": PRICE_GUARD_MAX_QUOTE_AGE_SECONDS,
+                "auto_confirm_max_steps": AUTO_CONFIRM_MAX_STEPS,
             },
             "gateway_url": GATEWAY_URL,
             "authenticated": authenticated,
@@ -847,6 +930,7 @@ async def health() -> dict:
                 "url": PRICE_GUARD_URL,
                 "max_deviation_pct": PRICE_GUARD_MAX_DEVIATION_PCT,
                 "max_quote_age_seconds": PRICE_GUARD_MAX_QUOTE_AGE_SECONDS,
+                "auto_confirm_max_steps": AUTO_CONFIRM_MAX_STEPS,
             },
             "gateway_url": GATEWAY_URL,
             "authenticated": False,
@@ -1298,29 +1382,16 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
             ibkr_resp = await client.place_orders([ibkr_payload])
             client_order_id = order.client_order_id or order.order_id
             if _reply_required_items(ibkr_resp):
-                guard = await _price_confirmation_guard(order, ibkr_payload, ibkr_resp)
-                if guard.get("ok"):
-                    reply_responses: list[dict] = []
-                    for item in _reply_required_items(ibkr_resp):
-                        reply_responses.extend(await client.reply_order(str(item["id"]), confirmed=True))
-                    if _reply_required_items(reply_responses):
-                        errors.append(_reply_required_error(
-                            order.order_id,
-                            client_order_id,
-                            reply_responses,
-                            extra={
-                                "confirmation_guard": guard,
-                                "initial_ibkr_response": ibkr_resp,
-                            },
-                        ))
-                        continue
-                    if _ibkr_error_messages(reply_responses):
+                confirmation = await _confirm_price_prompt_chain(client, order, ibkr_payload, ibkr_resp)
+                terminal_response = confirmation.get("terminal_response")
+                if confirmation.get("ok"):
+                    if _ibkr_error_messages(terminal_response):
                         errors.append(_ibkr_order_error(
                             order.order_id,
                             client_order_id,
-                            reply_responses,
+                            terminal_response,
                             extra={
-                                "confirmation_guard": guard,
+                                "confirmation_chain": confirmation,
                                 "initial_ibkr_response": ibkr_resp,
                             },
                         ))
@@ -1329,17 +1400,33 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                         "order_id": order.order_id,
                         "client_order_id": client_order_id,
                         "status": "submitted_after_confirmation",
-                        "ibkr_response": reply_responses,
+                        "ibkr_response": terminal_response,
                         "initial_ibkr_response": ibkr_resp,
-                        "confirmation_guard": guard,
+                        "confirmation_chain": confirmation,
                         "sent_at": now_iso(),
                     })
                     continue
+
+                if confirmation.get("reason") == "IBKR_ERROR_AFTER_CONFIRMATION":
+                    errors.append(_ibkr_order_error(
+                        order.order_id,
+                        client_order_id,
+                        terminal_response,
+                        extra={
+                            "confirmation_chain": confirmation,
+                            "initial_ibkr_response": ibkr_resp,
+                        },
+                    ))
+                    continue
+
                 errors.append(_reply_required_error(
                     order.order_id,
                     client_order_id,
-                    ibkr_resp,
-                    extra={"confirmation_guard": guard},
+                    terminal_response,
+                    extra={
+                        "confirmation_chain": confirmation,
+                        "initial_ibkr_response": ibkr_resp,
+                    },
                 ))
                 continue
             if _ibkr_error_messages(ibkr_resp):
