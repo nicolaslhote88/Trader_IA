@@ -3,6 +3,7 @@
 // Output: enrichit la config avec run { runId, timestampParis, timestampUtc, tz, executionId, versions }
 
 const cfg = $json ?? {};
+const N8N_CONTEXT = this;
 const tz = String(cfg.timezone || "Europe/Paris");
 
 const now = new Date();
@@ -52,15 +53,30 @@ const ibkrDryRun = String((typeof $env !== "undefined" && $env.IBKR_DRY_RUN) || 
 const liveOrdersEnabled = String((typeof $env !== "undefined" && $env.AG1_ACTIONS_LIVE_ORDERS_ENABLED) || "false").toLowerCase() === "true";
 const requireLiveAccountAlignment = String((typeof $env !== "undefined" && $env.AG1_ACTIONS_REQUIRE_LIVE_ACCOUNT_ALIGNMENT) || "true").toLowerCase() !== "false";
 
+async function getJson(url) {
+  if (typeof fetch === "function") {
+    const response = await fetch(url, { method: "GET", headers: { "Accept": "application/json" } });
+    const text = await response.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
+    return data;
+  }
+  if (N8N_CONTEXT?.helpers?.httpRequest) {
+    return await N8N_CONTEXT.helpers.httpRequest({
+      method: "GET",
+      url,
+      headers: { "Accept": "application/json" },
+      json: true,
+      timeout: 15000,
+    });
+  }
+  throw new Error("No HTTP client available in this n8n Code node");
+}
+
 if (!ibkrDryRun && liveOrdersEnabled && requireLiveAccountAlignment) {
   let health = null;
   try {
-    const response = await fetch(`${brokerUrl}/health`, { method: "GET", headers: { "Accept": "application/json" } });
-    const text = await response.text();
-    health = text ? JSON.parse(text) : {};
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${text}`);
-    }
+    health = await getJson(`${brokerUrl}/health`);
   } catch (err) {
     throw new Error(`AG1_V4_LIVE_PREFLIGHT_FAILED: unable to read ibkr-broker /health: ${err?.message || err}`);
   }
