@@ -179,31 +179,6 @@ async function pollRecentFills(ordersToMatch, resultMap) {
 }
 
 async function postJson(url, payload) {
-  if (typeof fetch === "function") {
-    const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-    });
-
-    const text = await response.text();
-    let data = {};
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch (err) {
-        data = { raw: text };
-      }
-    }
-
-    if (!response.ok) {
-      const message = data?.detail || data?.error || text || `HTTP ${response.status}`;
-      throw new Error(`HTTP ${response.status}: ${message}`);
-    }
-
-    return data;
-  }
-
   if (N8N_CONTEXT?.helpers?.httpRequest) {
     return await N8N_CONTEXT.helpers.httpRequest({
       method: "POST",
@@ -215,28 +190,10 @@ async function postJson(url, payload) {
     });
   }
 
-  throw new Error("No HTTP client available in this n8n Code node");
+  throw new Error("No n8n HTTP helper available in this Code node");
 }
 
 async function getJson(url) {
-  if (typeof fetch === "function") {
-    const response = await fetch(url, { method: "GET", headers: { "Accept": "application/json" } });
-    const text = await response.text();
-    let data = {};
-    if (text) {
-      try {
-        data = JSON.parse(text);
-      } catch (err) {
-        data = { raw: text };
-      }
-    }
-    if (!response.ok) {
-      const message = data?.detail || data?.error || text || `HTTP ${response.status}`;
-      throw new Error(`HTTP ${response.status}: ${message}`);
-    }
-    return data;
-  }
-
   if (N8N_CONTEXT?.helpers?.httpRequest) {
     return await N8N_CONTEXT.helpers.httpRequest({
       method: "GET",
@@ -247,7 +204,7 @@ async function getJson(url) {
     });
   }
 
-  throw new Error("No HTTP client available in this n8n Code node");
+  throw new Error("No n8n HTTP helper available in this Code node");
 }
 
 function modelAllowedForIbkr(modelText) {

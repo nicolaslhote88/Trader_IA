@@ -54,13 +54,6 @@ const liveOrdersEnabled = String((typeof $env !== "undefined" && $env.AG1_ACTION
 const requireLiveAccountAlignment = String((typeof $env !== "undefined" && $env.AG1_ACTIONS_REQUIRE_LIVE_ACCOUNT_ALIGNMENT) || "true").toLowerCase() !== "false";
 
 async function getJson(url) {
-  if (typeof fetch === "function") {
-    const response = await fetch(url, { method: "GET", headers: { "Accept": "application/json" } });
-    const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
-    if (!response.ok) throw new Error(`HTTP ${response.status}: ${text}`);
-    return data;
-  }
   if (N8N_CONTEXT?.helpers?.httpRequest) {
     return await N8N_CONTEXT.helpers.httpRequest({
       method: "GET",
@@ -70,7 +63,7 @@ async function getJson(url) {
       timeout: 15000,
     });
   }
-  throw new Error("No HTTP client available in this n8n Code node");
+  throw new Error("No n8n HTTP helper available in this Code node");
 }
 
 if (!ibkrDryRun && liveOrdersEnabled && requireLiveAccountAlignment) {
