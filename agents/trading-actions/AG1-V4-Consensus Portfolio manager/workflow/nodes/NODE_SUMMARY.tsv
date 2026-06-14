@@ -1,5 +1,5 @@
 slug	id	name	type	disabled
-1_hourly_trigger	a392eab3-8ab6-4f1b-a6c1-f6846cf0eaa3	1 - Hourly Trigger	n8n-nodes-base.cron	0
+1_trading_day_trigger	a392eab3-8ab6-4f1b-a6c1-f6846cf0eaa3	1 - Trading Day Trigger	n8n-nodes-base.scheduleTrigger	0
 7_validate_enforce_safety	6227fed2-bce6-452f-ac55-62d14067d316	7 - Validate & Enforce Safety	n8n-nodes-base.code	0
 8_build_duckdb_bundle	5e44caa2-132c-4c2f-a987-56c0591ce018	8 - Build DuckDB Bundle	n8n-nodes-base.code	0
 4b_build_portfolio_context	bae45771-922b-41c3-989a-39eb8c6dcade	4B – Build Portfolio Context	n8n-nodes-base.code	0

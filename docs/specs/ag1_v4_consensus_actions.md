@@ -124,6 +124,18 @@ Etat verifie le 2026-06-14:
 - `AG4-V3` conserve Google Sheets uniquement pour la configuration des sources
   RSS (`Source_RSS`) tant qu'aucune table DuckDB equivalente n'est introduite.
 
+## Planification AG1 V4
+
+Etat verifie le 2026-06-14:
+
+- `AG1 V4 - Consensus Portfolio Manager` est planifie uniquement les jours
+  ouvres a 14:00 Europe/Paris (`0 0 14 * * 1-5` dans le `Schedule Trigger`
+  n8n).
+- Le noeud `2B - Init Run Context` contient aussi une garde week-end:
+  samedi/dimanche, il retourne `[]` avant le preflight IBKR et avant tout appel
+  LLM, sauf si `allow_weekend_run=true` ou `AG1_V4_ALLOW_WEEKEND_RUN=true` est
+  explicitement pose pour un test.
+
 ## Bascule Production IBKR
 
 Etat verifie le 2026-06-11:

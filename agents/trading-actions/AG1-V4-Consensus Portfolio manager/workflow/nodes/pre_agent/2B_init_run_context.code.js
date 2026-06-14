@@ -41,6 +41,20 @@ const offsetStr = `${sign}${pad2(Math.floor(abs / 60))}:${pad2(abs % 60)}`;
 const timestampParis = `${isoLocal}${offsetStr}`;
 const timestampUtc = now.toISOString();
 
+const weekday = new Intl.DateTimeFormat("en-US", {
+  timeZone: tz,
+  weekday: "short",
+}).format(now);
+const isWeekend = weekday === "Sat" || weekday === "Sun";
+const allowWeekendRun = String(
+  cfg.allow_weekend_run ??
+    ((typeof $env !== "undefined" && $env.AG1_V4_ALLOW_WEEKEND_RUN) || "false")
+).toLowerCase() === "true";
+
+if (isWeekend && !allowWeekendRun) {
+  return [];
+}
+
 const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
 const universeScope = ["EQUITY", "ETF", "CRYPTO"];
 const envDbPath = (typeof $env !== "undefined" && $env.AG1_V4_DUCKDB_PATH) ? String($env.AG1_V4_DUCKDB_PATH) : "";
