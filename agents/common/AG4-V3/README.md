@@ -2,18 +2,21 @@
 
 ## Objectif
 AG4-V3 collecte les flux RSS, dedupe les news, analyse les impacts marche/secteurs/devise pour Agent #1, et utilise DuckDB (VPS) comme source de verite.
-Google Sheets est utilise uniquement pour les entrees de configuration.
+Google Sheets est utilise uniquement pour la configuration des sources RSS.
+L'univers titres est lu depuis DuckDB (`ag2_v3.duckdb.main.universe`).
 
 ## Architecture
 1. Declenchement 4 fois par jour ouvré (`01:45`, `06:45`, `10:45`, `18:45`, Europe/Paris) pour eviter les chevauchements de runs longs et les verrous DuckDB.
 2. Chargement des sources RSS depuis `Source_RSS`.
 3. Initialisation DuckDB (`/files/duckdb/ag4_v3.duckdb`) + `run_id`.
-4. Lecture de l'index historique depuis DuckDB (pas depuis Sheets).
-5. Traitement news: normalisation, dedupe, clustering, pre-score, analyse IA si necessaire.
-6. Ecriture continue dans DuckDB:
+4. Lecture de l'univers depuis `ag2_v3.duckdb.main.universe`.
+5. Lecture de l'index historique recent depuis DuckDB (fenetre courte pour
+   eviter les timeouts n8n sur la base multi-GB).
+6. Traitement news: normalisation, dedupe, clustering, pre-score, analyse IA si necessaire.
+7. Ecriture continue dans DuckDB:
    - `news_history` pour news analysees/skipped
    - `news_errors` pour erreurs RSS
-7. Fin de run:
+8. Fin de run:
    - maj `run_log`
    - consolidation des sorties dans DuckDB
 
@@ -34,7 +37,9 @@ Google Sheet document:
 
 Onglets utilises:
 - `Source_RSS` (`gid=1628829420`)
-- `Universe` (`gid=1078848687`)
+
+L'onglet `Universe` n'est plus utilise par AG4-V3; la source de verite est
+`/files/duckdb/ag2_v3.duckdb`, table `universe`.
 
 ## Regeneration
 ```bash

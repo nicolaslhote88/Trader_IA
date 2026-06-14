@@ -107,6 +107,23 @@ systeme Forex: une ligne par fill, avec commission brute, devise, montant EUR,
 source de commission et JSON broker brut. Le dashboard Actions s'appuie sur
 cette table pour distinguer P&L realise brut, frais IBKR et P&L realise net.
 
+## Valorisation Latente et Universe DuckDB
+
+Etat verifie le 2026-06-14:
+
+- `YF-ENRICH-V1 - Daily DuckDB Refresh` alimente `yf_enrichment_v1.duckdb`
+  depuis `ag2_v3.duckdb.main.universe`; il ne met pas a jour la valeur
+  latente du portefeuille AG1 V4.
+- `AG1-PF-V1 - Portfolio MTM (DuckDB-only, AG1-V4)` est le workflow de
+  valorisation recurrente du portefeuille V4. Il lit et ecrit uniquement
+  `/files/duckdb/ag1_v4_consensus.duckdb` pour la partie AG1, et enrichit les
+  metadonnees de titres depuis `/files/duckdb/ag2_v3.duckdb`.
+- Les workflows actions `AG2-V3`, `AG3-V2`, `AG4-V3` et `AG4_Spe-V2` lisent
+  l'univers depuis `ag2_v3.duckdb.main.universe` et ne doivent plus charger
+  l'onglet Google Sheets `Universe`.
+- `AG4-V3` conserve Google Sheets uniquement pour la configuration des sources
+  RSS (`Source_RSS`) tant qu'aucune table DuckDB equivalente n'est introduite.
+
 ## Bascule Production IBKR
 
 Etat verifie le 2026-06-11:

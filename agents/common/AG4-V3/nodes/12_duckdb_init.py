@@ -174,6 +174,8 @@ with db_con() as con:
 
     try:
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_run ON news_history(run_id)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_dedupe_key ON news_history(dedupe_key)")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_news_event_key ON news_history(event_key)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_history_type ON news_history(type)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_impact_asset_class ON news_history(impact_asset_class)")
         con.execute("CREATE INDEX IF NOT EXISTS idx_news_impact_region ON news_history(impact_region)")

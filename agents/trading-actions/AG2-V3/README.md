@@ -8,7 +8,11 @@ Le workflow officiel de la partie trading actions est :
 
 ## Agent technique
 
-Le pipeline charge l'univers, recupere les donnees Yahoo Finance H1/D1, calcule les indicateurs, applique le prefiltre technique puis valide les candidats via le prompt ACTIONS/ETF.
+Le pipeline charge l'univers depuis DuckDB (`/files/duckdb/ag2_v3.duckdb`,
+table `universe`), recupere les donnees Yahoo Finance H1/D1, calcule les
+indicateurs, applique le prefiltre technique puis valide les candidats via le
+prompt ACTIONS/ETF. Il ne doit plus dependre de l'onglet Google Sheets
+`Universe`.
 
 Le schema DuckDB conserve les sorties utiles a AG1 :
 
