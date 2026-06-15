@@ -82,19 +82,13 @@ def build() -> dict:
                         {
                             "id": "pf00-07",
                             "name": "portfolio_db_path",
-                            "value": "/local-files/duckdb/ag1_v3_chatgpt52.duckdb",
+                            "value": "/local-files/duckdb/ag1_v4_consensus.duckdb",
                             "type": "string",
                         },
                         {
                             "id": "pf00-07b",
                             "name": "portfolio_db_paths_json",
-                            "value": (
-                                "["
-                                "\"/local-files/duckdb/ag1_v3_chatgpt52.duckdb\","
-                                "\"/local-files/duckdb/ag1_v3_grok41_reasoning.duckdb\","
-                                "\"/local-files/duckdb/ag1_v3_gemini30_pro.duckdb\""
-                                "]"
-                            ),
+                            "value": "[\"/local-files/duckdb/ag1_v4_consensus.duckdb\"]",
                             "type": "string",
                         },
                         {
@@ -106,14 +100,38 @@ def build() -> dict:
                         {
                             "id": "pf00-08",
                             "name": "workflow_name",
-                            "value": "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
+                            "value": "PF Portfolio MTM Updater (DuckDB-only, AG1-V4)",
+                            "type": "string",
+                        },
+                        {
+                            "id": "pf00-13",
+                            "name": "run_id",
+                            "value": "={{ 'PFMTM_' + $now.toFormat('yyyyLLddHHmmss') }}",
                             "type": "string",
                         },
                         {
                             "id": "pf00-09",
-                            "name": "run_id",
+                            "name": "workflow_run_id",
                             "value": "={{ 'PFMTM_' + $now.toFormat('yyyyLLddHHmmss') }}",
                             "type": "string",
+                        },
+                        {
+                            "id": "pf00-10",
+                            "name": "strict_db_routing",
+                            "value": True,
+                            "type": "boolean",
+                        },
+                        {
+                            "id": "pf00-11",
+                            "name": "purge_latest_before_write",
+                            "value": True,
+                            "type": "boolean",
+                        },
+                        {
+                            "id": "pf00-12",
+                            "name": "write_only_if_any_price_found",
+                            "value": False,
+                            "type": "boolean",
                         },
                     ]
                 },
@@ -272,11 +290,10 @@ def build() -> dict:
             "position": [1840, -160],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f118",
             "name": "PF.08B - Write Positions MTM DuckDB",
-            "onError": "continueRegularOutput",
         },
         {
             "parameters": {
-                "content": "PF workflow (refactored): read each AG1 portfolio from its dedicated DuckDB, compute MTM per position, then write MTM back to the same DuckDB (3 portfolios in one run).",
+                "content": "AG1 V4 Portfolio MTM: updates latent valuation in /files/duckdb/ag1_v4_consensus.duckdb. No order execution.",
                 "height": 220,
                 "width": 900,
                 "color": 5,
@@ -316,7 +333,8 @@ def build() -> dict:
     }
 
     return {
-        "name": "AG1-PF-V1 - Portfolio MTM (DuckDB-only, Multi AG1-V3)",
+        "id": "iKnGA9gCMUFZfKYCCsWVF",
+        "name": "AG1-PF-V1 - Portfolio MTM (DuckDB-only, AG1-V4)",
         "nodes": nodes,
         "connections": connections,
         "pinData": {},

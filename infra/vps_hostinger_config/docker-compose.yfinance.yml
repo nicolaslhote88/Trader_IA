@@ -44,7 +44,8 @@ services:
   ibkr-gateway:
     image: voyz/ibeam:latest
     container_name: ibkr-gateway
-    restart: "no"
+    restart: unless-stopped
+    command: ["sh", "-lc", "cd /srv/clientportal.gw && bash bin/run.sh root/conf.yaml"]
     ports:
       - "127.0.0.1:5000:5000"
       - "127.0.0.1:5001:5001"
@@ -60,13 +61,20 @@ services:
       - IBEAM_RESTART_FAILED_SESSIONS=${IBEAM_RESTART_FAILED_SESSIONS:-True}
     volumes:
       - /opt/trader-ia/services/ibkr-gateway/conf.yaml:/srv/inputs/conf.yaml:ro
+      - /opt/trader-ia/services/ibkr-gateway/conf.yaml:/srv/clientportal.gw/root/conf.yaml:ro
       - ibeam_outputs:/srv/outputs
     networks:
       web:
         aliases:
           - ibkr-gateway
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -kfsS https://localhost:5000/v1/api/iserver/auth/status >/dev/null || exit 1"]
+      test:
+        [
+          "CMD",
+          "sh",
+          "-c",
+          "python -c 'import ssl, urllib.request; ctx=ssl._create_unverified_context(); urllib.request.urlopen(\"https://localhost:5000\", context=ctx, timeout=5).read()'",
+        ]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -85,11 +93,17 @@ services:
     environment:
       - IBKR_GATEWAY_URL=https://ibkr-gateway:5000
       - IBKR_DRY_RUN=${IBKR_DRY_RUN:-true}
+      - IBKR_FX_ORDERS_ENABLED=${IBKR_FX_ORDERS_ENABLED:-false}
       - IBKR_SSL_VERIFY=false
       - IBKR_ACCOUNT_ID=${IBKR_ACCOUNT_ID:-}
       - IBKR_KEEPALIVE_INTERVAL_SECONDS=${IBKR_KEEPALIVE_INTERVAL_SECONDS:-55}
       - IBKR_AUTO_REAUTH_ENABLED=${IBKR_AUTO_REAUTH_ENABLED:-true}
       - IBKR_AUTO_REAUTH_COMPETE=${IBKR_AUTO_REAUTH_COMPETE:-false}
+      - IBKR_AUTO_CONFIRM_PRICE_WARNINGS=${IBKR_AUTO_CONFIRM_PRICE_WARNINGS:-false}
+      - IBKR_PRICE_GUARD_URL=${IBKR_PRICE_GUARD_URL:-http://yfinance-api:8080/quote}
+      - IBKR_PRICE_GUARD_MAX_DEVIATION_PCT=${IBKR_PRICE_GUARD_MAX_DEVIATION_PCT:-3.0}
+      - IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS=${IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS:-28800}
+      - IBKR_AUTO_CONFIRM_MAX_STEPS=${IBKR_AUTO_CONFIRM_MAX_STEPS:-4}
       - IBKR_ALERT_WEBHOOK_URL=${IBKR_ALERT_WEBHOOK_URL:-}
       - IBKR_ALERT_COOLDOWN_SECONDS=${IBKR_ALERT_COOLDOWN_SECONDS:-900}
       - IBKR_LOGIN_URL=${IBKR_LOGIN_URL:-https://localhost:5000}

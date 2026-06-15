@@ -47,6 +47,11 @@ Les nodes n8n ne contactent pas le broker quand `IBKR_DRY_RUN=true`, sauf si
 | `IBKR_KEEPALIVE_INTERVAL_SECONDS` | `55` | Frequence du superviseur de session |
 | `IBKR_AUTO_REAUTH_ENABLED` | `true` | Tente `/iserver/auth/ssodh/init` si la session brokerage n'est plus authentifiee mais reste connectee |
 | `IBKR_AUTO_REAUTH_COMPETE` | `false` | Si `true`, peut deconnecter une session IBKR concurrente du meme username |
+| `IBKR_AUTO_CONFIRM_PRICE_WARNINGS` | `false` | Autorise le broker a confirmer uniquement les prompts IBKR de contrainte prix, apres garde-fou |
+| `IBKR_PRICE_GUARD_URL` | `http://yfinance-api:8080/quote` | Endpoint quote independant utilise avant confirmation |
+| `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` | `3.0` | Ecart maximum entre limite et prix de reference pour confirmer |
+| `IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS` | `28800` | Age maximum du prix de reference accepte |
+| `IBKR_AUTO_CONFIRM_MAX_STEPS` | `4` | Nombre maximum de prompts prix confirmes en chaine pour un meme ordre |
 | `IBKR_ALERT_WEBHOOK_URL` | *(vide)* | Webhook optionnel appele quand `manual_login_required=true` |
 | `IBKR_ALERT_COOLDOWN_SECONDS` | `900` | Cooldown minimal entre deux alertes relogin |
 | `IBKR_LOGIN_URL` | `https://localhost:5000` | URL affichee dans l'action operateur |
@@ -101,12 +106,23 @@ curl http://localhost:8080/health
 # → { "dry_run": true, "authenticated": true, ... }
 ```
 
+En mode réel, vérifier aussi `account_alignment` :
+
+- `configured_account_id` doit être le compte réel attendu (`U...`).
+- `gateway_accounts` doit contenir ce compte.
+- `aligned` doit être `true`.
+
+Si le gateway remonte seulement un compte `DU...`, la session est paper et les
+ordres live doivent rester bloqués.
+
 ### 4. Passer en mode live
 
 Dans `.env` sur le VPS :
 ```bash
 IBKR_DRY_RUN=false
 IBKR_ACCOUNT_ID=UxxxXXXXX
+IBKR_AUTO_CONFIRM_PRICE_WARNINGS=true
+IBKR_PRICE_GUARD_MAX_DEVIATION_PCT=3.0
 ```
 
 Puis :
@@ -143,8 +159,20 @@ IBKR si les credentials ou le 2FA echouent.
 
 Le broker envoie les ordres au format Web API actuel : `POST
 /v1/api/iserver/account/{accountId}/orders` avec un objet `{ "orders": [...] }`.
-Les confirmations IBKR renvoyant un `id` sont confirmees via
-`/v1/api/iserver/reply/{id}`.
+Par defaut, les confirmations IBKR renvoyant un `id` ne sont pas confirmees.
+Si `IBKR_AUTO_CONFIRM_PRICE_WARNINGS=true`, le broker confirme seulement les
+prompts prix de type "price exceeds the Percentage constraint" ou "Mandatory
+Cap Price", et seulement si le prix limite reste dans
+`IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` du prix de reference lu via
+`IBKR_PRICE_GUARD_URL`. Les confirmations peuvent etre enchainees jusqu'a
+`IBKR_AUTO_CONFIRM_MAX_STEPS`; les autres prompts restent rejetes et remontent
+dans le workflow.
+
+Pour tester la resolution des contrats sans envoyer d'ordre :
+
+```bash
+curl "http://localhost:8080/contracts/equity/resolve?symbols=THEP.PA,ELEC.PA,FGR.PA"
+```
 
 Reference : https://www.interactivebrokers.com/campus/ibkr-api-page/webapi-doc/
 

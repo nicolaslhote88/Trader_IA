@@ -1,0 +1,13 @@
+{
+  "parameters": {
+    "jsCode": "function isObj(x) { return x && typeof x === \"object\" && !Array.isArray(x); }\n\nfunction stripCodeFence(raw) {\n  let s = String(raw ?? \"\").trim();\n  const fenced = s.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);\n  if (fenced) return fenced[1].trim();\n  if (s.includes(\"```\")) {\n    const parts = s.split(\"```\");\n    if (parts.length >= 3) {\n      s = parts[1].trim();\n      if (s.toLowerCase().startsWith(\"json\")) s = s.slice(4).trim();\n    }\n  }\n  return s.trim();\n}\n\nfunction safeParseJson(text) {\n  try { return JSON.parse(text); } catch { return null; }\n}\n\nfunction parseAgentOutput(value) {\n  if (Array.isArray(value)) return { output: value, status: \"OK_ARRAY\" };\n  if (isObj(value)) return { output: value, status: \"OK_OBJECT\" };\n\n  const raw = String(value ?? \"\").trim();\n  const cleaned = stripCodeFence(raw);\n  let parsed = safeParseJson(cleaned);\n  if (parsed !== null) return { output: parsed, status: \"OK_JSON\" };\n\n  const firstArray = cleaned.indexOf(\"[\");\n  const lastArray = cleaned.lastIndexOf(\"]\");\n  if (firstArray !== -1 && lastArray > firstArray) {\n    parsed = safeParseJson(cleaned.slice(firstArray, lastArray + 1));\n    if (parsed !== null) return { output: parsed, status: \"OK_EXTRACTED_ARRAY\" };\n  }\n\n  const firstObj = cleaned.indexOf(\"{\");\n  const lastObj = cleaned.lastIndexOf(\"}\");\n  if (firstObj !== -1 && lastObj > firstObj) {\n    parsed = safeParseJson(cleaned.slice(firstObj, lastObj + 1));\n    if (parsed !== null) return { output: parsed, status: \"OK_EXTRACTED_OBJECT\" };\n  }\n\n  return { output: raw, status: \"UNPARSED_TEXT\" };\n}\n\nconst input = $json ?? {};\nconst parsed = parseAgentOutput(input.output ?? input.text ?? input);\nreturn [{\n  json: {\n    ...input,\n    output: parsed.output,\n    extractorStatus: parsed.status,\n  },\n}];\n"
+  },
+  "type": "n8n-nodes-base.code",
+  "typeVersion": 2,
+  "position": [
+    3744,
+    12304
+  ],
+  "id": "dfa82252-3956-413a-ba26-55a1f6b97c90",
+  "name": "Information Extractor"
+}

@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_run_log (
     rows_error      INTEGER DEFAULT 0,
     error_detail    VARCHAR,
     source          VARCHAR DEFAULT 'PF_MTM',
-    workflow_name   VARCHAR
+    workflow_name   VARCHAR,
+    source_run_ids  VARCHAR
 );
 
 CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_latest (
@@ -33,6 +34,12 @@ CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_latest (
     updated_at          TIMESTAMP,
     source_updated_at   VARCHAR,
     run_id              VARCHAR,
+    ag1_source_run_id       VARCHAR,
+    ag1_source_snapshot_ts  VARCHAR,
+    mtm_status              VARCHAR,
+    mtm_reason              VARCHAR,
+    mtm_price_source        VARCHAR,
+    mtm_price_stale         BOOLEAN,
     ingested_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -54,6 +61,12 @@ CREATE TABLE IF NOT EXISTS portfolio_positions_mtm_history (
     unrealized_pnl      DOUBLE,
     updated_at          TIMESTAMP,
     source_updated_at   VARCHAR,
+    ag1_source_run_id       VARCHAR,
+    ag1_source_snapshot_ts  VARCHAR,
+    mtm_status              VARCHAR,
+    mtm_reason              VARCHAR,
+    mtm_price_source        VARCHAR,
+    mtm_price_stale         BOOLEAN,
     ingested_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 

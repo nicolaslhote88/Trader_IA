@@ -144,6 +144,10 @@ with db_con() as con:
     con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS suggested_signal VARCHAR")
     con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS key_drivers VARCHAR")
     con.execute("ALTER TABLE news_history ADD COLUMN IF NOT EXISTS needs_follow_up BOOLEAN")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_spe_news_id ON news_history(news_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_spe_news_run ON news_history(run_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_spe_news_symbol ON news_history(symbol)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_spe_errors_run ON news_errors(run_id)")
 
 out = []
 for it in (_items or []):

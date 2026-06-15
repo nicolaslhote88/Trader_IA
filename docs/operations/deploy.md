@@ -54,6 +54,9 @@ docker volume create runner_pydeps
     └── AG1-V3-EXPORT/                  # pack DuckDB writer + schema
         ├── nodes/post_agent/duckdb_writer.py
         └── sql/portfolio_ledger_schema_v2.sql
+    └── AG1-V4-EXPORT/                  # pack consensus actions V4
+        ├── nodes/post_agent/duckdb_writer.py
+        └── sql/portfolio_ledger_schema_v4.sql
 ```
 
 ## 3. Première installation
@@ -141,6 +144,55 @@ Les ordres AG1 actions ont un verrou separe:
 si `IBKR_DRY_RUN=false` est active pour le Forex paper. L'activer seulement
 apres une validation explicite des runs actions et du ledger.
 
+### 3.e Deploiement AG1 V4 consensus actions
+
+AG1 V4 s'installe a cote de V3 et ne reprend aucun historique. Le workflow n8n
+importable est:
+
+```text
+agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json
+```
+
+Pack a copier sur le VPS:
+
+```bash
+rsync -av \
+  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/" \
+  root@<vps>:/local-files/AG1-V4-EXPORT/nodes/
+rsync -av \
+  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/sql/" \
+  root@<vps>:/local-files/AG1-V4-EXPORT/sql/
+scp \
+  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json" \
+  root@<vps>:/local-files/AG1-V4-EXPORT/AG1_workflow_v4_consensus.json
+```
+
+Variables compose requises cote `n8n` et `task-runners`:
+
+```text
+AG1_V4_DUCKDB_PATH=/files/duckdb/ag1_v4_consensus.duckdb
+AG1_V4_DUCKDB_WRITER_PATH=/files/AG1-V4-EXPORT/nodes/post_agent/duckdb_writer.py
+AG1_V4_LEDGER_SCHEMA_PATH=/files/AG1-V4-EXPORT/sql/portfolio_ledger_schema_v4.sql
+AG1_V4_ACTIONS_IBKR_ENABLED_MODELS=ag1_v4_consensus
+```
+
+Validation attendue avant activation cron:
+
+```bash
+docker compose restart n8n task-runners trading-dashboard
+docker compose exec task-runners python - <<'PY'
+import importlib.util, os
+p='/files/AG1-V4-EXPORT/nodes/post_agent/duckdb_writer.py'
+spec=importlib.util.spec_from_file_location('w', p)
+m=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+print(m.init_schema('/files/duckdb/ag1_v4_consensus.duckdb'))
+PY
+```
+
+La base doit contenir 10 000 EUR dans `cfg.portfolio_config` et
+`core.cash_ledger`, sans lignes de runs/fills historiques.
+
 ## 4. Mises à jour
 
 ```bash
@@ -159,6 +211,9 @@ Sur n8n 2.x, un workflow actif execute la version publiee
 (`workflow_entity.activeVersionId`), pas seulement le contenu courant de
 `workflow_entity.nodes`. Apres une mise a jour de workflow par import/injection
 DB, verifier que la version publiee pointe sur le nouveau `versionId`.
+Pour desactiver par maintenance SQL, `active=0` ne suffit pas: il faut aussi
+poser `activeVersionId=NULL` et redemarrer `n8n`/`task-runners`, sinon l'UI peut
+encore afficher le workflow publie et n8n peut conserver ses triggers.
 
 ```bash
 docker exec root-n8n-1 n8n publish:workflow --id=<workflow_id>

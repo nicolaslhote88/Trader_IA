@@ -13,7 +13,7 @@ The previous Boursorama HTML parsing approach is fragile (layout changes, anti-b
 V2 is API-first (yfinance) and DuckDB-first for reliability, traceability, and query performance.
 
 ## Flow
-1. Load `Universe` from Google Sheets.
+1. Load `Universe` from DuckDB (`/files/duckdb/ag2_v3.duckdb`, table `universe`).
 2. Build symbol queue (`Symbol`, optional `BoursoramaRef`).
 3. Fetch `/fundamentals?symbol=...` from `yfinance-api`.
 4. Compute:
@@ -28,6 +28,12 @@ V2 is API-first (yfinance) and DuckDB-first for reliability, traceability, and q
 ## Files
 - `AG3-V2/build_workflow.py`: workflow generator.
 - `AG3-V2/nodes/`: JS logic for context, queue, scoring and row preparation.
+
+## Universe Runtime Source
+
+Since 2026-06-14, the active n8n workflow no longer reads the Google Sheets
+`Universe` tab. The runtime source of truth is `ag2_v3.duckdb.main.universe`,
+shared with AG2 and AG4_Spe.
 - `AG3-V2/AG3-V2-workflow.json`: generated n8n workflow to import.
 
 ## Generate workflow JSON

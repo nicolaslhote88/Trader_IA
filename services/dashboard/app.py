@@ -99,6 +99,7 @@ DUCKDB_PATH = AG2_DUCKDB_PATH  # Backward compatibility across existing code pat
 AG1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_CHATGPT52_DUCKDB_PATH", "ag1_v3_chatgpt52.duckdb")
 AG1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GROK41_REASONING_DUCKDB_PATH", "ag1_v3_grok41_reasoning.duckdb")
 AG1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_GEMINI30_PRO_DUCKDB_PATH", "ag1_v3_gemini30_pro.duckdb")
+AG1_V4_CONSENSUS_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_V4_DUCKDB_PATH", "ag1_v4_consensus.duckdb")
 
 
 def _resolve_ag1_legacy_duckdb_path() -> str:
@@ -159,11 +160,20 @@ AG1_MULTI_PORTFOLIO_CONFIG = {
         "accent": "#f59e0b",
     },
     "gemini30_pro": {
-        "label": "Gemini 3.0 Pro",
+        "label": "Gemini 3.5 Flash",
         "short_label": "Gemini",
         "db_path": AG1_GEMINI30_PRO_DUCKDB_PATH,
         "accent": "#60a5fa",
     },
+}
+
+AG1_V4_CONSENSUS_PORTFOLIO_CONFIG = {
+    "ag1_v4_consensus": {
+        "label": "AG1 V4 Consensus",
+        "short_label": "V4",
+        "db_path": AG1_V4_CONSENSUS_DUCKDB_PATH,
+        "accent": "#14b8a6",
+    }
 }
 
 AG1_FX_MULTI_PORTFOLIO_CONFIG = {
@@ -7914,6 +7924,7 @@ def _ag1_expected_model_tokens(key: str, cfg: dict[str, str]) -> list[str]:
         "chatgpt52": ["chatgpt", "gpt", "openai", "o3", "o4"],
         "grok41_reasoning": ["grok", "xai"],
         "gemini30_pro": ["gemini", "google"],
+        "ag1_v4_consensus": ["ag1_v4_consensus", "consensus", "v4"],
     }
     tokens = list(token_map.get(str(key), []))
     label_blob = f"{cfg.get('label', '')} {cfg.get('short_label', '')}".lower()
@@ -8015,7 +8026,9 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
         },
         "df_portfolio": pd.DataFrame(),
         "df_performance": pd.DataFrame(),
+        "df_orders": pd.DataFrame(),
         "df_transactions": pd.DataFrame(),
+        "df_fill_costs": pd.DataFrame(),
         "df_realized_open_lots": pd.DataFrame(),
         "df_ai_signals": pd.DataFrame(),
         "df_alerts": pd.DataFrame(),
@@ -8066,7 +8079,7 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         if not has_ledger:
             payload["status"] = "error"
-            payload["error"] = "Schema AG1-V3 ledger non detecte (core.portfolio_snapshot absent)."
+            payload["error"] = "Schema AG1 ledger non detecte (core.portfolio_snapshot absent)."
             return payload
 
         df_runs = _ag1_fetchdf(
@@ -8257,6 +8270,62 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             LEFT JOIN lot_realized lr ON lr.fill_id = f.fill_id
             LEFT JOIN core.runs r ON r.run_id = f.run_id
             ORDER BY f.ts_fill
+            """,
+        )
+
+        df_orders = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              o.ts_created AS timestamp,
+              o.run_id AS run_id,
+              r.model AS agent,
+              o.order_id AS order_id,
+              o.symbol AS symbol,
+              o.side AS side,
+              o.intent AS intent,
+              o.order_type AS order_type,
+              CAST(o.qty AS DOUBLE) AS quantity,
+              CAST(o.limit_price AS DOUBLE) AS limit_price,
+              o.time_in_force AS time_in_force,
+              o.status AS status,
+              o.broker AS broker,
+              o.broker_order_id AS broker_order_id,
+              o.reason AS reason
+            FROM core.orders o
+            LEFT JOIN core.runs r ON r.run_id = o.run_id
+            ORDER BY o.ts_created DESC
+            LIMIT 1000
+            """,
+        )
+
+        df_fill_costs = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              c.fill_id AS fill_id,
+              c.order_id AS order_id,
+              COALESCE(c.symbol, c.pair, o.symbol) AS symbol,
+              c.pair AS pair,
+              c.broker AS broker,
+              c.broker_execution_id AS broker_execution_id,
+              CAST(c.commission_amount AS DOUBLE) AS commission_amount,
+              c.commission_ccy AS commission_ccy,
+              CAST(c.commission_eur AS DOUBLE) AS commission_eur,
+              c.commission_source AS commission_source,
+              c.raw_json AS raw_json,
+              c.recorded_at AS recorded_at,
+              f.ts_fill AS filled_at,
+              CAST(f.qty AS DOUBLE) AS fill_qty,
+              CAST(f.price AS DOUBLE) AS fill_price,
+              CAST(f.fees_eur AS DOUBLE) AS fill_fees_eur,
+              o.side AS fill_side,
+              o.status AS order_status
+            FROM core.fill_costs c
+            LEFT JOIN core.fills f ON f.fill_id = c.fill_id
+            LEFT JOIN core.orders o ON o.order_id = c.order_id
+            ORDER BY COALESCE(f.ts_fill, c.recorded_at) DESC
+            LIMIT 1000
             """,
         )
 
@@ -8636,11 +8705,16 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
         cash = safe_float(latest.get("cash_eur"))
         invest = safe_float(latest.get("equity_eur"))
         total_val = safe_float(latest.get("total_value_eur"))
+        has_position_rows = df_pos is not None and not df_pos.empty
+        if init_cap > 0 and total_val <= 0 and cash <= 0 and invest <= 0 and not has_position_rows:
+            cash = init_cap
+            invest = 0.0
+            total_val = init_cap
         if total_val <= 0 and (cash > 0 or invest > 0):
             total_val = cash + invest
         roi = float(latest.get("roi")) if pd.notna(latest.get("roi")) else ((total_val - init_cap) / init_cap if init_cap else 0.0)
         cash_pct = (cash / total_val * 100.0) if total_val > 0 else 0.0
-        positions_count = int(len(df_pos)) if df_pos is not None and not df_pos.empty else 0
+        positions_count = int(len(df_pos)) if has_position_rows else 0
 
         # Synthetise CASH_EUR / __META__ rows for compatibility with existing dashboard widgets.
         if df_pos is None or df_pos.empty:
@@ -8930,7 +9004,9 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 "summary": summary,
                 "df_portfolio": normalize_cols(df_portfolio),
                 "df_performance": normalize_cols(df_perf) if df_perf is not None else pd.DataFrame(),
+                "df_orders": normalize_cols(df_orders) if df_orders is not None else pd.DataFrame(),
                 "df_transactions": normalize_cols(df_transactions) if df_transactions is not None else pd.DataFrame(),
+                "df_fill_costs": normalize_cols(df_fill_costs) if df_fill_costs is not None else pd.DataFrame(),
                 "df_realized_open_lots": normalize_cols(df_realized_open_lots) if df_realized_open_lots is not None else pd.DataFrame(),
                 "df_ai_signals": normalize_cols(df_ai_signals) if df_ai_signals is not None else pd.DataFrame(),
                 "df_alerts": normalize_cols(df_alerts) if df_alerts is not None else pd.DataFrame(),
@@ -8956,6 +9032,97 @@ def load_ag1_multi_portfolios() -> dict[str, dict[str, object]]:
     out: dict[str, dict[str, object]] = {}
     for key, cfg in AG1_MULTI_PORTFOLIO_CONFIG.items():
         out[key] = _ag1_load_single_portfolio_ledger(key, cfg)
+    return out
+
+
+@st.cache_data(ttl=30)
+def load_ag1_v4_consensus_portfolio() -> dict[str, object]:
+    cfg = AG1_V4_CONSENSUS_PORTFOLIO_CONFIG["ag1_v4_consensus"]
+    return _ag1_load_single_portfolio_ledger("ag1_v4_consensus", cfg)
+
+
+@st.cache_data(ttl=30)
+def load_ag1_v4_consensus_trace(db_path: str, db_sig: tuple[str, float, int]) -> dict[str, pd.DataFrame]:
+    _ = db_sig
+    out = {
+        "decisions": pd.DataFrame(),
+        "votes": pd.DataFrame(),
+        "proposals": pd.DataFrame(),
+    }
+    if not db_path or not os.path.exists(db_path):
+        return out
+    conn = _duckdb_connect_readonly_retry(db_path)
+    if conn is None:
+        return out
+    try:
+        out["decisions"] = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ts,
+              run_id,
+              symbol,
+              intent,
+              action,
+              side,
+              vote_count,
+              valid_model_count,
+              model_keys,
+              status,
+              reason,
+              selected_qty,
+              selected_weight_pct,
+              selected_limit_price,
+              confidence
+            FROM core.consensus_decisions
+            ORDER BY ts DESC
+            LIMIT 100
+            """,
+        )
+        out["votes"] = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ts,
+              run_id,
+              model_key,
+              symbol,
+              intent,
+              action,
+              side,
+              executable,
+              confidence,
+              target_qty,
+              target_weight_pct,
+              limit_price
+            FROM core.consensus_votes
+            ORDER BY ts DESC
+            LIMIT 300
+            """,
+        )
+        out["proposals"] = _ag1_fetchdf(
+            conn,
+            """
+            SELECT
+              ts,
+              run_id,
+              model_key,
+              model_name,
+              extractor_status,
+              parse_ok,
+              error
+            FROM core.model_proposals
+            ORDER BY ts DESC
+            LIMIT 100
+            """,
+        )
+    except Exception:
+        return out
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
     return out
 
 
@@ -8985,6 +9152,7 @@ page = st.sidebar.radio("Page", NAV_GROUPS[nav_group])
 
 # Signatures fichiers DuckDB (invalidation cache basee sur mtime/size)
 ag1_db_sig = duckdb_file_signature(AG1_DUCKDB_PATH)
+ag1_v4_db_sig = duckdb_file_signature(AG1_V4_CONSENSUS_DUCKDB_PATH)
 ag2_db_sig = duckdb_file_signature(DUCKDB_PATH)
 ag3_db_sig = duckdb_file_signature(AG3_DUCKDB_PATH)
 ag4_db_sig = duckdb_file_signature(AG4_DUCKDB_PATH)
@@ -11525,21 +11693,19 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 if page == "Dashboard Trading":
     st.title("AI Trading Executor Dashboard")
 
-    ag1_multi = load_ag1_multi_portfolios()
-    for _payload in ag1_multi.values():
-        if isinstance(_payload, dict):
-            _payload["df_portfolio"] = sanitize_allocation_metadata_labels(
-                enrich_portfolio_metadata(
-                    _payload.get("df_portfolio", pd.DataFrame()),
-                    df_univ,
-                    df_yf_enrichment_latest,
-                )
+    ag1_multi: dict[str, dict[str, object]] = {}
+    ag1_v4_consensus = load_ag1_v4_consensus_portfolio()
+    if isinstance(ag1_v4_consensus, dict):
+        ag1_v4_consensus["df_portfolio"] = sanitize_allocation_metadata_labels(
+            enrich_portfolio_metadata(
+                ag1_v4_consensus.get("df_portfolio", pd.DataFrame()),
+                df_univ,
+                df_yf_enrichment_latest,
             )
-    compare_keys = [k for k in AG1_MULTI_PORTFOLIO_CONFIG.keys() if k in ag1_multi]
-    available_keys = [
-        k for k, p in ag1_multi.items()
-        if isinstance(p, dict) and str(p.get("status", "")).lower() == "ok"
-    ]
+        )
+    ag1_v4_trace = load_ag1_v4_consensus_trace(AG1_V4_CONSENSUS_DUCKDB_PATH, ag1_v4_db_sig)
+    compare_keys: list[str] = []
+    available_keys: list[str] = []
     compare_cards: list[dict[str, object]] = []
 
     ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
@@ -11563,7 +11729,7 @@ if page == "Dashboard Trading":
         )
     with ctrl_kpi:
         compare_winner_kpi = st.selectbox(
-            "KPI winner / tri",
+            "KPI analyse",
             options=["ROI", "TotalValue", "MaxDD", "Sharpe"],
             index=["ROI", "TotalValue", "MaxDD", "Sharpe"].index(st.session_state.get("dashboard_compare_winner_kpi", "ROI"))
             if st.session_state.get("dashboard_compare_winner_kpi", "ROI") in ["ROI", "TotalValue", "MaxDD", "Sharpe"] else 0,
@@ -11571,10 +11737,10 @@ if page == "Dashboard Trading":
         )
     with ctrl_bonus:
         compare_show_dd = st.checkbox(
-            "Drawdown compare",
+            "Drawdown",
             value=bool(st.session_state.get("dashboard_compare_show_dd", False)),
             key="dashboard_compare_show_dd",
-            help="Affiche la courbe de drawdown comparee sous les 3 colonnes (bonus).",
+            help="Affiche la courbe de drawdown sur les vues de performance.",
         )
     with ctrl_refresh:
         st.write("")
@@ -11582,22 +11748,192 @@ if page == "Dashboard Trading":
         if st.button("Rafraichir", use_container_width=True):
             load_data.clear()
             load_dashboard_market_data.clear()
-            load_ag1_multi_portfolios.clear()
+            load_ag1_v4_consensus_portfolio.clear()
+            load_ag1_v4_consensus_trace.clear()
             fetch_benchmarks_history.clear()
             st.rerun()
 
-    # Comparative scoreboard (3 AG1 variants) + Focus on one portfolio for detailed tabs below.
+    st.subheader("AG1 V4 Consensus")
+    v4_status = str((ag1_v4_consensus or {}).get("status", "")).lower()
+    if v4_status == "ok":
+        v4_summary = ag1_v4_consensus.get("summary", {}) if isinstance(ag1_v4_consensus, dict) else {}
+        v4_transactions = ag1_v4_consensus.get("df_transactions", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_costs = ag1_v4_consensus.get("df_fill_costs", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_orders = ag1_v4_consensus.get("df_orders", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_portfolio = ag1_v4_consensus.get("df_portfolio", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+
+        gross_realized_v4 = 0.0
+        fees_v4 = 0.0
+        fills_count_v4 = 0
+        if isinstance(v4_transactions, pd.DataFrame) and not v4_transactions.empty:
+            fills_count_v4 = int(len(v4_transactions))
+            gross_realized_v4 = float(pd.to_numeric(v4_transactions.get("realizedpnl"), errors="coerce").fillna(0.0).sum())
+            fees_v4 = float(pd.to_numeric(v4_transactions.get("fees_eur"), errors="coerce").fillna(0.0).sum())
+
+        cost_rows_v4 = 0
+        missing_costs_v4 = 0
+        assumed_costs_v4 = 0
+        if isinstance(v4_costs, pd.DataFrame) and not v4_costs.empty:
+            v4_costs = v4_costs.copy()
+            v4_costs["_commission_eur"] = pd.to_numeric(v4_costs.get("commission_eur"), errors="coerce").fillna(0.0)
+            v4_costs["_commission_source"] = v4_costs.get("commission_source", pd.Series("", index=v4_costs.index)).fillna("").astype(str)
+            fees_v4 = float(v4_costs["_commission_eur"].sum())
+            cost_rows_v4 = int(len(v4_costs))
+            source_series_v4 = v4_costs["_commission_source"].str.lower()
+            missing_costs_v4 = int((source_series_v4.eq("") | source_series_v4.str.contains("missing", regex=False)).sum())
+            assumed_costs_v4 = int(source_series_v4.str.contains("assumed_eur", regex=False).sum())
+
+        net_realized_v4 = gross_realized_v4 - fees_v4
+        cost_coverage_v4 = (cost_rows_v4 / fills_count_v4 * 100.0) if fills_count_v4 > 0 else None
+        latent_pnl_v4 = 0.0
+        if isinstance(v4_portfolio, pd.DataFrame) and not v4_portfolio.empty and "symbol" in v4_portfolio.columns:
+            visible_positions = v4_portfolio[
+                ~v4_portfolio["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
+            ]
+            latent_pnl_v4 = float(pd.to_numeric(visible_positions.get("unrealizedpnl"), errors="coerce").fillna(0.0).sum())
+        total_net_pnl_v4 = safe_float(v4_summary.get("total_val")) - safe_float(v4_summary.get("init_cap"))
+
+        v4_cols = st.columns(5)
+        v4_cols[0].metric("Valeur", f"{safe_float(v4_summary.get('total_val')):,.2f} EUR")
+        v4_cols[1].metric("Cash", f"{safe_float(v4_summary.get('cash')):,.2f} EUR")
+        v4_cols[2].metric("P&L total net", _fmt_currency(total_net_pnl_v4, 2), f"{safe_float(v4_summary.get('roi')) * 100:,.2f}%")
+        v4_cols[3].metric("Positions", int(safe_float(v4_summary.get("positions_count"))))
+        v4_cols[4].metric("Runs", int(safe_float(v4_summary.get("runs_count"))))
+
+        v4_cost_cols = st.columns(5)
+        v4_cost_cols[0].metric("P&L realise brut", _fmt_currency(gross_realized_v4, 2))
+        v4_cost_cols[1].metric("Fees IBKR", _fmt_currency(fees_v4, 2))
+        v4_cost_cols[2].metric("P&L realise net", _fmt_currency(net_realized_v4, 2), _fmt_delta_eur(net_realized_v4 - gross_realized_v4))
+        v4_cost_cols[3].metric("P&L latent", _fmt_currency(latent_pnl_v4, 2))
+        v4_cost_cols[4].metric(
+            "Couverture fees",
+            f"{cost_coverage_v4:.0f}%" if cost_coverage_v4 is not None else "-",
+            f"{cost_rows_v4}/{fills_count_v4} fills",
+        )
+        st.caption(
+            "Source AG1 V4: "
+            f"{AG1_V4_CONSENSUS_DUCKDB_PATH} | "
+            f"last_run={v4_summary.get('last_run_id') or 'n/a'} | "
+            f"decision={v4_summary.get('last_decision_summary') or 'n/a'}"
+        )
+        if fills_count_v4 > 0 and cost_rows_v4 < fills_count_v4:
+            st.warning(f"{fills_count_v4 - cost_rows_v4} fill(s) V4 n'ont pas encore de ligne `core.fill_costs` associee.")
+        if missing_costs_v4 > 0:
+            st.warning(f"{missing_costs_v4} cout(s) V4 ont une commission IBKR manquante ou une source vide.")
+        if assumed_costs_v4 > 0:
+            st.info(f"{assumed_costs_v4} commission(s) V4 sont affichees en EUR par fallback, faute de devise exploitable.")
+
+        with st.expander("AG1 V4 executions & couts IBKR", expanded=False):
+            tab_exec, tab_costs, tab_orders = st.tabs(["Fills", "Couts IBKR", "Ordres"])
+            with tab_exec:
+                if isinstance(v4_transactions, pd.DataFrame) and not v4_transactions.empty:
+                    show_cols = [
+                        c for c in [
+                            "timestamp",
+                            "run_id",
+                            "symbol",
+                            "side",
+                            "quantity",
+                            "price",
+                            "notional",
+                            "realizedpnl",
+                            "fees_eur",
+                            "status",
+                        ] if c in v4_transactions.columns
+                    ]
+                    render_interactive_table(
+                        v4_transactions.sort_values("timestamp", ascending=False, na_position="last")[show_cols],
+                        key_suffix="ag1_v4_fills",
+                        height=320,
+                    )
+                else:
+                    st.caption("Aucun fill V4 en base pour le moment.")
+            with tab_costs:
+                if isinstance(v4_costs, pd.DataFrame) and not v4_costs.empty:
+                    show_cols = [
+                        c for c in [
+                            "filled_at",
+                            "recorded_at",
+                            "symbol",
+                            "fill_id",
+                            "order_id",
+                            "broker",
+                            "broker_execution_id",
+                            "commission_amount",
+                            "commission_ccy",
+                            "commission_eur",
+                            "commission_source",
+                        ] if c in v4_costs.columns
+                    ]
+                    sort_col = "filled_at" if "filled_at" in v4_costs.columns else "recorded_at"
+                    render_interactive_table(
+                        v4_costs.sort_values(sort_col, ascending=False, na_position="last")[show_cols],
+                        key_suffix="ag1_v4_fill_costs",
+                        height=320,
+                    )
+                else:
+                    st.caption("Aucune ligne `core.fill_costs` V4 pour le moment.")
+            with tab_orders:
+                if isinstance(v4_orders, pd.DataFrame) and not v4_orders.empty:
+                    show_cols = [
+                        c for c in [
+                            "timestamp",
+                            "run_id",
+                            "symbol",
+                            "side",
+                            "intent",
+                            "order_type",
+                            "quantity",
+                            "limit_price",
+                            "status",
+                            "broker",
+                            "broker_order_id",
+                            "reason",
+                        ] if c in v4_orders.columns
+                    ]
+                    render_interactive_table(
+                        v4_orders[show_cols],
+                        key_suffix="ag1_v4_orders",
+                        height=320,
+                    )
+                else:
+                    st.caption("Aucun ordre V4 en base pour le moment.")
+        trace_decisions = ag1_v4_trace.get("decisions", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
+        trace_votes = ag1_v4_trace.get("votes", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
+        trace_proposals = ag1_v4_trace.get("proposals", pd.DataFrame()) if isinstance(ag1_v4_trace, dict) else pd.DataFrame()
+        with st.expander("AG1 V4 consensus trace", expanded=False):
+            if trace_decisions is not None and not trace_decisions.empty:
+                st.dataframe(trace_decisions, use_container_width=True, hide_index=True)
+            if trace_votes is not None and not trace_votes.empty:
+                st.dataframe(trace_votes, use_container_width=True, hide_index=True)
+            if trace_proposals is not None and not trace_proposals.empty:
+                st.dataframe(trace_proposals, use_container_width=True, hide_index=True)
+            if (
+                (trace_decisions is None or trace_decisions.empty)
+                and (trace_votes is None or trace_votes.empty)
+                and (trace_proposals is None or trace_proposals.empty)
+            ):
+                st.info("Aucun vote consensus V4 en base pour le moment.")
+    elif v4_status == "missing":
+        st.info(f"Base AG1 V4 absente pour le moment: `{AG1_V4_CONSENSUS_DUCKDB_PATH}`")
+    elif v4_status == "error":
+        st.warning(f"AG1 V4 consensus indisponible: {ag1_v4_consensus.get('error')}")
+    else:
+        st.info("AG1 V4 consensus non initialise.")
+
+    # AG1 V4 is now the only portfolio management surface. The legacy
+    # comparison block is kept dormant for historical code reference only.
     selected_portfolio_key = None
     active_portfolio = None
     active_positions_source_note = ""
 
-    if compare_keys:
+    if False and compare_keys:
         default_focus = st.session_state.get("dashboard_active_portfolio")
         if default_focus not in compare_keys:
             default_focus = available_keys[0] if available_keys else compare_keys[0]
         selected_portfolio_key = default_focus
 
-        st.caption("Vue comparative AG1-V3 (3 colonnes fixes : portefeuille + qualite agent)")
+        st.caption("Vue comparative historique desactivee")
 
         cards_by_key: dict[str, dict[str, object]] = {}
         for key in compare_keys:
@@ -11909,7 +12245,7 @@ if page == "Dashboard Trading":
                     except Exception:
                         mtm_age_txt = ""
                 active_positions_source_note = (
-                    "Source Positions: AG1-V3 ledger `core.positions_snapshot` "
+                    "Source Positions: ledger historique `core.positions_snapshot` "
                     f"(run_id={ledger_run}) | Miroir MTM `portfolio_positions_mtm_latest` "
                     f"(run_id={mtm_run}, source_run_id={mtm_source_run}, match_col={mtm_match_col}{mtm_age_txt})"
                 )
@@ -11936,20 +12272,56 @@ if page == "Dashboard Trading":
                         st.warning("Ecart detecte entre `core.positions_snapshot` et `portfolio_positions_mtm_latest` (" + " | ".join(diff_parts) + ")")
         else:
             st.warning(
-                "Aucune base AG1-V3 exploitable pour la zone details. "
+                "Aucune base historique exploitable pour la zone details. "
                 "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
             )
             df_sig_dashboard = pd.DataFrame()
             df_alt_dashboard = pd.DataFrame()
             active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
     else:
-        st.warning(
-            "Aucun portefeuille AG1-V3 configure pour la vue comparative. "
-            "Affichage du mode legacy (single portfolio) si les donnees historiques sont presentes."
-        )
-        df_sig_dashboard = pd.DataFrame()
-        df_alt_dashboard = pd.DataFrame()
-        active_positions_source_note = "Source Positions: mode legacy `portfolio_positions_mtm_latest` via `AG1_DUCKDB_PATH`"
+        selected_portfolio_key = "ag1_v4_consensus"
+        active_portfolio = ag1_v4_consensus if isinstance(ag1_v4_consensus, dict) else {}
+        selected_summary = active_portfolio.get("summary", {}) if isinstance(active_portfolio, dict) else {}
+        df_port = active_portfolio.get("df_portfolio", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_perf = active_portfolio.get("df_performance", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_trans = active_portfolio.get("df_transactions", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_realized_open = active_portfolio.get("df_realized_open_lots", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_sig_dashboard = active_portfolio.get("df_ai_signals", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+        df_alt_dashboard = active_portfolio.get("df_alerts", pd.DataFrame()) if isinstance(active_portfolio, dict) else pd.DataFrame()
+
+        df_port = enrich_df_with_name(df_port, df_univ) if df_port is not None else pd.DataFrame()
+        df_trans = enrich_df_with_name(df_trans, df_univ) if df_trans is not None else pd.DataFrame()
+        df_realized_open = enrich_df_with_name(df_realized_open, df_univ) if df_realized_open is not None else pd.DataFrame()
+
+        init_cap = safe_float(selected_summary.get("init_cap", 10000.0)) or 10000.0
+        total_val = safe_float(selected_summary.get("total_val", 0.0))
+        cash = safe_float(selected_summary.get("cash", 0.0))
+        invest = safe_float(selected_summary.get("invest", 0.0))
+        roi = float(selected_summary.get("roi", 0.0) or 0.0)
+        cash_pct = float(selected_summary.get("cash_pct", 0.0) or 0.0)
+
+        st.session_state["dashboard_active_portfolio"] = selected_portfolio_key
+        st.session_state["active_portfolio_id"] = selected_portfolio_key
+
+        if str(active_portfolio.get("status", "")).lower() == "ok":
+            last_update_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+            last_update_txt = (
+                last_update_ts.tz_convert("Europe/Paris").strftime("%Y-%m-%d %H:%M")
+                if pd.notna(last_update_ts)
+                else "N/A"
+            )
+            st.info(
+                "Portefeuille actif: AG1 V4 Consensus | "
+                f"Dernier run: {selected_summary.get('last_run_id', 'N/A') or 'N/A'} | "
+                f"MAJ: {last_update_txt}"
+            )
+            active_positions_source_note = (
+                "Source Positions: AG1 V4 consensus ledger `core.positions_snapshot` "
+                f"({active_portfolio.get('db_path', AG1_V4_CONSENSUS_DUCKDB_PATH)})"
+            )
+        else:
+            st.warning("AG1 V4 Consensus n'est pas encore initialise dans le ledger. Les onglets restent prets et se rempliront au premier run.")
+            active_positions_source_note = f"Source Positions: AG1 V4 consensus ledger ({AG1_V4_CONSENSUS_DUCKDB_PATH})"
 
     if active_positions_source_note:
         st.caption(active_positions_source_note)
@@ -12464,7 +12836,7 @@ if page == "Dashboard Trading":
 
         if selected_portfolio_key and active_portfolio:
             st.caption(
-                f"Source AG1-V3: {active_portfolio.get('label', selected_portfolio_key)} "
+                f"Source AG1 V4: {active_portfolio.get('label', selected_portfolio_key)} "
                 f"({active_portfolio.get('db_path', '')})"
             )
         else:
@@ -12704,10 +13076,10 @@ if page == "Dashboard Trading":
     # TAB 5: BENCHMARKS & INDICES
     with t5:
         st.subheader("Benchmarks / Indices")
-        st.caption("Comparaison AG1 (GPT/Grok/Gemini) vs CAC 40 / S&P 500 / EURO STOXX 50 sur la meme fenetre.")
+        st.caption("Comparaison AG1 V4 Consensus vs CAC 40 / S&P 500 / EURO STOXX 50 sur la meme fenetre.")
 
-        if not compare_cards:
-            st.info("Comparatif AG1 indisponible: aucun portefeuille multi-modele charge.")
+        if False and not compare_cards:
+            st.info("Comparatif indisponible: aucun portefeuille charge.")
         else:
             benchmark_labels_all = list(BENCHMARKS_CONFIG.keys())
             if not benchmark_labels_all:
@@ -12745,29 +13117,30 @@ if page == "Dashboard Trading":
             portfolio_missing: list[str] = []
             min_portfolio_starts: list[pd.Timestamp] = []
 
-            for card in compare_cards:
-                p_label = str(card.get("label") or card.get("key") or "").strip()
-                if not p_label:
-                    continue
-                portfolio_accent[p_label] = str(card.get("accent") or "#7c7c7c")
+            p_label = "AG1 V4 Consensus"
+            portfolio_accent[p_label] = "#14b8a6"
 
-                raw_series = pd.DataFrame()
-                perf_df = card.get("df_performance", pd.DataFrame())
-                if isinstance(perf_df, pd.DataFrame) and not perf_df.empty and {"timestamp", "total_value"}.issubset(set(perf_df.columns)):
-                    perf_period = _slice_timeseries_by_period(perf_df.copy(), compare_period)
-                    if perf_period is not None and not perf_period.empty:
-                        raw_series = perf_period[["timestamp", "total_value"]].rename(columns={"total_value": "value"})
+            raw_series = pd.DataFrame()
+            perf_df = _prepare_performance_timeseries(df_perf)
+            if (
+                isinstance(perf_df, pd.DataFrame)
+                and not perf_df.empty
+                and {"timestamp", "total_value"}.issubset(set(perf_df.columns))
+            ):
+                perf_period = _slice_timeseries_by_period(perf_df.copy(), compare_period)
+                if perf_period is not None and not perf_period.empty:
+                    raw_series = perf_period[["timestamp", "total_value"]].rename(columns={"total_value": "value"})
 
-                if raw_series.empty:
-                    curve_df = card.get("curve_df", pd.DataFrame())
-                    if isinstance(curve_df, pd.DataFrame) and not curve_df.empty and {"timestamp", "display_value"}.issubset(set(curve_df.columns)):
-                        raw_series = curve_df[["timestamp", "display_value"]].rename(columns={"display_value": "value"})
+            if raw_series.empty and total_val > 0:
+                current_ts = pd.to_datetime(selected_summary.get("last_update"), errors="coerce", utc=True)
+                if pd.isna(current_ts):
+                    current_ts = pd.Timestamp.now(tz="UTC")
+                raw_series = pd.DataFrame([{"timestamp": current_ts, "value": total_val}])
 
-                norm_series = normalize_to_base100(raw_series, ts_col="timestamp", value_col="value")
-                if norm_series.empty:
-                    portfolio_missing.append(p_label)
-                    continue
-
+            norm_series = normalize_to_base100(raw_series, ts_col="timestamp", value_col="value")
+            if norm_series.empty:
+                portfolio_missing.append(p_label)
+            else:
                 portfolio_series_norm[p_label] = norm_series
                 first_ts = pd.to_datetime(norm_series["timestamp"], errors="coerce", utc=True).min()
                 if pd.notna(first_ts):
@@ -12903,7 +13276,7 @@ if page == "Dashboard Trading":
                     )
 
                 fig_cmp.update_layout(
-                    title=f"Portefeuilles AG1 vs Benchmarks ({compare_period})",
+                    title=f"AG1 V4 Consensus vs Benchmarks ({compare_period})",
                     height=460,
                     margin=dict(t=50, b=20, l=20, r=20),
                     yaxis=dict(title=y_title),

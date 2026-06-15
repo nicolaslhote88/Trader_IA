@@ -6,7 +6,7 @@ AG4_Spe-V2 collecte les actualites Boursorama **specifiques a chaque valeur** (s
 Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base durable.
 
 ## Architecture
-1. Chargement de l'univers depuis Google Sheets (onglet `Universe`).
+1. Chargement de l'univers depuis DuckDB (`/files/duckdb/ag2_v3.duckdb`, table `universe`).
 2. Init DuckDB + creation schema (`universe_symbols`, `news_history`, `news_errors`, `run_log`).
 3. Queue rotative (batch 20 symboles par run) avec persistance d'offset dans DuckDB (`workflow_state`).
 4. Scraping de la page `cours/actualites/<ref>/` pour chaque symbole.
@@ -35,9 +35,13 @@ Le schema IA inclut:
 DB par defaut: `/files/duckdb/ag4_spe_v2.duckdb`
 
 ## Source Universe
-L'univers est lu depuis le Google Sheet:
-- Document: `TradingSim_GoogleSheet_Template`
-- Onglet: `Universe` (`gid=1078848687`)
+L'univers est lu depuis DuckDB:
+- Base: `/files/duckdb/ag2_v3.duckdb`
+- Table: `main.universe`
+
+Le noeud n8n historique `S00A - Load Universe (Google Sheets)` conserve son
+nom pour compatibilite des connexions, mais c'est desormais un noeud Code
+Python DuckDB. Le workflow ne doit plus appeler Google Sheets pour l'univers.
 
 Colonnes minimales attendues:
 - `Symbol`
