@@ -9,9 +9,7 @@ from datetime import datetime, timezone
 import duckdb
 
 DEFAULT_TARGETS = [
-    "/local-files/duckdb/ag1_v3_chatgpt52.duckdb",
-    "/local-files/duckdb/ag1_v3_grok41_reasoning.duckdb",
-    "/local-files/duckdb/ag1_v3_gemini30_pro.duckdb",
+    "/local-files/duckdb/ag1_v4_consensus.duckdb",
 ]
 DEFAULT_UNIVERSE_DB_PATH = "/local-files/duckdb/ag2_v3.duckdb"
 DEFAULT_UNIVERSE_TABLE = "universe"
@@ -299,6 +297,29 @@ def _table_exists(con, table_name, schema=None):
         return False
 
 
+def _table_has_column(con, table_name, column_name, schema=None):
+    try:
+        if schema:
+            row = con.execute(
+                """
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_schema = ? AND table_name = ? AND column_name = ?
+                """,
+                [schema, table_name, column_name],
+            ).fetchone()
+        else:
+            row = con.execute(
+                """
+                SELECT COUNT(*) FROM information_schema.columns
+                WHERE table_name = ? AND column_name = ?
+                """,
+                [table_name, column_name],
+            ).fetchone()
+        return bool(row and int(row[0] or 0) > 0)
+    except Exception:
+        return False
+
+
 def _iso(v):
     try:
         if v is None:
@@ -320,8 +341,10 @@ def _legacy_rows(con, db_path):
     if not _table_exists(con, "portfolio_positions_mtm_latest"):
         return []
     try:
+        has_run_id = _table_has_column(con, "portfolio_positions_mtm_latest", "run_id")
+        run_col = ",\n              run_id" if has_run_id else ""
         cur = con.execute(
-            """
+            f"""
             SELECT
               row_number,
               symbol,
@@ -336,6 +359,7 @@ def _legacy_rows(con, db_path):
               market_value,
               unrealized_pnl,
               updated_at
+              {run_col}
             FROM portfolio_positions_mtm_latest
             ORDER BY
               CASE
@@ -351,6 +375,8 @@ def _legacy_rows(con, db_path):
         out = []
         for row in cur.fetchall():
             r = dict(zip(cols, row))
+            source_run_id = to_text(r.get("run_id")) if has_run_id else ""
+            source_snapshot_ts = _iso(r.get("updated_at"))
             out.append(
                 {
                     "row_number": int(r.get("row_number")) if r.get("row_number") is not None else None,
@@ -365,9 +391,12 @@ def _legacy_rows(con, db_path):
                     "LastPrice": r.get("last_price"),
                     "MarketValue": r.get("market_value"),
                     "UnrealizedPnL": r.get("unrealized_pnl"),
-                    "UpdatedAt": _iso(r.get("updated_at")),
+                    "UpdatedAt": source_snapshot_ts,
                     "portfolio_db_path": db_path,
                     "portfolio_source": "legacy_mtm_latest",
+                    "run_id": source_run_id or None,
+                    "ag1_source_run_id": source_run_id or None,
+                    "ag1_source_snapshot_ts": source_snapshot_ts,
                 }
             )
         return out
@@ -422,7 +451,7 @@ def _core_rows(con, db_path):
             """
             SELECT
               ps.run_id,
-              ps.ts,
+              CAST(ps.ts AS VARCHAR) AS ts,
               CAST(ps.cash_eur AS DOUBLE) AS cash_eur
             FROM core.portfolio_snapshot ps
             ORDER BY ps.ts DESC
@@ -477,6 +506,9 @@ def _core_rows(con, db_path):
                 "UpdatedAt": snap_iso,
                 "portfolio_db_path": db_path,
                 "portfolio_source": "core_snapshots",
+                "run_id": run_id,
+                "ag1_source_run_id": run_id,
+                "ag1_source_snapshot_ts": snap_iso,
             },
             {
                 "row_number": 2,
@@ -494,6 +526,9 @@ def _core_rows(con, db_path):
                 "UpdatedAt": snap_iso,
                 "portfolio_db_path": db_path,
                 "portfolio_source": "core_snapshots",
+                "run_id": run_id,
+                "ag1_source_run_id": run_id,
+                "ag1_source_snapshot_ts": snap_iso,
             },
         ]
 
@@ -516,6 +551,9 @@ def _core_rows(con, db_path):
                     "UpdatedAt": snap_iso,
                     "portfolio_db_path": db_path,
                     "portfolio_source": "core_snapshots",
+                    "run_id": run_id,
+                    "ag1_source_run_id": run_id,
+                    "ag1_source_snapshot_ts": snap_iso,
                 }
             )
             idx += 1
@@ -547,7 +585,7 @@ for db_path_cfg in targets:
             diag.append(d)
             continue
 
-        # AG1-V3 ledger (core.*) is the source of truth for current portfolio state.
+        # AG1 ledger (core.*) is the source of truth for current portfolio state.
         # Legacy MTM table can lag behind after trades, so only use it as fallback.
         rows = _core_rows(con, db_path)
         source = "core_snapshots" if rows else None

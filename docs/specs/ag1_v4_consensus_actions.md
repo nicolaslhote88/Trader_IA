@@ -124,6 +124,20 @@ Etat verifie le 2026-06-14:
 - `AG4-V3` conserve Google Sheets uniquement pour la configuration des sources
   RSS (`Source_RSS`) tant qu'aucune table DuckDB equivalente n'est introduite.
 
+Correction verifiee le 2026-06-15:
+
+- les noeuds de lecture, normalisation, prix Yahoo 1D/1H, fusion et calcul MTM
+  fonctionnaient; l'erreur etait limitee au writer final;
+- l'ancienne table `portfolio_positions_mtm_latest` n'avait pas de contrainte
+  unique sur `symbol`, alors que le writer utilisait `ON CONFLICT(symbol)`;
+- le writer migre maintenant les colonnes manquantes et remplace chaque ligne
+  par `DELETE` puis `INSERT` dans une transaction, sans dependre des anciennes
+  contraintes DuckDB;
+- toute ecriture partielle ou en erreur fait desormais echouer le workflow n8n
+  au lieu de produire un faux statut vert;
+- le run n8n `18931` a ete verifie de bout en bout avec quatre lignes ecrites,
+  zero erreur et un run log DuckDB `SUCCESS`.
+
 ## Planification AG1 V4
 
 Etat verifie le 2026-06-14:

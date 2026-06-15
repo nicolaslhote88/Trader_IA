@@ -44,6 +44,11 @@ function normPath(v) {
   return s || null;
 }
 
+function normalizeDbPath(v) {
+  const s = String(v ?? "").trim().replace(/\\/g, "/");
+  return s.replace("/local-files/", "/files/");
+}
+
 function isLegacyAg1DbPath(v) {
   const s = String(v ?? "").trim().toLowerCase().replace(/\\/g, "/");
   return s.endsWith("/ag1_v2.duckdb");
@@ -79,7 +84,7 @@ function stripSpaces(s) {
 function parseFrNumber(v) {
   if (v === null || v === undefined || v === "") return null;
   if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  const s0 = stripSpaces(v).replace(/EUR/gi, "").replace(/â‚¬/g, "").trim();
+  const s0 = stripSpaces(v).replace(/EUR/gi, "").replace(/€/g, "").trim();
   if (!s0) return null;
   const s1 = s0.replace(/\./g, "").replace(",", ".");
   const n = Number(s1);
@@ -103,7 +108,7 @@ function loadConfig() {
   return {};
 }
 
-function resolvePortfolioDbPaths(cfg, inItems, readRows) {
+function resolvePortfolioDbPaths(cfg, inItems, readRows, strictDbRouting) {
   const arr1 = Array.isArray(cfg?.portfolio_db_paths) ? cfg.portfolio_db_paths : [];
   const parsedJson = safeJsonParse(cfg?.portfolio_db_paths_json, null);
   const arr2 = Array.isArray(parsedJson) ? parsedJson : [];
@@ -114,8 +119,11 @@ function resolvePortfolioDbPaths(cfg, inItems, readRows) {
     ...inItems.map((j) => j?.portfolio_db_path || j?.db_path),
     ...readRows.map((r) => r?.portfolio_db_path || r?.db_path),
   ];
-  const fallback = ["/local-files/duckdb/ag1_v3_chatgpt52.duckdb"];
-  return uniqPaths([...arr1, ...arr2, ...arr3, ...singles, ...fallback]).filter((p) => !isLegacyAg1DbPath(p));
+  const out = uniqPaths([...arr1, ...arr2, ...arr3, ...singles]).filter((p) => !isLegacyAg1DbPath(p));
+  if (strictDbRouting && out.length === 0) {
+    throw new Error("Erreur FATALE (PF.08 JS) : Aucun chemin de base de données résolu en mode strict.");
+  }
+  return out;
 }
 
 function buildPfCtxFromRows(rows, dbPath) {
@@ -154,46 +162,81 @@ const inItems = $input.all().map((i) => i.json || {});
 const cfg = loadConfig();
 const readRows = safeNodeItems("Read Portfolio");
 const fallbackRunId = makeFallbackRunId();
-const sharedRunId =
-  String(inItems.find((j) => j?.run_id)?.run_id || cfg.run_id || fallbackRunId);
+const mtmRunId = String(cfg.workflow_run_id || cfg.run_id || fallbackRunId);
+const strictDbRouting = cfg.strict_db_routing !== false;
+const purgeLatestBeforeWrite = cfg.purge_latest_before_write !== false;
+const writeOnlyIfAnyPriceFound = cfg.write_only_if_any_price_found === true;
 
-// Build/collect per-portfolio context (cash/meta rows) from the raw portfolio reader first.
-const readRowsByDb = new Map();
+const runInfoByDb = new Map();
 for (const r of readRows) {
-  const dbPath = normPath(r.portfolio_db_path || r.db_path || cfg.portfolio_db_path);
-  if (!dbPath) continue;
-  if (!readRowsByDb.has(dbPath)) readRowsByDb.set(dbPath, []);
-  readRowsByDb.get(dbPath).push(r);
-}
-
-const ctxByDb = new Map();
-for (const [dbPath, rows] of readRowsByDb.entries()) {
-  ctxByDb.set(dbPath, buildPfCtxFromRows(rows, dbPath));
-}
-
-for (const j of inItems) {
-  const dbPath = normPath(j.portfolio_db_path || j.db_path || cfg.portfolio_db_path);
-  if (!dbPath) continue;
-  if (j?.pf_ctx && !ctxByDb.has(dbPath)) {
-    ctxByDb.set(dbPath, j.pf_ctx);
+  const rawPath = r.portfolio_db_path || r.db_path;
+  const normKey = normalizeDbPath(rawPath);
+  if (!normKey) continue;
+  if (!runInfoByDb.has(normKey)) {
+    runInfoByDb.set(normKey, { ag1_source_run_id: null, ag1_source_snapshot_ts: null });
+  }
+  const info = runInfoByDb.get(normKey);
+  if (!info.ag1_source_run_id) {
+    info.ag1_source_run_id = normPath(r.ag1_source_run_id || r.run_id || null);
+  }
+  if (!info.ag1_source_snapshot_ts) {
+    info.ag1_source_snapshot_ts = normPath(r.ag1_source_snapshot_ts || r.UpdatedAt || null);
   }
 }
 
-const targetDbPaths = resolvePortfolioDbPaths(cfg, inItems, readRows);
+const readRowsByDb = new Map();
+for (const r of readRows) {
+  const rawPath = r.portfolio_db_path || r.db_path || cfg.portfolio_db_path;
+  const normKey = normalizeDbPath(rawPath);
+  if (!normKey) continue;
+  if (!readRowsByDb.has(normKey)) readRowsByDb.set(normKey, []);
+  readRowsByDb.get(normKey).push(r);
+}
+
+const ctxByDb = new Map();
+for (const [normKey, rows] of readRowsByDb.entries()) {
+  ctxByDb.set(normKey, buildPfCtxFromRows(rows, normKey));
+}
+
+for (const j of inItems) {
+  const rawPath = j.portfolio_db_path || j.db_path || cfg.portfolio_db_path;
+  const normKey = normalizeDbPath(rawPath);
+  if (!normKey) continue;
+  if (j?.pf_ctx && !ctxByDb.has(normKey)) {
+    ctxByDb.set(normKey, j.pf_ctx);
+  }
+}
+
+const targetDbPaths = resolvePortfolioDbPaths(cfg, inItems, readRows, strictDbRouting);
+const targetByNorm = new Map();
+for (const p of targetDbPaths) {
+  targetByNorm.set(normalizeDbPath(p), p);
+}
 const seenPositionDbs = new Set();
 
 const positionUpdates = inItems
   .filter((j) => j?.gs_update?.row_number != null)
   .map((j) => {
     const u = j.gs_update;
-    let primaryDbPath = normPath(j.portfolio_db_path || j.db_path || cfg.portfolio_db_path);
-    if (!primaryDbPath || isLegacyAg1DbPath(primaryDbPath)) {
-      primaryDbPath = "/local-files/duckdb/ag1_v3_chatgpt52.duckdb";
+    const primaryDbPathRaw = normPath(j.portfolio_db_path || j.db_path || cfg.portfolio_db_path);
+    if (!primaryDbPathRaw) {
+      throw new Error("Erreur FATALE (PF.08 JS) : portfolio_db_path manquant pour une position.");
     }
-    seenPositionDbs.add(primaryDbPath);
-    const pfCtx = j.pf_ctx || ctxByDb.get(primaryDbPath) || {};
+    if (isLegacyAg1DbPath(primaryDbPathRaw)) {
+      throw new Error(`Erreur FATALE (PF.08 JS) : Chemin legacy détecté (${primaryDbPathRaw}).`);
+    }
+
+    const currentNormPath = normalizeDbPath(primaryDbPathRaw);
+    const routedDbPath = targetByNorm.get(currentNormPath) || primaryDbPathRaw;
+    seenPositionDbs.add(currentNormPath);
+
+    const pfCtx = j.pf_ctx || ctxByDb.get(currentNormPath) || {};
     const pfCash = pfCtx.cash || {};
     const pfMeta = pfCtx.meta || {};
+    const ag1Info = runInfoByDb.get(currentNormPath) || {};
+    const ag1SourceRunId = normPath(j.ag1_source_run_id || j.run_id || ag1Info.ag1_source_run_id || null);
+    const ag1SourceSnapshotTs = normPath(j.ag1_source_snapshot_ts || j.UpdatedAt || ag1Info.ag1_source_snapshot_ts || null);
+
     return {
       row_number: u.row_number,
       LastPrice: round2(u.LastPrice),
@@ -211,15 +254,23 @@ const positionUpdates = inItems
       ISIN: j.ISIN || "",
       Quantity: j.qty ?? j.Quantity ?? "",
       AvgPrice: j.avgPrice ?? j.AvgPrice ?? "",
-      run_id: j.run_id || sharedRunId,
-      portfolio_db_path: primaryDbPath,
-      workflow_name: j.workflow_name || cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
+      run_id: mtmRunId,
+      workflow_run_id: mtmRunId,
+      ag1_source_run_id: ag1SourceRunId,
+      ag1_source_snapshot_ts: ag1SourceSnapshotTs,
+      portfolio_db_path: routedDbPath,
+      workflow_name: j.workflow_name || cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, AG1-V4)",
+      strict_db_routing: strictDbRouting,
+      purge_latest_before_write: purgeLatestBeforeWrite,
+      write_only_if_any_price_found: writeOnlyIfAnyPriceFound,
 
       mtm_ok: j.mtm_ok,
       mtm_status: j.mtm_status,
       mtm_reason: j.mtm_reason,
       mtm_price_picked: j.mtm_price_picked,
       mtm_price_asof: j.mtm_price_asof,
+      mtm_price_source: j.mtm_price_source,
+      mtm_price_stale: j.mtm_price_stale,
 
       // Portfolio context persisted by PF.08B in DuckDB technical rows (per portfolio).
       pf_cash_market_value: safeNum(pfCash.MarketValueEUR),
@@ -231,10 +282,12 @@ const positionUpdates = inItems
 
 // Ensure PF.08B can still persist CASH_EUR/__META__ for portfolios with zero equity rows.
 for (const dbPath of targetDbPaths) {
-  if (seenPositionDbs.has(dbPath)) continue;
-  const pfCtx = ctxByDb.get(dbPath) || {};
+  const currentNormPath = normalizeDbPath(dbPath);
+  if (seenPositionDbs.has(currentNormPath)) continue;
+  const pfCtx = ctxByDb.get(currentNormPath) || {};
   const pfCash = pfCtx.cash || {};
   const pfMeta = pfCtx.meta || {};
+  const ag1Info = runInfoByDb.get(currentNormPath) || {};
   positionUpdates.push({
     row_number: null,
     LastPrice: 0,
@@ -249,14 +302,22 @@ for (const dbPath of targetDbPaths) {
     ISIN: "",
     Quantity: "",
     AvgPrice: "",
-    run_id: sharedRunId,
+    run_id: mtmRunId,
+    workflow_run_id: mtmRunId,
+    ag1_source_run_id: ag1Info.ag1_source_run_id || null,
+    ag1_source_snapshot_ts: ag1Info.ag1_source_snapshot_ts || null,
     portfolio_db_path: dbPath,
-    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
+    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, AG1-V4)",
+    strict_db_routing: strictDbRouting,
+    purge_latest_before_write: purgeLatestBeforeWrite,
+    write_only_if_any_price_found: writeOnlyIfAnyPriceFound,
     mtm_ok: true,
     mtm_status: "NO_POSITION_ROWS",
     mtm_reason: "",
     mtm_price_picked: null,
     mtm_price_asof: null,
+    mtm_price_source: null,
+    mtm_price_stale: null,
     pf_cash_market_value: safeNum(pfCash.MarketValueEUR),
     pf_cash_updated_at: pfCash.UpdatedAt || nowIso,
     pf_initial_capital: safeNumOrNull(pfMeta.initialCapitalEUR),
@@ -264,39 +325,8 @@ for (const dbPath of targetDbPaths) {
   });
 }
 
-// Safety net if no targets were resolved but PF.08 still executes.
 if (positionUpdates.length === 0) {
-  let primaryDbPath = normPath(cfg.portfolio_db_path);
-  if (!primaryDbPath || isLegacyAg1DbPath(primaryDbPath)) {
-    primaryDbPath = "/local-files/duckdb/ag1_v3_chatgpt52.duckdb";
-  }
-  positionUpdates.push({
-    row_number: null,
-    LastPrice: 0,
-    MarketValue: 0,
-    UnrealizedPnL: 0,
-    UpdatedAt: nowIso,
-    Name: "",
-    AssetClass: "",
-    Sector: "",
-    Industry: "",
-    Symbol: "",
-    ISIN: "",
-    Quantity: "",
-    AvgPrice: "",
-    run_id: sharedRunId,
-    portfolio_db_path: primaryDbPath,
-    workflow_name: cfg.workflow_name || "PF Portfolio MTM Updater (DuckDB-only, Multi AG1-V3)",
-    mtm_ok: true,
-    mtm_status: "NO_POSITION_ROWS",
-    mtm_reason: "NO_TARGET_PORTFOLIO_ROWS_FOUND",
-    mtm_price_picked: null,
-    mtm_price_asof: null,
-    pf_cash_market_value: 0,
-    pf_cash_updated_at: nowIso,
-    pf_initial_capital: null,
-    pf_meta_updated_at: nowIso,
-  });
+  throw new Error("Erreur FATALE (PF.08 JS) : Aucun payload n'a été construit.");
 }
 
 return positionUpdates.map((o) => ({ json: o }));
