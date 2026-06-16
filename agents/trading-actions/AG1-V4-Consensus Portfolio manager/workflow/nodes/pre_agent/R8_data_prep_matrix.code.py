@@ -36,6 +36,10 @@ def safe_float(v, default=0.0):
         return default
 
 
+def optional_float(v):
+    return safe_float(v, None)
+
+
 def parse_dt(v):
     if v is None:
         return None
@@ -354,8 +358,18 @@ yf_rows = run_query(
     SELECT
       UPPER(TRIM(symbol)) AS symbol,
       regular_market_price,
+      bid,
+      ask,
+      bid_size,
+      ask_size,
       spread_pct,
       slippage_proxy_pct,
+      volume,
+      market_state,
+      regular_market_time,
+      exchange_data_delayed_by,
+      quote_source,
+      quote_fetched_at,
       iv_atm,
       options_ok,
       options_error,
@@ -377,8 +391,18 @@ if not yf_rows:
         FROM (
           SELECT UPPER(TRIM(symbol)) AS symbol,
                  regular_market_price,
+                 bid,
+                 ask,
+                 bid_size,
+                 ask_size,
                  spread_pct,
                  slippage_proxy_pct,
+                 volume,
+                 market_state,
+                 regular_market_time,
+                 exchange_data_delayed_by,
+                 quote_source,
+                 quote_fetched_at,
                  iv_atm,
                  options_ok,
                  options_error,
@@ -639,9 +663,19 @@ for sym in sorted(symbols):
             "Macro_Last_Date": to_iso(macro_last),
             "Macro_Themes": ", ".join(top_themes),
             "Last_News_Date": to_iso(last_news),
-            "Regular_Market_Price": safe_float(yf.get("regular_market_price"), 0.0),
-            "SpreadPct": safe_float(yf.get("spread_pct"), 0.0),
-            "SlippageProxyPct": safe_float(yf.get("slippage_proxy_pct"), 0.0),
+            "Regular_Market_Price": optional_float(yf.get("regular_market_price")),
+            "Bid": optional_float(yf.get("bid")),
+            "Ask": optional_float(yf.get("ask")),
+            "Bid_Size": optional_float(yf.get("bid_size")),
+            "Ask_Size": optional_float(yf.get("ask_size")),
+            "SpreadPct": optional_float(yf.get("spread_pct")),
+            "SlippageProxyPct": optional_float(yf.get("slippage_proxy_pct")),
+            "Volume": optional_float(yf.get("volume")),
+            "Market_State": str(yf.get("market_state") or "").strip(),
+            "Regular_Market_Time": to_iso(yf.get("regular_market_time")),
+            "Exchange_Data_Delayed_By": optional_float(yf.get("exchange_data_delayed_by")),
+            "Quote_Source": str(yf.get("quote_source") or "").strip(),
+            "Quote_Fetched_At": to_iso(yf.get("quote_fetched_at")),
             "IV_ATM": safe_float(yf.get("iv_atm"), 0.0),
             "Options_Ok": truthy(yf.get("options_ok")),
             "Options_Error": str(yf.get("options_error") or "").strip(),

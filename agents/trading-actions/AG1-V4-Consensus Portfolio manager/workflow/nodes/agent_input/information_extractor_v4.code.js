@@ -1,8 +1,9 @@
 // AG1 V4 - Information Extractor with model tagging.
-// MODEL_KEY and MODEL_NAME are replaced by build_v4_workflow.py for each branch.
+// Placeholders are replaced by build_v4_workflow.py for each branch.
 
 const MODEL_KEY = "__MODEL_KEY__";
 const MODEL_NAME = "__MODEL_NAME__";
+const MODEL_ID = "__MODEL_ID__";
 
 function isObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
 
@@ -25,27 +26,12 @@ function safeParseJson(text) {
 }
 
 function parseAgentOutput(value) {
-  if (Array.isArray(value)) return { output: value, status: "OK_ARRAY" };
   if (isObj(value)) return { output: value, status: "OK_OBJECT" };
 
   const raw = String(value ?? "").trim();
   const cleaned = stripCodeFence(raw);
   let parsed = safeParseJson(cleaned);
   if (parsed !== null) return { output: parsed, status: "OK_JSON" };
-
-  const firstArray = cleaned.indexOf("[");
-  const lastArray = cleaned.lastIndexOf("]");
-  if (firstArray !== -1 && lastArray > firstArray) {
-    parsed = safeParseJson(cleaned.slice(firstArray, lastArray + 1));
-    if (parsed !== null) return { output: parsed, status: "OK_EXTRACTED_ARRAY" };
-  }
-
-  const firstObj = cleaned.indexOf("{");
-  const lastObj = cleaned.lastIndexOf("}");
-  if (firstObj !== -1 && lastObj > firstObj) {
-    parsed = safeParseJson(cleaned.slice(firstObj, lastObj + 1));
-    if (parsed !== null) return { output: parsed, status: "OK_EXTRACTED_OBJECT" };
-  }
 
   return { output: raw, status: "UNPARSED_TEXT" };
 }
@@ -60,5 +46,6 @@ return [{
     extractorStatus: parsed.status,
     modelKey: MODEL_KEY,
     modelName: MODEL_NAME,
+    modelId: MODEL_ID,
   },
 }];

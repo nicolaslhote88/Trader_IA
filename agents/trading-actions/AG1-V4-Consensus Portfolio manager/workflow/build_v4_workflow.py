@@ -15,19 +15,27 @@ MODEL_BRANCHES = {
     "chatgpt52": {
         "agent": "Agent #1 - Portfolio manager",
         "extractor": "Information Extractor",
-        "model_name": "OpenAI GPT-5.2",
+        "parser": "AG1.V4 — Structured Output GPT",
+        "model_name": "OpenAI GPT-5.5",
+        "model_id": "gpt-5.5-2026-04-23",
         "merge_input": 1,
     },
     "grok41_reasoning": {
         "agent": "Agent #1 - Portfolio manager1",
         "extractor": "Information Extractor1",
-        "model_name": "xAI Grok 4.1 Reasoning",
+        "parser": "AG1.V4 — Structured Output Grok",
+        "model_node": "xAI Grok Chat Model",
+        "model_name": "xAI Grok 4.3",
+        "model_id": "grok-4.3",
         "merge_input": 2,
     },
-    "gemini30_pro": {
+    "claude_sonnet46": {
         "agent": "Agent #1 - Portfolio manager2",
         "extractor": "Information Extractor2",
-        "model_name": "Google Gemini 3.0 Pro",
+        "parser": "AG1.V4 — Structured Output Claude",
+        "model_node": "Anthropic Chat Model",
+        "model_name": "Anthropic Claude Sonnet 4.6",
+        "model_id": "claude-sonnet-4-6",
         "merge_input": 3,
     },
 }
@@ -42,6 +50,7 @@ CODE_MAP = {
     "R8 — Data Prep for Matrix (Fusion Filter)": ("pythonCode", ROOT / "nodes/pre_agent/R8_data_prep_matrix.code.py"),
     "Calcul Matrice & Briefing": ("pythonCode", ROOT / "nodes/pre_agent/calcul_matrice_briefing.code.py"),
     "AG1.00 — Assemble Input Packs": ("jsCode", ROOT / "nodes/agent_input/ag1_00_assemble_input_packs.code.js"),
+    "AG1.V4 — Liquidity Preflight": ("jsCode", ROOT / "nodes/pre_agent/ag1_v4_liquidity_preflight.code.js"),
     "7 - Validate & Enforce Safety": ("jsCode", ROOT / "nodes/post_agent/07_validate_enforce_safety_v5.code.js"),
     "07b - IBKR Send Orders": ("jsCode", ROOT / "nodes/post_agent/07b_ibkr_send_orders.js"),
     "8 - Build DuckDB Bundle": ("jsCode", ROOT / "nodes/post_agent/08_build_duckdb_bundle.code.js"),
@@ -101,24 +110,94 @@ def patch_code_nodes(workflow: Dict[str, Any]) -> None:
             extractor_template
             .replace("__MODEL_KEY__", model_key)
             .replace("__MODEL_NAME__", branch["model_name"])
+            .replace("__MODEL_ID__", branch["model_id"])
         )
         node.setdefault("parameters", {})["jsCode"] = code
 
 
 def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
-    intro = (
-        "MODE AG1 V4 CONSENSUS\n"
-        "Ta sortie est une proposition indépendante. Elle sera comparée aux deux autres modèles; "
-        "aucun ordre ne partira sans consensus 2/3 puis validation risk manager.\n\n"
-    )
+    source = load_json(ROOT / "nodes/agent_input/agent_1_portfolio_manager.node.json")
     for branch in MODEL_BRANCHES.values():
         node = get_node(workflow, branch["agent"])
-        text = str(node.get("parameters", {}).get("text", ""))
-        text = text[1:] if text.startswith("=") else text
-        if "MODE AG1 V4 CONSENSUS" not in text:
-            text = intro + text
-        text = text.replace("\n=Tu dois produire", "\nTu dois produire")
-        node.setdefault("parameters", {})["text"] = "=" + text
+        node["parameters"] = copy.deepcopy(source["parameters"])
+        if branch.get("use_output_parser") is False:
+            node["parameters"].pop("hasOutputParser", None)
+        node["onError"] = "continueRegularOutput"
+
+
+def add_input_and_parser_nodes(workflow: Dict[str, Any]) -> None:
+    workflow["nodes"].append({
+        "parameters": {"jsCode": read_code(ROOT / "nodes/pre_agent/ag1_v4_liquidity_preflight.code.js")},
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [2496, 11584],
+        "id": "ag1-v4-liquidity-preflight",
+        "name": "AG1.V4 — Liquidity Preflight",
+    })
+    schema = json.dumps(load_json(ROOT / "nodes/agent_input/portfolio_manager_output_schema.json"), ensure_ascii=False)
+    for idx, branch in enumerate(MODEL_BRANCHES.values()):
+        if branch.get("use_output_parser") is False:
+            continue
+        workflow["nodes"].append({
+            "parameters": {
+                "schemaType": "manual",
+                "inputSchema": schema,
+                "autoFix": False,
+            },
+            "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+            "typeVersion": 1.3,
+            "position": [3264, 10240 + idx * 1248],
+            "id": f"ag1-v4-output-parser-{idx + 1}",
+            "name": branch["parser"],
+        })
+
+
+def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
+    node_payload = {
+        "parameters": {
+            "model": {
+                "__rl": True,
+                "value": "claude-sonnet-4-6",
+                "mode": "list",
+                "cachedResultName": "Claude Sonnet 4.6",
+            },
+            "options": {},
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
+        "typeVersion": 1.3,
+        "position": [3264, 9664],
+        "id": "ag1-v4-claude-sonnet46-model",
+        "name": "Anthropic Chat Model",
+        "credentials": {
+            "anthropicApi": {
+                "id": "99IcBcafnZl2jhHG",
+                "name": "Anthropic account 2",
+            }
+        },
+    }
+    try:
+        existing = get_node(workflow, "Anthropic Chat Model")
+        existing.clear()
+        existing.update(node_payload)
+    except KeyError:
+        workflow["nodes"].append(node_payload)
+
+
+def patch_model_options(workflow: Dict[str, Any]) -> None:
+    openai = get_node(workflow, "OpenAI Chat Model - GPT5.2")
+    openai.setdefault("parameters", {})["responsesApiEnabled"] = True
+    openai["parameters"].setdefault("options", {})["reasoningEffort"] = "medium"
+
+    grok = get_node(workflow, "xAI Grok Chat Model")
+    grok.setdefault("parameters", {}).setdefault("options", {})["responseFormat"] = "json_object"
+
+
+def patch_sticky_notes(workflow: Dict[str, Any]) -> None:
+    for node in workflow["nodes"]:
+        params = node.get("parameters") or {}
+        content = str(params.get("content") or "").strip().upper()
+        if content == "## GEMINI":
+            params["content"] = "## CLAUDE"
 
 
 def add_consensus_nodes(workflow: Dict[str, Any]) -> None:
@@ -145,6 +224,9 @@ def add_consensus_nodes(workflow: Dict[str, Any]) -> None:
 def patch_positions(workflow: Dict[str, Any]) -> None:
     positions = {
         "AG1.00 — Assemble Input Packs": [2240, 11584],
+        "AG1.V4 — Liquidity Preflight": [2496, 11584],
+        "Anthropic Chat Model": [3264, 9664],
+        "AG1.V4 — Structured Output Claude": [3264, 10176],
         "Agent #1 - Portfolio manager2": [2928, 9920],
         "Information Extractor2": [3712, 9952],
         "Agent #1 - Portfolio manager1": [2928, 11168],
@@ -170,17 +252,26 @@ def patch_connections(workflow: Dict[str, Any]) -> None:
 
     set_main_connections(
         workflow,
-        "AG1.00 — Assemble Input Packs",
+        "AG1.V4 — Liquidity Preflight",
         [
             ("AG1.V4 — Merge Model Proposals", 0),
             (MODEL_BRANCHES["chatgpt52"]["agent"], 0),
             (MODEL_BRANCHES["grok41_reasoning"]["agent"], 0),
-            (MODEL_BRANCHES["gemini30_pro"]["agent"], 0),
+            (MODEL_BRANCHES["claude_sonnet46"]["agent"], 0),
         ],
     )
+    set_main_connections(workflow, "AG1.00 — Assemble Input Packs", [("AG1.V4 — Liquidity Preflight", 0)])
     for branch in MODEL_BRANCHES.values():
         set_main_connections(workflow, branch["agent"], [(branch["extractor"], 0)])
         set_main_connections(workflow, branch["extractor"], [("AG1.V4 — Merge Model Proposals", branch["merge_input"])])
+        if branch.get("model_node"):
+            workflow.setdefault("connections", {})[branch["model_node"]] = {
+                "ai_languageModel": [[{"node": branch["agent"], "type": "ai_languageModel", "index": 0}]]
+            }
+        if branch.get("use_output_parser") is not False:
+            workflow.setdefault("connections", {})[branch["parser"]] = {
+                "ai_outputParser": [[{"node": branch["agent"], "type": "ai_outputParser", "index": 0}]]
+            }
 
     set_main_connections(workflow, "AG1.V4 — Merge Model Proposals", [("AG1.V4 — Build Consensus", 0)])
     set_main_connections(workflow, "AG1.V4 — Build Consensus", [("7 - Validate & Enforce Safety", 0)])
@@ -198,10 +289,24 @@ def main() -> None:
     workflow["active"] = False
     workflow.pop("versionId", None)
 
-    remove_nodes(workflow, ["merge", "0 - SEED Portfolio"])
+    remove_nodes(workflow, [
+        "merge",
+        "0 - SEED Portfolio",
+        "news_web_x_scan (Grok)",
+        "news_web_x_scan (Grok)1",
+        "news_web_x_scan (Grok)2",
+        "OpenAI Chat Model8",
+        "OpenAI Chat Model14",
+        "xAI Grok Chat Model1",
+        "Google Gemini Chat Model",
+    ])
+    add_input_and_parser_nodes(workflow)
+    add_anthropic_model_node(workflow)
     add_consensus_nodes(workflow)
     patch_code_nodes(workflow)
     patch_agent_prompts(workflow)
+    patch_model_options(workflow)
+    patch_sticky_notes(workflow)
     patch_positions(workflow)
     patch_connections(workflow)
     write_json(OUTPUT_PATH, workflow)

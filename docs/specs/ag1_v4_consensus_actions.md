@@ -4,8 +4,8 @@ Date: 2026-06-10
 
 ## Objectif
 
-AG1 V4 consolide les trois Portfolio Managers actions historiques dans un
-workflow unique. GPT, Grok et Gemini recoivent le meme brief d'entree; le
+AG1 V4 consolide trois Portfolio Managers actions dans un workflow unique.
+GPT, Grok et Claude Sonnet recoivent le meme brief d'entree; le
 workflow ne transmet une intention d'ordre au Risk Manager que si au moins deux
 modeles sur trois produisent un consensus executable.
 
@@ -53,10 +53,15 @@ Merge7 -> AG1.00
 
 - `chatgpt52`
 - `grok41_reasoning`
-- `gemini30_pro`
+- `claude_sonnet46`
 
 Les trois extracteurs ajoutent `modelKey` et `modelName`, puis un merge 4
 entrees collecte le contexte AG1.00 et les trois propositions.
+
+Note 2026-06-16: la troisieme branche V4 a ete remplacee de Gemini 3.5 Flash
+vers Claude Sonnet 4.6, avec output parser structure retabli. Les anciens runs
+peuvent encore contenir `gemini30_pro` dans `core.model_proposals` et
+`core.consensus_votes`; les nouveaux runs doivent persister `claude_sonnet46`.
 
 ## Regle De Consensus
 

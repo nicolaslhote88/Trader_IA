@@ -1,0 +1,73 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "marketRegime",
+    "targetExposurePct",
+    "maxNewPositions",
+    "actions",
+    "riskNotes",
+    "dataCaveats"
+  ],
+  "properties": {
+    "marketRegime": {
+      "type": "string",
+      "enum": ["RISK_ON", "RISK_OFF", "ROTATION", "NEUTRAL"]
+    },
+    "targetExposurePct": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 100
+    },
+    "maxNewPositions": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "maximum": 15
+    },
+    "actions": {
+      "type": "array",
+      "maxItems": 15,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symbol",
+          "action",
+          "confidence",
+          "targetWeightPct",
+          "rationale",
+          "nextReviewDays"
+        ],
+        "properties": {
+          "symbol": {"type": "string"},
+          "action": {
+            "type": "string",
+            "enum": ["OPEN", "INCREASE", "DECREASE", "CLOSE", "HOLD", "WATCH"]
+          },
+          "confidence": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "targetWeightPct": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 100
+          },
+          "rationale": {"type": "string", "maxLength": 800},
+          "nextReviewDays": {"type": "integer", "enum": [1, 3, 5, 7]}
+        }
+      }
+    },
+    "riskNotes": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {"type": "string", "maxLength": 400}
+    },
+    "dataCaveats": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {"type": "string", "maxLength": 400}
+    }
+  }
+}

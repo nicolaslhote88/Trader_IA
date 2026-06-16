@@ -747,6 +747,7 @@ def _upsert_model_proposals(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Ma
                 _parse_ts(r.get("ts"), default_ts),
                 model_key,
                 _clean_text(r.get("model_name") or r.get("modelName"), 128) or None,
+                _clean_text(r.get("model_id") or r.get("modelId"), 128) or None,
                 _clean_text(r.get("extractor_status") or r.get("extractorStatus"), 64) or None,
                 _to_bool(r.get("parse_ok") if "parse_ok" in r else r.get("parseOk"), default=True),
                 _json_text(r.get("decision_json") or r.get("decisionJson") or r.get("decision")),
@@ -761,13 +762,14 @@ def _upsert_model_proposals(con: duckdb.DuckDBPyConnection, rows_in: Sequence[Ma
     con.executemany(
         """
         INSERT INTO core.model_proposals (
-          proposal_id, run_id, ts, model_key, model_name, extractor_status, parse_ok,
+          proposal_id, run_id, ts, model_key, model_name, model_id, extractor_status, parse_ok,
           decision_json, actions_json, warnings_json, error, latency_ms
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (proposal_id) DO UPDATE SET
           ts = excluded.ts,
           model_name = excluded.model_name,
+          model_id = excluded.model_id,
           extractor_status = excluded.extractor_status,
           parse_ok = excluded.parse_ok,
           decision_json = excluded.decision_json,
