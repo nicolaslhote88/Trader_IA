@@ -63,6 +63,13 @@ vers Claude Sonnet 4.6, avec output parser structure retabli. Les anciens runs
 peuvent encore contenir `gemini30_pro` dans `core.model_proposals` et
 `core.consensus_votes`; les nouveaux runs doivent persister `claude_sonnet46`.
 
+Note 2026-06-16: les identifiants canoniques internes restent
+`chatgpt52`, `grok41_reasoning` et `claude_sonnet46` dans
+`core.model_proposals.model_key` / `core.consensus_votes.model_key`.
+`core.consensus_decisions.model_keys` affiche en revanche les modeles reels
+utilises pour la decision (`gpt-5.5-2026-04-23`, `grok-4.3`,
+`claude-sonnet-4-6`) afin d'eviter une lecture trompeuse dans les vues finales.
+
 ## Regle De Consensus
 
 Une intention est executable si:
@@ -86,6 +93,26 @@ Le consensus ne bypass jamais le Risk Manager. La sortie consensus devient
 `agentDecision.actions`, puis le node `7 - Validate & Enforce Safety` applique
 les controles deterministes: cash, taille, secteur, data freshness, spread,
 kill switch, limite BUY obligatoire.
+
+## Fraicheur Des Prix Avant LLM
+
+Le pack transmis aux trois modeles passe par `AG1.V4 -- Liquidity Preflight`
+avant l'appel LLM:
+
+- resolution du contrat IBKR pour les symboles candidats du pack;
+- lecture read-only du snapshot IBKR CPAPI pour les quelques `conid` concernes;
+- si le snapshot IBKR contient un dernier prix valide, `entry` devient cette
+  reference fraiche et `quote_source=ibkr_cpapi_snapshot`;
+- l'ancien prix issu de la matrice est conserve dans `matrix_entry`;
+- si IBKR ne fournit pas de prix exploitable, le workflow conserve le fallback
+  Yahoo Finance existant;
+- si aucune reference fraiche n'est disponible dans la fenetre
+  `IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS`, la ligne recoit la gate
+  `STALE_QUOTE`, ce qui interdit `OPEN`/`INCREASE` avant consommation utile du
+  consensus.
+
+L'objectif est de fiabiliser la reflexion des modeles en amont plutot que de
+consommer trois appels LLM puis rejeter l'ordre uniquement en sortie broker.
 
 ## Execution IBKR
 

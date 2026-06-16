@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Tuple
 
@@ -74,6 +75,10 @@ def get_node(workflow: Dict[str, Any], name: str) -> Dict[str, Any]:
     raise KeyError(f"Node not found: {name}")
 
 
+def has_node(workflow: Dict[str, Any], name: str) -> bool:
+    return any(node.get("name") == name for node in workflow["nodes"])
+
+
 def remove_nodes(workflow: Dict[str, Any], names: Iterable[str]) -> None:
     names_set = set(names)
     workflow["nodes"] = [node for node in workflow["nodes"] if node.get("name") not in names_set]
@@ -126,30 +131,35 @@ def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
 
 
 def add_input_and_parser_nodes(workflow: Dict[str, Any]) -> None:
-    workflow["nodes"].append({
-        "parameters": {"jsCode": read_code(ROOT / "nodes/pre_agent/ag1_v4_liquidity_preflight.code.js")},
-        "type": "n8n-nodes-base.code",
-        "typeVersion": 2,
-        "position": [2496, 11584],
-        "id": "ag1-v4-liquidity-preflight",
-        "name": "AG1.V4 — Liquidity Preflight",
-    })
+    if not has_node(workflow, "AG1.V4 — Liquidity Preflight"):
+        workflow["nodes"].append({
+            "parameters": {"jsCode": read_code(ROOT / "nodes/pre_agent/ag1_v4_liquidity_preflight.code.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [2496, 11584],
+            "id": "ag1-v4-liquidity-preflight",
+            "name": "AG1.V4 — Liquidity Preflight",
+        })
     schema = json.dumps(load_json(ROOT / "nodes/agent_input/portfolio_manager_output_schema.json"), ensure_ascii=False)
     for idx, branch in enumerate(MODEL_BRANCHES.values()):
         if branch.get("use_output_parser") is False:
             continue
-        workflow["nodes"].append({
-            "parameters": {
-                "schemaType": "manual",
-                "inputSchema": schema,
-                "autoFix": False,
-            },
-            "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
-            "typeVersion": 1.3,
-            "position": [3264, 10240 + idx * 1248],
-            "id": f"ag1-v4-output-parser-{idx + 1}",
-            "name": branch["parser"],
-        })
+        if not has_node(workflow, branch["parser"]):
+            workflow["nodes"].append({
+                "parameters": {
+                    "schemaType": "manual",
+                    "inputSchema": schema,
+                    "autoFix": False,
+                },
+                "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+                "typeVersion": 1.3,
+                "position": [3264, 10240 + idx * 1248],
+                "id": f"ag1-v4-output-parser-{idx + 1}",
+                "name": branch["parser"],
+            })
+        else:
+            node = get_node(workflow, branch["parser"])
+            node.setdefault("parameters", {})["inputSchema"] = schema
 
 
 def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
@@ -185,7 +195,7 @@ def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
 
 def patch_model_options(workflow: Dict[str, Any]) -> None:
     openai = get_node(workflow, "OpenAI Chat Model - GPT5.2")
-    openai.setdefault("parameters", {})["responsesApiEnabled"] = True
+    openai.setdefault("parameters", {}).pop("responsesApiEnabled", None)
     openai["parameters"].setdefault("options", {})["reasoningEffort"] = "medium"
 
     grok = get_node(workflow, "xAI Grok Chat Model")
@@ -217,11 +227,15 @@ def add_consensus_nodes(workflow: Dict[str, Any]) -> None:
         "id": "ag1-v4-build-consensus",
         "name": "AG1.V4 — Build Consensus",
     }
-    workflow["nodes"].append(merge_node)
-    workflow["nodes"].append(consensus_node)
+    if not has_node(workflow, "AG1.V4 — Merge Model Proposals"):
+        workflow["nodes"].append(merge_node)
+    if not has_node(workflow, "AG1.V4 — Build Consensus"):
+        workflow["nodes"].append(consensus_node)
 
 
 def patch_positions(workflow: Dict[str, Any]) -> None:
+    if os.getenv("AG1_V4_APPLY_CANONICAL_POSITIONS", "").strip().lower() not in {"1", "true", "yes"}:
+        return
     positions = {
         "AG1.00 — Assemble Input Packs": [2240, 11584],
         "AG1.V4 — Liquidity Preflight": [2496, 11584],

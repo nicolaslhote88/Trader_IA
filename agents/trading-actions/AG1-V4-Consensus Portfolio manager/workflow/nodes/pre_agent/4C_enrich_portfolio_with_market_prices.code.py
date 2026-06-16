@@ -950,6 +950,10 @@ memory_diagnostics = {
 return [
     {
         "json": {
+            "run": input0.get("run", {}),
+            "config": input0.get("config", {}),
+            "transfer_pack": input0.get("transfer_pack", {}),
+            "db_path": input0.get("db_path"),
             "portfolioBrief": {
                 "generatedAt": datetime.now(timezone.utc).isoformat(),
                 "portfolioUpdatedAt": portfolio_updated_at,

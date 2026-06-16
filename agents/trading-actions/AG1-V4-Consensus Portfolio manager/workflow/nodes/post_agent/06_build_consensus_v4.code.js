@@ -108,6 +108,20 @@ function inferModelKey(item, index) {
   return ["chatgpt52", "grok41_reasoning", "claude_sonnet46"][index] || `model_${index + 1}`;
 }
 
+function modelDisplayKey(v) {
+  return clampText(
+    v?.modelId ||
+    v?.model_id ||
+    v?.modelName ||
+    v?.model_name ||
+    v?.model ||
+    v?.modelKey ||
+    v?.model_key ||
+    "",
+    128
+  ) || "UNKNOWN_MODEL";
+}
+
 function extractDecision(item) {
   if (isObj(item.output) && Array.isArray(item.output.actions)) return item.output;
   if (isObj(item.agentDecision) && Array.isArray(item.agentDecision.actions)) return item.agentDecision;
@@ -178,7 +192,8 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
   if (selectedAction === "CLOSE") qty = 0;
   if (selectedAction === "DECREASE" && qty !== null) qty = Math.min(currentQty, qty);
   const confidence = Math.round(median(votes.map((v) => v.confidence).filter((x) => x !== null)) ?? 50);
-  const modelKeys = votes.map((v) => v.modelKey).sort();
+  const modelKeysCanonical = votes.map((v) => v.modelKey).sort();
+  const modelKeys = votes.map(modelDisplayKey).sort();
   const consensusId = `CONS_${runId}_${symbol}_${intent}`;
 
   if (selectedAction === "DECREASE" && (votedWeight === null || qty === null)) {
@@ -245,9 +260,10 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
       voteCount: votes.length,
       validModelCount: group.validModelCount,
       modelKeys,
+      modelKeysCanonical,
       modelIds: votes.map((v) => v.modelId).filter(Boolean).sort(),
       sizingRule: "deterministic_target_weight_to_final_quantity",
-      priceRule: "matrix_entry",
+      priceRule: "pre_llm_fresh_entry",
     },
   };
 
@@ -267,7 +283,7 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
       selected_weight_pct: weight,
       selected_limit_price: selectedLimit,
       confidence,
-      payload_json: { action, votes, matrix },
+      payload_json: { action, votes, matrix, modelKeysCanonical },
     },
     action,
   };
@@ -343,6 +359,7 @@ for (let i = 0; i < proposalItems.length; i += 1) {
       model_key: modelKey,
       modelKey,
       modelId: item.modelId || item.model_id || null,
+      modelName: item.modelName || item.model_name || item.model || modelKey,
       symbol: symbol || "UNKNOWN",
       intent,
       action: rawAction,
@@ -378,6 +395,7 @@ const approvedActions = [];
 for (const group of groups.values()) {
   const uniqueModels = new Set(group.votes.map((v) => v.modelKey));
   if (uniqueModels.size < 2 || validModelCount < 2) {
+    const displayModels = group.votes.map(modelDisplayKey).sort();
     consensusDecisions.push({
       consensus_id: `CONS_${runId}_${group.symbol}_${group.intent}`,
       run_id: runId,
@@ -388,10 +406,10 @@ for (const group of groups.values()) {
       side: sideForIntent(group.intent),
       vote_count: uniqueModels.size,
       valid_model_count: validModelCount,
-      model_keys: Array.from(uniqueModels).sort().join(","),
+      model_keys: displayModels.join(","),
       status: "NO_CONSENSUS",
       reason: "Fewer than two valid model votes for the same symbol and intent",
-      payload_json: { votes: group.votes },
+      payload_json: { votes: group.votes, modelKeysCanonical: Array.from(uniqueModels).sort() },
     });
     continue;
   }
@@ -414,10 +432,10 @@ if (!approvedActions.length) {
       side: null,
       vote_count: 0,
       valid_model_count: validModelCount,
-      model_keys: modelProposals.filter((p) => p.parse_ok).map((p) => p.model_key).sort().join(","),
+      model_keys: modelProposals.filter((p) => p.parse_ok).map(modelDisplayKey).sort().join(","),
       status: "NO_TRADE",
       reason: warnings[warnings.length - 1],
-      payload_json: { modelProposals, votes },
+      payload_json: { modelProposals, votes, modelKeysCanonical: modelProposals.filter((p) => p.parse_ok).map((p) => p.model_key).sort() },
     });
   }
 }
