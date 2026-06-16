@@ -103,8 +103,11 @@ avant l'appel LLM:
 - lecture read-only du snapshot IBKR CPAPI pour les quelques `conid` concernes;
 - si le snapshot IBKR contient un dernier prix valide, `entry` devient cette
   reference fraiche et `quote_source=ibkr_cpapi_snapshot`;
+- si le snapshot ne fournit pas de prix, lecture read-only de l'historique IBKR
+  (`/marketdata/history`, d'abord `2d/1h`, puis `1w/1d`) pour recuperer la
+  derniere barre exploitable;
 - l'ancien prix issu de la matrice est conserve dans `matrix_entry`;
-- si IBKR ne fournit pas de prix exploitable, le workflow conserve le fallback
+- si IBKR ne fournit aucun prix exploitable, le workflow conserve le fallback
   Yahoo Finance existant;
 - si aucune reference fraiche n'est disponible dans la fenetre
   `IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS`, la ligne recoit la gate

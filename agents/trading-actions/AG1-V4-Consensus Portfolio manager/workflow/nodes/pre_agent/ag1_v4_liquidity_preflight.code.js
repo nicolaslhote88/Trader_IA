@@ -37,6 +37,14 @@ async function getJson(url) {
 function snapshotHasPrice(row) {
   return num(row?.["31"] ?? row?.lastPrice ?? row?.price) !== null;
 }
+function historyBarPrice(row) {
+  return num(row?.c ?? row?.close ?? row?.o ?? row?.open);
+}
+function historyBarTime(row) {
+  const t = num(row?.t ?? row?.time ?? row?.timestamp);
+  if (t !== null) return new Date(t).toISOString();
+  return row?.date || row?.datetime || row?.ts || null;
+}
 function mergeSnapshotRows(batches) {
   const out = new Map();
   for (const batch of batches) {
@@ -65,6 +73,27 @@ async function getIbkrSnapshots(conids) {
   }
   return { snapshots: mergeSnapshotRows(batches), attempts: batches.length };
 }
+async function getIbkrHistoryPrice(conid) {
+  const plans = [
+    { period: "2d", bar: "1h" },
+    { period: "1w", bar: "1d" },
+  ];
+  for (const plan of plans) {
+    const url = `${brokerUrl}/marketdata/history?conid=${encodeURIComponent(String(conid))}`
+      + `&period=${encodeURIComponent(plan.period)}&bar=${encodeURIComponent(plan.bar)}&outside_rth=true`;
+    const response = await getJson(url);
+    const bars = Array.isArray(response?.data) ? response.data : [];
+    for (let i = bars.length - 1; i >= 0; i -= 1) {
+      const bar = bars[i] || {};
+      const price = historyBarPrice(bar);
+      const time = historyBarTime(bar);
+      if (price !== null && price > 0 && time) {
+        return { conid, price, time, bar, period: plan.period, barSize: plan.bar };
+      }
+    }
+  }
+  return null;
+}
 
 const pack = isObj(input.opportunity_pack) ? { ...input.opportunity_pack } : { rows: [] };
 const rows = Array.isArray(pack.rows) ? pack.rows.map((row) => ({ ...row })) : [];
@@ -76,6 +105,8 @@ let quotes = [];
 let resolution = { results: [], errors: [] };
 let ibkrSnapshots = [];
 let ibkrSnapshotAttempts = 0;
+const ibkrHistoryMap = new Map();
+let ibkrHistoryAttempts = 0;
 const preflightWarnings = [];
 
 if (yahooSymbols.length) {
@@ -99,6 +130,21 @@ if (yahooSymbols.length) {
     } catch (err) {
       preflightWarnings.push(`IBKR_SNAPSHOT_UNAVAILABLE:${err?.message || err}`);
     }
+    const pricedConids = new Set(
+      ibkrSnapshots
+        .filter(snapshotHasPrice)
+        .map((row) => String(row.conid ?? row.conidEx))
+    );
+    const missingConids = conids.filter((conid) => !pricedConids.has(String(conid)));
+    for (const conid of missingConids) {
+      try {
+        ibkrHistoryAttempts += 1;
+        const history = await getIbkrHistoryPrice(conid);
+        if (history) ibkrHistoryMap.set(String(conid), history);
+      } catch (err) {
+        preflightWarnings.push(`IBKR_HISTORY_UNAVAILABLE:${conid}:${err?.message || err}`);
+      }
+    }
   }
 }
 
@@ -120,8 +166,11 @@ for (const row of rows) {
   const ibkrBid = num(snapshot["84"] ?? snapshot.bid);
   const ibkrAsk = num(snapshot["86"] ?? snapshot.ask);
   const ibkrHasFreshPrice = ibkrPrice !== null && ibkrPrice > 0;
+  const ibkrHistory = conid !== null ? (ibkrHistoryMap.get(String(conid)) || null) : null;
+  const ibkrHistoryPrice = num(ibkrHistory?.price);
+  const ibkrHasHistoryPrice = ibkrHistoryPrice !== null && ibkrHistoryPrice > 0;
   const yahooPrice = num(quote.regularMarketPrice);
-  const price = num((ibkrHasFreshPrice ? ibkrPrice : yahooPrice) ?? row.entry);
+  const price = num((ibkrHasFreshPrice ? ibkrPrice : (ibkrHasHistoryPrice ? ibkrHistoryPrice : yahooPrice)) ?? row.entry);
   const volume = num(quote.volume ?? row.volume);
   const spreadFromIbkr = ibkrBid !== null && ibkrAsk !== null && ibkrBid > 0 && ibkrAsk > 0
     ? ((ibkrAsk - ibkrBid) / ((ibkrAsk + ibkrBid) / 2)) * 100
@@ -129,7 +178,9 @@ for (const row of rows) {
   const spreadPct = num((ibkrHasFreshPrice ? spreadFromIbkr : null) ?? quote.spreadPct ?? row.spread_pct);
   const quoteTime = ibkrHasFreshPrice
     ? new Date().toISOString()
-    : (quote.regularMarketTime || row.regular_market_time || quote.fetchedAt || row.quote_fetched_at || null);
+    : (ibkrHasHistoryPrice
+      ? ibkrHistory.time
+      : (quote.regularMarketTime || row.regular_market_time || quote.fetchedAt || row.quote_fetched_at || null));
   const quoteAgeMinutes = parseTime(quoteTime) === null ? null : Math.max(0, (now - parseTime(quoteTime)) / 60000);
   const targetQty = totalValue > 0 && price > 0 ? Math.floor((totalValue * defaultWeightPct / 100) / price) : null;
   const orderVolumePct = targetQty !== null && volume > 0 ? targetQty / volume * 100 : null;
@@ -149,10 +200,12 @@ for (const row of rows) {
     row.matrix_entry = row.matrix_entry ?? row.entry;
     row.entry = Math.round(price * 10000) / 10000;
   }
-  row.quote_source = ibkrHasFreshPrice ? "ibkr_cpapi_snapshot" : (quote.source || row.quote_source || null);
+  row.quote_source = ibkrHasFreshPrice
+    ? "ibkr_cpapi_snapshot"
+    : (ibkrHasHistoryPrice ? `ibkr_cpapi_history_${ibkrHistory.barSize}` : (quote.source || row.quote_source || null));
   row.quote_fetched_at = quoteTime;
   row.regular_market_time = quoteTime;
-  row.market_state = ibkrHasFreshPrice ? "IBKR_SNAPSHOT" : (quote.marketState || row.market_state || null);
+  row.market_state = ibkrHasFreshPrice ? "IBKR_SNAPSHOT" : (ibkrHasHistoryPrice ? "IBKR_HISTORY" : (quote.marketState || row.market_state || null));
 
   row.gates = gates.size ? Array.from(gates).sort().join("|") : "OK";
   row.spread_pct = spreadPct;
@@ -177,7 +230,10 @@ for (const row of rows) {
     originalMatrixEntry: entry,
     ibkrSnapshotPrice: ibkrPrice,
     ibkrSnapshotAttempts,
-    readOnlyChecks: ["yfinance_quote", "ibkr_contract_resolution", "ibkr_market_snapshot"],
+    ibkrHistoryPrice,
+    ibkrHistoryTime: ibkrHistory?.time || null,
+    ibkrHistoryBar: ibkrHistory ? { period: ibkrHistory.period, barSize: ibkrHistory.barSize } : null,
+    readOnlyChecks: ["yfinance_quote", "ibkr_contract_resolution", "ibkr_market_snapshot", "ibkr_market_history"],
   };
 }
 
@@ -190,6 +246,8 @@ pack.liquidityPreflight = {
   ibkrSnapshotCount: ibkrSnapshots.length,
   ibkrSnapshotPricedCount: ibkrSnapshots.filter(snapshotHasPrice).length,
   ibkrSnapshotAttempts,
+  ibkrHistoryAttempts,
+  ibkrHistoryPricedCount: ibkrHistoryMap.size,
   warnings: preflightWarnings,
   orderEndpointsCalled: false,
 };
