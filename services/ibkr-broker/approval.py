@@ -215,6 +215,7 @@ async def maybe_park_for_approval(
         "deviation_pct": dev,
         "verification": verification,
         "prompt_messages": _prompt_messages(confirmation, guard),
+        "confirmation": confirmation,
         "ibkr_payload": dict(ibkr_payload),
         "status": "PENDING",
         "token": secrets.token_urlsafe(16),

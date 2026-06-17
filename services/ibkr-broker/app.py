@@ -1613,7 +1613,15 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
         if dev > approval.MAX_DEVIATION_PCT:
             await approval.mark(order_id, "REJECTED")
             raise HTTPException(status_code=409, detail="APPROVAL_PRICE_MOVED:%.2fpct" % dev)
-    terminal = await client.place_orders([ibkr_payload])
+    confirmation = entry.get("confirmation") if isinstance(entry.get("confirmation"), dict) else {}
+    terminal = confirmation.get("terminal_response")
+    if _reply_required_items(terminal):
+        next_response: list[dict] = []
+        for item in _reply_required_items(terminal):
+            next_response.extend(await client.reply_order(str(item["id"]), confirmed=True))
+        terminal = next_response
+    else:
+        terminal = await client.place_orders([ibkr_payload])
     steps = 0
     while _reply_required_items(terminal) and steps < AUTO_CONFIRM_MAX_STEPS:
         steps += 1

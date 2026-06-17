@@ -106,6 +106,16 @@ Correctif :
 Résultat attendu : si IBKR renvoie ce prompt après une validation prix fraîche, l'ordre est parqué et notifié
 Telegram au lieu d'être perdu en rejet silencieux.
 
+### v3.1 (2026-06-17) — approval Telegram répond au prompt IBKR existant
+Découverte après clic Telegram sur le run `19035` : le webhook `approve` était bien appelé, mais l'endpoint
+broker resoumettait l'ordre avec le même `cOID`. IBKR répondait alors :
+`Local order ID=... is already registered`.
+
+Correctif :
+- l'entrée approval stocke maintenant la chaîne de confirmation IBKR (`confirmation.terminal_response`) ;
+- au clic **Approuver**, le broker répond au `reply_id` IBKR déjà ouvert via `/iserver/reply/{id}` ;
+- la resoumission complète via `/orders` reste seulement un fallback si aucun prompt stocké n'est disponible.
+
 ## 5. Limites connues (v1)
 - Store PENDING **en mémoire** (perdu au restart broker ; OK pour TTL 10 min). Table DuckDB d'audit = évolution.
 - Pas de watchdog in-broker : l'expiration se fait à la lecture (`get_for_decision`/`sweep_expired`).
