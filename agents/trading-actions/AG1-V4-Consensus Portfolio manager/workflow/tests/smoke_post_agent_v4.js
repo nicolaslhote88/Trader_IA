@@ -20,23 +20,14 @@ async function runNode(relPath, json, inputItems = null, env = {}) {
   return await fn(json, input, env);
 }
 
-function action(symbol, qty, limitPrice, confidence, rationale) {
+function action(symbol, confidence, rationale) {
   return {
     symbol,
-    symbol_internal: symbol,
-    symbol_yahoo: symbol,
-    assetClass: "EQUITY",
-    sector: "Technology",
     action: "OPEN",
     confidence,
-    targetQty: qty,
-    entryPlan: { orderType: "LIMIT", limitPrice, timeInForce: "DAY" },
-    riskPlan: { stopLossPct: -5, takeProfitPct: 12, maxLossEUR: 90 },
+    targetWeightPct: 5,
     rationale,
-    Data_Age_H1_Hours: 1,
-    Data_Age_D1_Hours: 4,
-    SpreadPct: 0.08,
-    dataQualityFlags: "",
+    nextReviewDays: 3,
   };
 }
 
@@ -76,27 +67,49 @@ async function main() {
         positionsCount: 0,
       },
     },
+    opportunity_pack: {
+      rows: [{
+        symbol: "AAPL",
+        symbol_yahoo: "AAPL",
+        asset_class: "EQUITY",
+        sector: "Technology",
+        decision: "Entrer / Renforcer",
+        gates: "OK",
+        entry: 180,
+        stop: 171,
+        tp: 202,
+        spread_pct: 0.08,
+        liquidity: {
+          status: "OK",
+          contractResolved: true,
+          estimatedOrderToVolumePct: 0.001,
+        },
+      }],
+    },
     db_path: smokeDbPath,
   };
 
   const proposals = [
     {
       modelKey: "chatgpt52",
-      modelName: "OpenAI GPT-5.2",
+      modelName: "OpenAI GPT-5.5",
+      modelId: "gpt-5.5-2026-04-23",
       extractorStatus: "OK_OBJECT",
-      output: { actions: [action("AAPL", 10, 180, 72, "Smoke GPT buy")] },
+      output: { actions: [action("AAPL", 72, "Smoke GPT buy")] },
     },
     {
       modelKey: "grok41_reasoning",
-      modelName: "xAI Grok 4.1 Reasoning",
+      modelName: "xAI Grok 4.3",
+      modelId: "grok-4.3",
       extractorStatus: "OK_OBJECT",
-      output: { actions: [action("AAPL", 8, 179, 68, "Smoke Grok buy")] },
+      output: { actions: [action("AAPL", 68, "Smoke Grok buy")] },
     },
     {
-      modelKey: "gemini30_pro",
-      modelName: "Google Gemini 3.0 Pro",
+      modelKey: "claude_sonnet46",
+      modelName: "Anthropic Claude Sonnet 4.6",
+      modelId: "claude-sonnet-4-6",
       extractorStatus: "OK_OBJECT",
-      output: { actions: [{ symbol: "AAPL", assetClass: "EQUITY", action: "WATCH", confidence: 55 }] },
+      output: { actions: [{ symbol: "AAPL", action: "WATCH", confidence: 55, targetWeightPct: null, rationale: "Wait", nextReviewDays: 3 }] },
     },
   ];
 

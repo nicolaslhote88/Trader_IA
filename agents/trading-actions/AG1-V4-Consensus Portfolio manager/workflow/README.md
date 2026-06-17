@@ -12,7 +12,7 @@ python "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/build
 ```
 
 Le script injecte les codes extraits dans le workflow, garde les trois branches
-LLM du template, route `AG1.00` vers GPT/Grok/Gemini en parallele, ajoute le
+LLM du template, route `AG1.00` vers GPT/Grok/Claude en parallele, ajoute le
 merge 4 entrees puis le node de consensus.
 
 ## Contrat DuckDB

@@ -376,9 +376,10 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
 }
 
 const input = $json || {};
+const transferPack = input.transfer_pack || {};
 const ctx = input.ctx || {};
-const runCtx = ctx.run || {};
-const meta = input.meta || ctx.meta || {};
+const runCtx = ctx.run || input.run || transferPack.run || {};
+const meta = input.meta || ctx.meta || transferPack.meta || {};
 const agentDecision = input.agentDecision || {};
 const ordersIn = Array.isArray(input.orders) ? input.orders : [];
 const modelProposals = Array.isArray(input.modelProposals)
@@ -566,9 +567,14 @@ const bundle = {
     ts_start: runCtx.timestampParis || ts_end,
     ts_end,
     tz: "Europe/Paris",
+    strategy_version: runCtx.strategyVersion || runCtx.strategy_version || null,
+    config_version: runCtx.configVersion || runCtx.config_version || null,
+    prompt_version: runCtx.promptVersion || runCtx.prompt_version || null,
     model: runCtx.model || "UNKNOWN",
+    n8n_execution_id: runCtx.executionId || runCtx.n8nExecutionId || runCtx.n8n_execution_id || null,
     db_path: db_path || null,
     decision_summary: input.decision || "NO_TRADE",
+    data_ok_for_trading: true,
     agent_output_json: agentDecision,
     warnings_json: warnings,
   },

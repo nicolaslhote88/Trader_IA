@@ -192,8 +192,9 @@ for r in rows:
     rr_outlier = bool(r_multiple_raw > 6.0 or (risk_pct_raw > 0 and risk_pct_raw < atr_stop_floor_pct * 0.85))
 
     funda_risk = safe_float(r.get("Funda_Risk"), 50.0)
-    spread_pct = safe_float(r.get("SpreadPct"), 0.0)
-    slip_pct = safe_float(r.get("SlippageProxyPct"), 0.0)
+    spread_pct = safe_float(r.get("SpreadPct"), None)
+    slip_pct = safe_float(r.get("SlippageProxyPct"), None)
+    volume = safe_float(r.get("Volume"), None)
     symbol_news_impact = safe_float(r.get("Symbol_News_Impact_7d"), 0.0)
     macro_impact = safe_float(r.get("Macro_Impact_30d"), 0.0)
     sector_weight = safe_float(r.get("Sector_Weight_Pct"), 0.0)
@@ -228,7 +229,14 @@ for r in rows:
         event_risk = 42.0
 
     vol_risk = clamp(d1_atr_pct * 20.0, 0.0, 100.0)
-    liq_risk = clamp(spread_pct * 35.0 + slip_pct * 20.0, 0.0, 100.0)
+    liq_observations = [x for x in (spread_pct, slip_pct) if x is not None]
+    liq_risk = (
+        clamp((spread_pct or 0.0) * 35.0 + (slip_pct or 0.0) * 20.0, 0.0, 100.0)
+        if liq_observations
+        else 100.0
+    )
+    if volume is not None and volume < 5000:
+        liq_risk = max(liq_risk, 90.0)
     news_risk = clamp(max(0.0, -symbol_news_impact) * 8.0 + max(0.0, -macro_impact) * 3.0, 0.0, 100.0)
     concentration_risk = clamp(sector_weight * 1.3 + symbol_weight * 1.1, 0.0, 100.0)
 
@@ -395,6 +403,7 @@ for r in rows:
 
     data_quality_gate_ok = data_quality_score >= 60.0
     earnings_gate_block = days_to_next_earnings is not None and days_to_next_earnings <= 7.0
+    liquidity_unknown = spread_pct is None or volume is None
     liquidity_gate_block = liq_risk >= 85.0
     invalid_options_state_gate = invalid_options_state
 
@@ -403,6 +412,8 @@ for r in rows:
         gates.append("DATA_QUALITY_LOW")
     if earnings_gate_block:
         gates.append("EARNINGS_IMMINENT")
+    if liquidity_unknown:
+        gates.append("LIQUIDITY_UNKNOWN")
     if liquidity_gate_block:
         gates.append("LIQUIDITY_STRESS")
     if invalid_options_state_gate:
@@ -438,6 +449,11 @@ for r in rows:
             "days_since_last_earnings": days_since_last_earnings,
             "spread_pct": spread_pct,
             "slippage_proxy_pct": slip_pct,
+            "volume": volume,
+            "market_state": str(r.get("Market_State") or "").strip(),
+            "regular_market_time": fmt_date(r.get("Regular_Market_Time")),
+            "quote_fetched_at": fmt_date(r.get("Quote_Fetched_At")),
+            "quote_source": str(r.get("Quote_Source") or "").strip(),
             "iv_atm": iv_atm if iv_atm > 0 else None,
             "options_ok": options_ok,
             "options_note": ("INVALID_OPTIONS_STATE" if invalid_options_state else (options_error or options_warning or "")),
@@ -446,6 +462,8 @@ for r in rows:
             "liquidity_risk_score": liq_risk,
             "news_risk_score": news_risk,
             "concentration_risk_score": concentration_risk,
+            "sector_weight": sector_weight,
+            "symbol_weight": symbol_weight,
             "options_risk_score": options_risk,
             "reward_component_r": reward_r,
             "reward_component_upside": reward_upside,
@@ -458,6 +476,8 @@ for r in rows:
             "last_funda_date": fmt_date(r.get("Last_Funda_Date")),
             "last_news_date": fmt_date(r.get("Last_News_Date")),
             "yf_fetched_at": fmt_date(r.get("YF_Fetched_At")),
+            "data_age_h1_hours": safe_float(r.get("Data_Age_H1_Hours"), None),
+            "data_age_d1_hours": safe_float(r.get("Data_Age_D1_Hours"), None),
             "gate_summary": "|".join(gates),
             "tech_action": tech_action,
             "tech_confidence": tech_conf,
@@ -501,7 +521,10 @@ for r in matrix_rows:
 
     quality_block = data_quality < 60.0
     earnings_block = r.get("days_to_next_earnings") is not None and safe_float(r.get("days_to_next_earnings"), 99.0) <= 7.0
-    liquidity_block = safe_float(r.get("liquidity_risk_score"), 0.0) >= 85.0
+    liquidity_block = (
+        safe_float(r.get("liquidity_risk_score"), 0.0) >= 85.0
+        or "LIQUIDITY_UNKNOWN" in str(r.get("gate_summary") or "")
+    )
     invalid_options_state = "INVALID_OPTIONS_STATE" in str(r.get("gate_summary") or "")
     rr_outlier = bool(r.get("rr_outlier"))
 
@@ -606,9 +629,9 @@ enter_rows = [r for r in matrix_rows if r.get("matrix_action") == "Entrer / Renf
 watch_rows = [r for r in matrix_rows if r.get("matrix_action") == "Surveiller"]
 exit_rows = [r for r in matrix_rows if r.get("matrix_action") == "Reduire / Sortir"]
 
-PACK_TOP_ENTER = 18
-PACK_TOP_WATCH = 8
-PACK_TOP_EXIT = 12
+PACK_TOP_ENTER = 10
+PACK_TOP_WATCH = 4
+PACK_TOP_EXIT = 6
 
 brief_lines = []
 brief_lines.append("=== MATRICE AG2+AG3+AG4 (PREP AGENT #1) ===")
@@ -655,7 +678,8 @@ thresholds = {
 }
 
 pack_rows = []
-selected_rows = enter_rows[:PACK_TOP_ENTER] + watch_rows[:PACK_TOP_WATCH] + exit_rows[:PACK_TOP_EXIT]
+held_exit_rows = [r for r in exit_rows if safe_float(r.get("symbol_weight"), 0.0) > 0.0]
+selected_rows = enter_rows[:PACK_TOP_ENTER] + watch_rows[:PACK_TOP_WATCH] + held_exit_rows[:PACK_TOP_EXIT]
 seen_pack_symbols = set()
 for r in selected_rows:
     symbol_key = str(r.get("symbol") or "").strip().upper()
@@ -684,7 +708,14 @@ for r in selected_rows:
             "tp": round(safe_float(r["tp_price"]), 4),
             "days_to_next_earnings": r.get("days_to_next_earnings"),
             "iv_atm": r.get("iv_atm"),
-            "spread_pct": round(safe_float(r.get("spread_pct"), 0.0), 4),
+            "spread_pct": round(r["spread_pct"], 4) if r.get("spread_pct") is not None else None,
+            "volume": int(r["volume"]) if r.get("volume") is not None else None,
+            "market_state": r.get("market_state") or None,
+            "regular_market_time": r.get("regular_market_time") or None,
+            "quote_fetched_at": r.get("quote_fetched_at") or None,
+            "quote_source": r.get("quote_source") or None,
+            "data_age_h1_hours": r.get("data_age_h1_hours"),
+            "data_age_d1_hours": r.get("data_age_d1_hours"),
             "macro_themes": r.get("macro_themes") or "",
             "action_reason": r.get("action_reason") or "",
         }
@@ -697,7 +728,7 @@ opportunity_pack = {
     "selection": {
         "enter": min(len(enter_rows), PACK_TOP_ENTER),
         "watch": min(len(watch_rows), PACK_TOP_WATCH),
-        "exit": min(len(exit_rows), PACK_TOP_EXIT),
+        "exit": min(len(held_exit_rows), PACK_TOP_EXIT),
         "rows": len(pack_rows),
     },
     "rows": pack_rows,

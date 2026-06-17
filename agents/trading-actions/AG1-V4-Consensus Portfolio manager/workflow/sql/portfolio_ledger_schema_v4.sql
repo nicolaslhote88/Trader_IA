@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS core.runs (
   risk_gate_json JSON,
   created_at TIMESTAMPTZ DEFAULT now()
 );
-
 CREATE TABLE IF NOT EXISTS core.instruments (
   symbol VARCHAR PRIMARY KEY,
   name VARCHAR,
@@ -187,6 +186,7 @@ CREATE TABLE IF NOT EXISTS core.model_proposals (
   latency_ms INTEGER,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE core.model_proposals ADD COLUMN IF NOT EXISTS model_id VARCHAR;
 
 CREATE TABLE IF NOT EXISTS core.consensus_decisions (
   consensus_id VARCHAR PRIMARY KEY,

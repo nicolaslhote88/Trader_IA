@@ -1,7 +1,7 @@
 # AG1 V4 Consensus Portfolio Manager
 
 AG1 V4 remplace la concurrence entre trois workflows actions par un workflow
-unique. Le meme brief d'entree est envoye en parallele a GPT, Grok et Gemini,
+unique. Le meme brief d'entree est envoye en parallele a GPT, Grok et Claude,
 puis un node de consensus autorise une intention d'ordre seulement si au moins
 deux modeles sur trois votent le meme symbole et le meme intent executable.
 
@@ -12,7 +12,7 @@ deux modeles sur trois votent le meme symbole et le meme intent executable.
 - Base separee : `/files/duckdb/ag1_v4_consensus.duckdb`.
 - Capital initial : 10 000 EUR.
 - Aucun import historique AG1 V3.
-- IBKR reste dry-run par defaut. Le passage paper/live depend des gates
+- L'execution IBKR depend des gates
   `IBKR_DRY_RUN`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED` et
   `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS`.
 - Les fills confirmes IBKR alimentent `core.fills` et `core.fill_costs`.
@@ -35,7 +35,7 @@ deux modeles sur trois votent le meme symbole et le meme intent executable.
 ## Flux
 
 `2B/4B/4C/AG4/R8/Calcul/Merge7/AG1.00`
--> fan-out GPT/Grok/Gemini
+-> fan-out GPT/Grok/Claude
 -> extracteurs tagues par modele
 -> `AG1.V4 - Build Consensus`
 -> `7 - Validate & Enforce Safety`

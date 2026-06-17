@@ -55,7 +55,15 @@ if (isWeekend && !allowWeekendRun) {
   return [];
 }
 
-const executionId = cfg.execution_id ? String(cfg.execution_id) : null;
+let n8nExecutionId = null;
+try {
+  n8nExecutionId = (typeof $execution !== "undefined" && $execution && $execution.id)
+    ? String($execution.id)
+    : null;
+} catch {
+  n8nExecutionId = null;
+}
+const executionId = cfg.execution_id ? String(cfg.execution_id) : n8nExecutionId;
 const universeScope = ["EQUITY", "ETF", "CRYPTO"];
 const envDbPath = (typeof $env !== "undefined" && $env.AG1_V4_DUCKDB_PATH) ? String($env.AG1_V4_DUCKDB_PATH) : "";
 const envInitialCapital = (typeof $env !== "undefined" && $env.AG1_V4_INITIAL_CAPITAL_EUR) ? Number($env.AG1_V4_INITIAL_CAPITAL_EUR) : null;

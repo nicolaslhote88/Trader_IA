@@ -1,4 +1,4 @@
-// AG1 V4 - Build 2/3 consensus from GPT, Grok and Gemini proposals.
+// AG1 V4 - Build 2/3 consensus from GPT, Grok and Claude proposals.
 // Mode: Run Once for All Items.
 
 function isObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
@@ -103,9 +103,23 @@ function inferModelKey(item, index) {
     ""
   ).trim().toLowerCase();
   if (raw.includes("grok") || raw.includes("xai")) return "grok41_reasoning";
-  if (raw.includes("gemini") || raw.includes("google")) return "gemini30_pro";
+  if (raw.includes("claude") || raw.includes("anthropic") || raw.includes("sonnet")) return "claude_sonnet46";
   if (raw.includes("gpt") || raw.includes("openai") || raw.includes("chatgpt")) return "chatgpt52";
-  return ["chatgpt52", "grok41_reasoning", "gemini30_pro"][index] || `model_${index + 1}`;
+  return ["chatgpt52", "grok41_reasoning", "claude_sonnet46"][index] || `model_${index + 1}`;
+}
+
+function modelDisplayKey(v) {
+  return clampText(
+    v?.modelId ||
+    v?.model_id ||
+    v?.modelName ||
+    v?.model_name ||
+    v?.model ||
+    v?.modelKey ||
+    v?.model_key ||
+    "",
+    128
+  ) || "UNKNOWN_MODEL";
 }
 
 function extractDecision(item) {
@@ -158,7 +172,7 @@ function selectActionName(intent, votes, currentQty) {
   return intent;
 }
 
-function buildSelectedAction(group, posQtyMap, runId) {
+function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioSummary, config) {
   const votes = group.votes;
   const representative = deepClone(votes[0].rawAction || {});
   const symbol = group.symbol;
@@ -166,19 +180,23 @@ function buildSelectedAction(group, posQtyMap, runId) {
   const side = sideForIntent(intent);
   const currentQty = posQtyMap[symbol] || 0;
   const selectedAction = selectActionName(intent, votes, currentQty);
-  const qty = conservativeQty(votes.map((v) => v.targetQty));
-  const weight = conservativeWeight(votes.map((v) => v.targetWeightPct));
-  const limits = votes.map((v) => v.limitPrice).filter((x) => Number.isFinite(x) && x > 0);
-  const minLimit = limits.length ? Math.min(...limits) : null;
-  const maxLimit = limits.length ? Math.max(...limits) : null;
-  const limitSpreadPct = minLimit && maxLimit ? ((maxLimit - minLimit) / minLimit) * 100 : 0;
-  const limitCompatible = limits.length < 2 || limitSpreadPct <= 5;
-  const selectedLimit = limits.length ? (side === "BUY" ? minLimit : maxLimit) : null;
+  const matrix = opportunityMap[symbol] || {};
+  const maxPosPct = toNumOrNull(config?.max_pos_pct ?? config?.maxPositionPct) ?? 25;
+  const votedWeight = conservativeWeight(votes.map((v) => v.targetWeightPct));
+  const weight = Math.max(0, Math.min(maxPosPct, votedWeight ?? (intent === "BUY" ? 5 : 0)));
+  const selectedLimit = toNumOrNull(matrix.entry);
+  const totalValue = toNumOrNull(portfolioSummary.totalPortfolioValueEUR) ?? 0;
+  let qty = selectedLimit && selectedLimit > 0 && totalValue > 0
+    ? Math.floor((totalValue * weight / 100) / selectedLimit)
+    : null;
+  if (selectedAction === "CLOSE") qty = 0;
+  if (selectedAction === "DECREASE" && qty !== null) qty = Math.min(currentQty, qty);
   const confidence = Math.round(median(votes.map((v) => v.confidence).filter((x) => x !== null)) ?? 50);
-  const modelKeys = votes.map((v) => v.modelKey).sort();
+  const modelKeysCanonical = votes.map((v) => v.modelKey).sort();
+  const modelKeys = votes.map(modelDisplayKey).sort();
   const consensusId = `CONS_${runId}_${symbol}_${intent}`;
 
-  if (!limitCompatible) {
+  if (selectedAction === "DECREASE" && (votedWeight === null || qty === null)) {
     return {
       decision: {
         consensus_id: consensusId,
@@ -189,37 +207,48 @@ function buildSelectedAction(group, posQtyMap, runId) {
         vote_count: votes.length,
         valid_model_count: group.validModelCount,
         model_keys: modelKeys.join(","),
-        status: "REJECTED_INCOMPATIBLE_LIMITS",
-        reason: `Limit prices diverge by ${limitSpreadPct.toFixed(2)} pct`,
-        selected_qty: qty,
-        selected_weight_pct: weight,
+        status: "REJECTED_MISSING_TARGET_WEIGHT",
+        reason: "DECREASE requires a deterministic final target weight and reference price",
+        selected_qty: null,
+        selected_weight_pct: votedWeight,
         selected_limit_price: selectedLimit,
         confidence,
-        payload_json: { votes },
+        payload_json: { votes, matrix },
       },
       action: null,
     };
   }
 
-  const entryPlan = isObj(representative.entryPlan) ? { ...representative.entryPlan } : {};
-  if (selectedLimit !== null) {
-    entryPlan.orderType = "LIMIT";
-    entryPlan.limitPrice = selectedLimit;
-  } else if (!entryPlan.orderType) {
-    entryPlan.orderType = side === "BUY" ? "LIMIT" : "MARKET";
-  }
+  const entryPlan = {
+    orderType: side === "BUY" ? "LIMIT" : "MARKET",
+    limitPrice: side === "BUY" ? selectedLimit : null,
+    timeInForce: "DAY",
+  };
+  const stopPrice = toNumOrNull(matrix.stop);
+  const takeProfitPrice = toNumOrNull(matrix.tp);
+  const stopLossPct = selectedLimit && stopPrice ? ((stopPrice - selectedLimit) / selectedLimit) * 100 : null;
+  const takeProfitPct = selectedLimit && takeProfitPrice ? ((takeProfitPrice - selectedLimit) / selectedLimit) * 100 : null;
+  const maxLossEUR = qty && selectedLimit && stopPrice ? Math.max(0, qty * (selectedLimit - stopPrice)) : null;
 
   const action = {
     ...representative,
     symbol,
     symbol_internal: symbol,
-    assetClass: normAssetClass(representative.assetClass ?? representative.AssetClass),
+    symbol_yahoo: matrix.symbol_yahoo || symbol,
+    assetClass: normAssetClass(matrix.asset_class || representative.assetClass || representative.AssetClass),
+    sector: matrix.sector || representative.sector || "UNKNOWN",
     action: selectedAction,
     signal: side,
     confidence,
-    targetQty: qty ?? representative.targetQty ?? null,
-    targetWeightPct: weight ?? representative.targetWeightPct ?? null,
+    targetQty: qty,
+    targetWeightPct: weight,
     entryPlan,
+    riskPlan: { stopLossPct, takeProfitPct, maxLossEUR },
+    Data_Age_H1_Hours: toNumOrNull(matrix.data_age_h1_hours),
+    Data_Age_D1_Hours: toNumOrNull(matrix.data_age_d1_hours),
+    SpreadPct: toNumOrNull(matrix.spread_pct),
+    dataQualityFlags: matrix.gates || "",
+    liquidity: matrix.liquidity || null,
     rationale: clampText(
       `AG1 V4 consensus ${votes.length}/3 (${modelKeys.join(", ")}): ${representative.rationale || ""}`,
       2048
@@ -231,8 +260,10 @@ function buildSelectedAction(group, posQtyMap, runId) {
       voteCount: votes.length,
       validModelCount: group.validModelCount,
       modelKeys,
-      sizingRule: "min_qty_min_weight_conservative",
-      limitRule: side === "BUY" ? "min_limit" : "max_limit",
+      modelKeysCanonical,
+      modelIds: votes.map((v) => v.modelId).filter(Boolean).sort(),
+      sizingRule: "deterministic_target_weight_to_final_quantity",
+      priceRule: "pre_llm_fresh_entry",
     },
   };
 
@@ -252,7 +283,7 @@ function buildSelectedAction(group, posQtyMap, runId) {
       selected_weight_pct: weight,
       selected_limit_price: selectedLimit,
       confidence,
-      payload_json: { action, votes },
+      payload_json: { action, votes, matrix, modelKeysCanonical },
     },
     action,
   };
@@ -266,6 +297,11 @@ const dbPath = String(context.db_path || context.ag1_db_path || run.db_path || "
 const meta = isObj(context.meta) ? context.meta : { initialCapitalEUR: 10000 };
 const portfolioSummary = buildPortfolioSummary(context);
 const posQtyMap = buildPositionQtyMap(portfolioSummary);
+const opportunityMap = Object.fromEntries(
+  safeArray(context?.opportunity_pack?.rows)
+    .map((row) => [normSymbol(row?.symbol), row])
+    .filter(([symbol]) => symbol)
+);
 const ts = new Date().toISOString();
 
 const proposalItems = items.filter((it) => it !== context && (isObj(it.output) || isObj(it.agentDecision) || Array.isArray(it.output)));
@@ -278,14 +314,16 @@ for (let i = 0; i < proposalItems.length; i += 1) {
   const modelKey = inferModelKey(item, i);
   const decision = extractDecision(item);
   const actions = safeArray(decision.actions);
-  const parseOk = Array.isArray(decision.actions);
+  const extractorStatus = String(item.extractorStatus || item.extractor_status || "");
+  const parseOk = ["OK_OBJECT", "OK_JSON"].includes(extractorStatus) && Array.isArray(decision.actions);
   modelProposals.push({
     proposal_id: `PROP_${runId}_${modelKey}`,
     run_id: runId,
     ts,
     model_key: modelKey,
     model_name: item.modelName || item.model_name || item.model || modelKey,
-    extractor_status: item.extractorStatus || item.extractor_status || null,
+    model_id: item.modelId || item.model_id || null,
+    extractor_status: extractorStatus || null,
     parse_ok: parseOk,
     decision_json: decision,
     actions_json: actions,
@@ -304,13 +342,24 @@ for (let i = 0; i < proposalItems.length; i += 1) {
     const rawAction = normAction(action.action);
     const intent = normalizeIntent(rawAction);
     const assetClass = normAssetClass(action.assetClass ?? action.AssetClass);
-    const executable = ["BUY", "SELL"].includes(intent) && symbol && !isFxSymbol(action) && ["EQUITY", "ETF", "CRYPTO"].includes(assetClass);
+    const matrix = opportunityMap[symbol] || {};
+    const gates = String(matrix.gates || "");
+    const buyEligible = intent === "BUY"
+      && matrix.decision === "Entrer / Renforcer"
+      && (!gates || gates === "OK");
+    const sellEligible = intent === "SELL" && (posQtyMap[symbol] || 0) > 0;
+    const executable = (buyEligible || sellEligible)
+      && symbol
+      && !isFxSymbol(action)
+      && ["EQUITY", "ETF"].includes(assetClass);
     const vote = {
       vote_id: `VOTE_${runId}_${modelKey}_${symbol || "UNKNOWN"}_${intent}_${aIdx}`,
       run_id: runId,
       ts,
       model_key: modelKey,
       modelKey,
+      modelId: item.modelId || item.model_id || null,
+      modelName: item.modelName || item.model_name || item.model || modelKey,
       symbol: symbol || "UNKNOWN",
       intent,
       action: rawAction,
@@ -346,6 +395,7 @@ const approvedActions = [];
 for (const group of groups.values()) {
   const uniqueModels = new Set(group.votes.map((v) => v.modelKey));
   if (uniqueModels.size < 2 || validModelCount < 2) {
+    const displayModels = group.votes.map(modelDisplayKey).sort();
     consensusDecisions.push({
       consensus_id: `CONS_${runId}_${group.symbol}_${group.intent}`,
       run_id: runId,
@@ -356,14 +406,14 @@ for (const group of groups.values()) {
       side: sideForIntent(group.intent),
       vote_count: uniqueModels.size,
       valid_model_count: validModelCount,
-      model_keys: Array.from(uniqueModels).sort().join(","),
+      model_keys: displayModels.join(","),
       status: "NO_CONSENSUS",
       reason: "Fewer than two valid model votes for the same symbol and intent",
-      payload_json: { votes: group.votes },
+      payload_json: { votes: group.votes, modelKeysCanonical: Array.from(uniqueModels).sort() },
     });
     continue;
   }
-  const selected = buildSelectedAction(group, posQtyMap, runId);
+  const selected = buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioSummary, context.config || {});
   consensusDecisions.push(selected.decision);
   for (const v of group.votes) v.consensus_id = selected.decision.consensus_id;
   if (selected.action) approvedActions.push(selected.action);
@@ -382,15 +432,25 @@ if (!approvedActions.length) {
       side: null,
       vote_count: 0,
       valid_model_count: validModelCount,
-      model_keys: modelProposals.filter((p) => p.parse_ok).map((p) => p.model_key).sort().join(","),
+      model_keys: modelProposals.filter((p) => p.parse_ok).map(modelDisplayKey).sort().join(","),
       status: "NO_TRADE",
       reason: warnings[warnings.length - 1],
-      payload_json: { modelProposals, votes },
+      payload_json: { modelProposals, votes, modelKeysCanonical: modelProposals.filter((p) => p.parse_ok).map((p) => p.model_key).sort() },
     });
   }
 }
 
 const decision = approvedActions.length ? "TRADE" : "NO_TRADE";
+const validDecisions = modelProposals.filter((p) => p.parse_ok).map((p) => p.decision_json || {});
+const regimeCounts = {};
+for (const proposal of validDecisions) {
+  const regime = String(proposal.marketRegime || "").toUpperCase();
+  if (regime) regimeCounts[regime] = (regimeCounts[regime] || 0) + 1;
+}
+const selectedRegime = Object.entries(regimeCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))[0]?.[0] || "NEUTRAL";
+const targetExposurePct = median(validDecisions.map((p) => toNumOrNull(p.targetExposurePct)).filter((x) => x !== null));
+const maxNewPositionVotes = validDecisions.map((p) => toNumOrNull(p.maxNewPositions)).filter((x) => x !== null && x >= 0);
+const maxNewPositions = maxNewPositionVotes.length ? Math.floor(Math.min(...maxNewPositionVotes)) : null;
 const agentDecision = {
   decisionMeta: {
     runId,
@@ -402,7 +462,9 @@ const agentDecision = {
   },
   portfolioPlan: {
     posture: decision === "TRADE" ? "CONSENSUS_TRADE" : "CONSENSUS_NO_TRADE",
-    maxNewExposurePct: null,
+    marketRegime: selectedRegime,
+    targetExposurePct,
+    maxNewPositions,
   },
   actions: approvedActions,
   riskNotes: warnings,

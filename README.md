@@ -25,15 +25,16 @@ broker les nouvelles ouvertures FX qui emprunteraient une devise non-EUR
 | # | Agent | RÃ´le | ImplÃ©mentÃ© dans |
 |---|---|---|---|
 | 1 | **Univers** | Extraction et maintenance de l'univers d'investissement (tickers, mÃ©tadonnÃ©es, secteurs) | `outils/AG0-V1 - extraction universe/` (workflow n8n inactif, utilitaire ponctuel) |
-| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres theoriques. Cote actions, AG1 V4 consolide GPT/Grok/Gemini par consensus 2/3. Cote Forex paper, GPT-5.2 est l'unique PM actif ; Grok/Gemini sont gardes inactifs. | `AG1-V4-Consensus Portfolio manager/`, `AG1-V3-Portfolio manager/`, `AG1-FX-V1-Portfolio manager/` |
+| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres theoriques. Cote actions, AG1 V4 consolide GPT/Grok/Claude par consensus 2/3. Cote Forex paper, GPT-5.2 est l'unique PM actif ; Grok/Gemini sont gardes inactifs. | `AG1-V4-Consensus Portfolio manager/`, `AG1-V3-Portfolio manager/`, `AG1-FX-V1-Portfolio manager/` |
 | 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
 | 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
 | 5 | **Analyste Sentiment / News** | Sentiment de marchÃ©, news, transcripts | `AG4-V3/` (macro + geo-tagging), `AG4-SPE-V2/` (par valeur), `AG4-Forex/` (canaux FX dÃ©diÃ©s) |
 | 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exÃ©cution | `AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` |
 
-> Etat actuel : l'Execution Trader actions reste sandbox par defaut. Cote
-> Forex, `IBKR_DRY_RUN=false` est active uniquement sur l'environnement IBKR
-> paper, avec garde-fou de compte paper et reconciliation IBKR/DuckDB.
+> Etat actuel : AG1 V4 actions est le Portfolio Manager actif et peut executer
+> sur le compte IBKR live si les gates VPS sont ouvertes. Cote Forex, les
+> workflows sont parques/desactives; les mentions paper restantes concernent
+> l'historique AG1-FX.
 
 ## 2. Stack technique
 
@@ -42,7 +43,7 @@ broker les nouvelles ouvertures FX qui emprunteraient une devise non-EUR
 - **yfinance-api** : service maison autour de `yfinance` (cache, cooldown par symbole, endpoints `/history`, `/quote`, `/options`, `/calendar`, `/fundamentals`)
 - **yf-enrichment** : enrichissement quotidien (volatilitÃ©, earnings, calendar)
 - **Streamlit** : dashboard opÃ©rationnel (`dashboard/`, `trading-dashboard` service)
-- **IBKR Client Portal API** : gateway + broker FastAPI pour l'execution actions/ETF/FX. Forex est branche en paper, actions/ETF restent en dry-run par defaut.
+- **IBKR Client Portal API** : gateway + broker FastAPI pour l'execution actions/ETF/FX. AG1 V4 actions peut envoyer des ordres reels selon les gates VPS; le Forex est parque/desactive hors workflows historiques.
 - **Traefik** : reverse proxy TLS (Let's Encrypt)
 
 Tout tourne dans Docker Compose â€” voir `vps_hostinger_config/`.
@@ -97,7 +98,7 @@ Trader_IA/
 ## 5. Flux de donnÃ©es (vue haute)
 
 ```
-AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨les) â”€â”€â–º AG1 V4 (GPT/Grok/Gemini)
+AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨les) â”€â”€â–º AG1 V4 (GPT/Grok/Claude)
                                                                     â”‚
                                                                     â–¼
                                     Consensus 2/3 â”€â”€â–º Validate & Enforce Safety â”€â”€â–º Build DuckDB Bundle â”€â”€â–º Upsert Run Bundle â”€â”€â–º Post-Run Health

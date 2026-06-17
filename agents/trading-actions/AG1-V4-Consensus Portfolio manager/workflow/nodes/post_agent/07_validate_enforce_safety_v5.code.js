@@ -261,9 +261,19 @@ for (const a of agentDecision.actions || []) {
   const d1Age = actionDataAge(a, ["Data_Age_D1_Hours", "dataAgeD1Hours", "data_age_d1_hours"]);
   const spreadPct = actionDataAge(a, ["SpreadPct", "spreadPct", "spread_pct"]);
   const flags = actionFlagText(a).toUpperCase();
+  const liquidityStatus = String(a?.liquidity?.status || "").trim().toUpperCase();
+  const contractResolved = a?.liquidity?.contractResolved;
+  const orderToVolumePct = toNumOrNull(a?.liquidity?.estimatedOrderToVolumePct);
   if (side === "BUY" && h1Age !== null && h1Age > limits.maxH1AgeHours) { reject(symbol, "STALE_H1", String(h1Age)); continue; }
   if (side === "BUY" && d1Age !== null && d1Age > limits.maxD1AgeHours) { reject(symbol, "STALE_D1", String(d1Age)); continue; }
   if (side === "BUY" && flags.includes("STALE_YF")) { reject(symbol, "STALE_YF"); continue; }
+  if (side === "BUY" && ["UNKNOWN", "STRESS"].includes(liquidityStatus)) { reject(symbol, `LIQUIDITY_${liquidityStatus}`); continue; }
+  if (side === "BUY" && contractResolved !== true) { reject(symbol, "IBKR_CONTRACT_UNRESOLVED"); continue; }
+  if (side === "BUY" && ["LIQUIDITY_UNKNOWN", "LIQUIDITY_STRESS", "IBKR_CONTRACT_UNRESOLVED", "STALE_QUOTE", "PRICE_DIVERGENCE"].some((code) => flags.includes(code))) {
+    reject(symbol, "LIQUIDITY_GATE", flags);
+    continue;
+  }
+  if (side === "BUY" && spreadPct === null) { reject(symbol, "LIQUIDITY_UNKNOWN", "spread"); continue; }
   if (side === "BUY" && spreadPct !== null && spreadPct > limits.maxSpreadPct) { reject(symbol, "SPREAD_TOO_WIDE", String(spreadPct)); continue; }
 
   const grossNotional = qty * notionalPx;
@@ -300,6 +310,9 @@ for (const a of agentDecision.actions || []) {
       h1Age,
       d1Age,
       spreadPct,
+      liquidityStatus,
+      contractResolved,
+      orderToVolumePct,
       dataFlags: flags,
     },
   });
