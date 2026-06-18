@@ -45,6 +45,19 @@ if len(items) > 0:
 run_id = f"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
 with db_con(db_path) as con:
+    # A1 (2026-06-17) — auto-réconciliation des runs zombies. Un run dure <25 min et les
+    # runs sont espacés de >=3 h (cron 9/12/15) : tout 'RUNNING' de plus d'1 h est un
+    # orphelin (finalize jamais atteint) -> on le clôt en 'STALE'. Idempotent.
+    con.execute(
+        """
+        UPDATE run_log
+        SET status = 'STALE',
+            finished_at = CURRENT_TIMESTAMP,
+            error_detail = 'auto-reconciled: orphan RUNNING at next run start'
+        WHERE status = 'RUNNING'
+          AND started_at < CURRENT_TIMESTAMP - INTERVAL '1 hour'
+        """
+    )
     if len(items) == 0:
         con.execute(
             """

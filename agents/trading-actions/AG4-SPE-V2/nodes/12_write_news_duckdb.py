@@ -9,7 +9,7 @@ DEFAULT_DB_PATH = "/files/duckdb/ag4_spe_v2.duckdb"
 
 
 @contextmanager
-def db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):
+def db_con(path=DEFAULT_DB_PATH, retries=8, delay=1):
     con = None
     for attempt in range(retries):
         try:
@@ -24,12 +24,6 @@ def db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
             try:
                 con.close()
             except Exception:

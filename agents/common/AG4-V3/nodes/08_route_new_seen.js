@@ -31,6 +31,21 @@ const oldEvent = (!old && eKey && historyEventIndex[eKey]) ? historyEventIndex[e
 
 const REANALYZE_HOURS = 12;
 
+// --- P1 (2026-06-17) Hard pre-filter : eviter d'appeler le LLM sur du bruit pur.
+// Une news brand-new est analysee seulement si elle a un minimum de signal
+// (mot-cle d'impact OU secteur candidat OU source de bon niveau).
+// Sinon on l'ecrit en skip (action=skip, reason=low_prescore) sans cout LLM.
+const MIN_PRESCORE_TO_ANALYZE = 3;
+function passesHardFilter(nn) {
+  const pre = toNum(nn.preImpactScore, 0);
+  const hasSector = Array.isArray(nn.candidateSectors) && nn.candidateSectors.length > 0;
+  const tier = toNum(nn.sourceTier, 3);
+  if (pre >= MIN_PRESCORE_TO_ANALYZE) return true;   // signal mots-cles suffisant
+  if (hasSector) return true;                          // touche un secteur de l'univers
+  if (tier <= 1) return true;                          // source tier-1 (qualite), on garde
+  return false;
+}
+
 if (old) {
   const age = hoursBetween(nowIso, old.firstSeenAt || old.publishedAt || old.analyzedAt || nowIso);
   const preImpact = toNum(n.preImpactScore, 0);
@@ -95,6 +110,34 @@ if (oldEvent && !n.preAnalyzeHint) {
       Strategy: oldEvent.Strategy ?? '',
       firstSeenAt: oldEvent.firstSeenAt ?? oldEvent.analyzedAt ?? nowIso,
       analyzedAt: oldEvent.analyzedAt ?? nowIso,
+    }
+  }];
+}
+
+if (!passesHardFilter(n)) {
+  return [{
+    json: {
+      ...n,
+      _action: 'skip',
+      _reason: 'low_prescore',
+      seenNowAt: nowIso,
+      ImpactScore: 0,
+      confidence: 0,
+      urgency: 'low',
+      notes: 'Noise (pre-filter)',
+      symbols: Array.isArray(n.symbols) ? n.symbols.join(', ') : (n.symbols || ''),
+      type: n.type || 'macro',
+      Regime: 'Neutral',
+      Theme: 'Resultats/Micro',
+      sectors_bullish: '',
+      sectors_bearish: '',
+      currencies_bullish: '',
+      currencies_bearish: '',
+      Winners: '',
+      Losers: '',
+      Strategy: '',
+      firstSeenAt: nowIso,
+      analyzedAt: nowIso,
     }
   }];
 }

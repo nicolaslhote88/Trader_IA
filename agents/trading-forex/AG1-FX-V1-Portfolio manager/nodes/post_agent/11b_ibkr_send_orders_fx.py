@@ -22,8 +22,18 @@ import uuid
 import urllib.request
 from urllib.error import URLError
 
+ctx = (_items or [{"json": {}}])[0].get("json", {})
+
+
+def env_bool(name, default):
+    raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return default, "context" if name == "IBKR_DRY_RUN" else "default"
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}, "env"
+
+
 BROKER_URL = os.environ.get("IBKR_BROKER_URL", "http://ibkr-broker:8080")
-DRY_RUN = os.environ.get("IBKR_DRY_RUN", "true").lower() != "false"
+DRY_RUN, DRY_RUN_SOURCE = env_bool("IBKR_DRY_RUN", bool(ctx.get("dry_run", True)))
 SEND_DRY_RUN_TO_BROKER = os.environ.get("IBKR_SEND_DRY_RUN_TO_BROKER", "false").lower() == "true"
 REQUIRE_PAPER_ACCOUNT = os.environ.get("IBKR_REQUIRE_PAPER_ACCOUNT", "true").lower() != "false"
 PAPER_ACCOUNT_PREFIXES = tuple(
@@ -219,7 +229,6 @@ def broker_payload_for_orders(orders):
     }
 
 
-ctx = (_items or [{"json": {}}])[0].get("json", {})
 executable_orders = ctx.get("executable_orders") or []
 run_id = ctx.get("run_id") or ""
 
@@ -444,6 +453,7 @@ return [
             "executable_orders": executable_orders,
             "ibkr_send_summary": {
                 "dry_run": DRY_RUN,
+                "dry_run_source": DRY_RUN_SOURCE,
                 "broker_dry_run": broker_dry_run,
                 "broker_called": broker_called,
                 "orders_considered": len(pending_orders),

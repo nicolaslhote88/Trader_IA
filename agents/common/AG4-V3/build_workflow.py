@@ -37,6 +37,31 @@ def build() -> dict:
             'name': 'Manual Trigger',
         },
         {
+            # P0 (2026-06-17) — Interrupteur de mode d'analyse.
+            # 'reduced' = analyse Actions seule (schema minimal, Grok). 'full' = analyse
+            # complete Actions+Forex (schema complet, gpt-5-mini) a reactiver si Forex revient.
+            # Pour basculer : editer la valeur de 'analysisMode' ci-dessous (ou dans l'UI n8n).
+            'parameters': {
+                'assignments': {
+                    'assignments': [
+                        {
+                            'id': 'mode-flag',
+                            'name': 'analysisMode',
+                            'value': 'reduced',
+                            'type': 'string',
+                        }
+                    ]
+                },
+                'includeOtherFields': True,
+                'options': {},
+            },
+            'type': 'n8n-nodes-base.set',
+            'typeVersion': 3.4,
+            'position': [-1376, -104],
+            'id': 'b2d4f6a8-0c1e-4a2b-9c3d-5e6f70819201',
+            'name': '20CFG - Analysis Mode',
+        },
+        {
             'parameters': {
                 'documentId': {
                     '__rl': True,
@@ -338,7 +363,13 @@ def build() -> dict:
                                 'Coherence attendue : si impact_magnitude = High, alors urgency doit etre immediate ou today. '
                                 'Coherence attendue : si impact_asset_class contient FX, alors impact_fx_pairs est non vide. '
                                 'Tu dois TOUJOURS renseigner les 4 nouveaux champs meme si impact_asset_class = None '
-                                '(dans ce cas : impact_fx_pairs = "", impact_magnitude = "Low", impact_region = "Other").'
+                                '(dans ce cas : impact_fx_pairs = "", impact_magnitude = "Low", impact_region = "Other").\n\n'
+                                'CALIBRATION impact_score (0-10) - TRES IMPORTANT : la TRES GRANDE MAJORITE des news sont 1-4. '
+                                '8-10 est RESERVE aux chocs systemiques (decision/surprise de banque centrale, defaut souverain, '
+                                'crise geopolitique/energetique majeure, surprise macro > 2 sigma qui change la tendance). '
+                                '5-7 = evenement directionnel net pour un secteur. 1-3 = micro/anecdotique/interview/point marche de routine. '
+                                '0 = aucun impact marche notable. Coherence : impact_magnitude=Low => impact_score 0-3 ; Medium => 4-6 ; High => 7-10. '
+                                'Si confidence < 0.5, n attribue PAS un impact_score > 6.'
                             ),
                         },
                         {
@@ -416,6 +447,90 @@ def build() -> dict:
             'name': '20H2 - Parse AI Output',
         },
         {
+            # P0 — Routeur de mode : full (Forex+Actions, gpt-5-mini) vs reduced (Actions, Grok).
+            'parameters': {
+                'rules': {
+                    'values': [
+                        {
+                            'conditions': {
+                                'options': {'caseSensitive': False, 'leftValue': '', 'typeValidation': 'loose', 'version': 3},
+                                'conditions': [
+                                    {
+                                        'id': 'is-full',
+                                        'leftValue': '={{ $json.analysisMode }}',
+                                        'rightValue': 'full',
+                                        'operator': {'type': 'string', 'operation': 'equals'},
+                                    }
+                                ],
+                                'combinator': 'and',
+                            },
+                            'outputKey': 'full',
+                        },
+                        {
+                            'conditions': {
+                                'options': {'caseSensitive': False, 'leftValue': '', 'typeValidation': 'loose', 'version': 3},
+                                'conditions': [
+                                    {
+                                        'id': 'is-reduced',
+                                        'leftValue': '={{ $json.analysisMode }}',
+                                        'rightValue': 'full',
+                                        'operator': {'type': 'string', 'operation': 'notEquals'},
+                                    }
+                                ],
+                                'combinator': 'and',
+                            },
+                            'outputKey': 'reduced',
+                        },
+                    ]
+                },
+                'looseTypeValidation': True,
+                'options': {},
+            },
+            'type': 'n8n-nodes-base.switch',
+            'typeVersion': 3.4,
+            'position': [1696, 48],
+            'id': 'c3e5f7a9-1d2e-4b3c-8d4e-6f7081920312',
+            'name': '20H_MODE - Route full vs reduced',
+        },
+        {
+            # Branche REDUITE — appel Grok (xAI) en HTTP, corps construit dans 20H0 (grokRequest).
+            'parameters': {
+                'method': 'POST',
+                'url': 'https://api.x.ai/v1/chat/completions',
+                'authentication': 'predefinedCredentialType',
+                'nodeCredentialType': 'xAiApi',
+                'sendBody': True,
+                'specifyBody': 'json',
+                'jsonBody': '={{ JSON.stringify($json.grokRequest) }}',
+                'options': {'timeout': 120000},
+            },
+            'type': 'n8n-nodes-base.httpRequest',
+            'typeVersion': 4.2,
+            'position': [1920, 240],
+            'id': 'd4f6a8b0-2e3f-4c4d-9e5f-708192031423',
+            'name': '20H1R - Analyze with Grok',
+            'retryOnFail': True,
+            'maxTries': 2,
+            'onError': 'continueRegularOutput',
+            'credentials': {'xAiApi': {'id': '8nKnkigAO1POxfzs', 'name': 'xAi account'}},
+        },
+        {
+            'parameters': {'mode': 'combine', 'combineBy': 'combineByPosition', 'options': {}},
+            'type': 'n8n-nodes-base.merge',
+            'typeVersion': 3.2,
+            'position': [2144, 240],
+            'id': 'e5a7b9c1-3f4a-4d5e-8f6a-819203142534',
+            'name': '20H1BR - Merge Grok + Context',
+        },
+        {
+            'parameters': {'jsCode': load_code('10b_parse_llm_output_reduced.js')},
+            'type': 'n8n-nodes-base.code',
+            'typeVersion': 2,
+            'position': [2368, 240],
+            'id': 'f6b8c0d2-4a5b-4e6f-9a7b-920314253645',
+            'name': '20H2R - Parse Grok Output',
+        },
+        {
             'parameters': {'jsCode': load_code('11_build_skip_row.js')},
             'type': 'n8n-nodes-base.code',
             'typeVersion': 2,
@@ -424,10 +539,10 @@ def build() -> dict:
             'name': '20S1 - Build Skip Row',
         },
         {
-            'parameters': {'mode': 'append', 'options': {}},
+            'parameters': {'mode': 'append', 'numberInputs': 3, 'options': {}},
             'type': 'n8n-nodes-base.merge',
             'typeVersion': 3.2,
-            'position': [2464, 64],
+            'position': [2640, 64],
             'id': '1d7d61df-2326-443e-aec7-45ca7987a8b9',
             'name': '20Z - Merge analyzed + skipped',
         },
@@ -443,7 +558,7 @@ def build() -> dict:
             'parameters': {'language': 'pythonNative', 'pythonCode': load_code('14_write_fx_news_duckdb.py')},
             'type': 'n8n-nodes-base.code',
             'typeVersion': 2,
-            'position': [2912, 64],
+            'position': [3088, 64],
             'id': '4a38ea3b-79bb-444a-af56-3cb7c1225b5d',
             'name': '20FXW - FX Conditional Write',
         },
@@ -471,8 +586,9 @@ def build() -> dict:
     ]
 
     connections = {
-        'Schedule Trigger': {'main': [[{'node': '20A - Load RSS Sources', 'type': 'main', 'index': 0}]]},
-        'Manual Trigger': {'main': [[{'node': '20A - Load RSS Sources', 'type': 'main', 'index': 0}]]},
+        'Schedule Trigger': {'main': [[{'node': '20CFG - Analysis Mode', 'type': 'main', 'index': 0}]]},
+        'Manual Trigger': {'main': [[{'node': '20CFG - Analysis Mode', 'type': 'main', 'index': 0}]]},
+        '20CFG - Analysis Mode': {'main': [[{'node': '20A - Load RSS Sources', 'type': 'main', 'index': 0}]]},
         '20A - Load RSS Sources': {'main': [[{'node': '20B - Normalize RSS Sources', 'type': 'main', 'index': 0}]]},
         '20B - Normalize RSS Sources': {'main': [[{'node': '20C - Filter enabled', 'type': 'main', 'index': 0}]]},
         '20C - Filter enabled': {
@@ -531,17 +647,27 @@ def build() -> dict:
             ]
         },
         '20H0 - Prepare LLM Input': {
+            'main': [[{'node': '20H_MODE - Route full vs reduced', 'type': 'main', 'index': 0}]]
+        },
+        '20H_MODE - Route full vs reduced': {
             'main': [
                 [
                     {'node': '20H1 - Analyze with OpenAI', 'type': 'main', 'index': 0},
                     {'node': '20H1B - Merge AI + Context', 'type': 'main', 'index': 0},
-                ]
+                ],
+                [
+                    {'node': '20H1R - Analyze with Grok', 'type': 'main', 'index': 0},
+                    {'node': '20H1BR - Merge Grok + Context', 'type': 'main', 'index': 0},
+                ],
             ]
         },
         '20H1 - Analyze with OpenAI': {'main': [[{'node': '20H1B - Merge AI + Context', 'type': 'main', 'index': 1}]]},
         '20H1B - Merge AI + Context': {'main': [[{'node': '20H2 - Parse AI Output', 'type': 'main', 'index': 0}]]},
+        '20H1R - Analyze with Grok': {'main': [[{'node': '20H1BR - Merge Grok + Context', 'type': 'main', 'index': 1}]]},
+        '20H1BR - Merge Grok + Context': {'main': [[{'node': '20H2R - Parse Grok Output', 'type': 'main', 'index': 0}]]},
         '20H2 - Parse AI Output': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 0}]]},
-        '20S1 - Build Skip Row': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 1}]]},
+        '20H2R - Parse Grok Output': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 1}]]},
+        '20S1 - Build Skip Row': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 2}]]},
         '20Z - Merge analyzed + skipped': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
         '20DBW - Upsert News DuckDB': {'main': [[{'node': '20FXW - FX Conditional Write', 'type': 'main', 'index': 0}]]},
         '20FXW - FX Conditional Write': {'main': [[{'node': 'SplitInBatches ITEMS', 'type': 'main', 'index': 0}]]},

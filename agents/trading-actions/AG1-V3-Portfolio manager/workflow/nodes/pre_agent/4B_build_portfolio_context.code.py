@@ -758,19 +758,38 @@ def load_latest_positions_core(con):
     for idx, row in enumerate(out_rows, start=1):
         row["row_number"] = idx
 
+    cash_eur = to_num(s.get("cash_eur"), 0.0) or 0.0
+    equity_eur = to_num(s.get("equity_eur"), 0.0) or 0.0
+    total_value_eur = to_num(s.get("total_value_eur"), 0.0) or 0.0
+    total_pnl_eur = to_num(s.get("total_pnl_eur"), None)
+    roi = to_num(s.get("roi"), None)
+
+    if used_mtm_overlay:
+        equity_eur = sum(to_num(row.get("MarketValue"), 0.0) or 0.0 for row in out_rows)
+        total_value_eur = cash_eur + equity_eur
+
+        initial_capital = None
+        if total_pnl_eur is not None:
+            initial_capital = (to_num(s.get("total_value_eur"), 0.0) or 0.0) - total_pnl_eur
+        if initial_capital is None or initial_capital <= 0:
+            initial_capital = 50000.0
+
+        total_pnl_eur = total_value_eur - initial_capital
+        roi = (total_pnl_eur / initial_capital) if initial_capital > 0 else roi
+
     return {
         "rows": out_rows,
         "positionsSource": "core_snapshots+mtm_overlay" if used_mtm_overlay else "core_snapshots",
         "summary": {
             "runId": run_id,
             "ts": to_iso(s.get("ts_ms") if s.get("ts_ms") is not None else s.get("ts")),
-            "cashEUR": to_num(s.get("cash_eur"), 0.0) or 0.0,
-            "equityEUR": to_num(s.get("equity_eur"), 0.0) or 0.0,
-            "totalPortfolioValueEUR": to_num(s.get("total_value_eur"), 0.0) or 0.0,
+            "cashEUR": cash_eur,
+            "equityEUR": equity_eur,
+            "totalPortfolioValueEUR": total_value_eur,
             "cumFeesEUR": to_num(s.get("cum_fees_eur"), 0.0) or 0.0,
             "cumAiCostEUR": to_num(s.get("cum_ai_cost_eur"), 0.0) or 0.0,
-            "totalPnLEUR": to_num(s.get("total_pnl_eur"), None),
-            "roi": to_num(s.get("roi"), None),
+            "totalPnLEUR": total_pnl_eur,
+            "roi": roi,
             "drawdownPct": to_num(s.get("drawdown_pct"), None),
         },
     }

@@ -24,6 +24,12 @@ l'envoi broker des ordres actions meme quand le broker est en mode live/paper.
 Ne passer cette variable a `true` qu'apres validation du ledger AG1, de la
 reconciliation broker et des controles de qualite des donnees.
 
+En mode paper pre-live, garder `IBKR_REQUIRE_PAPER_ACCOUNT=true` et
+`IBKR_PAPER_ACCOUNT_PREFIXES=DU`. Le node verifie le compte via
+`/account/summary` avant tout envoi non-dry-run. Pour limiter le test paper a un
+agent, renseigner `AG1_ACTIONS_IBKR_ENABLED_MODELS` avec des tokens de modele
+autorises, par exemple `gemini`.
+
 Utilitaires au niveau parent :
 
 - `rebuild_pack.py` — régénère les fichiers `workflow/nodes/*` et les variants depuis le template.
