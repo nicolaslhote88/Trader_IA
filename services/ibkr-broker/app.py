@@ -1007,6 +1007,55 @@ async def health() -> dict:
         }
 
 
+@app.get("/news/portfolio")
+async def news_portfolio() -> dict:
+    """News IBKR des valeurs detenues (read-only) pour AG4_Spe-V3.
+
+    Normalise /iserver/news/portfolio. En cas d'erreur (session down) -> liste
+    vide pour ne pas casser le workflow. Ne touche jamais a l'execution.
+    """
+    client = get_client()
+    try:
+        raw = await client.get_portfolio_news()
+    except Exception as exc:
+        return {"items": [], "count": 0, "error": str(exc)}
+    if isinstance(raw, dict):
+        items = raw.get("news", []) or []
+    elif isinstance(raw, list):
+        items = raw
+    else:
+        items = []
+    out: list[dict] = []
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        headline = str(it.get("headline") or "").strip()
+        symbol_guess = ""
+        if " - " in headline:
+            symbol_guess = headline.split(" - ", 1)[0].strip().upper()
+        rt = it.get("receiptTime_r") or it.get("displayTime_r")
+        published_at = None
+        if rt:
+            try:
+                published_at = datetime.fromtimestamp(int(rt) / 1000.0, tz=timezone.utc).isoformat()
+            except Exception:
+                published_at = None
+        out.append(
+            {
+                "news_article_id": it.get("id"),
+                "symbol_guess": symbol_guess,
+                "headline": headline,
+                "source": it.get("source"),
+                "provider": it.get("provider"),
+                "sentiment": it.get("sentiment"),
+                "published_at": published_at,
+                "receipt_time": it.get("receiptTime"),
+                "tickers": it.get("tickers"),
+            }
+        )
+    return {"items": out, "count": len(out)}
+
+
 @app.post("/auth/tickle")
 async def manual_tickle() -> dict:
     """Keepalive manuel de la session IBKR."""

@@ -1,0 +1,303 @@
+{
+  "id": "hSqxVSb8YAO9Nc6A",
+  "name": "AG4_Spé-IBKR-V1 — Portfolio News",
+  "active": 1,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 0 10,13,16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "ibkr-sched",
+      "name": "Schedule IBKR News",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "ibkr-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://ibkr-broker:8080/news/portfolio",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "ibkr-http",
+      "name": "HTTP Broker Portfolio News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2500
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb, hashlib, json, time\nfrom datetime import datetime, timezone\nDB = \"/files/duckdb/ag4_spe_v2.duckdb\"\nAG1 = \"/files/duckdb/ag1_v4_consensus.duckdb\"\nRUN_ID = \"AG4IBKR_\" + datetime.now(timezone.utc).strftime(\"%Y%m%d%H%M%S\")\n\ndef connect_w(path, tries=6, delay=0.4):\n    last = None\n    for i in range(tries):\n        try:\n            return duckdb.connect(path)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and i < tries - 1:\n                time.sleep(delay * (2 ** i)); continue\n            raise\n    raise last\n\ndef held_syms():\n    s = set(); c = None\n    try:\n        c = duckdb.connect(AG1, read_only=True)\n        for r in c.execute(\"SELECT DISTINCT UPPER(TRIM(symbol)) FROM main.portfolio_positions_mtm_latest WHERE symbol IS NOT NULL AND UPPER(TRIM(symbol)) NOT IN ('CASH_EUR','__META__') AND COALESCE(quantity,0)<>0\").fetchall():\n            if r and r[0]:\n                s.add(r[0])\n    except Exception:\n        pass\n    finally:\n        if c is not None:\n            try: c.close()\n            except Exception: pass\n    return s\n\nheld = held_syms()\nraw = []\nfor it in (_items or []):\n    j = it.get(\"json\", {}) or {}\n    arr = j.get(\"items\")\n    if isinstance(arr, list):\n        raw += arr\n    elif isinstance(j, list):\n        raw += j\n\ncon = connect_w(DB)\nfor ddl in [\"ALTER TABLE news_history ADD COLUMN IF NOT EXISTS provider VARCHAR\",\n            \"ALTER TABLE news_history ADD COLUMN IF NOT EXISTS news_article_id VARCHAR\",\n            \"ALTER TABLE news_history ADD COLUMN IF NOT EXISTS ibkr_sentiment DOUBLE\"]:\n    try: con.execute(ddl)\n    except Exception: pass\n\nout = []\nseen = set()\nfor a in raw:\n    if not isinstance(a, dict):\n        continue\n    sym = str(a.get(\"symbol_guess\") or \"\").upper().strip()\n    if not sym or sym not in held:\n        continue\n    provider_code = str(a.get(\"source\") or \"IBKR\")\n    art = str(a.get(\"news_article_id\") or \"\")\n    if not art:\n        continue\n    news_id = hashlib.sha1((sym + \"|\" + provider_code + \"|\" + art).encode(\"utf-8\")).hexdigest()\n    if news_id in seen:\n        continue\n    seen.add(news_id)\n    if con.execute(\"SELECT 1 FROM news_history WHERE news_id=? LIMIT 1\", [news_id]).fetchone():\n        continue\n    headline = str(a.get(\"headline\") or \"\").strip()\n    pub = a.get(\"published_at\")\n    payload = {\"source\": \"ibkr\", \"title\": headline, \"date\": pub, \"provider\": a.get(\"provider\"), \"snippet\": headline, \"content\": headline}\n    out.append({\"json\": {\n        \"run_id\": RUN_ID, \"db_path\": DB,\n        \"newsId\": news_id, \"symbol\": sym, \"company_name\": sym, \"companyName\": sym, \"isin\": None,\n        \"source\": \"ibkr\", \"provider\": a.get(\"provider\") or provider_code, \"newsArticleId\": art,\n        \"ibkrSentiment\": a.get(\"sentiment\"),\n        \"url\": art, \"articleUrl\": art, \"articleCanonicalUrl\": art, \"canonicalUrl\": art,\n        \"title\": headline, \"articleTitle\": headline, \"publishedAt\": pub, \"snippet\": headline, \"text\": headline,\n        \"firstSeenAt\": datetime.now(timezone.utc).isoformat(),\n        \"_reason\": \"ibkr_portfolio\", \"_runAI\": True, \"_articlesLoopReset\": False,\n        \"llmInput\": json.dumps(payload),\n    }})\ntry: con.execute(\"CHECKPOINT\")\nexcept Exception: pass\ncon.close()\nreturn out\n"
+      },
+      "id": "ibkr-code3",
+      "name": "Normalize + Dedup IBKR",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        464,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "runai",
+              "leftValue": "={{ $json._runAI }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        704,
+        0
+      ],
+      "id": "ibkr-s18",
+      "name": "S18 - IF Run AI?"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini",
+          "cachedResultName": "GPT-5-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "Tu es un analyste buy-side specialise news single-stock. N'utilise QUE les informations fournies, n'invente rien. Si la correspondance entreprise est ambigue ou absente, retourne isRelevant=false. Rubric impactScore: -10 catastrophique, -7 a -4 negatif, -3 a -1 legerement negatif, 0 neutre/bruit, +1 a +3 legerement positif, +4 a +7 positif, +8 a +10 exceptionnel. Reponds uniquement en JSON valide selon le schema impose."
+            },
+            {
+              "content": "=TARGET:\n- symbol: {{ $json.symbol }}\n- name: {{ $json.company_name }}\n- isin: {{ $json.isin }}\n\nNEWS:\n{{ $json.llmInput }}\n\nRegles:\n- Si la news ne concerne pas explicitement TARGET -> isRelevant=false, impactScore=0, sentiment=Neutral, category=Noise.\n- Si ambigu / doute -> isRelevant=false."
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_schema",
+              "name": "specific_stock_news_v2",
+              "schema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"isRelevant\": { \"type\": \"boolean\" },\n    \"relevanceReason\": { \"type\": \"string\" },\n    \"impactScore\": { \"type\": \"integer\", \"minimum\": -10, \"maximum\": 10 },\n    \"sentiment\": { \"type\": \"string\", \"enum\": [\"Bullish\", \"Bearish\", \"Neutral\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"Earnings\", \"M&A\", \"Contract/Product\", \"Management\", \"Analyst Rating\", \"Macro/Sector\", \"Legal/Reg\", \"Noise\"] },\n    \"summary\": { \"type\": \"string\" },\n    \"confidence\": { \"type\": \"integer\", \"minimum\": 0, \"maximum\": 100 },\n    \"horizon\": { \"type\": \"string\", \"enum\": [\"Intraday\", \"Days\", \"Weeks\", \"Months\"] },\n    \"urgency\": { \"type\": \"string\", \"enum\": [\"Low\", \"Medium\", \"High\"] },\n    \"suggestedSignal\": { \"type\": \"string\", \"enum\": [\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"] },\n    \"keyDrivers\": { \"type\": \"array\", \"items\": { \"type\": \"string\" }, \"minItems\": 2, \"maxItems\": 5 },\n    \"needsFollowUp\": { \"type\": \"boolean\" }\n  },\n  \"required\": [\"isRelevant\", \"relevanceReason\", \"impactScore\", \"sentiment\", \"category\", \"summary\", \"confidence\", \"horizon\", \"urgency\", \"suggestedSignal\", \"keyDrivers\", \"needsFollowUp\"]\n}",
+              "strict": true
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        912,
+        176
+      ],
+      "id": "ibkr-s19",
+      "name": "S19 - Analyze with OpenAI",
+      "credentials": {
+        "openAiApi": {
+          "id": "rILpYjTayqc4jXXZ",
+          "name": "OpenAi account"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1184,
+        0
+      ],
+      "id": "ibkr-s19m",
+      "name": "S19M - Merge AI + Context"
+    },
+    {
+      "parameters": {
+        "jsCode": "function safeParse(value) {\n  try {\n    if (typeof value === \"object\" && value !== null) return value;\n    return JSON.parse(value);\n  } catch {\n    return {};\n  }\n}\n\nfunction clampScore(v, lo, hi, dflt) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return dflt;\n  return Math.max(lo, Math.min(hi, Math.round(n)));\n}\n\nfunction cleanSentiment(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Bullish\", \"Bearish\", \"Neutral\"].includes(s)) return s;\n  return \"Neutral\";\n}\n\nfunction cleanHorizon(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Intraday\", \"Days\", \"Weeks\", \"Months\"].includes(s)) return s;\n  return \"Days\";\n}\n\nfunction cleanUrgency(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Low\", \"Medium\", \"High\"].includes(s)) return s;\n  return \"Low\";\n}\n\nfunction cleanSignal(v) {\n  const s = String(v || \"\").trim();\n  if ([\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"].includes(s)) return s;\n  return \"WATCH\";\n}\n\nfunction cleanDrivers(v) {\n  if (!Array.isArray(v)) return \"\";\n  const arr = v\n    .map((x) => String(x || \"\").trim())\n    .filter(Boolean)\n    .slice(0, 5);\n  return arr.join(\" | \");\n}\n\nfunction toBool(v, d = false) {\n  if (typeof v === \"boolean\") return v;\n  if (v == null) return d;\n  const s = String(v).trim().toLowerCase();\n  if ([\"1\", \"true\", \"yes\", \"y\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\"].includes(s)) return false;\n  return d;\n}\n\nconst j = $json || {};\nconst raw = j.output?.[0]?.content?.[0]?.text || j.content || \"{}\";\nconst ai = safeParse(raw);\nconst nowIso = new Date().toISOString();\n\nconst isRelevant = typeof ai.isRelevant === \"boolean\" ? ai.isRelevant : true;\nconst impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;\nconst sentiment = isRelevant ? cleanSentiment(ai.sentiment) : \"Neutral\";\nconst category = isRelevant ? String(ai.category || \"Noise\").trim() : \"Noise\";\nconst suggestedSignal = isRelevant ? cleanSignal(ai.suggestedSignal) : \"WATCH\";\nconst urgency = isRelevant ? cleanUrgency(ai.urgency) : \"Low\";\nconst confidence = clampScore(ai.confidence, 0, 100, isRelevant ? 50 : 0);\nconst horizon = cleanHorizon(ai.horizon);\nconst keyDrivers = cleanDrivers(ai.keyDrivers);\nconst needsFollowUp = toBool(ai.needsFollowUp, false);\n\nreturn [\n  {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || null,\n      snippet: j.snippet || \"\",\n      text: j.text || \"\",\n      summary: String(ai.summary || \"\").trim(),\n      category,\n      impactScore,\n      sentiment,\n      confidence,\n      horizon,\n      urgency,\n      suggestedSignal,\n      keyDrivers,\n      needsFollowUp,\n      isRelevant,\n      relevanceReason: String(ai.relevanceReason || \"\").trim(),\n      action: \"analyze\",\n      reason: j._reason || \"new_item\",\n      status: \"ANALYZED\",\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n      provider: j.provider || null,\n      newsArticleId: j.newsArticleId || null,\n      ibkrSentiment: (j.ibkrSentiment === undefined ? null : j.ibkrSentiment),\n    },\n  },\n];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1424,
+        0
+      ],
+      "id": "ibkr-s20",
+      "name": "S20 - Parse LLM Output"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import duckdb, time\ndef connect_w(path, tries=6, delay=0.4):\n    last = None\n    for i in range(tries):\n        try:\n            return duckdb.connect(path)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and i < tries - 1:\n                time.sleep(delay * (2 ** i)); continue\n            raise\n    raise last\n\ndef tb(v, d=False):\n    if isinstance(v, bool): return v\n    if v is None: return d\n    return str(v).strip().lower() in (\"1\", \"true\", \"yes\", \"y\")\n\nitems = _items or []\nif not items:\n    return []\nDB = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or \"/files/duckdb/ag4_spe_v2.duckdb\")\ncols = [\"news_id\",\"run_id\",\"symbol\",\"company_name\",\"source\",\"url\",\"canonical_url\",\"title\",\n        \"published_at\",\"published_at_raw\",\"snippet\",\"text\",\"summary\",\"category\",\"impact_score\",\n        \"sentiment\",\"confidence_score\",\"horizon\",\"urgency\",\"suggested_signal\",\"key_drivers\",\n        \"needs_follow_up\",\"is_relevant\",\"relevance_reason\",\"action\",\"reason\",\"status\",\n        \"first_seen_at\",\"last_seen_at\",\"analyzed_at\",\"fetched_at\",\"provider\",\"news_article_id\",\n        \"ibkr_sentiment\"]\nph = \",\".join([\"?\"] * len(cols))\nsql = \"INSERT OR REPLACE INTO news_history (\" + \",\".join(cols) + \",updated_at) VALUES (\" + ph + \",CURRENT_TIMESTAMP)\"\ncon = connect_w(DB)\nn = 0\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    con.execute(sql, [\n        j.get(\"newsId\"), j.get(\"run_id\"), j.get(\"symbol\"), j.get(\"companyName\") or j.get(\"symbol\"),\n        j.get(\"source\") or \"ibkr\", j.get(\"url\"), j.get(\"canonicalUrl\") or j.get(\"url\"), j.get(\"title\"),\n        j.get(\"publishedAt\"), j.get(\"publishedAt\"), j.get(\"snippet\"), j.get(\"text\"),\n        j.get(\"summary\"), j.get(\"category\"), j.get(\"impactScore\"), j.get(\"sentiment\"),\n        j.get(\"confidence\"), j.get(\"horizon\"), j.get(\"urgency\"), j.get(\"suggestedSignal\"),\n        j.get(\"keyDrivers\"), tb(j.get(\"needsFollowUp\")), tb(j.get(\"isRelevant\"), True),\n        j.get(\"relevanceReason\"), j.get(\"action\") or \"analyze\", j.get(\"reason\") or \"ibkr_portfolio\",\n        j.get(\"status\") or \"ANALYZED\", j.get(\"firstSeenAt\"), j.get(\"firstSeenAt\"),\n        j.get(\"analyzedAt\"), j.get(\"fetchedAt\"), j.get(\"provider\"), j.get(\"newsArticleId\"),\n        j.get(\"ibkrSentiment\"),\n    ])\n    n += 1\ntry: con.execute(\"CHECKPOINT\")\nexcept Exception: pass\ncon.close()\nreturn [{\"json\": {\"written\": n, \"db_path\": DB}}]\n"
+      },
+      "id": "ibkr-write",
+      "name": "Write IBKR DuckDB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1664,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule IBKR News": {
+      "main": [
+        [
+          {
+            "node": "HTTP Broker Portfolio News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "HTTP Broker Portfolio News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Broker Portfolio News": {
+      "main": [
+        [
+          {
+            "node": "Normalize + Dedup IBKR",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize + Dedup IBKR": {
+      "main": [
+        [
+          {
+            "node": "S18 - IF Run AI?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S18 - IF Run AI?": {
+      "main": [
+        [
+          {
+            "node": "S19 - Analyze with OpenAI",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "S19M - Merge AI + Context",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "S19 - Analyze with OpenAI": {
+      "main": [
+        [
+          {
+            "node": "S19M - Merge AI + Context",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "S19M - Merge AI + Context": {
+      "main": [
+        [
+          {
+            "node": "S20 - Parse LLM Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "S20 - Parse LLM Output": {
+      "main": [
+        [
+          {
+            "node": "Write IBKR DuckDB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": {
+    "node:Schedule IBKR News": {
+      "recurrenceRules": []
+    }
+  },
+  "pinData": {},
+  "versionId": "732d73cc-555f-46e3-8770-0e72933d02c9",
+  "activeVersionId": "c2c5ffe8-90c5-403d-80ff-9d0cb04d64b6",
+  "meta": null,
+  "createdAt": "2026-06-18 08:58:41.305",
+  "updatedAt": "2026-06-18 09:13:43.057"
+}
