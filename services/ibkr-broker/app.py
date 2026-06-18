@@ -1631,12 +1631,21 @@ async def approvals_pending() -> dict[str, Any]:
     }
 
 
+def _approval_decision_error(order_id: str, err: str) -> dict[str, Any]:
+    """Decision deja prise / double-tap = no-op idempotent (200). Vrais problemes = 4xx."""
+    if err.startswith("ALREADY_"):
+        return {"order_id": order_id, "status": err.replace("ALREADY_", "", 1), "idempotent": True}
+    if err == "BAD_TOKEN":
+        raise HTTPException(status_code=403, detail="APPROVAL_BAD_TOKEN")
+    raise HTTPException(status_code=409, detail="APPROVAL_" + err)
+
+
 @app.post("/orders/approvals/{order_id}/reject")
 async def approvals_reject(order_id: str, body: dict = ApprovalBody(default={})) -> dict[str, Any]:
     token = str((body or {}).get("token") or "")
     entry, err = await approval.get_for_decision(order_id, token)
     if err:
-        raise HTTPException(status_code=409, detail="APPROVAL_" + err)
+        return _approval_decision_error(order_id, err)
     await approval.mark(order_id, "REJECTED")
     return {"order_id": order_id, "status": "REJECTED"}
 
@@ -1646,7 +1655,7 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
     token = str((body or {}).get("token") or "")
     entry, err = await approval.get_for_decision(order_id, token)
     if err:
-        raise HTTPException(status_code=409, detail="APPROVAL_" + err)
+        return _approval_decision_error(order_id, err)
     client = get_client()
     ibkr_payload = dict(entry["ibkr_payload"])
     side = str(ibkr_payload.get("side") or "BUY")
@@ -1662,22 +1671,25 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
         if dev > approval.MAX_DEVIATION_PCT:
             await approval.mark(order_id, "REJECTED")
             raise HTTPException(status_code=409, detail="APPROVAL_PRICE_MOVED:%.2fpct" % dev)
-    confirmation = entry.get("confirmation") if isinstance(entry.get("confirmation"), dict) else {}
-    terminal = confirmation.get("terminal_response")
-    if _reply_required_items(terminal):
-        next_response: list[dict] = []
-        for item in _reply_required_items(terminal):
-            next_response.extend(await client.reply_order(str(item["id"]), confirmed=True))
-        terminal = next_response
-    else:
+    # Re-soumission FRAICHE a l'approbation : les reply_id IBKR captures au parking expirent
+    # ("reply id not found"). On resoumet l'ordre durable puis on auto-confirme la NOUVELLE
+    # chaine de prompts. Toute erreur IBKR -> FAILED propre (jamais de 500). Le prompt
+    # d'origine ayant expire, l'ordre n'avait pas ete place -> pas de doublon.
+    try:
         terminal = await client.place_orders([ibkr_payload])
-    steps = 0
-    while _reply_required_items(terminal) and steps < AUTO_CONFIRM_MAX_STEPS:
-        steps += 1
-        nxt2: list[dict] = []
-        for item in _reply_required_items(terminal):
-            nxt2.extend(await client.reply_order(str(item["id"]), confirmed=True))
-        terminal = nxt2
+        steps = 0
+        while _reply_required_items(terminal) and steps < AUTO_CONFIRM_MAX_STEPS:
+            steps += 1
+            nxt2: list[dict] = []
+            for item in _reply_required_items(terminal):
+                nxt2.extend(await client.reply_order(str(item["id"]), confirmed=True))
+            terminal = nxt2
+    except CPAPIError as exc:
+        await approval.mark(order_id, "FAILED")
+        return {"order_id": order_id, "status": "FAILED", "error": str(exc)}
+    except Exception as exc:  # noqa: BLE001
+        await approval.mark(order_id, "FAILED")
+        return {"order_id": order_id, "status": "FAILED", "error": str(exc)}
     if _reply_required_items(terminal) or _ibkr_error_messages(terminal):
         await approval.mark(order_id, "FAILED")
         return {"order_id": order_id, "status": "FAILED", "ibkr_response": terminal}

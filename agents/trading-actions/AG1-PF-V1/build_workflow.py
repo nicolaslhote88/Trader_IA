@@ -100,7 +100,7 @@ def build() -> dict:
                         {
                             "id": "pf00-08",
                             "name": "workflow_name",
-                            "value": "PF Portfolio MTM Updater (DuckDB-only, AG1-V4)",
+                            "value": "PF Portfolio MTM + IBKR Reconcile (AG1-V4)",
                             "type": "string",
                         },
                         {
@@ -144,13 +144,32 @@ def build() -> dict:
             "name": "PF.00 - Config",
         },
         {
+            "parameters": {"jsCode": load_code("00b_fetch_ibkr_state.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [240, -112],
+            "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f121",
+            "name": "PF.00B - Fetch IBKR State",
+        },
+        {
+            "parameters": {
+                "language": "pythonNative",
+                "pythonCode": load_code("00c_reconcile_ibkr_ledger.py"),
+            },
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [480, 0],
+            "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f122",
+            "name": "PF.00C - Reconcile IBKR Ledger",
+        },
+        {
             "parameters": {
                 "language": "pythonNative",
                 "pythonCode": load_code("00_read_portfolios_duckdb.py"),
             },
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [240, 0],
+            "position": [720, 0],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f104",
             "name": "Read Portfolio",
         },
@@ -158,7 +177,7 @@ def build() -> dict:
             "parameters": {"jsCode": load_code("03_normalize_positions.js")},
             "type": "n8n-nodes-base.code",
             "typeVersion": 2,
-            "position": [480, 0],
+            "position": [960, 0],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f108",
             "name": "PF.02 - Normalize Positions",
         },
@@ -166,7 +185,7 @@ def build() -> dict:
             "parameters": {"options": {}},
             "type": "n8n-nodes-base.splitInBatches",
             "typeVersion": 3,
-            "position": [704, 0],
+            "position": [1184, 0],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f109",
             "name": "Loop Over Items",
         },
@@ -309,7 +328,9 @@ def build() -> dict:
     connections = {
         "Schedule Trigger": {"main": [[{"node": "PF.00 - Config", "type": "main", "index": 0}]]},
         "Manual Trigger": {"main": [[{"node": "PF.00 - Config", "type": "main", "index": 0}]]},
-        "PF.00 - Config": {"main": [[{"node": "Read Portfolio", "type": "main", "index": 0}]]},
+        "PF.00 - Config": {"main": [[{"node": "PF.00B - Fetch IBKR State", "type": "main", "index": 0}]]},
+        "PF.00B - Fetch IBKR State": {"main": [[{"node": "PF.00C - Reconcile IBKR Ledger", "type": "main", "index": 0}]]},
+        "PF.00C - Reconcile IBKR Ledger": {"main": [[{"node": "Read Portfolio", "type": "main", "index": 0}]]},
         "Read Portfolio": {"main": [[{"node": "PF.02 - Normalize Positions", "type": "main", "index": 0}]]},
         "PF.02 - Normalize Positions": {"main": [[{"node": "Loop Over Items", "type": "main", "index": 0}]]},
         "Loop Over Items": {

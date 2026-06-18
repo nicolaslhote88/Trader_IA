@@ -123,3 +123,66 @@ Tout est **déjà déployé et vérifié** sur le VPS (n8n + broker baked rebuil
 - Le bruit CRLF sur ~200 fichiers non liés.
 - Les changements préexistants AG4-V3/FX/macro non commités (sauf décision explicite de les inclure).
 - Tout fichier sous `.codex-tmp/` (backups/scratch).
+
+---
+
+## 7. AJOUTS (mise à jour 2026-06-18 fin de session) — D2 + fix approbation + AGENTS
+
+Travaux supplémentaires **déployés et vérifiés en prod**, à inclure dans la même PR.
+
+### Fichiers additionnels à committer
+**D2 — exploitation news par AG1 V4 (node 20K)**
+- `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/20K_news_digest.code.py` (source du node)
+- workflow AG1 V4 : exporter de n8n (`id=AG1V4CONSENSUS`) pour capter le node `20K — News Digest (Pack+Held)` + le rewire `Calcul Matrice → 20K → Merge7[1]`. (NE PAS committer un export brut qui réverserait D1 — vérifier que `RECENCY_SPE` ET `20K` sont présents.)
+- `docs/specs/ag1_v4_d2_news_digest.md`
+
+**Fix approbation ordres (broker)**
+- `services/ibkr-broker/app.py` (déjà dans la liste §2 ; contient maintenant AUSSI le fix `approvals_approve` re-soumission fraîche + helper `_approval_decision_error`). Source host miroir : `/opt/trader-ia/services/ibkr-broker/app.py`.
+
+**Doc projet**
+- `AGENTS.md` (réécrit : pipeline news V2/V3/D2, fix approbation, pièges dev, issues MAJ). Backup `.codex-tmp/AGENTS.md.bak_20260618`.
+
+### Vérifs prod (déjà passées)
+- Run consensus 20:04 UTC : `opportunity_pack` enrichi (`news_legend`, `held_news`, news par row), +~1,4k tokens. D1 toujours présent.
+- Approbation : approve → 200 (plus de 500), double-tap → idempotent. (Fill réel à revalider EN SÉANCE — hors séance l'ordre finit FAILED proprement.)
+
+### Commits suggérés (compléments)
+6. `ag1_v4: D2 news digest node (20K) enriching opportunity_pack (pack+held, 14d, compact)`
+7. `broker: fix order-approval (fresh re-submit on approve, idempotent double-tap, no 500)`
+8. `docs: update AGENTS.md (news pipeline V2/V3/D2, approval fix, dev pitfalls)`
+
+### Issues résolues cette session (à retirer des bugs ouverts si listées ailleurs)
+- ✅ Bug dates AG4_Spé (2016→2031) — corrigé (B1) + base nettoyée.
+- ✅ Runs zombies AG4_Spé — auto-réconciliation (A1).
+- ✅ Approche « approve → re-price → fill » : exercée et **corrigée** (plus de 500 ; échec propre hors séance).
+
+---
+
+## 8. AJOUT CODEX — Réconciliation durable IBKR → dashboard AG1-PF
+
+Travail additionnel déployé et vérifié le 2026-06-18 après constat d'un écart entre le portefeuille IBKR live et le dashboard.
+
+### Fichiers additionnels à committer
+- `agents/trading-actions/AG1-PF-V1/build_workflow.py`
+- `agents/trading-actions/AG1-PF-V1/AG1-PF-V1-workflow.json`
+- `agents/trading-actions/AG1-PF-V1/nodes/00b_fetch_ibkr_state.js`
+- `agents/trading-actions/AG1-PF-V1/nodes/00c_reconcile_ibkr_ledger.py`
+- `scripts/ag1_v4_reconcile_ibkr_live.py`
+- `docs/operations/ag1_v4_ibkr_reconcile_20260618.md`
+
+### Cause racine
+Les ordres IBKR approuvés ou remplis hors-bande pouvaient arriver après le run AG1 V4 initial. Le dashboard AG1-PF lisait DuckDB uniquement ; les fills tardifs n'étaient donc pas réimportés dans `core.fills`, `core.position_lots` et `core.positions_snapshot`.
+
+### Correctif
+`AG1-PF-V1` exécute maintenant une réconciliation read-only IBKR avant de lire le portefeuille :
+- fetch broker `/health`, `/positions`, `/fills`, `/account/ledger` ;
+- si compte live `U25651155` authentifié/aligné : import idempotent des fills stock manquants, rebuild FIFO `core.position_lots`, snapshot `RUN_RECON_IBKR_PF_*` uniquement en cas d'écart ;
+- si IBKR est déconnecté : no-op, le MTM existant continue.
+
+### Vérifs prod
+- Script maintenance appliqué une fois : import de 4 fills manquants (`NVDA`, `PEUG.PA`, `ELEC.PA` x2) + snapshot `RUN_RECON_IBKR_20260618_211130`.
+- Tests sur copie DuckDB : `NO_DIFF` quand aligné ; fill `NVDA` supprimé artificiellement → réimport `WRITTEN`.
+- Après relogin IBKR et run manuel AG1-PF : execution n8n `19189` `success`, `missing_fills=[]`, `position_diffs=[]`, MTM `PFMTM_20260618233554` `SUCCESS`.
+
+### Commit suggéré
+9. `ag1_pf: reconcile IBKR live state before dashboard MTM`
