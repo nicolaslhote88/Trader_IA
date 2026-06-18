@@ -1,7 +1,11 @@
 {
+  "updatedAt": "2026-06-18T07:40:47Z",
+  "createdAt": "2026-06-18T06:29:45.803Z",
   "id": "uXW5M4vc1imTExB4",
   "name": "AG4_Spé — Health Alert",
-  "active": 1,
+  "description": null,
+  "active": true,
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -95,10 +99,9 @@
       "recurrenceRules": []
     }
   },
+  "meta": null,
   "pinData": null,
   "versionId": "931449a8-ed8b-4fe4-9949-d6b1a318b751",
   "activeVersionId": "931449a8-ed8b-4fe4-9949-d6b1a318b751",
-  "meta": null,
-  "createdAt": "2026-06-18 06:29:45.803",
-  "updatedAt": "2026-06-18 07:40:47"
+  "versionCounter": 10
 }
