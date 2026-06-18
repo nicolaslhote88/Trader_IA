@@ -114,6 +114,14 @@ class CPAPIClient:
         account_id = await self.get_account_id()
         return await self._get(f"/v1/api/portfolio/{account_id}/ledger")
 
+    async def get_portfolio_news(self) -> Any:
+        """News IBKR des positions detenues. Read-only (spike 2026-06-18).
+
+        /iserver/news/portfolio -> {"news":[...]} headline/source/provider/sentiment.
+        L'endpoint par-contrat (/iserver/news?conid=) n'est PAS servi (503).
+        """
+        return await self._get("/v1/api/iserver/news/portfolio")
+
     # ──────────────────────────────────────────────────────────────────────────
     # Résolution de contrats
     # ──────────────────────────────────────────────────────────────────────────

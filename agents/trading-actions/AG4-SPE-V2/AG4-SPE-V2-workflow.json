@@ -1,5 +1,11 @@
 {
+  "updatedAt": "2026-06-18T06:25:15Z",
+  "createdAt": "2026-02-17T07:41:52.089Z",
+  "id": "H0cfY1coMx8dvMuXScMc_",
   "name": "AG4_Spé-V2",
+  "description": null,
+  "active": true,
+  "isArchived": false,
   "nodes": [
     {
       "parameters": {
@@ -15,10 +21,10 @@
       "type": "n8n-nodes-base.scheduleTrigger",
       "typeVersion": 1.3,
       "position": [
-        -1952,
-        -192
+        5664,
+        5776
       ],
-      "id": "f8a0f0d6-faf7-4c9f-bca1-d7212bd2bcd1",
+      "id": "d5d71438-5b52-4df1-b2da-c87e40f7958c",
       "name": "Schedule Trigger"
     },
     {
@@ -26,57 +32,38 @@
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        -1952,
-        -16
+        5664,
+        5952
       ],
-      "id": "669d6295-6968-4436-b5c7-3f5f6d1b5dce",
+      "id": "e78c1541-96a5-4c71-9704-2f01e06c58c6",
       "name": "Manual Trigger"
     },
     {
       "parameters": {
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": 1078848687,
-          "cachedResultName": "Universe",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        -1728,
-        -96
-      ],
-      "id": "0bd3f148-cff3-4dbe-b9b2-9ea242909b1a",
-      "name": "S00A - Load Universe (Google Sheets)",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      }
-    },
-    {
-      "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import json\nimport duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nBATCH_SIZE = 20\nSTATE_KEY = \"ag4_spe_v2_last_symbol_index\"\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            # CHECKPOINT avant close pour libérer les pages orphelines laissées\n            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.\n            try:\n                con.execute(\"CHECKPOINT\")\n            except Exception:\n                pass\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\ndef truthy(v):\n    if isinstance(v, bool):\n        return v\n    s = to_text(v).lower()\n    if s in (\"\", \"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\", \"non\", \"disabled\"):\n        return False\n    return True\n\n\ndef safe_json_parse(raw):\n    if raw is None:\n        return {}\n    if isinstance(raw, dict):\n        return raw\n    txt = to_text(raw)\n    if not txt:\n        return {}\n    try:\n        obj = json.loads(txt)\n        return obj if isinstance(obj, dict) else {}\n    except Exception:\n        return {}\n\n\ndef normalize_ref(v):\n    return to_text(v).upper()\n\n\nrows = [dict(it.get(\"json\", {}) or {}) for it in (_items or [])]\n\ncandidates = []\nfor r in rows:\n    enabled = truthy(r.get(\"enabled\", r.get(\"Enabled\", True)))\n    if not enabled:\n        continue\n\n    symbol = to_text(r.get(\"symbol\", r.get(\"Symbol\", \"\"))).upper()\n    if not symbol:\n        continue\n\n    notes = safe_json_parse(r.get(\"notesJson\", r.get(\"Notes\")))\n    boursorama_ref = normalize_ref(\n        r.get(\"boursoramaRef\")\n        or r.get(\"BoursoramaRef\")\n        or notes.get(\"boursoramaRef\")\n        or notes.get(\"boursoramaCode\")\n        or \"\"\n    )\n    if not boursorama_ref:\n        continue\n\n    db_path = to_text(r.get(\"db_path\")) or DB_PATH\n    candidates.append(\n        {\n            \"queueId\": f\"{symbol}|boursorama|actualites\",\n            \"symbol\": symbol,\n            \"companyName\": to_text(r.get(\"companyName\", r.get(\"Name\", symbol))),\n            \"isin\": r.get(\"isin\", r.get(\"ISIN\")),\n            \"assetClass\": r.get(\"assetClass\", r.get(\"AssetClass\")),\n            \"exchange\": r.get(\"exchange\", r.get(\"Exchange\")),\n            \"currency\": r.get(\"currency\", r.get(\"Currency\")),\n            \"country\": r.get(\"country\", r.get(\"Country\")),\n            \"boursoramaRef\": boursorama_ref,\n            \"coursUrl\": f\"https://www.boursorama.com/cours/{boursorama_ref}/\",\n            \"actualitesUrl\": f\"https://www.boursorama.com/cours/actualites/{boursorama_ref}/\",\n            \"source\": \"boursorama\",\n            \"enabled\": True,\n            \"db_path\": db_path,\n        }\n    )\n\n# Keep deterministic order across runs.\ncandidates = sorted(candidates, key=lambda x: x.get(\"symbol\", \"\"))\ntotal_items = len(candidates)\n\nif total_items == 0:\n    return []\n\ndb_path = to_text(candidates[0].get(\"db_path\")) or DB_PATH\n\nwith db_con(db_path) as con:\n    con.execute(\n        \"\"\"\n        CREATE TABLE IF NOT EXISTS workflow_state (\n          state_key VARCHAR PRIMARY KEY,\n          state_value VARCHAR,\n          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n        )\n        \"\"\"\n    )\n\n    row = con.execute(\n        \"SELECT state_value FROM workflow_state WHERE state_key = ?\",\n        [STATE_KEY],\n    ).fetchone()\n    try:\n        start = int(row[0]) if row and row[0] is not None else 0\n    except Exception:\n        start = 0\n\n    if start < 0 or start >= total_items:\n        start = 0\n\n    end = start + BATCH_SIZE\n    batch = candidates[start:end]\n    next_start = 0 if end >= total_items else end\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO workflow_state (state_key, state_value, updated_at)\n        VALUES (?, ?, CURRENT_TIMESTAMP)\n        \"\"\",\n        [STATE_KEY, str(next_start)],\n    )\n\nout = []\nfor idx, item in enumerate(batch):\n    j = dict(item)\n    j[\"_batchInfo\"] = {\n        \"batchIndex\": idx + 1,\n        \"globalIndex\": start + idx + 1,\n        \"totalItems\": total_items,\n        \"nextStart\": next_start,\n        \"rotationStore\": \"duckdb.workflow_state\",\n    }\n    out.append({\"json\": j})\n\nreturn out\n\n"
+        "pythonCode": "import duckdb\nimport os\nimport time\nimport gc\nfrom contextlib import contextmanager\n\nDB_PATH = os.getenv(\"AG2_DUCKDB_PATH\", \"/files/duckdb/ag2_v3.duckdb\")\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=6, delay=0.25):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path, read_only=True)\n            break\n        except Exception as exc:\n            if (\"lock\" in str(exc).lower() or \"busy\" in str(exc).lower()) and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n                continue\n            raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\ndef truthy(v):\n    if isinstance(v, bool):\n        return v\n    s = to_text(v).lower()\n    if s in (\"\", \"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\", \"non\", \"disabled\"):\n        return False\n    return True\n\n\ndef norm_asset_class(v, symbol):\n    s = to_text(v).upper()\n    sym = to_text(symbol).upper()\n    if s in (\"FX\", \"FOREX\", \"CURRENCY\"):\n        return \"FX\"\n    if s in (\"ETF\",):\n        return \"ETF\"\n    if s in (\"CRYPTO\", \"CRYPTOCURRENCY\"):\n        return \"CRYPTO\"\n    if sym.startswith(\"FX:\") or sym.endswith(\"=X\"):\n        return \"FX\"\n    return s or \"EQUITY\"\n\n\nrows = []\nwith db_con() as con:\n    result = con.execute(\n        \"\"\"\n        SELECT\n          symbol,\n          COALESCE(symbol_yahoo, symbol) AS symbol_yahoo,\n          COALESCE(name, symbol) AS name,\n          COALESCE(asset_class, 'EQUITY') AS asset_class,\n          COALESCE(exchange, '') AS exchange,\n          COALESCE(currency, '') AS currency,\n          COALESCE(country, '') AS country,\n          COALESCE(sector, '') AS sector,\n          COALESCE(industry, '') AS industry,\n          COALESCE(isin, '') AS isin,\n          COALESCE(enabled, TRUE) AS enabled,\n          COALESCE(boursorama_ref, '') AS boursorama_ref,\n          updated_at\n        FROM universe\n        WHERE COALESCE(enabled, TRUE) = TRUE\n        ORDER BY symbol\n        \"\"\"\n    ).fetchall()\n\nfor r in result:\n    symbol = to_text(r[0]).upper()\n    if not symbol:\n        continue\n    asset_class = norm_asset_class(r[3], symbol)\n    boursorama_ref = to_text(r[11])\n    row = {\n        \"Symbol\": symbol,\n        \"symbol\": symbol,\n        \"Ticker\": symbol,\n        \"ticker\": symbol,\n        \"symbol_yahoo\": to_text(r[1]) or symbol,\n        \"SymbolYahoo\": to_text(r[1]) or symbol,\n        \"Name\": to_text(r[2]) or symbol,\n        \"name\": to_text(r[2]) or symbol,\n        \"companyName\": to_text(r[2]) or symbol,\n        \"AssetClass\": asset_class,\n        \"assetClass\": asset_class,\n        \"asset_class\": asset_class,\n        \"Exchange\": to_text(r[4]),\n        \"exchange\": to_text(r[4]),\n        \"Currency\": to_text(r[5]),\n        \"currency\": to_text(r[5]),\n        \"Country\": to_text(r[6]),\n        \"country\": to_text(r[6]),\n        \"Sector\": to_text(r[7]),\n        \"sector\": to_text(r[7]),\n        \"Industry\": to_text(r[8]),\n        \"industry\": to_text(r[8]),\n        \"ISIN\": to_text(r[9]),\n        \"isin\": to_text(r[9]),\n        \"Enabled\": bool(r[10]),\n        \"enabled\": bool(r[10]),\n        \"BoursoramaRef\": boursorama_ref,\n        \"boursoramaRef\": boursorama_ref,\n        \"notesJson\": \"{}\",\n        \"universe_source\": \"duckdb.ag2_v3.universe\",\n        \"universe_db_path\": DB_PATH,\n        \"universe_updated_at\": str(r[12]) if r[12] is not None else \"\",\n    }\n    rows.append({\"json\": row})\n\nreturn rows"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1280,
-        -96
+        5888,
+        5872
       ],
-      "id": "3e1f6147-0f0f-4256-aab3-48af94afcc51",
+      "id": "f1b13bfd-4a3a-4426-beac-79007385548a",
+      "name": "S00A - Load Universe (Google Sheets)"
+    },
+    {
+      "parameters": {
+        "language": "pythonNative",
+        "pythonCode": "import json\nimport duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nAG1_DB_PATH = \"/files/duckdb/ag1_v4_consensus.duckdb\"\nBATCH_SIZE = 20\nSTATE_KEY = \"ag4_spe_v2_last_symbol_index\"\n\n# C1/C3 (2026-06-18) - cf docs/audits/20260617_ag4_spe_v2_analysis.md.\n# 1) Univers aligne sur AG1 actions : on EXCLUT les paires FX (=X / CURRENCY). Le Forex est\n#    desactive et AG1 actions ne consomme jamais ces lignes -> ~44% de la base etait du gaspillage\n#    LLM + scraping (et la source des 502/503 FX). Pour reactiver le FX un jour : SKIP_FX=False.\n# 2) Rotation PRIORISEE portefeuille : les symboles detenus par AG1 passent a CHAQUE run\n#    (fraicheur des positions), le reste tourne par offset.\nSKIP_FX = True\n\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.execute(\"CHECKPOINT\")\n            except Exception:\n                pass\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v).strip()\n\n\ndef truthy(v):\n    if isinstance(v, bool):\n        return v\n    s = to_text(v).lower()\n    if s in (\"\", \"1\", \"true\", \"yes\", \"y\", \"oui\", \"ok\", \"enabled\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\", \"non\", \"disabled\"):\n        return False\n    return True\n\n\ndef is_fx(symbol, asset_class):\n    s = to_text(symbol).upper()\n    a = to_text(asset_class).upper()\n    return s.endswith(\"=X\") or a in (\"FX\", \"FOREX\", \"CURRENCY\")\n\n\ndef safe_json_parse(raw):\n    if raw is None:\n        return {}\n    if isinstance(raw, dict):\n        return raw\n    txt = to_text(raw)\n    if not txt:\n        return {}\n    try:\n        obj = json.loads(txt)\n        return obj if isinstance(obj, dict) else {}\n    except Exception:\n        return {}\n\n\ndef normalize_ref(v):\n    return to_text(v).upper()\n\n\ndef load_held_symbols(path=AG1_DB_PATH):\n    held = set()\n    con = None\n    try:\n        con = duckdb.connect(path, read_only=True)\n        rows = con.execute(\n            \"SELECT DISTINCT UPPER(TRIM(symbol)) FROM main.portfolio_positions_mtm_latest \"\n            \"WHERE symbol IS NOT NULL AND UPPER(TRIM(symbol)) NOT IN ('CASH_EUR', '__META__') \"\n            \"AND COALESCE(quantity, 0) <> 0\"\n        ).fetchall()\n        held = {r[0] for r in rows if r and r[0]}\n    except Exception:\n        held = set()\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n    return held\n\n\nrows = [dict(it.get(\"json\", {}) or {}) for it in (_items or [])]\n\ncandidates = []\nfor r in rows:\n    if not truthy(r.get(\"enabled\", r.get(\"Enabled\", True))):\n        continue\n    symbol = to_text(r.get(\"symbol\", r.get(\"Symbol\", \"\"))).upper()\n    if not symbol:\n        continue\n    asset_class = r.get(\"assetClass\", r.get(\"AssetClass\"))\n    if SKIP_FX and is_fx(symbol, asset_class):\n        continue\n    notes = safe_json_parse(r.get(\"notesJson\", r.get(\"Notes\")))\n    boursorama_ref = normalize_ref(\n        r.get(\"boursoramaRef\")\n        or r.get(\"BoursoramaRef\")\n        or notes.get(\"boursoramaRef\")\n        or notes.get(\"boursoramaCode\")\n        or \"\"\n    )\n    if not boursorama_ref:\n        continue\n    db_path = to_text(r.get(\"db_path\")) or DB_PATH\n    candidates.append({\n        \"queueId\": symbol + \"|boursorama|actualites\",\n        \"symbol\": symbol,\n        \"companyName\": to_text(r.get(\"companyName\", r.get(\"Name\", symbol))),\n        \"isin\": r.get(\"isin\", r.get(\"ISIN\")),\n        \"assetClass\": asset_class,\n        \"exchange\": r.get(\"exchange\", r.get(\"Exchange\")),\n        \"currency\": r.get(\"currency\", r.get(\"Currency\")),\n        \"country\": r.get(\"country\", r.get(\"Country\")),\n        \"boursoramaRef\": boursorama_ref,\n        \"coursUrl\": \"https://www.boursorama.com/cours/\" + boursorama_ref + \"/\",\n        \"actualitesUrl\": \"https://www.boursorama.com/cours/actualites/\" + boursorama_ref + \"/\",\n        \"source\": \"boursorama\",\n        \"enabled\": True,\n        \"db_path\": db_path,\n    })\n\ncandidates = sorted(candidates, key=lambda x: x.get(\"symbol\", \"\"))\ntotal_items = len(candidates)\n\nif total_items == 0:\n    return []\n\ndb_path = to_text(candidates[0].get(\"db_path\")) or DB_PATH\n\nheld = load_held_symbols()\npriority = [c for c in candidates if c[\"symbol\"] in held]\nrotation = [c for c in candidates if c[\"symbol\"] not in held]\nrot_total = len(rotation)\n\nwith db_con(db_path) as con:\n    con.execute(\n        \"CREATE TABLE IF NOT EXISTS workflow_state (\"\n        \"state_key VARCHAR PRIMARY KEY, state_value VARCHAR, \"\n        \"updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)\"\n    )\n    row = con.execute(\n        \"SELECT state_value FROM workflow_state WHERE state_key = ?\", [STATE_KEY]\n    ).fetchone()\n    try:\n        start = int(row[0]) if row and row[0] is not None else 0\n    except Exception:\n        start = 0\n    if rot_total == 0:\n        start = 0\n    elif start < 0 or start >= rot_total:\n        start = 0\n    fill = max(0, BATCH_SIZE - len(priority))\n    rot_batch = rotation[start:start + fill]\n    next_start = 0 if (start + fill) >= rot_total else (start + fill)\n    batch = priority + rot_batch\n    con.execute(\n        \"INSERT OR REPLACE INTO workflow_state (state_key, state_value, updated_at) \"\n        \"VALUES (?, ?, CURRENT_TIMESTAMP)\",\n        [STATE_KEY, str(next_start)],\n    )\n\nout = []\nfor idx, item in enumerate(batch):\n    j = dict(item)\n    j[\"_isHeld\"] = j[\"symbol\"] in held\n    j[\"_batchInfo\"] = {\n        \"batchIndex\": idx + 1,\n        \"heldCount\": len(priority),\n        \"rotationFill\": len(rot_batch),\n        \"rotationTotal\": rot_total,\n        \"totalItems\": total_items,\n        \"nextStart\": next_start,\n        \"rotationStore\": \"duckdb.workflow_state\",\n    }\n    out.append({\"json\": j})\n\nreturn out\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6336,
+        5872
+      ],
+      "id": "15953b82-9005-4fb9-83c8-75b17fa5047e",
       "name": "S01 - Build Symbol Queue"
     },
     {
@@ -87,24 +74,24 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1504,
-        -96
+        6112,
+        5872
       ],
-      "id": "be2cf27b-c104-4d57-8c06-4fec0129e4be",
+      "id": "d4f4ca23-959a-4c3d-a50a-48acc151d072",
       "name": "S00B - DuckDB Init Schema"
     },
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nWORKFLOW_VERSION = \"2.0.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            # CHECKPOINT avant close pour libérer les pages orphelines laissées\n            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.\n            try:\n                con.execute(\"CHECKPOINT\")\n            except Exception:\n                pass\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\ndb_path = DEFAULT_DB_PATH\nif len(items) > 0:\n    db_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nrun_id = f\"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\"\n\nwith db_con(db_path) as con:\n    # A1 (2026-06-17) — auto-réconciliation des runs zombies. Un run dure <25 min et les\n    # runs sont espacés de >=3 h (cron 9/12/15) : tout 'RUNNING' de plus d'1 h est un\n    # orphelin (finalize jamais atteint) -> on le clôt en 'STALE'. Idempotent.\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET status = 'STALE',\n            finished_at = CURRENT_TIMESTAMP,\n            error_detail = 'auto-reconciled: orphan RUNNING at next run start'\n        WHERE status = 'RUNNING'\n          AND started_at < CURRENT_TIMESTAMP - INTERVAL '1 hour'\n        \"\"\"\n    )\n    if len(items) == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, len(items), WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n\n"
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\nWORKFLOW_VERSION = \"2.0.0\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            # CHECKPOINT avant close pour libérer les pages orphelines laissées\n            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.\n            try:\n                con.execute(\"CHECKPOINT\")\n            except Exception:\n                pass\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\ndb_path = DEFAULT_DB_PATH\nif len(items) > 0:\n    db_path = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or DEFAULT_DB_PATH)\n\nrun_id = f\"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}\"\n\nwith db_con(db_path) as con:\n    if len(items) == 0:\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO run_log (\n              run_id, started_at, finished_at, status, symbols_total, symbols_ok, symbols_error,\n              articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n            )\n            VALUES (?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, 'NO_DATA', 0, 0, 0, 0, 0, 0, 0, NULL, ?)\n            \"\"\",\n            [run_id, WORKFLOW_VERSION],\n        )\n        return []\n\n    con.execute(\n        \"\"\"\n        INSERT OR REPLACE INTO run_log (\n          run_id, started_at, status, symbols_total, symbols_ok, symbols_error,\n          articles_total, items_analyzed, items_skipped, errors_logged, error_detail, version\n        )\n        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, 0, 0, 0, 0, 0, 0, NULL, ?)\n        \"\"\",\n        [run_id, len(items), WORKFLOW_VERSION],\n    )\n\nout = []\nfor it in items:\n    j = dict(it.get(\"json\", {}) or {})\n    j[\"run_id\"] = run_id\n    j[\"db_path\"] = db_path\n    out.append({\"json\": j, \"pairedItem\": it.get(\"pairedItem\")})\n\nreturn out\n\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -1072,
-        -96
+        6544,
+        5872
       ],
-      "id": "34c2a416-4c86-4f03-a94e-df5ae6a3f91d",
+      "id": "29848aa3-d0a0-459a-adb2-e138392934ca",
       "name": "S02 - Start Run"
     },
     {
@@ -114,10 +101,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -960,
-        -96
+        6768,
+        5872
       ],
-      "id": "7a41d9f4-c2cc-4eb2-9c8e-6d652e3696f7",
+      "id": "0ae1b22a-b232-4738-9f18-93a3240545e2",
       "name": "S02B - Reset News Buffer"
     },
     {
@@ -129,10 +116,10 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        -864,
-        -96
+        6912,
+        5872
       ],
-      "id": "73358bb3-2807-42f2-a72e-98954b35dfdd",
+      "id": "480ad836-98d4-42ee-a1dd-c8a49aec31a4",
       "name": "S03 - Split Symbols"
     },
     {
@@ -172,12 +159,15 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
       "position": [
-        -848,
-        16
+        7120,
+        5792
       ],
-      "id": "3d6f7c6a-6a3b-4c0f-a53d-31b7d2da53cc",
+      "id": "20b72cfb-8c74-4850-bfb8-5dbcb2f01d41",
       "name": "S04 - HTTP Listing Page",
-      "onError": "continueRegularOutput"
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2500
     },
     {
       "parameters": {
@@ -188,10 +178,10 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        -640,
-        -32
+        7280,
+        5936
       ],
-      "id": "34ec95df-6b2c-4752-b1c0-a73de9f6a428",
+      "id": "c972c437-a20f-4000-9d31-82ca36215867",
       "name": "S04M - Merge Symbol + Listing"
     },
     {
@@ -221,10 +211,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        -432,
-        -32
+        7440,
+        5936
       ],
-      "id": "8938cc57-42fb-4ddc-a2ee-bfe2c42986b4",
+      "id": "bfe12a06-d277-4894-b02f-fb424e7e7a94",
       "name": "S05 - IF Listing 200?"
     },
     {
@@ -234,10 +224,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -224,
-        224
+        7648,
+        6192
       ],
-      "id": "6bc3533d-96df-4f17-a8ec-0076dcd325ec",
+      "id": "6fd35579-e370-4743-bd0a-c9e4b48b4081",
       "name": "S05E - Build Listing Error Row"
     },
     {
@@ -248,10 +238,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -16,
-        224
+        7856,
+        6192
       ],
-      "id": "f0db3665-fda8-4322-9ed3-ec08dcff9c40",
+      "id": "418f36a0-271d-4024-9b0c-32d43f4e504a",
       "name": "S23L - Write Listing Errors DuckDB"
     },
     {
@@ -261,10 +251,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -224,
-        -32
+        7648,
+        5936
       ],
-      "id": "be1590be-2fef-4f41-9f26-ad70c58d11f2",
+      "id": "4df1e49b-5950-4fdd-b9cb-233e638df637",
       "name": "S06 - Extract Articles"
     },
     {
@@ -274,10 +264,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -16,
-        -32
+        7856,
+        5936
       ],
-      "id": "c10fbcf2-3965-4e31-89d8-cb651ad54baf",
+      "id": "8f603bda-6270-4e1e-9ad8-f10f0805a95e",
       "name": "S07 - Normalize + Dedupe + Limit"
     },
     {
@@ -307,10 +297,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        192,
-        -32
+        8064,
+        5936
       ],
-      "id": "6f3a0de4-769f-4cd8-8f7c-92db8e0f1490",
+      "id": "3b2689be-2e49-4206-a763-e77be13976d9",
       "name": "S08 - IF Has Articles?"
     },
     {
@@ -320,10 +310,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        400,
-        -32
+        8272,
+        5936
       ],
-      "id": "2b36f448-01dc-4359-b81f-47ef7ef973ef",
+      "id": "06193fc2-a254-4b7f-b1dd-5736e01922d2",
       "name": "S09 - Explode Articles"
     },
     {
@@ -335,10 +325,10 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        608,
-        -32
+        8480,
+        5936
       ],
-      "id": "db2d3cd7-1fb0-4765-bd9f-3f56466de7d6",
+      "id": "9e8969d0-b83b-40d5-b00b-c39222890aff",
       "name": "S10 - Split Articles"
     },
     {
@@ -349,10 +339,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        816,
-        -32
+        8688,
+        5936
       ],
-      "id": "ed654f58-ed66-473f-990e-27169f86ff96",
+      "id": "2ed480a1-4814-4a5a-800e-c2ce33bbea3f",
       "name": "S11 - Route New vs Seen"
     },
     {
@@ -410,10 +400,10 @@
       "type": "n8n-nodes-base.switch",
       "typeVersion": 3.4,
       "position": [
-        1024,
-        -32
+        8896,
+        5936
       ],
-      "id": "0be2ec6f-f5ca-428e-9cd6-c9976ca2dd73",
+      "id": "e6fdc513-b6cc-4c92-ab7c-16732d23c920",
       "name": "S12 - Router Analyze vs Skip"
     },
     {
@@ -423,10 +413,10 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1232,
-        -128
+        9104,
+        5840
       ],
-      "id": "869fdc69-b2b3-4b3a-abf6-b0b4f3ed9f52",
+      "id": "d19adf73-f158-4455-a9cf-f9fd939c2cc2",
       "name": "S13 - Wait Article",
       "webhookId": "88cbf6c7-7dcf-4da3-b0ca-5f307ce24395"
     },
@@ -467,12 +457,15 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.3,
       "position": [
-        1440,
-        -128
+        9312,
+        5840
       ],
-      "id": "0ca3f374-fd86-4533-a65e-8d7784ec4d93",
+      "id": "42636845-e172-4f5c-a102-db1caf3f96fb",
       "name": "S14 - HTTP Article Page",
-      "onError": "continueRegularOutput"
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2500
     },
     {
       "parameters": {
@@ -483,10 +476,10 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        1648,
-        -176
+        9520,
+        5792
       ],
-      "id": "4d99e026-e09a-4d5e-a9d6-05018ccce237",
+      "id": "323484db-7923-49ff-b1c9-7158db00b858",
       "name": "S14M - Merge Article + Response"
     },
     {
@@ -516,10 +509,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        1856,
-        -176
+        9728,
+        5792
       ],
-      "id": "c8c7a52c-a8d3-4a34-9f88-c00be48a3ff0",
+      "id": "4bc4ddb3-389a-4620-861d-23aa3ba1c3c4",
       "name": "S15 - IF Article 200?"
     },
     {
@@ -529,10 +522,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2064,
-        -16
+        9936,
+        5952
       ],
-      "id": "6bfefea8-7ce9-4247-8e14-f45bf2ce92ec",
+      "id": "35564341-df74-435f-9b34-31ec167686cd",
       "name": "S15E - Build Article Error Row"
     },
     {
@@ -543,23 +536,23 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2272,
-        -16
+        10144,
+        5952
       ],
-      "id": "af8f0f20-07ba-4f58-ac14-efcad758f5a7",
+      "id": "bdd66234-be5b-4c42-88c9-1b442abd992b",
       "name": "S23A - Write Article Errors DuckDB"
     },
     {
       "parameters": {
-        "jsCode": "const MAX_TEXT_CHARS = 50000;\nconst MAX_SNIPPET_CHARS = 1200;\n\nfunction htmlEntityDecode(str) {\n  if (!str) return \"\";\n  return String(str)\n    .replace(/&nbsp;/gi, \" \")\n    .replace(/&amp;/gi, \"&\")\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;/gi, \"'\")\n    .replace(/&lt;/gi, \"<\")\n    .replace(/&gt;/gi, \">\");\n}\n\nfunction stripTags(html) {\n  if (!html) return \"\";\n  let s = String(html)\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \")\n    .replace(/<\\/?[^>]+>/g, \" \");\n  s = htmlEntityDecode(s);\n  return s.replace(/\\u00A0/g, \" \").replace(/\\s+/g, \" \").trim();\n}\n\nfunction getMetaContent(html, key, mode) {\n  if (!html || !key) return null;\n  const escaped = key.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n  const re = new RegExp(`<meta[^>]+${mode}\\\\s*=\\\\s*[\"']${escaped}[\"'][^>]*>`, \"i\");\n  const m = html.match(re);\n  if (!m) return null;\n  const content = m[0].match(/content\\s*=\\s*[\"']([^\"']+)[\"']/i);\n  return content ? stripTags(content[1]) : null;\n}\n\nfunction getFirst(html, re) {\n  const m = html && html.match(re);\n  if (!m) return null;\n  return stripTags(m[1]) || null;\n}\n\nfunction extractParagraphs(htmlBlock) {\n  if (!htmlBlock) return \"\";\n  const out = [];\n  const re = /<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;\n  let m;\n  while ((m = re.exec(htmlBlock)) !== null) {\n    const t = stripTags(m[1]);\n    if (t && t.length >= 20) out.push(t);\n  }\n  return out.join(\"\\n\\n\").trim();\n}\n\nfunction extractMainBlock(html) {\n  if (!html) return \"\";\n  const article = html.match(/<article\\b[^>]*>([\\s\\S]*?)<\\/article>/i);\n  if (article?.[1]) return article[1];\n  const main = html.match(/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/i);\n  if (main?.[1]) return main[1];\n  const body = html.match(/<body\\b[^>]*>([\\s\\S]*?)<\\/body>/i);\n  if (body?.[1]) return body[1];\n  return html;\n}\n\nfunction normalizeDate(raw) {\n  // B1 (2026-06-17) — anti-corruption des dates (cf docs/audits/20260617_ag4_spe_v2_analysis.md).\n  // 1) on privilégie l'ISO des sources fiables (<time datetime>, meta article:published_time) ;\n  // 2) fallback date FR JJ/MM/AAAA ANCRÉE (\\b...\\b, année 4 chiffres) pour ne PAS capter une\n  //    année isolée du corps (échéance obligataire 2031, plan 2030, etc.) ;\n  // 3) garde-fou de plausibilité : toute date hors [now-2ans ; now+7j] -> null\n  //    => published_at restera NULL et les consommateurs retombent sur first_seen_at.\n  if (!raw) return null;\n  const s = String(raw).trim();\n  if (!s) return null;\n\n  let d = null;\n  const iso = new Date(s);\n  if (!isNaN(iso.getTime())) {\n    d = iso;\n  } else {\n    const fr = s.match(/\\b(\\d{1,2})[./-](\\d{1,2})[./-](\\d{4})\\b/);\n    if (fr) {\n      const cand = new Date(Date.UTC(Number(fr[3]), Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));\n      if (!isNaN(cand.getTime())) d = cand;\n    }\n  }\n  if (!d) return null;\n\n  const now = Date.now();\n  const t = d.getTime();\n  if (t < now - 730 * 86400000 || t > now + 7 * 86400000) return null;\n  return d.toISOString();\n}\n\nfunction truncate(str, maxLen) {\n  const s = String(str || \"\");\n  if (s.length <= maxLen) return s;\n  return `${s.slice(0, maxLen)}\\n\\n[TRUNCATED ${s.length} -> ${maxLen}]`;\n}\n\nreturn $input.all().map((item) => {\n  const j = { ...(item.json || {}) };\n  const html = j.articleHtml || j.body || j.data || j.html || j.response || \"\";\n\n  const h1 = getFirst(html, /<h1\\b[^>]*>([\\s\\S]*?)<\\/h1>/i);\n  const ogTitle = getMetaContent(html, \"og:title\", \"property\");\n  const docTitle = getFirst(html, /<title\\b[^>]*>([\\s\\S]*?)<\\/title>/i);\n  const title = h1 || ogTitle || j.articleTitleGuess || j.title || docTitle || null;\n\n  const timeDt = (html.match(/<time\\b[^>]*datetime\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/i) || [])[1];\n  const metaPub = getMetaContent(html, \"article:published_time\", \"property\");\n  const metaDate = getMetaContent(html, \"date\", \"name\");\n  const publishedAt = normalizeDate(timeDt || metaPub || metaDate || j.publishedAt || j.publishedAtGuess);\n\n  const metaDesc = getMetaContent(html, \"description\", \"name\");\n  const ogDesc = getMetaContent(html, \"og:description\", \"property\");\n\n  const main = extractMainBlock(html);\n  let text = extractParagraphs(main);\n  if (!text) text = stripTags(main).slice(0, 20000);\n  text = truncate(text, MAX_TEXT_CHARS);\n\n  let snippet = metaDesc || ogDesc || j.snippet || j.snippetGuess || (text ? text.slice(0, 280) : \"\");\n  snippet = truncate(snippet, MAX_SNIPPET_CHARS);\n\n  return {\n    json: {\n      ...j,\n      title,\n      articleTitle: title,\n      publishedAt: publishedAt || j.publishedAt || null,\n      snippet,\n      text,\n      parseMethod: \"html_regex_v3\",\n      parsedAt: new Date().toISOString(),\n      _articlesLoopReset: false,\n    },\n  };\n});\n\n"
+        "jsCode": "const MAX_TEXT_CHARS = 50000;\nconst MAX_SNIPPET_CHARS = 1200;\n\nfunction htmlEntityDecode(str) {\n  if (!str) return \"\";\n  return String(str)\n    .replace(/&nbsp;/gi, \" \")\n    .replace(/&amp;/gi, \"&\")\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;/gi, \"'\")\n    .replace(/&lt;/gi, \"<\")\n    .replace(/&gt;/gi, \">\");\n}\n\nfunction stripTags(html) {\n  if (!html) return \"\";\n  let s = String(html)\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \")\n    .replace(/<\\/?[^>]+>/g, \" \");\n  s = htmlEntityDecode(s);\n  return s.replace(/\\u00A0/g, \" \").replace(/\\s+/g, \" \").trim();\n}\n\nfunction getMetaContent(html, key, mode) {\n  if (!html || !key) return null;\n  const escaped = key.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n  const re = new RegExp(`<meta[^>]+${mode}\\\\s*=\\\\s*[\"']${escaped}[\"'][^>]*>`, \"i\");\n  const m = html.match(re);\n  if (!m) return null;\n  const content = m[0].match(/content\\s*=\\s*[\"']([^\"']+)[\"']/i);\n  return content ? stripTags(content[1]) : null;\n}\n\nfunction getFirst(html, re) {\n  const m = html && html.match(re);\n  if (!m) return null;\n  return stripTags(m[1]) || null;\n}\n\nfunction extractParagraphs(htmlBlock) {\n  if (!htmlBlock) return \"\";\n  const out = [];\n  const re = /<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;\n  let m;\n  while ((m = re.exec(htmlBlock)) !== null) {\n    const t = stripTags(m[1]);\n    if (t && t.length >= 20) out.push(t);\n  }\n  return out.join(\"\\n\\n\").trim();\n}\n\nfunction extractMainBlock(html) {\n  if (!html) return \"\";\n  const article = html.match(/<article\\b[^>]*>([\\s\\S]*?)<\\/article>/i);\n  if (article?.[1]) return article[1];\n  const main = html.match(/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/i);\n  if (main?.[1]) return main[1];\n  const body = html.match(/<body\\b[^>]*>([\\s\\S]*?)<\\/body>/i);\n  if (body?.[1]) return body[1];\n  return html;\n}\n\nfunction normalizeDate(raw) {\n  if (!raw) return null;\n  const s = String(raw).trim();\n\n  const fr = s.match(/(\\d{1,2})[./-](\\d{1,2})[./-](\\d{2,4})/);\n  if (fr) {\n    let y = Number(fr[3]);\n    if (y < 100) y += 2000;\n    const d = new Date(Date.UTC(y, Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));\n    if (!isNaN(d.getTime())) return d.toISOString();\n  }\n\n  const iso = new Date(s);\n  if (!isNaN(iso.getTime())) return iso.toISOString();\n  return null;\n}\n\nfunction truncate(str, maxLen) {\n  const s = String(str || \"\");\n  if (s.length <= maxLen) return s;\n  return `${s.slice(0, maxLen)}\\n\\n[TRUNCATED ${s.length} -> ${maxLen}]`;\n}\n\nreturn $input.all().map((item) => {\n  const j = { ...(item.json || {}) };\n  const html = j.articleHtml || j.body || j.data || j.html || j.response || \"\";\n\n  const h1 = getFirst(html, /<h1\\b[^>]*>([\\s\\S]*?)<\\/h1>/i);\n  const ogTitle = getMetaContent(html, \"og:title\", \"property\");\n  const docTitle = getFirst(html, /<title\\b[^>]*>([\\s\\S]*?)<\\/title>/i);\n  const title = h1 || ogTitle || j.articleTitleGuess || j.title || docTitle || null;\n\n  const timeDt = (html.match(/<time\\b[^>]*datetime\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/i) || [])[1];\n  const metaPub = getMetaContent(html, \"article:published_time\", \"property\");\n  const metaDate = getMetaContent(html, \"date\", \"name\");\n  const publishedAt = normalizeDate(timeDt || metaPub || metaDate || j.publishedAt || j.publishedAtGuess);\n\n  const metaDesc = getMetaContent(html, \"description\", \"name\");\n  const ogDesc = getMetaContent(html, \"og:description\", \"property\");\n\n  const main = extractMainBlock(html);\n  let text = extractParagraphs(main);\n  if (!text) text = stripTags(main).slice(0, 20000);\n  text = truncate(text, MAX_TEXT_CHARS);\n\n  let snippet = metaDesc || ogDesc || j.snippet || j.snippetGuess || (text ? text.slice(0, 280) : \"\");\n  snippet = truncate(snippet, MAX_SNIPPET_CHARS);\n\n  return {\n    json: {\n      ...j,\n      title,\n      articleTitle: title,\n      publishedAt: publishedAt || j.publishedAt || null,\n      snippet,\n      text,\n      parseMethod: \"html_regex_v3\",\n      parsedAt: new Date().toISOString(),\n      _articlesLoopReset: false,\n    },\n  };\n});\n\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2064,
-        -176
+        9968,
+        5728
       ],
-      "id": "30f10254-1e03-4448-938d-0b6f0368fdd8",
+      "id": "136845ab-78f9-4480-afad-8e8a1f4e6242",
       "name": "S16 - Parse Article"
     },
     {
@@ -569,10 +562,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        2272,
-        -176
+        10176,
+        5728
       ],
-      "id": "2f75a97b-a6cd-43ff-9f45-042b4d11f4c6",
+      "id": "c42a4f3f-d914-4947-8b58-478abb2b1fe5",
       "name": "S17 - Prepare LLM Input"
     },
     {
@@ -602,10 +595,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        2480,
-        -176
+        10384,
+        5728
       ],
-      "id": "f385ab13-b63f-44bb-a8eb-c9ca0ec21280",
+      "id": "999d87da-1bf9-4642-94a3-21503c2f1ab1",
       "name": "S18 - IF Run AI?"
     },
     {
@@ -642,10 +635,10 @@
       "type": "@n8n/n8n-nodes-langchain.openAi",
       "typeVersion": 2.1,
       "position": [
-        2704,
-        -256
+        10816,
+        5952
       ],
-      "id": "31f66369-d4ed-4865-84c4-e78944f4f7d9",
+      "id": "32c21fbf-dda1-44d1-9bd5-c4a536493628",
       "name": "S19 - Analyze with OpenAI",
       "credentials": {
         "openAiApi": {
@@ -664,10 +657,10 @@
       "type": "n8n-nodes-base.merge",
       "typeVersion": 3.2,
       "position": [
-        2928,
-        -176
+        11264,
+        5920
       ],
-      "id": "3f6a478c-f4ef-4f8d-a988-257d813f6ea2",
+      "id": "bc2a108a-882e-40d0-9451-13c0277f302a",
       "name": "S19M - Merge AI + Context"
     },
     {
@@ -677,10 +670,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3152,
-        -176
+        11488,
+        5920
       ],
-      "id": "783d68f2-1df2-40df-a8cb-b1d7dbb51807",
+      "id": "63d8877a-a114-4a3b-9ab6-e0c83360eeec",
       "name": "S20 - Parse LLM Output"
     },
     {
@@ -690,10 +683,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3152,
-        0
+        10768,
+        6112
       ],
-      "id": "52b64b59-ef74-4015-b0ca-ef631748ccf2",
+      "id": "57d9a72f-9056-4a7d-992d-2f6f593b6dee",
       "name": "S21 - Build Skip Row"
     },
     {
@@ -703,10 +696,10 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3376,
-        -16
+        11712,
+        6080
       ],
-      "id": "58e6b6d8-7c65-4485-b1f4-fe8b75c32dc9",
+      "id": "c408c699-1ccf-451c-b9af-a4f9dc4d39d4",
       "name": "S21B - Buffer News Rows"
     },
     {
@@ -716,54 +709,54 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        816,
-        -256
+        8688,
+        5712
       ],
-      "id": "88889c9e-3204-4fc7-9183-bafc95f2dc2c",
+      "id": "de8ee314-5030-42ac-856b-8a12c726600e",
       "name": "S22B - Flush News Buffer"
     },
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import duckdb\nimport gc\nimport hashlib\nimport time\nfrom contextlib import contextmanager\nfrom datetime import date, datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=8, delay=1):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_int(v, d=0):\n    try:\n        if v is None or v == \"\":\n            return d\n        return int(round(float(v)))\n    except Exception:\n        return d\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v)\n\n\ndef to_bool(v, d=True):\n    if isinstance(v, bool):\n        return v\n    if v is None:\n        return d\n    s = str(v).strip().lower()\n    if s in (\"1\", \"true\", \"yes\", \"y\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\"):\n        return False\n    return d\n\n\ndef ensure_utc(dt):\n    if dt is None:\n        return None\n    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:\n        return dt.replace(tzinfo=timezone.utc)\n    return dt.astimezone(timezone.utc)\n\n\ndef parse_ts(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        if isinstance(v, date) and not isinstance(v, datetime):\n            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)\n        return ensure_utc(v)\n\n    s = str(v).strip()\n    if not s:\n        return None\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n\n    try:\n        return ensure_utc(datetime.fromisoformat(s))\n    except Exception:\n        pass\n\n    try:\n        d = datetime.strptime(s, \"%d.%m.%Y\")\n        return ensure_utc(d)\n    except Exception:\n        return None\n\n\ndef build_news_id(symbol, canonical_url):\n    seed = f\"{str(symbol or '').upper()}|{str(canonical_url or '')}\"\n    return hashlib.sha1(seed.encode(\"utf-8\")).hexdigest()\n\n\nitems = _items or []\nif len(items) == 0:\n    return []\n\nfirst_json = dict(items[0].get(\"json\", {}) or {})\nflush_rows = first_json.get(\"_flushRows\")\nrows = []\nif isinstance(flush_rows, list):\n    for row in flush_rows:\n        if isinstance(row, dict):\n            rows.append(dict(row))\nelse:\n    for it in items:\n        rows.append(dict(it.get(\"json\", {}) or {}))\n\nif len(rows) == 0:\n    return items\n\ndb_path = str(first_json.get(\"db_path\") or rows[0].get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for j in rows:\n\n        symbol = str(j.get(\"symbol\", \"\") or \"\").upper()\n        canonical_url = str(j.get(\"canonicalUrl\", \"\") or j.get(\"url\", \"\") or \"\")\n        news_id = str(j.get(\"newsId\", \"\") or \"\").strip()\n        if not news_id:\n            news_id = build_news_id(symbol, canonical_url)\n\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n        company_name = to_text(j.get(\"companyName\", \"\"))\n        source = to_text(j.get(\"source\", \"boursorama\"))\n        boursorama_ref = to_text(j.get(\"boursoramaRef\", \"\"))\n        listing_url = to_text(j.get(\"listingUrl\", \"\"))\n        url = to_text(j.get(\"url\", canonical_url))\n        title = to_text(j.get(\"title\", \"\"))\n        published_at_raw = to_text(j.get(\"publishedAt\", \"\"))\n        published_at = parse_ts(j.get(\"publishedAt\"))\n        snippet = to_text(j.get(\"snippet\", \"\"))\n        text = to_text(j.get(\"text\", \"\"))\n        summary = to_text(j.get(\"summary\", \"\"))\n        category = to_text(j.get(\"category\", \"Noise\"))\n        impact_score = to_int(j.get(\"impactScore\"), 0)\n        sentiment = to_text(j.get(\"sentiment\", \"Neutral\"))\n        confidence_score = to_int(j.get(\"confidence\"), 0)\n        horizon = to_text(j.get(\"horizon\", \"Days\"))\n        urgency = to_text(j.get(\"urgency\", \"Low\"))\n        suggested_signal = to_text(j.get(\"suggestedSignal\", \"WATCH\"))\n        key_drivers = to_text(j.get(\"keyDrivers\", \"\"))\n        needs_follow_up = to_bool(j.get(\"needsFollowUp\"), False)\n        is_relevant = to_bool(j.get(\"isRelevant\"), True)\n        relevance_reason = to_text(j.get(\"relevanceReason\", \"\"))\n        action = to_text(j.get(\"action\", \"skip\"))\n        reason = to_text(j.get(\"reason\", \"\"))\n        status = to_text(j.get(\"status\", \"\"))\n        now_utc = datetime.now(timezone.utc)\n        incoming_first_seen = parse_ts(j.get(\"firstSeenAt\")) or parse_ts(j.get(\"publishedAt\")) or now_utc\n        incoming_last_seen = parse_ts(j.get(\"lastSeenAt\")) or now_utc\n        analyzed_at = parse_ts(j.get(\"analyzedAt\")) or now_utc\n        fetched_at = parse_ts(j.get(\"fetchedAt\")) or now_utc\n\n        existing = con.execute(\n            \"SELECT first_seen_at FROM news_history WHERE news_id = ?\",\n            [news_id],\n        ).fetchone()\n        existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None\n        if existing_first_seen is not None and existing_first_seen < incoming_first_seen:\n            first_seen_at = existing_first_seen\n        else:\n            first_seen_at = incoming_first_seen\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO news_history (\n              news_id, run_id, symbol, company_name, source, boursorama_ref, listing_url,\n              url, canonical_url, title, published_at, published_at_raw, snippet, text,\n              summary, category, impact_score, sentiment, confidence_score, horizon,\n              urgency, suggested_signal, key_drivers, needs_follow_up, is_relevant, relevance_reason,\n              action, reason, status, first_seen_at, last_seen_at, analyzed_at, fetched_at,\n              updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                news_id,\n                run_id,\n                symbol,\n                company_name,\n                source,\n                boursorama_ref,\n                listing_url,\n                url,\n                canonical_url,\n                title,\n                published_at,\n                published_at_raw,\n                snippet,\n                text,\n                summary,\n                category,\n                impact_score,\n                sentiment,\n                confidence_score,\n                horizon,\n                urgency,\n                suggested_signal,\n                key_drivers,\n                needs_follow_up,\n                is_relevant,\n                relevance_reason,\n                action,\n                reason,\n                status,\n                first_seen_at,\n                incoming_last_seen,\n                analyzed_at,\n                fetched_at,\n            ],\n        )\n\nreturn items\n"
+        "pythonCode": "import duckdb\nimport gc\nimport hashlib\nimport time\nfrom contextlib import contextmanager\nfrom datetime import date, datetime, timezone\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=8, delay=1):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            # No per-run CHECKPOINT here: on multi-GB DuckDB files it can exceed n8n task timeouts.\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\ndef to_int(v, d=0):\n    try:\n        if v is None or v == \"\":\n            return d\n        return int(round(float(v)))\n    except Exception:\n        return d\n\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    return str(v)\n\n\ndef to_bool(v, d=True):\n    if isinstance(v, bool):\n        return v\n    if v is None:\n        return d\n    s = str(v).strip().lower()\n    if s in (\"1\", \"true\", \"yes\", \"y\"):\n        return True\n    if s in (\"0\", \"false\", \"no\", \"n\"):\n        return False\n    return d\n\n\ndef ensure_utc(dt):\n    if dt is None:\n        return None\n    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:\n        return dt.replace(tzinfo=timezone.utc)\n    return dt.astimezone(timezone.utc)\n\n\ndef parse_ts(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        if isinstance(v, date) and not isinstance(v, datetime):\n            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)\n        return ensure_utc(v)\n\n    s = str(v).strip()\n    if not s:\n        return None\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n\n    try:\n        return ensure_utc(datetime.fromisoformat(s))\n    except Exception:\n        pass\n\n    try:\n        d = datetime.strptime(s, \"%d.%m.%Y\")\n        return ensure_utc(d)\n    except Exception:\n        return None\n\n\ndef build_news_id(symbol, canonical_url):\n    seed = f\"{str(symbol or '').upper()}|{str(canonical_url or '')}\"\n    return hashlib.sha1(seed.encode(\"utf-8\")).hexdigest()\n\n\nitems = _items or []\nif len(items) == 0:\n    return []\n\nfirst_json = dict(items[0].get(\"json\", {}) or {})\nflush_rows = first_json.get(\"_flushRows\")\nrows = []\nif isinstance(flush_rows, list):\n    for row in flush_rows:\n        if isinstance(row, dict):\n            rows.append(dict(row))\nelse:\n    for it in items:\n        rows.append(dict(it.get(\"json\", {}) or {}))\n\nif len(rows) == 0:\n    return items\n\ndb_path = str(first_json.get(\"db_path\") or rows[0].get(\"db_path\") or DEFAULT_DB_PATH)\n\nwith db_con(db_path) as con:\n    for j in rows:\n\n        symbol = str(j.get(\"symbol\", \"\") or \"\").upper()\n        canonical_url = str(j.get(\"canonicalUrl\", \"\") or j.get(\"url\", \"\") or \"\")\n        news_id = str(j.get(\"newsId\", \"\") or \"\").strip()\n        if not news_id:\n            news_id = build_news_id(symbol, canonical_url)\n\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n        company_name = to_text(j.get(\"companyName\", \"\"))\n        source = to_text(j.get(\"source\", \"boursorama\"))\n        boursorama_ref = to_text(j.get(\"boursoramaRef\", \"\"))\n        listing_url = to_text(j.get(\"listingUrl\", \"\"))\n        url = to_text(j.get(\"url\", canonical_url))\n        title = to_text(j.get(\"title\", \"\"))\n        published_at_raw = to_text(j.get(\"publishedAt\", \"\"))\n        published_at = parse_ts(j.get(\"publishedAt\"))\n        snippet = to_text(j.get(\"snippet\", \"\"))\n        text = to_text(j.get(\"text\", \"\"))\n        summary = to_text(j.get(\"summary\", \"\"))\n        category = to_text(j.get(\"category\", \"Noise\"))\n        impact_score = to_int(j.get(\"impactScore\"), 0)\n        sentiment = to_text(j.get(\"sentiment\", \"Neutral\"))\n        confidence_score = to_int(j.get(\"confidence\"), 0)\n        horizon = to_text(j.get(\"horizon\", \"Days\"))\n        urgency = to_text(j.get(\"urgency\", \"Low\"))\n        suggested_signal = to_text(j.get(\"suggestedSignal\", \"WATCH\"))\n        key_drivers = to_text(j.get(\"keyDrivers\", \"\"))\n        needs_follow_up = to_bool(j.get(\"needsFollowUp\"), False)\n        is_relevant = to_bool(j.get(\"isRelevant\"), True)\n        relevance_reason = to_text(j.get(\"relevanceReason\", \"\"))\n        action = to_text(j.get(\"action\", \"skip\"))\n        reason = to_text(j.get(\"reason\", \"\"))\n        status = to_text(j.get(\"status\", \"\"))\n        now_utc = datetime.now(timezone.utc)\n        incoming_first_seen = parse_ts(j.get(\"firstSeenAt\")) or parse_ts(j.get(\"publishedAt\")) or now_utc\n        incoming_last_seen = parse_ts(j.get(\"lastSeenAt\")) or now_utc\n        analyzed_at = parse_ts(j.get(\"analyzedAt\")) or now_utc\n        fetched_at = parse_ts(j.get(\"fetchedAt\")) or now_utc\n\n        existing = con.execute(\n            \"SELECT first_seen_at FROM news_history WHERE news_id = ?\",\n            [news_id],\n        ).fetchone()\n        existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None\n        if existing_first_seen is not None and existing_first_seen < incoming_first_seen:\n            first_seen_at = existing_first_seen\n        else:\n            first_seen_at = incoming_first_seen\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO news_history (\n              news_id, run_id, symbol, company_name, source, boursorama_ref, listing_url,\n              url, canonical_url, title, published_at, published_at_raw, snippet, text,\n              summary, category, impact_score, sentiment, confidence_score, horizon,\n              urgency, suggested_signal, key_drivers, needs_follow_up, is_relevant, relevance_reason,\n              action, reason, status, first_seen_at, last_seen_at, analyzed_at, fetched_at,\n              updated_at\n            )\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                news_id,\n                run_id,\n                symbol,\n                company_name,\n                source,\n                boursorama_ref,\n                listing_url,\n                url,\n                canonical_url,\n                title,\n                published_at,\n                published_at_raw,\n                snippet,\n                text,\n                summary,\n                category,\n                impact_score,\n                sentiment,\n                confidence_score,\n                horizon,\n                urgency,\n                suggested_signal,\n                key_drivers,\n                needs_follow_up,\n                is_relevant,\n                relevance_reason,\n                action,\n                reason,\n                status,\n                first_seen_at,\n                incoming_last_seen,\n                analyzed_at,\n                fetched_at,\n            ],\n        )\n\nreturn items\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        3376,
-        -80
+        9440,
+        6464
       ],
-      "id": "596f94d7-5f40-40a4-b34f-a718f13cd994",
+      "id": "4ac28797-85e2-45eb-907e-59ec35e6a22a",
       "name": "S22 - Upsert News DuckDB"
     },
     {
       "parameters": {
         "language": "pythonNative",
-        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            # CHECKPOINT avant close pour libérer les pages orphelines laissées\n            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.\n            try:\n                con.execute(\"CHECKPOINT\")\n            except Exception:\n                pass\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\n            \"SELECT run_id FROM run_log WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1\"\n        ).fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\", \"run_id\": \"\", \"db_path\": db_path}}]\n\n    r = con.execute(\"SELECT COALESCE(symbols_total, 0) FROM run_log WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_total = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(DISTINCT symbol) FROM news_history WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_ok = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(DISTINCT symbol) FROM news_errors WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_error = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM news_history WHERE run_id = ?\", [run_id]).fetchone()\n    articles_total = int(r[0]) if r else 0\n\n    r = con.execute(\n        \"SELECT COUNT(*) FROM news_history WHERE run_id = ? AND action = 'analyze'\",\n        [run_id],\n    ).fetchone()\n    items_analyzed = int(r[0]) if r else 0\n\n    r = con.execute(\n        \"SELECT COUNT(*) FROM news_history WHERE run_id = ? AND action = 'skip'\",\n        [run_id],\n    ).fetchone()\n    items_skipped = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM news_errors WHERE run_id = ?\", [run_id]).fetchone()\n    errors_logged = int(r[0]) if r else 0\n\n    if symbols_total == 0:\n        status = \"NO_DATA\"\n    elif articles_total > 0 and errors_logged == 0:\n        status = \"SUCCESS\"\n    elif articles_total > 0 and errors_logged > 0:\n        status = \"PARTIAL\"\n    elif articles_total == 0 and errors_logged > 0:\n        status = \"FAILED\"\n    else:\n        status = \"NO_OUTPUT\"\n\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            status = ?,\n            symbols_ok = ?,\n            symbols_error = ?,\n            articles_total = ?,\n            items_analyzed = ?,\n            items_skipped = ?,\n            errors_logged = ?,\n            error_detail = ?\n        WHERE run_id = ?\n        \"\"\",\n        [status, symbols_ok, symbols_error, articles_total, items_analyzed, items_skipped, errors_logged, None, run_id],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"db_path\": db_path,\n            \"status\": status,\n            \"symbols_total\": symbols_total,\n            \"symbols_ok\": symbols_ok,\n            \"symbols_error\": symbols_error,\n            \"articles_total\": articles_total,\n            \"items_analyzed\": items_analyzed,\n            \"items_skipped\": items_skipped,\n            \"errors_logged\": errors_logged,\n        }\n    }\n]\n"
+        "pythonCode": "import duckdb\nimport gc\nimport time\nfrom contextlib import contextmanager\n\nDEFAULT_DB_PATH = \"/files/duckdb/ag4_spe_v2.duckdb\"\n\n\n@contextmanager\ndef db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as exc:\n            if \"lock\" in str(exc).lower() and attempt < retries - 1:\n                time.sleep(delay * (2 ** attempt))\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            # No per-run CHECKPOINT here: this workflow must stay under n8n's 60s code-node timeout.\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\n\nitems = _items or []\nrun_id = \"\"\ndb_path = DEFAULT_DB_PATH\n\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if not run_id:\n        run_id = str(j.get(\"run_id\", \"\") or \"\")\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    if not run_id:\n        rr = con.execute(\n            \"SELECT run_id FROM run_log WHERE status = 'RUNNING' ORDER BY started_at DESC LIMIT 1\"\n        ).fetchone()\n        run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    if not run_id:\n        return [{\"json\": {\"status\": \"NO_RUN\", \"run_id\": \"\", \"db_path\": db_path}}]\n\n    r = con.execute(\"SELECT COALESCE(symbols_total, 0) FROM run_log WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_total = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(DISTINCT symbol) FROM news_history WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_ok = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(DISTINCT symbol) FROM news_errors WHERE run_id = ?\", [run_id]).fetchone()\n    symbols_error = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM news_history WHERE run_id = ?\", [run_id]).fetchone()\n    articles_total = int(r[0]) if r else 0\n\n    r = con.execute(\n        \"SELECT COUNT(*) FROM news_history WHERE run_id = ? AND action = 'analyze'\",\n        [run_id],\n    ).fetchone()\n    items_analyzed = int(r[0]) if r else 0\n\n    r = con.execute(\n        \"SELECT COUNT(*) FROM news_history WHERE run_id = ? AND action = 'skip'\",\n        [run_id],\n    ).fetchone()\n    items_skipped = int(r[0]) if r else 0\n\n    r = con.execute(\"SELECT COUNT(*) FROM news_errors WHERE run_id = ?\", [run_id]).fetchone()\n    errors_logged = int(r[0]) if r else 0\n\n    if symbols_total == 0:\n        status = \"NO_DATA\"\n    elif articles_total > 0 and errors_logged == 0:\n        status = \"SUCCESS\"\n    elif articles_total > 0 and errors_logged > 0:\n        status = \"PARTIAL\"\n    elif articles_total == 0 and errors_logged > 0:\n        status = \"FAILED\"\n    else:\n        status = \"NO_OUTPUT\"\n\n    con.execute(\n        \"\"\"\n        UPDATE run_log\n        SET finished_at = CURRENT_TIMESTAMP,\n            status = ?,\n            symbols_ok = ?,\n            symbols_error = ?,\n            articles_total = ?,\n            items_analyzed = ?,\n            items_skipped = ?,\n            errors_logged = ?,\n            error_detail = ?\n        WHERE run_id = ?\n        \"\"\",\n        [status, symbols_ok, symbols_error, articles_total, items_analyzed, items_skipped, errors_logged, None, run_id],\n    )\n\nreturn [\n    {\n        \"json\": {\n            \"run_id\": run_id,\n            \"db_path\": db_path,\n            \"status\": status,\n            \"symbols_total\": symbols_total,\n            \"symbols_ok\": symbols_ok,\n            \"symbols_error\": symbols_error,\n            \"articles_total\": articles_total,\n            \"items_analyzed\": items_analyzed,\n            \"items_skipped\": items_skipped,\n            \"errors_logged\": errors_logged,\n        }\n    }\n]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -848,
-        -256
+        7152,
+        5648
       ],
-      "id": "0a5ecf81-f16e-49e1-aeb2-12096f68e77d",
+      "id": "39873316-4615-4ce1-92ef-5435c4110349",
       "name": "S24 - Finalize Run"
     },
     {
       "parameters": {
         "content": "AG4_Spe-V2: Universe from Google Sheets, specific stock news from Boursorama, dedupe + analysis + storage in DuckDB.",
-        "height": 180,
-        "width": 1680,
+        "height": 1124,
+        "width": 6320,
         "color": 5
       },
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -1940,
-        -352
+        5584,
+        5600
       ],
-      "id": "85dd69e0-12f0-4b3a-a7f3-2fbd52a0f67d",
+      "id": "ab88abd1-d219-4604-8912-c1ae8b90167c",
       "name": "Note AG4_Spe-V2"
     }
   ],
@@ -1223,8 +1216,14 @@
       ]
     }
   },
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "staticData": null,
+  "meta": null,
   "pinData": {},
-  "meta": {
-    "instanceId": "093ba1266e85fcaaa6abca411d9f7941951737b3920bfaa6e2db89226df2c82d"
-  }
+  "versionId": "b14a34df-27aa-4d41-bc6b-6e01446a983d",
+  "activeVersionId": "b14a34df-27aa-4d41-bc6b-6e01446a983d",
+  "versionCounter": 261
 }
