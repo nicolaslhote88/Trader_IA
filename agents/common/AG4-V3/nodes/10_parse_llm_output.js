@@ -20,7 +20,7 @@ function normalizeKey(s) {
   return String(s || '')
     .toLowerCase()
     .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -177,6 +177,36 @@ function normalizeUrgencyForMagnitude(urgency, magnitude) {
   return ['immediate', 'today'].includes(u) ? u : 'today';
 }
 
+// --- P0 calibration (2026-06-17) : borne impact_score par magnitude + confiance ---
+function calibrateImpact(score, magnitude, confidence) {
+  const v = Number(score);
+  let s = Number.isFinite(v) ? Math.max(0, Math.min(10, Math.round(v))) : 0;
+  let cap = 10;
+  if (magnitude === 'Low') cap = 3;
+  else if (magnitude === 'Medium') cap = 6;
+  s = Math.min(s, cap);
+  if (Number(confidence) < 0.5 && s > 6) s = 6;
+  return s;
+}
+
+function deriveSourceFromUrl(existing, url) {
+  const cur = String(existing || '').trim();
+  if (cur && cur.toLowerCase() !== 'unknown') return cur;
+  try {
+    const h = new URL(String(url || '')).hostname.toLowerCase().replace(/^www\./, '');
+    if (!h) return 'unknown';
+    if (h.includes('boursorama')) return 'Boursorama';
+    if (h.includes('investir') || h.includes('lesechos')) return 'Investir/Les Echos';
+    if (h.includes('reuters')) return 'Reuters';
+    if (h.includes('bloomberg')) return 'Bloomberg';
+    if (h.includes('zonebourse')) return 'Zonebourse';
+    if (h.includes('amf-france')) return 'AMF France';
+    return h;
+  } catch {
+    return cur || 'unknown';
+  }
+}
+
 const j = $json || {};
 const llmRaw = j.output?.[0]?.content?.[0]?.text || j.content || '{}';
 const ai = safeJsonParse(llmRaw);
@@ -214,13 +244,13 @@ return [{
     canonicalUrl: j.canonicalUrlNormalized || j.canonicalUrl || j.url || 'unknown',
     publishedAt: j.publishedAtNormalized || j.publishedAt || now,
     title: j.title || 'unknown',
-    source: j.source || 'unknown',
+    source: deriveSourceFromUrl(j.source, j.canonicalUrlNormalized || j.canonicalUrl || j.url),
     feedUrl: j.feedUrl || '',
     symbols: '',
     type: 'macro',
     notes,
     isActionable,
-    ImpactScore: isActionable ? clamp10(ai.impact_score, j.preImpactScore ?? 0) : 0,
+    ImpactScore: isActionable ? calibrateImpact(ai.impact_score, impactMagnitude, ai.confidence) : 0,
     confidence: clamp01(ai.confidence, 0.5),
     urgency,
     Snippet: j.snippet || '',

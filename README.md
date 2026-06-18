@@ -1,137 +1,161 @@
-﻿# Trader_IA
+# Trader_IA
 
-Plateforme de trading assiste par IA, orchestree par n8n sur un VPS Hostinger.
-Le systeme combine des **Portfolio Managers LLM**, trois **analystes specialises**
-(technique, fondamental, sentiment/news), un **Risk Manager** deterministe et un
-**Execution Trader** branche sur IBKR Client Portal.
+Plateforme de trading assistée par IA, orchestrée par n8n sur un VPS Hostinger.
+Le système combine des Portfolio Managers LLM, des analystes spécialisés, un
+Risk Manager déterministe, un broker FastAPI branché sur IBKR Client Portal et
+un dashboard Streamlit.
 
-Etat Forex au 2026-05-06 : seul le workflow AG1-FX GPT-5.2 est publie contre le
-compte IBKR paper unique. Les variantes Grok et Gemini restent versionnees mais
-desactivees pour eviter que plusieurs sources generent des ordres sur le meme
-portefeuille IBKR. Les ordres FX sont explicites comme trades spot
-speculatifs (`isCcyConv=false`), pas comme conversions de devise. Les bases
-DuckDB AG1-FX sont reconciliees avec les positions et les cash balances IBKR
-avant les runs PM et toutes les heures via `AG1-FX-PF-V1`.
-Le validateur AG1-FX bloque maintenant les ouvertures `NO_NEW_POSITION` et
-ramene les ouvertures `REDUCED_SIZE_ONLY` a un cap reduit configurable avant
-tout envoi IBKR. Depuis le 2026-05-18, le mode paper live bloque aussi avant
-broker les nouvelles ouvertures FX qui emprunteraient une devise non-EUR
-(`AG1_FX_CASH_ONLY_BASE_CCY_MODE=true`).
+**État opérationnel au 2026-06-18.** Le système Actions/ETF fonctionne en
+**LIVE réel** sur le compte IBKR `U25651155` (`IBKR_DRY_RUN=false`,
+`AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`). Le Portfolio Manager actif est
+**AG1 V4 consensus** : GPT-5.5, Grok 4.3 et Claude Sonnet 4.6 votent, puis le
+workflow applique une règle de consensus 2/3 avant toute exécution. Gemini a été
+retiré. Le Forex est entièrement désactivé (`fx_orders_enabled=false`, workflows
+FX inactifs) ; les bases FX sont conservées mais figées.
 
----
+**Attention : ordres réels.** Toute modification du chemin AG1 V4, du broker
+IBKR ou des variables d'exécution doit être validée avec les garde-fous du projet.
+Ne jamais déclencher ni confirmer un ordre manuellement depuis le code.
 
-## 1. Architecture fonctionnelle (6 agents)
+## 1. Architecture fonctionnelle
 
-| # | Agent | RÃ´le | ImplÃ©mentÃ© dans |
+| # | Agent | Rôle | Implémentation principale |
 |---|---|---|---|
-| 1 | **Univers** | Extraction et maintenance de l'univers d'investissement (tickers, mÃ©tadonnÃ©es, secteurs) | `outils/AG0-V1 - extraction universe/` (workflow n8n inactif, utilitaire ponctuel) |
-| 2 | **Portfolio Manager** | Allocation, cibles de position, ordres theoriques. Cote actions, AG1 V4 consolide GPT/Grok/Claude par consensus 2/3. Cote Forex paper, GPT-5.2 est l'unique PM actif ; Grok/Gemini sont gardes inactifs. | `AG1-V4-Consensus Portfolio manager/`, `AG1-V3-Portfolio manager/`, `AG1-FX-V1-Portfolio manager/` |
-| 3 | **Analyste Technique** | Indicateurs, patterns, signaux de prix | `AG2-V3/` |
-| 4 | **Analyste Fondamental** | Financials, valorisation, earnings | `AG3-V2/` |
-| 5 | **Analyste Sentiment / News** | Sentiment de marchÃ©, news, transcripts | `AG4-V3/` (macro + geo-tagging), `AG4-SPE-V2/` (par valeur), `AG4-Forex/` (canaux FX dÃ©diÃ©s) |
-| 6 | **Risk Manager + Execution Trader** | Validation des ordres, garde-fous, exÃ©cution | `AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `AG1-V3-Portfolio manager/workflow/nodes/post_agent/` |
+| 1 | Univers | Extraction et maintenance de l'univers d'investissement : tickers, métadonnées, secteurs | `outils/AG0-V1 - extraction universe/` |
+| 2 | Portfolio Manager | Allocation, cibles de position et ordres théoriques. En production Actions/ETF : AG1 V4 consensus GPT-5.5 + Grok 4.3 + Claude Sonnet 4.6 | `agents/trading-actions/AG1-V4-Consensus Portfolio manager/` |
+| 3 | Analyste Technique | Indicateurs, patterns et signaux de prix | `agents/trading-actions/AG2-V3/` |
+| 4 | Analyste Fondamental | Financials, valorisation, earnings | `agents/trading-actions/AG3-V2/` |
+| 5 | Analyste Sentiment / News | News macro, sentiment marché, signaux par valeur et mode AG4 dual-branch | `agents/common/AG4-V3/`, `agents/trading-actions/AG4-SPE-V2/` |
+| 6 | Risk Manager + Execution Trader | Validation déterministe, consensus, écriture DuckDB, envoi IBKR et approbation Telegram | `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `services/ibkr-broker/` |
 
-> Etat actuel : AG1 V4 actions est le Portfolio Manager actif et peut executer
-> sur le compte IBKR live si les gates VPS sont ouvertes. Cote Forex, les
-> workflows sont parques/desactives; les mentions paper restantes concernent
-> l'historique AG1-FX.
+## 2. Workflows actifs
 
-## 2. Stack technique
+Workflows actifs côté Actions/ETF :
 
-- **n8n** : orchestration des workflows (13 workflows â€” 10 actifs, 3 inactifs)
-- **DuckDB** : source of truth analytique + ledger d'exÃ©cution (`cfg.portfolio_config`, `core.orders`, `core.fills`, `core.lots`, snapshots, cash ledger)
-- **yfinance-api** : service maison autour de `yfinance` (cache, cooldown par symbole, endpoints `/history`, `/quote`, `/options`, `/calendar`, `/fundamentals`)
-- **yf-enrichment** : enrichissement quotidien (volatilitÃ©, earnings, calendar)
-- **Streamlit** : dashboard opÃ©rationnel (`dashboard/`, `trading-dashboard` service)
-- **IBKR Client Portal API** : gateway + broker FastAPI pour l'execution actions/ETF/FX. AG1 V4 actions peut envoyer des ordres reels selon les gates VPS; le Forex est parque/desactive hors workflows historiques.
-- **Traefik** : reverse proxy TLS (Let's Encrypt)
+- `AG1V4CONSENSUS` : Portfolio Manager Actions/ETF live, consensus 2/3.
+- `AG1-PF-V1` : mark-to-market horaire V4.
+- `AG2-V3` : analyse technique.
+- `AG3-V2` : analyse fondamentale.
+- `AG4-V3` : News Watcher macro, dual-branch `reduced/full`.
+- `AG4_Spé-V2` : analyse news par valeur.
+- `YF-ENRICH-V1` : enrichissement Yahoo Finance.
 
-Tout tourne dans Docker Compose â€” voir `vps_hostinger_config/`.
+Workflows d'approbation :
 
-## 3. DÃ©marrage rapide
+- `AG1 V4 — Order Approval Request` : notification Telegram quand un ordre doit
+  être validé hors bande.
+- `AG1 V4 — Order Approval Decide` : webhook appelé par les boutons
+  Approuver/Rejeter.
 
-```bash
-# Cloner
-git clone https://github.com/nicolaslhote88/Trader_IA.git
-cd Trader_IA
+Forex : workflows FX inactifs. Ne pas les réactiver sans décision explicite.
 
-# Configurer l'environnement VPS
-cd vps_hostinger_config
-cp .env.example .env
-# â†’ Ã©diter .env (voir docs/operations/env_vars.md)
+## 3. Exécution IBKR et approbation
 
-# Lancer la stack principale
-docker compose up -d
-```
+AG1 V4 utilise des prix frais avant d'envoyer les packs aux LLM, avec un
+préflight de liquidité qui interroge IBKR pour les symboles retenus. L'objectif
+est d'éviter de consommer trois appels LLM sur une réflexion inexécutable.
 
-## 4. Structure du repo
+Chemin d'exécution Actions/ETF :
 
-```
+1. Construction du portefeuille, des opportunités et du brief compact.
+2. Préflight IBKR/yfinance : résolution contrat, snapshot, historique de secours.
+3. Raisonnement des trois LLM.
+4. Consensus 2/3 sur symbole + intention.
+5. Safety deterministic checks.
+6. Envoi IBKR via `services/ibkr-broker`.
+7. Écriture ledger DuckDB et health check.
+
+Garde-fous broker :
+
+- Déviation prix limite vs référence <= 5 % : confirmation automatique si le
+  prompt IBKR est qualifié comme prompt prix.
+- Déviation 5 % à 15 % : ordre parqué, notification Telegram, revalidation au clic.
+- Déviation > 15 % : rejet.
+- Prix non vérifiable (`QUOTE_TOO_OLD`, `NO_REFERENCE_PRICE`,
+  `QUOTE_FETCH_FAILED`) : parking Telegram.
+- Prompt IBKR `without market data` : parking Telegram uniquement si la garde prix
+  précédente a validé une déviation <= 5 %. Au clic, le broker répond au prompt
+  IBKR existant via son `reply_id`, au lieu de recréer l'ordre.
+
+Détails : `docs/operations/order_approval_deploy_notes.md`.
+
+## 4. Stack technique
+
+- **n8n** : orchestration des workflows. Instance partagée : Trader_IA, SIGA et
+  templates. Filtrer les opérations sur `AG*` / `YF*`.
+- **DuckDB** : vérité métier et ledger V4 dans `/local-files/duckdb/` sur le VPS.
+- **IBKR Client Portal Gateway** : passerelle compte réel `U25651155`.
+- **ibkr-broker** : service FastAPI, image Docker rebuildée depuis
+  `/opt/trader-ia/services/ibkr-broker/` sur le VPS.
+- **yfinance-api** : quotes et données Yahoo Finance.
+- **yf-enrichment** : enrichissement quotidien.
+- **macro-data-api** : données macro et marché complémentaires.
+- **Streamlit dashboard** : dashboard V4-only.
+- **Traefik** : reverse proxy TLS.
+
+Deux stacks Docker Compose sont utilisées sur le VPS :
+
+- n8n : `/docker/root`
+- IBKR/yfinance : `/docker/yfinance`
+
+## 5. Structure du dépôt
+
+```text
 Trader_IA/
-├── agents/                          # Workflows n8n des agents
-│   ├── common/                      # Agents transverses
-│   │   ├── AG4-V3/                  # News macro globales + geo-tagging + dual-write FX
-│   │   └── yf-enrichment-v1/        # Enrichissement Yahoo Finance quotidien
-│   ├── trading-actions/             # Agents du système actions/ETF/crypto
+├── agents/
+│   ├── common/
+│   │   ├── AG4-V3/
+│   │   └── yf-enrichment-v1/
+│   ├── trading-actions/
 │   │   ├── AG1-PF-V1/
 │   │   ├── AG1-V4-Consensus Portfolio manager/
 │   │   ├── AG1-V3-Portfolio manager/
 │   │   ├── AG2-V3/
 │   │   ├── AG3-V2/
 │   │   └── AG4-SPE-V2/
-│   └── trading-forex/               # Agents du système Forex isolé
-│       ├── AG1-FX-V1-Portfolio manager/
-│       ├── AG2-FX-V1/
-│       ├── AG4-FX-V1/
-│       └── AG4-Forex/
-├── services/                        # Services Docker transverses
-│   ├── dashboard/                   # Streamlit (trading-dashboard)
-│   ├── yf-enrichment-service/       # Scheduler Dockerfile pour yf-enrichment-v1
-│   └── yfinance-api/                # Service Yahoo Finance
-├── infra/                           # Infra-as-code
-│   └── vps_hostinger_config/        # Docker Compose + .env.example
-├── docs/                            # Documentation consolidée (voir §6)
-└── outils/                          # Workflows n8n inactifs / utilitaires ponctuels (AG0 univers)
-```
-> **Rappel** : cette arborescence GitHub peut diffÃ©rer de celle dÃ©ployÃ©e sur le VPS. Sur le VPS, `/opt/trader-ia/` a sa propre layout â€” les chemins de volumes et les `STATIC_WRITER_PATHS` dans le nÅ“ud 9 d'AG1-V3 sont pensÃ©s pour cette rÃ©alitÃ©.
-
-## 5. Flux de donnÃ©es (vue haute)
-
-```
-AG0 (univers) â”€â”€â–º AG2/AG3/AG4/AG4-SPE (analystes parallÃ¨les) â”€â”€â–º AG1 V4 (GPT/Grok/Claude)
-                                                                    â”‚
-                                                                    â–¼
-                                    Consensus 2/3 â”€â”€â–º Validate & Enforce Safety â”€â”€â–º Build DuckDB Bundle â”€â”€â–º Upsert Run Bundle â”€â”€â–º Post-Run Health
-                                    (Risk Manager)                 (Execution = SIM)    (ledger atomique)    (health check)
-                                                                    â”‚
-                                                                    â–¼
-                                                          Streamlit Dashboard (lecture seule)
+│   └── trading-forex/
+├── docs/
+│   ├── audits/
+│   ├── operations/
+│   └── specs/
+├── infra/
+├── scripts/
+├── services/
+│   ├── dashboard/
+│   ├── ibkr-broker/
+│   ├── macro-data-api/
+│   └── yfinance-api/
+└── outils/
 ```
 
-## 6. Documentation
+Le layout GitHub n'est pas identique au layout VPS. En particulier,
+`/opt/trader-ia` sur le VPS n'est pas un clone Git : toute modification broker
+déployée doit aussi être commitée dans ce dépôt.
 
-| ThÃ¨me | Emplacement |
+## 6. Documentation utile
+
+| Sujet | Fichier |
 |---|---|
-| Ã‰tat des lieux fonctionnel complet | `docs/architecture/etat_des_lieux.md` |
-| Historique des issues et dÃ©cisions | `docs/architecture/historique_issues.md` |
-| Analyse systÃ¨me avant branchement broker | `ANALYSE_SYSTEME_AVANT_AGENT6.md` (racine) |
-| Comparatif brokers 2026 | `Etude_Comparative_Brokers_Trader_IA.docx` (racine) |
-| Audits (valorisation, segments marchÃ©) | `docs/audits/20260423_audit_valorisation/` |
-| Spec AG4 geo-tagging + AG4_Forex | `docs/specs/ag4_geo_tagging_and_forex_base_v1.md` |
-| Spec AG1 V4 consensus actions | `docs/specs/ag1_v4_consensus_actions.md` |
+| Instructions projet pour Codex | `AGENTS.md` |
+| Investigation n8n | `docs/operations/runbook_n8n_investigation.md` |
+| Déploiement VPS | `docs/operations/deploy.md` |
+| Accès VPS | `docs/operations/vps-access.md` |
 | Variables d'environnement | `docs/operations/env_vars.md` |
-| DÃ©ploiement VPS | `docs/operations/deploy.md` |
-| Execution IBKR | `docs/operations/ibkr_execution.md` |
-| Reconstruction du pack AG1 | `docs/dev/rebuild_pack.md` |
-| Historique des migrations | `docs/history/` |
-| README par agent | `AG*/README.md` ou `AG*/docs/GUIDE.md` |
+| Exécution IBKR | `docs/operations/ibkr_execution.md` |
+| Approbation ordres | `docs/operations/order_approval_deploy_notes.md` |
+| Audit brief LLM AG1 V4 | `docs/audits/20260615_ag1_v4_prompt_audit.md` |
+| Audit AG4 V3 | `docs/audits/20260617_ag4_v3_news_watcher_audit.md` |
+| Plans AG4 SPE | `docs/audits/20260617_ag4_spe_v2_analysis.md`, `docs/audits/20260617_ag4_spe_v2_remediation_plan.md` |
 
-## 7. Conventions
+## 7. Conventions de sécurité
 
-- Ne jamais renommer les dossiers `AG*` ou `yfinance-api`, `yf-enrichment*` : les chemins sont en dur dans le docker-compose, dans `09_upsert_run_bundle_duckdb.code.py` (`STATIC_WRITER_PATHS`) et dans l'environnement VPS (`/opt/trader-ia/...`, `/local-files/...`).
-- Les Ã©critures DuckDB passent par `duckdb_writer.py::upsert_run_bundle()` (transaction atomique, idempotent via `ON CONFLICT DO UPDATE`).
-- Tout nouvel ordre broker live doit passer par le chemin existant `core.orders` + `core.fills` (colonnes `broker`, `broker_order_id`, `client_order_id`).
+- Les lectures DuckDB doivent être faites en `read_only=True`.
+- Ne jamais afficher ni committer de secret, clé privée ou fichier `.env` réel.
+- Ne pas modifier les variables live IBKR sans décision explicite.
+- Ne jamais confirmer un ordre depuis le code ou la console.
+- Toute nouvelle version d'un workflow live doit être validée en shadow/replay
+  avant publication.
 
 ## 8. Licence
 
-MIT â€” voir `LICENSE`.
+MIT. Voir `LICENSE`.

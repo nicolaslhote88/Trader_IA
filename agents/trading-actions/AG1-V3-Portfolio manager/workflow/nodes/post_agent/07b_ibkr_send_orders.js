@@ -20,6 +20,15 @@ const N8N_CONTEXT = this;
 
 const SEND_DRY_RUN_TO_BROKER = String($env.IBKR_SEND_DRY_RUN_TO_BROKER || "false").toLowerCase() === "true";
 const LIVE_ORDERS_ENABLED = String($env.AG1_ACTIONS_LIVE_ORDERS_ENABLED || "false").toLowerCase() === "true";
+const ENABLED_MODEL_TOKENS = String($env.AG1_ACTIONS_IBKR_ENABLED_MODELS || "gemini")
+  .split(",")
+  .map((s) => s.trim().toLowerCase())
+  .filter(Boolean);
+const REQUIRE_PAPER_ACCOUNT = String($env.IBKR_REQUIRE_PAPER_ACCOUNT || "true").toLowerCase() !== "false";
+const PAPER_ACCOUNT_PREFIXES = String($env.IBKR_PAPER_ACCOUNT_PREFIXES || "DU")
+  .split(",")
+  .map((s) => s.trim().toUpperCase())
+  .filter(Boolean);
 const FORCE_IBKR_CONNECTIVITY_TEST_ORDER = false;
 
 function toNum(v, d = 0) {
@@ -104,11 +113,60 @@ async function postJson(url, payload) {
   throw new Error("No HTTP client available in this n8n Code node");
 }
 
+async function getJson(url) {
+  if (typeof fetch === "function") {
+    const response = await fetch(url, { method: "GET", headers: { "Accept": "application/json" } });
+    const text = await response.text();
+    let data = {};
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch (err) {
+        data = { raw: text };
+      }
+    }
+    if (!response.ok) {
+      const message = data?.detail || data?.error || text || `HTTP ${response.status}`;
+      throw new Error(`HTTP ${response.status}: ${message}`);
+    }
+    return data;
+  }
+
+  if (N8N_CONTEXT?.helpers?.httpRequest) {
+    return await N8N_CONTEXT.helpers.httpRequest({
+      method: "GET",
+      url,
+      headers: { "Accept": "application/json" },
+      json: true,
+      timeout: 15000,
+    });
+  }
+
+  throw new Error("No HTTP client available in this n8n Code node");
+}
+
+function modelAllowedForIbkr(modelText) {
+  const normalized = String(modelText || "").toLowerCase();
+  if (!ENABLED_MODEL_TOKENS.length) return false;
+  return ENABLED_MODEL_TOKENS.some((token) => token === "*" || token === "all" || normalized.includes(token));
+}
+
+function accountCodeFromSummary(summary) {
+  const raw = summary?.accountcode ?? summary?.accountCode ?? summary?.account_id ?? summary?.accountId;
+  if (typeof raw === "string") return raw.trim();
+  if (raw && typeof raw === "object") {
+    return String(raw.value || raw.accountcode || raw.accountCode || raw.id || "").trim();
+  }
+  return "";
+}
+
 const input = $json || {};
 const orders = Array.isArray(input.orders)
   ? input.orders
   : (Array.isArray(input.validatedOrders) ? input.validatedOrders : []);
 const runId = String(input?.ctx?.run?.runId || input.runId || input.run_id || "").trim() || `RUN_${Date.now()}`;
+const modelText = String(input?.ctx?.run?.model || input?.run?.model || input.model || "").trim();
+const modelIbkrAllowed = modelAllowedForIbkr(modelText);
 
 for (let i = 0; i < orders.length; i += 1) {
   const order = orders[i];
@@ -123,6 +181,13 @@ let ibkrResults = [];
 let ibkrErrors = [];
 let brokerCalled = false;
 let connectivityTestInjected = false;
+let accountPreflight = {
+  required: REQUIRE_PAPER_ACCOUNT,
+  ok: null,
+  accountCode: "",
+  paperPrefixes: PAPER_ACCOUNT_PREFIXES,
+  error: "",
+};
 
 let actionableOrders = orders.filter((o) => (
   !["HOLD", "WATCH"].includes(String(o.signal || o.action || "").toUpperCase())
@@ -151,7 +216,13 @@ if (
   }];
 }
 
-if (!DRY_RUN && !LIVE_ORDERS_ENABLED && actionableOrders.length > 0) {
+if (!DRY_RUN && !modelIbkrAllowed && actionableOrders.length > 0) {
+  ibkrErrors = actionableOrders.map((o) => ({
+    order_id: o.orderId,
+    client_order_id: o.clientOrderId,
+    error: `AG1_ACTIONS_MODEL_NOT_IBKR_ENABLED:${modelText || "UNKNOWN"}`,
+  }));
+} else if (!DRY_RUN && !LIVE_ORDERS_ENABLED && actionableOrders.length > 0) {
   ibkrErrors = actionableOrders.map((o) => ({
     order_id: o.orderId,
     client_order_id: o.clientOrderId,
@@ -174,12 +245,28 @@ if (!DRY_RUN && !LIVE_ORDERS_ENABLED && actionableOrders.length > 0) {
   };
 
   try {
+    if (!DRY_RUN && REQUIRE_PAPER_ACCOUNT) {
+      const accountSummary = await getJson(`${BROKER_URL}/account/summary`);
+      const accountCode = accountCodeFromSummary(accountSummary).toUpperCase();
+      accountPreflight.accountCode = accountCode;
+      accountPreflight.ok = PAPER_ACCOUNT_PREFIXES.some((prefix) => accountCode.startsWith(prefix));
+      if (!accountPreflight.ok) {
+        throw new Error(`IBKR paper account required, got '${accountCode || "UNKNOWN"}'`);
+      }
+    }
+
     brokerCalled = true;
     const response = await postJson(`${BROKER_URL}/orders/equity`, payload);
     ibkrResults = response.results || [];
     ibkrErrors = response.errors || [];
   } catch (err) {
-    ibkrErrors.push({ error: `ibkr-broker unreachable: ${err.message}`, fallback: "sandbox_only" });
+    accountPreflight.error = String(err?.message || err || "");
+    ibkrErrors = actionableOrders.map((o) => ({
+      order_id: o.orderId,
+      client_order_id: o.clientOrderId,
+      error: `ibkr-broker preflight/send failed: ${accountPreflight.error}`,
+      fallback: "sandbox_only",
+    }));
   }
 }
 
@@ -244,6 +331,10 @@ return [{
       dryRun: DRY_RUN,
       liveOrdersEnabled: LIVE_ORDERS_ENABLED,
       sendDryRunToBroker: SEND_DRY_RUN_TO_BROKER,
+      enabledModelTokens: ENABLED_MODEL_TOKENS,
+      model: modelText,
+      modelAllowedForIbkr: modelIbkrAllowed,
+      accountPreflight,
       forceConnectivityTestOrder: FORCE_IBKR_CONNECTIVITY_TEST_ORDER,
       connectivityTestInjected,
       brokerCalled,

@@ -4,3 +4,4 @@ plotly
 altair
 duckdb
 requests
+pytz

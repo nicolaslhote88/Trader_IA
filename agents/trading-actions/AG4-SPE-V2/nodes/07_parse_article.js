@@ -63,20 +63,33 @@ function extractMainBlock(html) {
 }
 
 function normalizeDate(raw) {
+  // B1 (2026-06-17) — anti-corruption des dates (cf docs/audits/20260617_ag4_spe_v2_analysis.md).
+  // 1) on privilégie l'ISO des sources fiables (<time datetime>, meta article:published_time) ;
+  // 2) fallback date FR JJ/MM/AAAA ANCRÉE (\b...\b, année 4 chiffres) pour ne PAS capter une
+  //    année isolée du corps (échéance obligataire 2031, plan 2030, etc.) ;
+  // 3) garde-fou de plausibilité : toute date hors [now-2ans ; now+7j] -> null
+  //    => published_at restera NULL et les consommateurs retombent sur first_seen_at.
   if (!raw) return null;
   const s = String(raw).trim();
+  if (!s) return null;
 
-  const fr = s.match(/(\d{1,2})[./-](\d{1,2})[./-](\d{2,4})/);
-  if (fr) {
-    let y = Number(fr[3]);
-    if (y < 100) y += 2000;
-    const d = new Date(Date.UTC(y, Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));
-    if (!isNaN(d.getTime())) return d.toISOString();
-  }
-
+  let d = null;
   const iso = new Date(s);
-  if (!isNaN(iso.getTime())) return iso.toISOString();
-  return null;
+  if (!isNaN(iso.getTime())) {
+    d = iso;
+  } else {
+    const fr = s.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b/);
+    if (fr) {
+      const cand = new Date(Date.UTC(Number(fr[3]), Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));
+      if (!isNaN(cand.getTime())) d = cand;
+    }
+  }
+  if (!d) return null;
+
+  const now = Date.now();
+  const t = d.getTime();
+  if (t < now - 730 * 86400000 || t > now + 7 * 86400000) return null;
+  return d.toISOString();
 }
 
 function truncate(str, maxLen) {

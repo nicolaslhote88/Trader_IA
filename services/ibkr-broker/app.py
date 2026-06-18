@@ -358,6 +358,9 @@ async def lifespan(app: FastAPI):
     await _cpapi.close()
 
 
+import approval  # human-in-the-loop order approval (flag-gated)
+from fastapi import Body as ApprovalBody
+
 app = FastAPI(title="ibkr-broker", version="1.0.0", lifespan=lifespan)
 
 
@@ -588,7 +591,57 @@ async def _fetch_equity_quote(symbol: str, side: str, qty: float) -> dict:
     return quotes[0] if isinstance(quotes[0], dict) else {"ok": False, "error": "INVALID_QUOTE_ROW"}
 
 
-async def _price_confirmation_guard(order: Any, ibkr_payload: dict, response: Any) -> dict[str, Any]:
+def _parse_ibkr_snapshot_price(snapshot: Any, side: str) -> "float | None":
+    try:
+        rows = snapshot if isinstance(snapshot, list) else []
+        row = rows[0] if rows else {}
+        def _n(v):
+            if v is None:
+                return None
+            t = str(v).lstrip("CcHh ").replace(",", "").strip()
+            try:
+                return float(t)
+            except ValueError:
+                return None
+        last = _n(row.get("31")); bid = _n(row.get("84")); ask = _n(row.get("86"))
+        if str(side).upper() == "BUY":
+            return ask or last or bid
+        return bid or last or ask
+    except Exception:
+        return None
+
+
+async def _ibkr_reference_price(client: Any, ibkr_payload: dict, side: str) -> "float | None":
+    conid = ibkr_payload.get("conid")
+    if not conid:
+        return None
+    try:
+        cid = int(conid)
+    except (TypeError, ValueError):
+        return None
+    try:
+        await client.marketdata_snapshot([cid], fields="31,84,86")
+        await asyncio.sleep(1.0)
+        snap = await client.marketdata_snapshot([cid], fields="31,84,86")
+        return _parse_ibkr_snapshot_price(snap, side)
+    except Exception:
+        return None
+
+
+def _apply_reference(guard: dict, ref_price: float, limit_price: float, field: str) -> dict:
+    guard["reference_price"] = ref_price
+    guard["reference_field"] = field
+    dev = abs(limit_price - ref_price) / ref_price * 100.0
+    guard["deviation_pct"] = dev
+    if dev <= PRICE_GUARD_MAX_DEVIATION_PCT:
+        guard["ok"] = True
+        guard["reason"] = "PRICE_WITHIN_GUARD"
+    else:
+        guard["reason"] = "PRICE_DEVIATION_TOO_HIGH"
+    return guard
+
+
+async def _price_confirmation_guard(client: Any, order: Any, ibkr_payload: dict, response: Any) -> dict[str, Any]:
     messages = _reply_messages(response)
     guard: dict[str, Any] = {
         "enabled": AUTO_CONFIRM_PRICE_WARNINGS,
@@ -649,6 +702,9 @@ async def _price_confirmation_guard(order: Any, ibkr_payload: dict, response: An
     guard["limit_price"] = limit_price
 
     if not ref_price or ref_price <= 0:
+        _ibkr_ref = await _ibkr_reference_price(client, ibkr_payload, str(ibkr_payload.get("side") or "BUY"))
+        if _ibkr_ref and _ibkr_ref > 0:
+            return _apply_reference(guard, _ibkr_ref, limit_price, "ibkr_snapshot")
         guard["reason"] = "NO_REFERENCE_PRICE"
         return guard
 
@@ -661,6 +717,9 @@ async def _price_confirmation_guard(order: Any, ibkr_payload: dict, response: An
         age_seconds = (datetime.now(timezone.utc) - quote_ts).total_seconds()
         guard["quote_age_seconds"] = age_seconds
         if age_seconds > PRICE_GUARD_MAX_QUOTE_AGE_SECONDS:
+            _ibkr_ref = await _ibkr_reference_price(client, ibkr_payload, str(ibkr_payload.get("side") or "BUY"))
+            if _ibkr_ref and _ibkr_ref > 0:
+                return _apply_reference(guard, _ibkr_ref, limit_price, "ibkr_snapshot")
             guard["reason"] = "QUOTE_TOO_OLD"
             return guard
 
@@ -698,7 +757,7 @@ async def _confirm_price_prompt_chain(
                 "attempts": attempts,
             }
 
-        guard = await _price_confirmation_guard(order, ibkr_payload, current_response)
+        guard = await _price_confirmation_guard(client, order, ibkr_payload, current_response)
         attempt = {
             "step": step,
             "reply_ids": [str(item.get("id")) for item in prompt_items],
@@ -1419,6 +1478,16 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                     ))
                     continue
 
+                _appr_result = await approval.maybe_park_for_approval(
+                    confirmation=confirmation,
+                    order=order,
+                    client_order_id=client_order_id,
+                    ibkr_payload=ibkr_payload,
+                    run_id=req.run_id,
+                )
+                if _appr_result is not None:
+                    results.append(_appr_result)
+                    continue
                 errors.append(_reply_required_error(
                     order.order_id,
                     client_order_id,
@@ -1500,3 +1569,68 @@ async def get_market_data_snapshot(
         return await client.get_market_data_snapshot(conid_list, field_list)
     except CPAPIError as exc:
         raise HTTPException(502, str(exc)) from exc
+
+
+# --- Approbation humaine des ordres hors-bande (flag-gated) -------------------
+
+@app.get("/orders/approvals/pending")
+async def approvals_pending() -> dict[str, Any]:
+    return {
+        "enabled": approval.is_enabled(),
+        "config": approval.config(),
+        "pending": await approval.list_pending(),
+    }
+
+
+@app.post("/orders/approvals/{order_id}/reject")
+async def approvals_reject(order_id: str, body: dict = ApprovalBody(default={})) -> dict[str, Any]:
+    token = str((body or {}).get("token") or "")
+    entry, err = await approval.get_for_decision(order_id, token)
+    if err:
+        raise HTTPException(status_code=409, detail="APPROVAL_" + err)
+    await approval.mark(order_id, "REJECTED")
+    return {"order_id": order_id, "status": "REJECTED"}
+
+
+@app.post("/orders/approvals/{order_id}/approve")
+async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})) -> dict[str, Any]:
+    token = str((body or {}).get("token") or "")
+    entry, err = await approval.get_for_decision(order_id, token)
+    if err:
+        raise HTTPException(status_code=409, detail="APPROVAL_" + err)
+    client = get_client()
+    ibkr_payload = dict(entry["ibkr_payload"])
+    side = str(ibkr_payload.get("side") or "BUY")
+    symbol = str(entry.get("symbol") or "")
+    try:
+        quote = await _fetch_equity_quote(symbol, side, float(ibkr_payload.get("quantity") or 0))
+        ref_price, _ref_field = _quote_reference_price(quote, side)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail="APPROVAL_QUOTE_FAILED:" + str(exc))
+    limit_price = _num(ibkr_payload.get("price"))
+    if ref_price and limit_price:
+        dev = abs(limit_price - ref_price) / ref_price * 100.0
+        if dev > approval.MAX_DEVIATION_PCT:
+            await approval.mark(order_id, "REJECTED")
+            raise HTTPException(status_code=409, detail="APPROVAL_PRICE_MOVED:%.2fpct" % dev)
+    confirmation = entry.get("confirmation") if isinstance(entry.get("confirmation"), dict) else {}
+    terminal = confirmation.get("terminal_response")
+    if _reply_required_items(terminal):
+        next_response: list[dict] = []
+        for item in _reply_required_items(terminal):
+            next_response.extend(await client.reply_order(str(item["id"]), confirmed=True))
+        terminal = next_response
+    else:
+        terminal = await client.place_orders([ibkr_payload])
+    steps = 0
+    while _reply_required_items(terminal) and steps < AUTO_CONFIRM_MAX_STEPS:
+        steps += 1
+        nxt2: list[dict] = []
+        for item in _reply_required_items(terminal):
+            nxt2.extend(await client.reply_order(str(item["id"]), confirmed=True))
+        terminal = nxt2
+    if _reply_required_items(terminal) or _ibkr_error_messages(terminal):
+        await approval.mark(order_id, "FAILED")
+        return {"order_id": order_id, "status": "FAILED", "ibkr_response": terminal}
+    await approval.mark(order_id, "FILLED")
+    return {"order_id": order_id, "status": "APPROVED_SUBMITTED", "ibkr_response": terminal, "sent_at": now_iso()}

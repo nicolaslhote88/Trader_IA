@@ -9,7 +9,15 @@ LOT_UNITS = 100000
 ctx = (_items or [{"json": {}}])[0].get("json", {})
 orders = ctx.get("executable_orders") or []
 brief = ctx.get("brief") or {}
-dry_run = os.environ.get("IBKR_DRY_RUN", "true").lower() != "false"
+env_dry_run = os.environ.get("IBKR_DRY_RUN")
+if env_dry_run is None or str(env_dry_run).strip() == "":
+    summary = ctx.get("ibkr_send_summary") or {}
+    if "dry_run" in summary:
+        dry_run = bool(summary.get("dry_run"))
+    else:
+        dry_run = bool(ctx.get("dry_run", True))
+else:
+    dry_run = str(env_dry_run).strip().lower() not in {"0", "false", "no", "off"}
 
 prices = {r.get("pair"): r.get("last_close") for r in brief.get("technical_signals", []) if r.get("pair")}
 meta = {r.get("pair"): r for r in (brief.get("universe", {}).get("metadata") or [])}

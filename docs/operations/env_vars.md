@@ -36,9 +36,9 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 
 | Variable | Rôle |
 |---|---|
-| `IBKR_DRY_RUN` | `true` : aucun ordre broker reel n'est envoye. `false` active l'envoi via IBKR. En production Forex actuelle, cette valeur est `false` uniquement sur le compte paper. |
+| `IBKR_DRY_RUN` | `true` : aucun ordre broker reel n'est envoye. `false` active l'envoi via IBKR. **Actuel : `false` sur compte LIVE `U25651155`** (cutover V4 actions ; le Forex est desactive). |
 | `IBKR_SEND_DRY_RUN_TO_BROKER` | `false` par defaut : les nodes n8n restent sandbox-only en dry-run. `true` appelle `ibkr-broker` en dry-run pour valider le chemin HTTP sans ordre live. |
-| `AG1_ACTIONS_LIVE_ORDERS_ENABLED` | `false` par defaut : bloque les ordres actions AG1 meme si `IBKR_DRY_RUN=false` pour le Forex paper. Passer a `true` uniquement apres validation des runs actions, reconciliation broker et controle du ledger. |
+| `AG1_ACTIONS_LIVE_ORDERS_ENABLED` | Garde des ordres actions AG1. **Actuel : `true`** (AG1 V4 envoie des ordres reels). Ne pas modifier sans decision explicite de Nicolas. |
 | `AG1_ACTIONS_IBKR_ENABLED_MODELS` | Liste de tokens de modeles autorises a envoyer des ordres actions via IBKR quand le gate actions est ouvert. Exemple pre-live : `gemini`. |
 | `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS` | Token logique autorise pour AG1 V4 consensus quand le gate actions est ouvert. Defaut : `ag1_v4_consensus`. |
 | `IBKR_ACCOUNT_ID` | Compte IBKR cible. Laisser vide pour auto-detection, mais le fixer est recommande avant le live. |
@@ -59,6 +59,16 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_AUTO_REAUTH_COMPETE` | `false` par defaut. Si `true`, peut deconnecter une session concurrente du meme username IBKR; a reserver a un username dedie au robot. |
 | `IBKR_ALERT_WEBHOOK_URL` | Webhook optionnel appele quand IBKR impose un relogin navigateur/2FA. Laisser vide si non branche. |
 | `IBKR_ALERT_COOLDOWN_SECONDS` | Cooldown minimal entre deux alertes relogin, par defaut `900`. |
+| `IBKR_AUTO_CONFIRM_PRICE_WARNINGS` | `true` : le broker confirme automatiquement les prompts prix IBKR ("Percentage constraint"/"Mandatory Cap Price") **si** le limit reste dans la bande du price-guard. |
+| `IBKR_PRICE_GUARD_URL` | Quote de reference independante (defaut `http://yfinance-api:8080/quote`). |
+| `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` | Bande d'auto-confirmation (ecart max limit↔reference). **Actuel : `5.0`** (releve de 3.0 le 2026-06-16). |
+| `IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS` | Age max du quote de reference. **Actuel : `3600`** (1 h ; etait 28800). |
+| `IBKR_AUTO_CONFIRM_MAX_STEPS` | Nb max de prompts prix confirmes en chaine, defaut `4`. |
+| `IBKR_APPROVAL_ENABLED` | `true` (depuis 2026-06-16) : approbation humaine Telegram des ordres hors-bande (5–15 %). Voir `order_approval_deploy_notes.md`. |
+| `IBKR_APPROVAL_MAX_DEVIATION_PCT` | Plafond d'approbation : au-dela, rejet meme avec humain. Defaut `15.0`. |
+| `IBKR_APPROVAL_TTL_SECONDS` | Duree de vie d'un ordre parque avant annulation auto. Defaut `600` (10 min). |
+| `IBKR_APPROVAL_NOTIFY_WEBHOOK_URL` | Webhook n8n notifie quand un ordre est parque (`.../webhook/order-approval-request`). |
+| `IBKR_APPROVAL_REPRICE_ON_APPROVE` | `true` : re-fetch prix + recale le limit au moment de l'approbation. |
 | `IBKR_LOGIN_URL` | URL affichee par `/auth/operator-action`, par defaut `https://localhost:5000`. |
 | `IBKR_LOGIN_TUNNEL_COMMAND` | Commande de tunnel affichee par `/auth/operator-action`. |
 | `IBKR_ASSISTED_LOGIN_ENABLED` | `false` par defaut. Indique qu'un flux credentials assistes est branche; ne contourne pas le 2FA IBKR. |

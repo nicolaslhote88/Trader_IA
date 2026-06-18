@@ -21,6 +21,23 @@ MAX_H1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_H1_AGE_HOURS", "96") or "96"
 MAX_D1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_D1_AGE_HOURS", "240") or "240")
 MAX_YF_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_YF_AGE_HOURS", "72") or "72")
 
+# D1 (2026-06-17) — published_at de la base AG4_Spé est corrompu (années 2016->2031,
+# cf docs/audits/20260617_ag4_spe_v2_analysis.md). On ne fait confiance à published_at que
+# s'il tombe dans une plage plausible, sinon on retombe sur first_seen_at (date de collecte,
+# fiable). Forward-compatible : une fois B1/B2 déployés, published_at redevient prioritaire.
+RECENCY_SPE = (
+    "COALESCE("
+    "CASE WHEN published_at BETWEEN (CURRENT_TIMESTAMP - INTERVAL '730 days') "
+    "AND (CURRENT_TIMESTAMP + INTERVAL '2 days') THEN published_at END, "
+    "first_seen_at, analyzed_at, fetched_at, updated_at, created_at)"
+)
+RECENCY_V3 = (
+    "COALESCE("
+    "CASE WHEN published_at BETWEEN (CURRENT_TIMESTAMP - INTERVAL '730 days') "
+    "AND (CURRENT_TIMESTAMP + INTERVAL '2 days') THEN published_at END, "
+    "first_seen_at, analyzed_at, last_seen_at, updated_at, created_at)"
+)
+
 
 def safe_float(v, default=0.0):
     try:
@@ -311,12 +328,12 @@ symbol_news_rows = run_query(
     FROM (
       SELECT
         UPPER(TRIM(symbol)) AS symbol,
-        COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) AS publishedat,
+        {RECENCY_SPE} AS publishedat,
         COALESCE(impact_score, 0) AS impactscore
       FROM news_history
       WHERE symbol IS NOT NULL
         AND TRIM(symbol) <> ''
-        AND COALESCE(published_at, analyzed_at, fetched_at, updated_at, created_at) >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
+        AND {RECENCY_SPE} >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
       ORDER BY publishedat DESC
       LIMIT {MAX_SYMBOL_NEWS_ROWS}
     )
@@ -338,13 +355,13 @@ if not symbol_news_rows:
         FROM (
           SELECT
             UPPER(TRIM(symbol)) AS symbol,
-            COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) AS publishedat,
+            {RECENCY_V3} AS publishedat,
             COALESCE(impact_score, 0) AS impactscore
           FROM news_history
           WHERE COALESCE(type, '') = 'symbol'
             AND symbol IS NOT NULL
             AND TRIM(symbol) <> ''
-            AND COALESCE(published_at, analyzed_at, last_seen_at, updated_at, created_at) >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
+            AND {RECENCY_V3} >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
           ORDER BY publishedat DESC
           LIMIT {MAX_SYMBOL_NEWS_ROWS}
         )

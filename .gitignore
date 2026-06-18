@@ -10,6 +10,13 @@ venv/
 .env.*
 !.env.example
 
+# Local SSH credentials — NE JAMAIS committer
+.ssh/
+*_ed25519
+*_ed25519.pub
+*.pem
+known_hosts*
+
 # IDE & OS
 .vscode/
 .idea/
@@ -19,6 +26,7 @@ Thumbs.db
 
 # Logs & tmp
 *.log
+.codex-tmp/
 tmp_*/
 .tmp_*/
 *.tmp

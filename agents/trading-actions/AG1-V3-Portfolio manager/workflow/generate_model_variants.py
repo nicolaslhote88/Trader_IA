@@ -53,6 +53,11 @@ VARIANTS = {
         "agent_node": "Agent #1 - Portfolio manager",
         "extractor_node": "Information Extractor",
         "layout_overrides_key": "chatgpt52_current",
+        "trigger_intervals": [
+            {"field": "cronExpression", "expression": "0 15 9 * * 1-5"},
+            {"field": "cronExpression", "expression": "0 30 12 * * 1-5"},
+            {"field": "cronExpression", "expression": "0 45 16 * * 1-5"},
+        ],
         "branch_nodes": {
             "Agent #1 - Portfolio manager",
             "Information Extractor",
@@ -74,6 +79,11 @@ VARIANTS = {
         "agent_node": "Agent #1 - Portfolio manager1",
         "extractor_node": "Information Extractor1",
         "layout_overrides_key": "grok41_reasoning_current",
+        "trigger_intervals": [
+            {"field": "cronExpression", "expression": "0 20 9 * * 1-5"},
+            {"field": "cronExpression", "expression": "0 35 12 * * 1-5"},
+            {"field": "cronExpression", "expression": "0 50 16 * * 1-5"},
+        ],
         "branch_nodes": {
             "Agent #1 - Portfolio manager1",
             "Information Extractor1",
@@ -84,17 +94,22 @@ VARIANTS = {
         },
     },
     "gemini30_pro": {
-        "workflow_name": "AG1 - Workflow général - Gemini 3.0 Pro",
+        "workflow_name": "AG1 - Workflow général - Gemini 3.5 Flash",
         "db_path": "/files/duckdb/ag1_v3_gemini30_pro.duckdb",
         "run_defaults": {
             "strategy_version": "strategy_v3",
             "config_version": "config_v3",
             "prompt_version": "prompt_v3",
-            "model": "models/gemini-3-pro-preview",
+            "model": "models/gemini-3.5-flash",
         },
         "agent_node": "Agent #1 - Portfolio manager2",
         "extractor_node": "Information Extractor2",
         "layout_overrides_key": "gemini30_pro_current",
+        "trigger_intervals": [
+            {"field": "cronExpression", "expression": "0 25 9 * * 1-5"},
+            {"field": "cronExpression", "expression": "0 40 12 * * 1-5"},
+            {"field": "cronExpression", "expression": "0 55 16 * * 1-5"},
+        ],
         "branch_nodes": {
             "Agent #1 - Portfolio manager2",
             "Information Extractor2",
@@ -298,7 +313,7 @@ OLD_PATHS = (
     "/local-files/duckdb/ag1_v3.duckdb",
 )
 
-VARIANT_TRIGGER_INTERVALS = [
+DEFAULT_TRIGGER_INTERVALS = [
     {"field": "cronExpression", "expression": "0 15 9 * * 1-5"},   # 09:15 Mon-Fri
     {"field": "cronExpression", "expression": "0 30 12 * * 1-5"},  # 12:30 Mon-Fri
     {"field": "cronExpression", "expression": "0 45 16 * * 1-5"},  # 16:45 Mon-Fri
@@ -389,7 +404,7 @@ def patch_init_run_context_defaults(workflow: dict, cfg: dict) -> None:
     node.setdefault("parameters", {})["jsCode"] = js_code
 
 
-def patch_start_trigger_schedule(workflow: dict) -> None:
+def patch_start_trigger_schedule(workflow: dict, cfg: dict) -> None:
     node = next((n for n in (workflow.get("nodes") or []) if n.get("name") == "1 - Hourly Trigger"), None)
     if node is None:
         raise ValueError("Node '1 - Hourly Trigger' not found")
@@ -398,7 +413,7 @@ def patch_start_trigger_schedule(workflow: dict) -> None:
     node["typeVersion"] = 1.3
     node["parameters"] = {
         "rule": {
-            "interval": copy.deepcopy(VARIANT_TRIGGER_INTERVALS),
+            "interval": copy.deepcopy(cfg.get("trigger_intervals") or DEFAULT_TRIGGER_INTERVALS),
         }
     }
 
@@ -544,7 +559,7 @@ def build_variant(base_workflow: dict, key: str, cfg: dict) -> dict:
     # Replace AG1 DB default paths everywhere in the workflow export.
     wf = deep_replace_ag1_path(wf, cfg["db_path"])
     patch_init_run_context_defaults(wf, cfg)
-    patch_start_trigger_schedule(wf)
+    patch_start_trigger_schedule(wf, cfg)
     patch_workflow_timezone(wf)
     apply_layout_overrides(wf, cfg)
 

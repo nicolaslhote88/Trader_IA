@@ -66,6 +66,7 @@ EXPORT_SPECS: tuple[ExportSpec, ...] = (
     ExportSpec("agent_input", "agent_1_portfolio_manager", ("agent 1 portfolio manager",)),
     ExportSpec("agent_input", "information_extractor", ("information extractor",)),
     ExportSpec("post_agent", "07_validate_enforce_safety_v5", ("7 validate enforce safety",)),
+    ExportSpec("post_agent", "07b_ibkr_send_orders", ("07b ibkr send orders",)),
     ExportSpec("post_agent", "08_build_duckdb_bundle", ("8 build duckdb bundle",)),
     ExportSpec("post_agent", "09_upsert_run_bundle_duckdb", ("9 upsert run bundle duckdb",)),
     ExportSpec("post_agent", "10_post_run_health", ("10 post run health duckdb",)),
@@ -201,6 +202,12 @@ Utilitaires au niveau parent :
 
 - `rebuild_pack.py` — régénère les fichiers `workflow/nodes/*` et les variants depuis le template.
 - `export_to_github.ps1` — helper PowerShell pour commit + push ciblé sur ce dossier.
+
+Execution IBKR actions:
+
+- `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true` autorise l'envoi broker actions.
+- `AG1_ACTIONS_IBKR_ENABLED_MODELS=gemini` limite l'envoi paper a Gemini.
+- `IBKR_REQUIRE_PAPER_ACCOUNT=true` et `IBKR_PAPER_ACCOUNT_PREFIXES=DU` gardent le pre-live sur compte paper.
 
 Voir [`docs/dev/rebuild_pack.md`](../docs/dev/rebuild_pack.md) pour la procédure.
 """
