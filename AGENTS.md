@@ -13,7 +13,7 @@ Ce fichier est le point d'entrée durable du projet (la mémoire interne peut ne
 à moindre coût : (1) lire ce fichier en entier ; (2) pour l'état live réel, se connecter au VPS (§ VPS/infra) et
 lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détail par sujet dans `docs/`.
 État vérifié sur le VPS au **2026-06-18**. Branche repo : `claude/ag4-v3-dualbranch-calib-20260617`.
-⚠️ Travaux récents **déployés sur le VPS mais à committer** (cf `docs/operations/HANDOFF_codex_PR_ag4_spe_v3_20260618.md`).
+⚠️ Travaux récents **déployés sur le VPS mais à committer** : (1) `docs/operations/HANDOFF_codex_PR_ag4_spe_v3_20260618.md` ; (2) **AG2→AG1 hybride** (2026-06-19) `docs/operations/20260619_ag2_hybrid_deploy_notes.md`.
 ⚠️ Le working tree a ~200 fichiers en **bruit CRLF** : ne stager QUE les fichiers réellement modifiés (liste dans le handoff).
 
 ## État du projet — VÉRIFIÉ sur le VPS le 2026-06-18
@@ -23,6 +23,10 @@ lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détai
   Base `ag1_v4_consensus.duckdb` (ledger v4 : `core.runs/orders/consensus_*/model_proposals/fills/*_mtm_*`). Dashboard Streamlit V4-only (8501).
 - Autres workflows actifs : `AG1-PF-V1` (MTM horaire V4), `AG2-V3`, `AG3-V2`, `AG4-V3`, `AG4_Spé-V2`,
   **`AG4_Spé-IBKR-V1`** (news IBKR portfolio, nouveau), **`AG4_Spé — Health Alert`** (nouveau), `YF-ENRICH-V1`.
+- **AG2-V3 → AG1 V4 : analyse technique utile au PM (hybride, MAJ 2026-06-19).** Suite à l'audit `docs/audits/20260619_ag2_v3_analyse_pertinence_efficience.md` (le LLM AG2 n'apportait rien de consommé par AG1).
+  AG2 (`Extract AI + Write`) persiste désormais `ai_rr_theoretical` (était 100 % NULL). AG1 (`R8` + `Calcul Matrice`) lit `ai_decision`/`ai_quality` :
+  **REJECT exclu de « Entrer/Renforcer »** (filtre dur, n'affecte pas les sorties) ; **APPROVE/WATCH pondérés** par qualité (WATCH éligible, poids réduit) ; SKIP/inconnu = neutre.
+  Univers AG1 nettoyé (whitelist `EQUITY/ETF/CRYPTO` → retire 78 paires FX legacy). Le SELL reste scanné (REJECT alimente le filtre dur). Détails/rollback : `docs/operations/20260619_ag2_hybrid_deploy_notes.md`.
 - **AG4-V3 : dual-branch.** Node `20CFG - Analysis Mode` (`analysisMode`, défaut `reduced`) → Switch `20H_MODE`.
   `reduced` = Actions via Grok grok-4.3 ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
 - **⚠️ IBKR mode RÉEL (live).** Compte **`U25651155`**, `dry_run=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`. Ordres réels.
@@ -66,6 +70,7 @@ Code : `services/ibkr-broker/approval.py` + endpoints/guard `app.py`. Workflows 
 - Couverture scraping AG4_Spé : certains symboles rendent 0 article par run (502/503 transitoires Boursorama atténués par retry). Surveiller via Health Alert.
 
 ### Docs de référence
+- **AG2→AG1 hybride (2026-06-19)** : audit `docs/audits/20260619_ag2_v3_analyse_pertinence_efficience.md` · déploiement/rollback `docs/operations/20260619_ag2_hybrid_deploy_notes.md` · handoff commit `docs/operations/HANDOFF_codex_PR_ag2_hybrid_20260619.md`
 - Handoff PR (commit) : `docs/operations/HANDOFF_codex_PR_ag4_spe_v3_20260618.md`
 - Audit/plan news AG4_Spé : `docs/audits/20260617_ag4_spe_v2_analysis.md` · `…_remediation_plan.md` · déploiement `docs/operations/ag4_spe_sprint1_deploy.md`
 - Specs news : `docs/specs/ag4_spe_v3_ibkr_news.md` (V3 IBKR) · `docs/specs/ag1_v4_d2_news_digest.md` (D2)
