@@ -212,7 +212,7 @@ universe_rows = run_query(
            COALESCE(industry, '') AS industry
     FROM universe
     WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''
-      AND UPPER(TRIM(COALESCE(asset_class, 'EQUITY'))) <> 'CURRENCY'
+      AND UPPER(TRIM(COALESCE(asset_class, 'EQUITY'))) IN ('EQUITY', 'ETF', 'CRYPTO')
       AND UPPER(TRIM(COALESCE(symbol_yahoo, symbol))) NOT LIKE '%=X'
     ORDER BY symbol
     """,
@@ -232,6 +232,8 @@ tech_rows = run_query(
            ts.d1_dist_sup_pct,
            ts.ai_stop_loss,
            ts.ai_rr_theoretical,
+           ts.ai_decision,
+           ts.ai_quality,
            ts.ai_alignment,
            ts.ai_regime_d1,
            ts.last_close,
@@ -658,6 +660,8 @@ for sym in sorted(symbols):
             "D1_Dist_Sup_Pct": safe_float(t.get("d1_dist_sup_pct"), 0.0),
             "AI_Stop_Loss": safe_float(t.get("ai_stop_loss"), 0.0),
             "AI_RR_Theoretical": safe_float(t.get("ai_rr_theoretical"), 0.0),
+            "AI_Decision": str(t.get("ai_decision") or "").strip().upper(),
+            "AI_Quality": safe_float(t.get("ai_quality"), 0.0),
             "AI_Alignment": str(t.get("ai_alignment") or "").strip(),
             "AI_Regime_D1": str(t.get("ai_regime_d1") or "").strip(),
             "Data_Age_H1_Hours": h1_age,

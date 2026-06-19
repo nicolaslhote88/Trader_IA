@@ -395,6 +395,20 @@ for r in rows:
         100.0,
     )
 
+    # --- HYBRIDE AG2 LLM (2026-06-19): REJECT exclu (filtre dur cote action),
+    #     APPROVE/WATCH ponderes par ai_quality ; WATCH poids reduit vs APPROVE. ---
+    ai_decision = str(r.get("AI_Decision") or "").upper().strip()
+    ai_quality = safe_float(r.get("AI_Quality"), 0.0)
+    if ai_decision == "APPROVE":
+        llm_adj = 12.0 + (ai_quality - 5.0) * 1.5
+    elif ai_decision == "WATCH":
+        llm_adj = 4.0 + (ai_quality - 5.0) * 1.0
+    elif ai_decision == "REJECT":
+        llm_adj = 0.0   # REJECT exclu via filtre dur cote entree ; pas de penalite prob (evite de polluer sortie/grade)
+    else:
+        llm_adj = 0.0
+    prob_score = clamp(prob_score + llm_adj, 0.0, 100.0)
+
     p_win = clamp(prob_score / 100.0, 0.05, 0.95)
     ev_r = (p_win * max(0.0, r_multiple_capped)) - (1.0 - p_win)
 
@@ -441,6 +455,9 @@ for r in rows:
             "risk_score_u": risk_u,
             "reward_score_u": reward_u,
             "prob_score": prob_score,
+            "ai_decision": ai_decision,
+            "ai_quality": ai_quality,
+            "llm_adj": round(llm_adj, 2),
             "prob_score_for_grade": (0.85 * prob_score + 0.15 * data_quality_score),
             "p_win": p_win,
             "ev_r": ev_r,
@@ -545,15 +562,23 @@ for r in matrix_rows:
     )
 
     reasons = []
-    if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state):
+    ai_decision_row = str(r.get("ai_decision") or "").upper().strip()
+    llm_reject_block = (ai_decision_row == "REJECT")
+    if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state or llm_reject_block):
         action = "Entrer / Renforcer"
         reasons.append("SETUP_OK")
+        if ai_decision_row == "APPROVE":
+            reasons.append("AG2_LLM_APPROVE")
+        elif ai_decision_row == "WATCH":
+            reasons.append("AG2_LLM_WATCH")
     elif reduce_core:
         action = "Reduire / Sortir"
         reasons.append("RISK_REWARD_UNFAVORABLE")
     else:
         action = "Surveiller"
         reasons.append("WAIT_CONFIRMATION")
+        if llm_reject_block:
+            reasons.append("AG2_LLM_REJECT")
         if quality_block:
             reasons.append("DATA_QUALITY_GATE")
         if earnings_block:
@@ -603,6 +628,9 @@ count_exit = sum(1 for r in matrix_rows if r.get("matrix_action") == "Reduire / 
 count_grade_a = sum(1 for r in matrix_rows if r.get("setup_grade") == "A")
 count_rr_out = sum(1 for r in matrix_rows if r.get("rr_outlier"))
 count_dq_low = sum(1 for r in matrix_rows if safe_float(r.get("data_quality_score"), 0.0) < 60.0)
+count_llm_approve = sum(1 for r in matrix_rows if r.get("ai_decision") == "APPROVE")
+count_llm_watch = sum(1 for r in matrix_rows if r.get("ai_decision") == "WATCH")
+count_llm_reject = sum(1 for r in matrix_rows if r.get("ai_decision") == "REJECT")
 
 avg_ev = sum(safe_float(r.get("ev_r"), 0.0) for r in matrix_rows) / total if total else 0.0
 avg_pwin = (sum(safe_float(r.get("p_win"), 0.0) for r in matrix_rows) / total * 100.0) if total else 0.0
@@ -644,6 +672,10 @@ brief_lines.append(
 brief_lines.append(
     f"Univers={total} | Entrer={count_enter} | Surveiller={count_watch} | Reduire/Sortir={count_exit} | "
     f"GradeA={count_grade_a} | RR_outliers={count_rr_out} | DataQ<60={count_dq_low}"
+)
+brief_lines.append(
+    f"AG2 LLM: APPROVE={count_llm_approve} | WATCH={count_llm_watch} | REJECT={count_llm_reject} "
+    f"(REJECT exclu de Entrer/Renforcer ; APPROVE/WATCH ponderes par qualite)"
 )
 brief_lines.append(f"EV(R) moyen={avg_ev:.2f} | Prob.win moyenne={avg_pwin:.1f}%")
 brief_lines.append("")
@@ -695,6 +727,8 @@ for r in selected_rows:
             "sector": r["sector"],
             "decision": r["matrix_action"],
             "grade": r["setup_grade"],
+            "ai_decision": r.get("ai_decision") or "",
+            "ai_quality": int(safe_float(r.get("ai_quality"), 0.0)),
             "risk": int(r["risk_score_u"]),
             "reward": int(r["reward_score_u"]),
             "r": round(safe_float(r["r_multiple"]), 4),

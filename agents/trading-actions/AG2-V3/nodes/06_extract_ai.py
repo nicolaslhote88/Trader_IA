@@ -196,6 +196,7 @@ def ensure_schema(con):
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bias_sma200 TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_regime_d1 TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_alignment TEXT;")
+    con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_rr_theoretical DOUBLE;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bb_status TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_rsi_status TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_missing TEXT;")
@@ -356,6 +357,10 @@ with db_con() as con:
         ai_missing = json.dumps(missing_fields, ensure_ascii=False)
         ai_anomalies = json.dumps(sorted(set([x for x in anomalies_list if x])), ensure_ascii=False)
 
+        # FIX 2026-06-19: rr_theoretical calcule dans Snapshot Context (ai_context.rr_theoretical)
+        # mais jamais persiste -> AG1 lisait une colonne 100% NULL. On le mappe ici.
+        ai_rr_theo = safe_float(get_nested(d, ["ai_context", "rr_theoretical"]))
+
         # Prepare update payload
         upd = {
             "ai_decision": decision,
@@ -368,6 +373,7 @@ with db_con() as con:
             "ai_bias_sma200": bias,
             "ai_regime_d1": regime,
             "ai_alignment": alignment,
+            "ai_rr_theoretical": ai_rr_theo,
             "ai_bb_status": bb_status,
             "ai_rsi_status": rsi_status,
             "ai_missing": ai_missing,
