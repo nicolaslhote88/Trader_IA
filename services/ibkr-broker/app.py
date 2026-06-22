@@ -120,6 +120,7 @@ PRICE_GUARD_MAX_QUOTE_AGE_SECONDS = _env_int(
     minimum=60,
 )
 AUTO_CONFIRM_MAX_STEPS = _env_int("IBKR_AUTO_CONFIRM_MAX_STEPS", 4, minimum=1)
+AUTO_CONFIRM_MARKET_SELL = _env_bool("IBKR_AUTO_CONFIRM_MARKET_SELL", True)
 
 # ─── Global client ───────────────────────────────────────────────────────────
 _cpapi: CPAPIClient | None = None
@@ -511,6 +512,30 @@ def _ibkr_order_error(
     return out
 
 
+def _is_market_sell_confirmation_prompt(messages: list[str]) -> bool:
+    """Auto-confirmable IBKR prompts for a MARKET SELL (market-order / mandatory cap price).
+    Excludes any risk-bearing prompt (margin/short/restricted)."""
+    if not messages:
+        return False
+    joined = " | ".join(messages).lower()
+    danger_markers = (
+        "margin",
+        "insufficient",
+        "short sale",
+        "shortable",
+        "locate",
+        "restricted",
+        "not allowed",
+    )
+    if any(marker in joined for marker in danger_markers):
+        return False
+    return (
+        "market order" in joined
+        or "mandatory cap price" in joined
+        or ("fair and orderly market" in joined and "may set a cap" in joined)
+    )
+
+
 def _is_price_confirmation_prompt(messages: list[str]) -> bool:
     if not messages:
         return False
@@ -654,6 +679,19 @@ async def _price_confirmation_guard(client: Any, order: Any, ibkr_payload: dict,
     }
     if not AUTO_CONFIRM_PRICE_WARNINGS:
         guard["reason"] = "AUTO_CONFIRM_PRICE_WARNINGS_DISABLED"
+        return guard
+    _side = str(ibkr_payload.get("side") or "").upper()
+    _is_market = normalize_order_type(ibkr_payload.get("orderType")) == "MKT"
+    if _is_market:
+        if (
+            AUTO_CONFIRM_MARKET_SELL
+            and _side == "SELL"
+            and _is_market_sell_confirmation_prompt(messages)
+        ):
+            guard["ok"] = True
+            guard["reason"] = "MARKET_SELL_AUTO_CONFIRM"
+            return guard
+        guard["reason"] = "ORDER_TYPE_NOT_LIMIT"
         return guard
     if not _is_price_confirmation_prompt(messages):
         guard["reason"] = "PROMPT_NOT_PRICE_CONFIRMATION"

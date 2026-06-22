@@ -218,6 +218,18 @@ universe_rows = run_query(
     """,
 )
 
+quarantine_rows = run_query(
+    cfg["ag2_db_path"],
+    """
+    SELECT UPPER(TRIM(symbol)) AS symbol,
+           COALESCE(reason, '') AS reason
+    FROM universe_quarantine
+    WHERE symbol IS NOT NULL
+      AND TRIM(symbol) <> ''
+      AND COALESCE(active, FALSE)
+    """,
+)
+
 tech_rows = run_query(
     cfg["ag2_db_path"],
     """
@@ -469,6 +481,14 @@ if total_mv > 0:
         sym_weight[sym] = sym_weight.get(sym, 0.0) + pct
         sec_weight[sec] = sec_weight.get(sec, 0.0) + pct
 
+held_symbols = set(sym_weight.keys())
+quarantine_map = {}
+for r in quarantine_rows:
+    sym = str(r.get("symbol") or "").strip().upper()
+    if not sym:
+        continue
+    quarantine_map[sym] = str(r.get("reason") or "").strip()
+
 universe = {}
 for r in universe_rows:
     sym = str(r.get("symbol") or "").strip().upper()
@@ -581,6 +601,9 @@ for r in macro_rows:
 
 out = []
 for sym in sorted(symbols):
+    quarantine_reason = quarantine_map.get(sym, "")
+    if quarantine_reason and sym not in held_symbols:
+        continue
     u = universe.get(sym, {})
     t = tech_map.get(sym, {})
     f = funda_map.get(sym, {})
@@ -708,7 +731,8 @@ for sym in sorted(symbols):
             "Data_Quality_Flags": ", ".join(data_flags),
             "Data_OK_For_Trading": len(data_flags) == 0,
             "Sector_Weight_Pct": safe_float(sec_weight.get(sector, 0.0), 0.0),
-            "Symbol_Weight_Pct": safe_float(sym_weight.get(sym, 0.0), 0.0)
+            "Symbol_Weight_Pct": safe_float(sym_weight.get(sym, 0.0), 0.0),
+            "Universe_Quarantine_Reason": quarantine_reason
         }
     )
 
