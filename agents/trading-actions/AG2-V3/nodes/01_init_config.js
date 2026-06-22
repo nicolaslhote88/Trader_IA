@@ -1,5 +1,8 @@
 // AG2-V3 - Init Config (actions/ETF/crypto only)
 // Batch rotation remains handled by DuckDB init.
+const DEFAULT_ROTATION_MODE = "ACTIONS_ONLY";
+const DEFAULT_BATCH_SIZE = 10;
+const DEFAULT_BATCH_STATE_KEY = "last_index_actions";
 
 function getField(row, names) {
   if (!row || typeof row !== "object") return undefined;
@@ -72,7 +75,10 @@ function buildInstrument(row) {
 const items = $input.all();
 const cfgSource = items[0]?.json || {};
 const batchSizeRaw = Number(getField(cfgSource, ["AG2_BATCH_SIZE", "batch_size"]));
-const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.floor(batchSizeRaw) : 10;
+const batchSize = Number.isFinite(batchSizeRaw) && batchSizeRaw > 0 ? Math.floor(batchSizeRaw) : DEFAULT_BATCH_SIZE;
+const rotationMode = String(getField(cfgSource, ["AG2_ROTATION_MODE", "rotation_mode"]) ?? DEFAULT_ROTATION_MODE)
+  .trim()
+  .toUpperCase();
 
 const universeRaw = items.map((i) => i.json || {});
 const universe = [];
@@ -82,7 +88,7 @@ for (const row of universeRaw) {
 }
 
 const processQueue = universe.filter((u) => u.enabled);
-const batchStateKey = "last_index_actions";
+const batchStateKey = DEFAULT_BATCH_STATE_KEY;
 
 if (processQueue.length === 0) {
   return [
@@ -91,6 +97,7 @@ if (processQueue.length === 0) {
         ok: false,
         error: "NO_SYMBOLS",
         universe_mode: "ACTIONS_ONLY",
+        rotation_mode: rotationMode,
         batch_state_key: batchStateKey,
         universe_total: universe.length,
         symbols: [],
@@ -111,6 +118,7 @@ return [
       daily: { interval: "1d", lookback_days: 400, max_bars: 400, min_bars: 200 },
       batch_size: batchSize,
       universe_mode: "ACTIONS_ONLY",
+      rotation_mode: rotationMode,
       batch_state_key: batchStateKey,
       strategy_version: "strategy_v3",
       config_version: "config_v3",

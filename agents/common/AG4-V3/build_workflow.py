@@ -62,75 +62,20 @@ def build() -> dict:
             'name': '20CFG - Analysis Mode',
         },
         {
-            'parameters': {
-                'documentId': {
-                    '__rl': True,
-                    'mode': 'list',
-                    'value': '1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I',
-                    'cachedResultName': 'TradingSim_GoogleSheet_Template',
-                    'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk',
-                },
-                'sheetName': {
-                    '__rl': True,
-                    'mode': 'list',
-                    'value': 1628829420,
-                    'cachedResultName': 'Source_RSS',
-                    'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1628829420',
-                },
-                'options': {},
-            },
-            'type': 'n8n-nodes-base.googleSheets',
-            'typeVersion': 4.7,
+            'parameters': {'language': 'pythonNative', 'pythonCode': load_code('00_load_rss_sources_duckdb.py')},
+            'type': 'n8n-nodes-base.code',
+            'typeVersion': 2,
             'position': [-1280, -96],
             'id': '4ba89389-1e3d-4730-b1da-9a9fbf9cc7b6',
             'name': '20A - Load RSS Sources',
-            'credentials': {
-                'googleSheetsOAuth2Api': {'id': 'aX5iAQEN9HK4UGjr', 'name': 'Google Sheets account'}
-            },
         },
         {
-            'parameters': {
-                'documentId': {
-                    '__rl': True,
-                    'mode': 'list',
-                    'value': '1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I',
-                    'cachedResultName': 'TradingSim_GoogleSheet_Template',
-                    'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk',
-                },
-                'sheetName': {
-                    '__rl': True,
-                    'mode': 'list',
-                    'value': 1078848687,
-                    'cachedResultName': 'Universe',
-                    'cachedResultUrl': 'https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687',
-                },
-                'filtersUI': {'values': [{'lookupColumn': 'Enabled', 'lookupValue': 'true'}]},
-                'options': {},
-            },
-            'type': 'n8n-nodes-base.googleSheets',
-            'typeVersion': 4.7,
-            'position': [-640, -256],
-            'id': 'a24cf6f4-56c5-47d3-a63b-d151e2f0f001',
-            'name': '20A1 - Load Universe',
-            'credentials': {
-                'googleSheetsOAuth2Api': {'id': 'aX5iAQEN9HK4UGjr', 'name': 'Google Sheets account'}
-            },
-        },
-        {
-            'parameters': {'jsCode': load_code('00_build_symbol_directory.js')},
+            'parameters': {'language': 'pythonNative', 'pythonCode': load_code('00_build_sector_dictionary_duckdb.py')},
             'type': 'n8n-nodes-base.code',
             'typeVersion': 2,
-            'position': [-416, -256],
+            'position': [-576, -256],
             'id': 'aa3b664f-c1c6-4f42-b8be-4dc52f427077',
             'name': '20A2 - Build Sector Dictionary',
-        },
-        {
-            'parameters': {'jsCode': load_code('01_normalize_sources.js')},
-            'type': 'n8n-nodes-base.code',
-            'typeVersion': 2,
-            'position': [-1088, -96],
-            'id': '1c30e7d0-8e02-4705-a111-e7f7a4376395',
-            'name': '20B - Normalize RSS Sources',
         },
         {
             'parameters': {
@@ -539,14 +484,6 @@ def build() -> dict:
             'name': '20S1 - Build Skip Row',
         },
         {
-            'parameters': {'mode': 'append', 'numberInputs': 3, 'options': {}},
-            'type': 'n8n-nodes-base.merge',
-            'typeVersion': 3.2,
-            'position': [2640, 64],
-            'id': '1d7d61df-2326-443e-aec7-45ca7987a8b9',
-            'name': '20Z - Merge analyzed + skipped',
-        },
-        {
             'parameters': {'language': 'pythonNative', 'pythonCode': load_code('14_write_news_duckdb.py')},
             'type': 'n8n-nodes-base.code',
             'typeVersion': 2,
@@ -589,18 +526,16 @@ def build() -> dict:
         'Schedule Trigger': {'main': [[{'node': '20CFG - Analysis Mode', 'type': 'main', 'index': 0}]]},
         'Manual Trigger': {'main': [[{'node': '20CFG - Analysis Mode', 'type': 'main', 'index': 0}]]},
         '20CFG - Analysis Mode': {'main': [[{'node': '20A - Load RSS Sources', 'type': 'main', 'index': 0}]]},
-        '20A - Load RSS Sources': {'main': [[{'node': '20B - Normalize RSS Sources', 'type': 'main', 'index': 0}]]},
-        '20B - Normalize RSS Sources': {'main': [[{'node': '20C - Filter enabled', 'type': 'main', 'index': 0}]]},
+        '20A - Load RSS Sources': {'main': [[{'node': '20C - Filter enabled', 'type': 'main', 'index': 0}]]},
         '20C - Filter enabled': {
             'main': [
                 [
                     {'node': '20DB0 - DuckDB Init', 'type': 'main', 'index': 0},
-                    {'node': '20A1 - Load Universe', 'type': 'main', 'index': 0},
+                    {'node': '20A2 - Build Sector Dictionary', 'type': 'main', 'index': 0},
                 ],
                 [],
             ]
         },
-        '20A1 - Load Universe': {'main': [[{'node': '20A2 - Build Sector Dictionary', 'type': 'main', 'index': 0}]]},
         '20DB0 - DuckDB Init': {
             'main': [
                 [
@@ -665,10 +600,9 @@ def build() -> dict:
         '20H1B - Merge AI + Context': {'main': [[{'node': '20H2 - Parse AI Output', 'type': 'main', 'index': 0}]]},
         '20H1R - Analyze with Grok': {'main': [[{'node': '20H1BR - Merge Grok + Context', 'type': 'main', 'index': 1}]]},
         '20H1BR - Merge Grok + Context': {'main': [[{'node': '20H2R - Parse Grok Output', 'type': 'main', 'index': 0}]]},
-        '20H2 - Parse AI Output': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 0}]]},
-        '20H2R - Parse Grok Output': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 1}]]},
-        '20S1 - Build Skip Row': {'main': [[{'node': '20Z - Merge analyzed + skipped', 'type': 'main', 'index': 2}]]},
-        '20Z - Merge analyzed + skipped': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
+        '20H2 - Parse AI Output': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
+        '20H2R - Parse Grok Output': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
+        '20S1 - Build Skip Row': {'main': [[{'node': '20DBW - Upsert News DuckDB', 'type': 'main', 'index': 0}]]},
         '20DBW - Upsert News DuckDB': {'main': [[{'node': '20FXW - FX Conditional Write', 'type': 'main', 'index': 0}]]},
         '20FXW - FX Conditional Write': {'main': [[{'node': 'SplitInBatches ITEMS', 'type': 'main', 'index': 0}]]},
     }

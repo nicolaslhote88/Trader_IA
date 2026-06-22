@@ -261,6 +261,36 @@ SCHEMA_STMTS = [
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS universe_quarantine (
+      symbol VARCHAR PRIMARY KEY,
+      symbol_yahoo VARCHAR,
+      asset_class VARCHAR,
+      reason VARCHAR,
+      reason_detail VARCHAR,
+      active BOOLEAN DEFAULT FALSE,
+      first_quarantined_at TIMESTAMP,
+      last_evaluated_at TIMESTAMP,
+      last_released_at TIMESTAMP,
+      rule_version VARCHAR,
+      metrics_json VARCHAR,
+      manual_override BOOLEAN DEFAULT FALSE,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS universe_segments (
+      symbol VARCHAR NOT NULL,
+      segment VARCHAR NOT NULL,
+      active BOOLEAN DEFAULT TRUE,
+      priority_score DOUBLE,
+      source VARCHAR DEFAULT 'auto',
+      reason VARCHAR,
+      metrics_json VARCHAR,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      PRIMARY KEY (symbol, segment)
+    )
+    """,
 ]
 
 MIGRATE_STMTS = [
@@ -273,6 +303,16 @@ MIGRATE_STMTS = [
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_d1_hours DOUBLE",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_bb_status VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_rsi_status VARCHAR",
+    "ALTER TABLE universe_quarantine ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE universe_quarantine ADD COLUMN IF NOT EXISTS manual_override BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE universe_quarantine ADD COLUMN IF NOT EXISTS reason VARCHAR",
+    "ALTER TABLE universe_quarantine ADD COLUMN IF NOT EXISTS reason_detail VARCHAR",
+    "ALTER TABLE universe_quarantine ADD COLUMN IF NOT EXISTS metrics_json VARCHAR",
+    "ALTER TABLE universe_segments ADD COLUMN IF NOT EXISTS active BOOLEAN DEFAULT TRUE",
+    "ALTER TABLE universe_segments ADD COLUMN IF NOT EXISTS priority_score DOUBLE",
+    "ALTER TABLE universe_segments ADD COLUMN IF NOT EXISTS source VARCHAR DEFAULT 'auto'",
+    "ALTER TABLE universe_segments ADD COLUMN IF NOT EXISTS reason VARCHAR",
+    "ALTER TABLE universe_segments ADD COLUMN IF NOT EXISTS metrics_json VARCHAR",
 ]
 
 VIEW_STMTS = [
@@ -442,6 +482,103 @@ def migrate_legacy_v2(con, legacy_path):
             except Exception:
                 pass
 
+
+def load_active_quarantine(con):
+    try:
+        rows = con.execute(
+            """
+            SELECT UPPER(TRIM(symbol)) AS symbol
+            FROM universe_quarantine
+            WHERE COALESCE(active, FALSE)
+              AND symbol IS NOT NULL
+              AND TRIM(symbol) <> ''
+            """
+        ).fetchall()
+        return {r[0] for r in rows if r and r[0]}
+    except Exception:
+        return set()
+
+
+def _entry_symbol(entry):
+    return str(entry.get("symbol") or entry.get("symbol_internal") or "").strip().upper()
+
+
+def load_active_segments(con):
+    segments = {}
+    try:
+        rows = con.execute(
+            """
+            SELECT UPPER(TRIM(symbol)) AS symbol,
+                   UPPER(TRIM(segment)) AS segment
+            FROM universe_segments
+            WHERE COALESCE(active, TRUE)
+              AND symbol IS NOT NULL
+              AND TRIM(symbol) <> ''
+              AND segment IS NOT NULL
+              AND TRIM(segment) <> ''
+            """
+        ).fetchall()
+        for sym, segment in rows:
+            if not sym or not segment:
+                continue
+            segments.setdefault(sym, set()).add(segment)
+    except Exception:
+        segments = {}
+    return segments
+
+
+def apply_rotation_mode(process_queue, quarantine_symbols, segments, rotation_mode, batch_size):
+    mode = str(rotation_mode or "ACTIONS_ONLY").strip().upper()
+    by_symbol = {}
+    ordered_symbols = []
+    for entry in process_queue:
+        sym = _entry_symbol(entry)
+        if not sym:
+            continue
+        if sym not in by_symbol:
+            ordered_symbols.append(sym)
+        by_symbol[sym] = entry
+
+    def not_quarantined(sym):
+        return sym not in quarantine_symbols
+
+    if mode == "HELD_CORE":
+        held_symbols = {s for s, segs in segments.items() if "HELD" in segs}
+        core_symbols = {
+            s for s, segs in segments.items()
+            if "CORE_AUTO" in segs or "CORE_MANUAL" in segs
+        }
+        always = [by_symbol[s] for s in ordered_symbols if s in held_symbols and s in by_symbol]
+        always_seen = {_entry_symbol(e) for e in always}
+        rotation = [
+            by_symbol[s] for s in ordered_symbols
+            if s in core_symbols and s not in always_seen and not_quarantined(s)
+        ]
+        return always, rotation, {
+            "rotation_mode": mode,
+            "held_total": len(always),
+            "segment_rotation_total": len(rotation),
+            "segment_symbols_total": len(held_symbols | core_symbols),
+        }
+
+    if mode == "WATCHLIST":
+        watch_symbols = {s for s, segs in segments.items() if "WATCHLIST" in segs}
+        rotation = [by_symbol[s] for s in ordered_symbols if s in watch_symbols and not_quarantined(s)]
+        return [], rotation, {
+            "rotation_mode": mode,
+            "held_total": 0,
+            "segment_rotation_total": len(rotation),
+            "segment_symbols_total": len(watch_symbols),
+        }
+
+    rotation = [by_symbol[s] for s in ordered_symbols if not_quarantined(s)]
+    return [], rotation, {
+        "rotation_mode": "ACTIONS_ONLY",
+        "held_total": 0,
+        "segment_rotation_total": len(rotation),
+        "segment_symbols_total": len(rotation),
+    }
+
 items = _items or []
 first_json = items[0].get("json", {}) if items else {}
 
@@ -463,6 +600,7 @@ config = {
     "config_version": str(first_json.get("config_version") or "config_v3"),
     "prompt_version": str(first_json.get("prompt_version") or "prompt_v3"),
     "universe_mode": str(first_json.get("universe_mode") or "ACTIONS_ONLY").upper(),
+    "rotation_mode": str(first_json.get("rotation_mode") or "ACTIONS_ONLY").upper(),
     "batch_state_key": str(first_json.get("batch_state_key") or "last_index"),
     "universe_scope": first_json.get("universe_scope") or ["EQUITY", "ETF", "CRYPTO"],
 }
@@ -512,15 +650,33 @@ with db_con() as con:
             ],
         )
 
-    # Batch rotation (persistent).
+    # Batch rotation (persistent), with reversible quarantine/segment filtering.
+    raw_total = len(process_queue)
+    quarantine_symbols = load_active_quarantine(con)
+    segments = load_active_segments(con)
+    always_batch, rotation_queue, rotation_meta = apply_rotation_mode(
+        process_queue,
+        quarantine_symbols,
+        segments,
+        config["rotation_mode"],
+        batch_size,
+    )
+    eligible_symbols = {_entry_symbol(r) for r in always_batch + rotation_queue}
+    quarantine_excluded = len([
+        r for r in process_queue
+        if _entry_symbol(r) in quarantine_symbols and _entry_symbol(r) not in eligible_symbols
+    ])
+
     row = con.execute("SELECT value FROM batch_state WHERE key = ?", [config["batch_state_key"]]).fetchone()
     idx = int(row[0]) if row else 0
-    total = len(process_queue)
-    if idx >= total:
+    rotation_total = len(rotation_queue)
+    total = len(always_batch) + rotation_total
+    if idx >= rotation_total:
         idx = 0
 
-    batch = process_queue[idx : idx + batch_size]
-    next_idx = 0 if (idx + batch_size >= total) else idx + batch_size
+    rotation_batch = rotation_queue[idx : idx + batch_size]
+    batch = always_batch + rotation_batch
+    next_idx = 0 if (rotation_total == 0 or idx + batch_size >= rotation_total) else idx + batch_size
 
     con.execute(
         "INSERT OR REPLACE INTO batch_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
@@ -561,9 +717,20 @@ for i, entry in enumerate(batch):
                 "config_version": config["config_version"],
                 "prompt_version": config["prompt_version"],
                 "universe_mode": config["universe_mode"],
+                "rotation_mode": config["rotation_mode"],
                 "batch_state_key": config["batch_state_key"],
                 "universe_scope": config["universe_scope"],
-                "batch_info": {"start": idx, "size": len(batch), "total": total},
+                "batch_info": {
+                    "start": idx,
+                    "size": len(batch),
+                    "total": total,
+                    "raw_total": raw_total,
+                    "quarantine_excluded": quarantine_excluded,
+                    "rotation_size": len(rotation_batch),
+                    "always_included": len(always_batch),
+                    "rotation_total": rotation_total,
+                    **rotation_meta,
+                },
                 "_index": i,
             }
         }

@@ -60,6 +60,7 @@ Cette page décrit les variables attendues côté VPS. Le fichier template est `
 | `IBKR_ALERT_WEBHOOK_URL` | Webhook optionnel appele quand IBKR impose un relogin navigateur/2FA. Laisser vide si non branche. |
 | `IBKR_ALERT_COOLDOWN_SECONDS` | Cooldown minimal entre deux alertes relogin, par defaut `900`. |
 | `IBKR_AUTO_CONFIRM_PRICE_WARNINGS` | `true` : le broker confirme automatiquement les prompts prix IBKR ("Percentage constraint"/"Mandatory Cap Price") **si** le limit reste dans la bande du price-guard. |
+| `IBKR_AUTO_CONFIRM_MARKET_SELL` | `true` par defaut : autorise l'auto-confirmation des prompts IBKR non risqués pour un ordre `SELL MARKET` uniquement. Reste gouverné par `IBKR_AUTO_CONFIRM_PRICE_WARNINGS`; les `BUY MARKET` et prompts marge/short/restricted restent rejetés. |
 | `IBKR_PRICE_GUARD_URL` | Quote de reference independante (defaut `http://yfinance-api:8080/quote`). |
 | `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT` | Bande d'auto-confirmation (ecart max limit↔reference). **Actuel : `5.0`** (releve de 3.0 le 2026-06-16). |
 | `IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS` | Age max du quote de reference. **Actuel : `3600`** (1 h ; etait 28800). |

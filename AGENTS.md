@@ -27,6 +27,9 @@ lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détai
   AG2 (`Extract AI + Write`) persiste désormais `ai_rr_theoretical` (était 100 % NULL). AG1 (`R8` + `Calcul Matrice`) lit `ai_decision`/`ai_quality` :
   **REJECT exclu de « Entrer/Renforcer »** (filtre dur, n'affecte pas les sorties) ; **APPROVE/WATCH pondérés** par qualité (WATCH éligible, poids réduit) ; SKIP/inconnu = neutre.
   Univers AG1 nettoyé (whitelist `EQUITY/ETF/CRYPTO` → retire 78 paires FX legacy). Le SELL reste scanné (REJECT alimente le filtre dur). Détails/rollback : `docs/operations/20260619_ag2_hybrid_deploy_notes.md`.
+- **Universe Quarantine (live 2026-06-19).** Workflow `AG2 — Universe Health Quarantine` (`AG2UHQ20260619`, cron 18:35 UTC sem.) audite `ag2_v3.duckdb.universe` et maintient `universe_quarantine`.
+  AG2/AG4_Spé excluent les symboles actifs de leur rotation non détenue ; AG1 exclut les entrées/renforts non détenus ; les positions détenues restent surveillées. Run initial : 385 évalués, 131 quarantaines actives. Notes/rollback : `docs/operations/20260619_universe_quarantine_deploy_notes.md`.
+- **AG2 split rotation (live 2026-06-19).** AG2 généraliste `lUsgEdJODpYh5vt0dQdb2` conservé en rollback mais désactivé. Actifs : `AG2-V3 — Technical Held+Core` (`AG2V3HELDCORE20260619`, 08/12/14h10 UTC sem., held + 18 CORE) et `AG2-V3 — Technical Watchlist Nightly` (`AG2V3WATCHNIGHT20260619`, 02h20 UTC mar-sam., 40 watchlist). Segments dans `ag2_v3.duckdb.universe_segments`.
 - **AG4-V3 : dual-branch.** Node `20CFG - Analysis Mode` (`analysisMode`, défaut `reduced`) → Switch `20H_MODE`.
   `reduced` = Actions via Grok grok-4.3 ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
 - **⚠️ IBKR mode RÉEL (live).** Compte **`U25651155`**, `dry_run=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`. Ordres réels.
@@ -71,6 +74,8 @@ Code : `services/ibkr-broker/approval.py` + endpoints/guard `app.py`. Workflows 
 
 ### Docs de référence
 - **AG2→AG1 hybride (2026-06-19)** : audit `docs/audits/20260619_ag2_v3_analyse_pertinence_efficience.md` · déploiement/rollback `docs/operations/20260619_ag2_hybrid_deploy_notes.md` · handoff commit `docs/operations/HANDOFF_codex_PR_ag2_hybrid_20260619.md`
+- **Universe Quarantine (2026-06-19)** : déploiement/rollback `docs/operations/20260619_universe_quarantine_deploy_notes.md`
+- **AG2 split rotation (2026-06-19)** : déploiement/rollback `docs/operations/20260619_ag2_split_rotation_deploy_notes.md`
 - Handoff PR (commit) : `docs/operations/HANDOFF_codex_PR_ag4_spe_v3_20260618.md`
 - Audit/plan news AG4_Spé : `docs/audits/20260617_ag4_spe_v2_analysis.md` · `…_remediation_plan.md` · déploiement `docs/operations/ag4_spe_sprint1_deploy.md`
 - Specs news : `docs/specs/ag4_spe_v3_ibkr_news.md` (V3 IBKR) · `docs/specs/ag1_v4_d2_news_digest.md` (D2)

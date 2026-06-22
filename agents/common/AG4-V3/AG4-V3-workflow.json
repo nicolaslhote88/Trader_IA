@@ -58,103 +58,31 @@
     },
     {
       "parameters": {
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": 1628829420,
-          "cachedResultName": "Source_RSS",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1628829420"
-        },
-        "options": {}
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport time\nfrom datetime import datetime\n\nDB_PATH = \"/files/duckdb/ag4_v3.duckdb\"\n\n\ndef connect(path=DB_PATH, retries=36, delay=10):\n    last = None\n    for attempt in range(retries):\n        try:\n            return duckdb.connect(path, read_only=True)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay)\n            else:\n                raise\n    raise Exception(f\"Unable to open AG4 config DuckDB: {last}\")\n\n\ncon = connect()\ntry:\n    exists = con.execute(\n        \"\"\"\n        SELECT count(*)\n        FROM information_schema.tables\n        WHERE table_schema = 'cfg'\n          AND table_name = 'ag4_rss_sources'\n        \"\"\"\n    ).fetchone()[0]\n    if not exists:\n        raise Exception(\"Missing cfg.ag4_rss_sources in ag4_v3.duckdb\")\n\n    rows = con.execute(\n        \"\"\"\n        SELECT\n          source_id,\n          family,\n          source,\n          feed_name,\n          url,\n          interest,\n          source_tier,\n          enabled\n        FROM cfg.ag4_rss_sources\n        WHERE enabled = TRUE\n        ORDER BY source_tier ASC, source_id ASC\n        \"\"\"\n    ).fetchall()\nfinally:\n    con.close()\n\nif not rows:\n    raise Exception(\"cfg.ag4_rss_sources contains no enabled RSS source\")\n\nfetched_at = datetime.utcnow().isoformat() + \"Z\"\nout = []\nfor row in rows:\n    out.append({\n        \"json\": {\n            \"enabled\": bool(row[7]),\n            \"family\": row[1] or \"unknown\",\n            \"source\": row[2] or \"unknown\",\n            \"feedName\": row[3] or \"unknown\",\n            \"url\": row[4] or \"\",\n            \"interest\": int(row[5] or 0),\n            \"sourceTier\": int(row[6] or 3),\n            \"sourceId\": row[0] or \"unknown\",\n            \"fetchedAt\": fetched_at,\n        }\n    })\n\nreturn out\n"
       },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
       "position": [
         -1280,
         -96
       ],
       "id": "4ba89389-1e3d-4730-b1da-9a9fbf9cc7b6",
-      "name": "20A - Load RSS Sources",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      }
+      "name": "20A - Load RSS Sources"
     },
     {
       "parameters": {
-        "documentId": {
-          "__rl": true,
-          "mode": "list",
-          "value": "1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I",
-          "cachedResultName": "TradingSim_GoogleSheet_Template",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit?usp=drivesdk"
-        },
-        "sheetName": {
-          "__rl": true,
-          "mode": "list",
-          "value": 1078848687,
-          "cachedResultName": "Universe",
-          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1l3fmopgQ8jVd__UTyIja3-nQkn7Jaxm19lcC32HQq8I/edit#gid=1078848687"
-        },
-        "filtersUI": {
-          "values": [
-            {
-              "lookupColumn": "Enabled",
-              "lookupValue": "true"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.googleSheets",
-      "typeVersion": 4.7,
-      "position": [
-        -640,
-        -256
-      ],
-      "id": "a24cf6f4-56c5-47d3-a63b-d151e2f0f001",
-      "name": "20A1 - Load Universe",
-      "credentials": {
-        "googleSheetsOAuth2Api": {
-          "id": "aX5iAQEN9HK4UGjr",
-          "name": "Google Sheets account"
-        }
-      }
-    },
-    {
-      "parameters": {
-        "jsCode": "// 20A2 - Build Sector Dictionary from Universe sheet (V2)\nfunction cleanText(s) {\n  return String(s || '')\n    .trim()\n    .replace(/\\s+/g, ' ');\n}\n\nfunction pickSector(row) {\n  return (\n    row.Sector ??\n    row.sector ??\n    row['GICS Sector'] ??\n    row.gics_sector ??\n    row['Sector Name'] ??\n    row['sector_name'] ??\n    ''\n  );\n}\n\nconst rows = $input.all().map((i) => i.json || {});\nconst uniq = new Map();\n\nfor (const row of rows) {\n  const sector = cleanText(pickSector(row));\n  if (!sector) continue;\n  const key = sector.toLowerCase();\n  if (!uniq.has(key)) uniq.set(key, sector);\n}\n\nconst sectorDictionary = Array.from(uniq.values()).sort((a, b) => a.localeCompare(b));\n\nreturn [{\n  json: {\n    sectorDictionary,\n    count: sectorDictionary.length,\n    generatedAt: new Date().toISOString(),\n  },\n}];\n"
+        "language": "pythonNative",
+        "pythonCode": "import duckdb\nimport time\nfrom datetime import datetime\n\nDB_PATH = \"/files/duckdb/ag2_v3.duckdb\"\n\n\ndef connect(path=DB_PATH, retries=12, delay=5):\n    last = None\n    for attempt in range(retries):\n        try:\n            return duckdb.connect(path, read_only=True)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay)\n            else:\n                raise\n    raise Exception(f\"Unable to open AG2 universe DuckDB: {last}\")\n\n\ncon = connect()\ntry:\n    rows = con.execute(\n        \"\"\"\n        SELECT DISTINCT TRIM(sector) AS sector\n        FROM universe\n        WHERE enabled = TRUE\n          AND COALESCE(TRIM(sector), '') <> ''\n          AND COALESCE(asset_class, '') IN ('EQUITY', 'ETF')\n        ORDER BY sector\n        \"\"\"\n    ).fetchall()\nfinally:\n    con.close()\n\nsector_dictionary = [str(row[0]).strip() for row in rows if row[0]]\n\nreturn [{\n    \"json\": {\n        \"sectorDictionary\": sector_dictionary,\n        \"count\": len(sector_dictionary),\n        \"generatedAt\": datetime.utcnow().isoformat() + \"Z\",\n        \"source\": \"duckdb.ag2_v3.universe\",\n    }\n}]\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -416,
+        -576,
         -256
       ],
       "id": "aa3b664f-c1c6-4f42-b8be-4dc52f427077",
       "name": "20A2 - Build Sector Dictionary"
-    },
-    {
-      "parameters": {
-        "jsCode": "// 20B — Normalize RSS Sources (V2)\nfunction toIntInterest(v) {\n  if (v === null || v === undefined) return 0;\n  const s = String(v).trim();\n  const m = s.match(/(\\d+(?:[.,]\\d+)?)/);\n  if (!m) return 0;\n  return Math.round(parseFloat(m[1].replace(',', '.')));\n}\n\nfunction slugify(s) {\n  return String(s || '')\n    .trim()\n    .toLowerCase()\n    .normalize('NFD').replace(/[\\u0300-\\u036f]/g, '')\n    .replace(/[^a-z0-9]+/g, '-')\n    .replace(/^-+|-+$/g, '');\n}\n\nconst rows = $input.all().map(i => i.json || {});\nconst out = [];\n\nfor (const row of rows) {\n  const family = row['Famille'] ?? 'unknown';\n  const source = row['Source'] ?? 'unknown';\n  const feedName = row['Nom du Flux'] ?? 'unknown';\n  const url = row['URL Exacte'] ?? '';\n\n  if (!url || !String(url).startsWith('http')) continue;\n\n  const interest = toIntInterest(row['Note Intérêt Agent (1-5)']);\n  const tier = interest >= 4 ? 1 : (interest >= 2 ? 2 : 3);\n\n  out.push({\n    json: {\n      enabled: interest >= 2,\n      family,\n      source,\n      feedName,\n      url,\n      interest,\n      sourceTier: tier,\n      sourceId: slugify(`${family}_${source}_${feedName}`),\n      fetchedAt: new Date().toISOString(),\n    }\n  });\n}\n\nreturn out;\n"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        -1088,
-        -96
-      ],
-      "id": "1c30e7d0-8e02-4705-a111-e7f7a4376395",
-      "name": "20B - Normalize RSS Sources"
     },
     {
       "parameters": {
@@ -689,21 +617,6 @@
     },
     {
       "parameters": {
-        "mode": "append",
-        "numberInputs": 3,
-        "options": {}
-      },
-      "type": "n8n-nodes-base.merge",
-      "typeVersion": 3.2,
-      "position": [
-        2640,
-        64
-      ],
-      "id": "1d7d61df-2326-443e-aec7-45ca7987a8b9",
-      "name": "20Z - Merge analyzed + skipped"
-    },
-    {
-      "parameters": {
         "language": "pythonNative",
         "pythonCode": "import json\nimport duckdb, time, gc\nfrom contextlib import contextmanager\nfrom datetime import datetime, timezone, date\n\nDB_PATH = \"/files/duckdb/ag4_v3.duckdb\"\n\n@contextmanager\ndef db_con(path=DB_PATH, retries=8, delay=1):\n    con = None\n    for attempt in range(retries):\n        try:\n            con = duckdb.connect(path)\n            break\n        except Exception as e:\n            if \"lock\" in str(e).lower() and attempt < retries - 1:\n                time.sleep(delay)\n            else:\n                raise\n    try:\n        yield con\n    finally:\n        if con is not None:\n            try:\n                con.close()\n            except Exception:\n                pass\n        gc.collect()\n\ndef safe_int(v, d=0):\n    try:\n        if v is None or v == \"\":\n            return d\n        return int(float(v))\n    except Exception:\n        return d\n\ndef safe_float(v, d=0.0):\n    try:\n        if v is None or v == \"\":\n            return d\n        return float(v)\n    except Exception:\n        return d\n\ndef to_text(v):\n    if v is None:\n        return \"\"\n    if isinstance(v, list):\n        return \", \".join([str(x) for x in v if x is not None and str(x).strip()])\n    return str(v)\n\ndef ensure_utc_aware(dt):\n    if dt is None:\n        return None\n    if dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None:\n        return dt.replace(tzinfo=timezone.utc)\n    return dt.astimezone(timezone.utc)\n\ndef parse_ts(v):\n    if v is None:\n        return None\n    if isinstance(v, (datetime, date)):\n        if isinstance(v, date) and not isinstance(v, datetime):\n            return datetime(v.year, v.month, v.day, tzinfo=timezone.utc)\n        return ensure_utc_aware(v)\n    s = str(v).strip()\n    if not s or s.lower() == \"unknown\":\n        return None\n    if s.endswith(\"Z\"):\n        s = s[:-1] + \"+00:00\"\n    try:\n        return ensure_utc_aware(datetime.fromisoformat(s))\n    except Exception:\n        return None\n\nitems = _items or []\nif not items:\n    return []\n\ndb_path = DB_PATH\nrunning_run_id = \"\"\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    if j.get(\"db_path\"):\n        db_path = str(j.get(\"db_path\"))\n\nwith db_con(db_path) as con:\n    rr = con.execute(\"SELECT run_id FROM run_log WHERE status='RUNNING' ORDER BY started_at DESC LIMIT 1\").fetchone()\n    running_run_id = str(rr[0]) if rr and rr[0] else \"\"\n\n    for it in items:\n        j = dict(it.get(\"json\", {}) or {})\n\n        dedupe_key = str(j.get(\"dedupeKey\", \"\") or \"\").strip()\n        if not dedupe_key:\n            continue\n\n        run_id = str(j.get(\"run_id\", \"\") or running_run_id)\n        event_key = str(j.get(\"eventKey\", \"\") or \"\")\n        canonical_url = str(j.get(\"canonicalUrl\", \"\") or \"\")\n        published_at = parse_ts(j.get(\"publishedAt\"))\n        title = str(j.get(\"title\", \"\") or \"\")\n        source = str(j.get(\"source\", \"\") or \"\")\n        feed_url = str(j.get(\"feedUrl\", \"\") or \"\")\n        symbols = to_text(j.get(\"symbols\", \"\"))\n        typ = str(j.get(\"type\", \"\") or (\"symbol\" if symbols else \"macro\"))\n        notes = str(j.get(\"notes\", \"\") or \"\")\n        impact_score = safe_int(j.get(\"ImpactScore\"), 0)\n        confidence = safe_float(j.get(\"confidence\"), 0.0)\n        urgency = str(j.get(\"urgency\", \"\") or \"low\")\n        snippet = str(j.get(\"Snippet\", \"\") or j.get(\"snippet\", \"\") or \"\")\n        now_utc = datetime.now(timezone.utc)\n        new_first_seen = parse_ts(j.get(\"firstSeenAt\")) or published_at or now_utc\n        strategy = str(j.get(\"Strategy\", \"\") or \"\")\n        sectors_bearish = to_text(j.get(\"sectors_bearish\", j.get(\"Losers\", \"\")))\n        sectors_bullish = to_text(j.get(\"sectors_bullish\", j.get(\"Winners\", \"\")))\n        currencies_bearish = to_text(j.get(\"currencies_bearish\", \"\"))\n        currencies_bullish = to_text(j.get(\"currencies_bullish\", \"\"))\n        losers = str(j.get(\"Losers\", \"\") or sectors_bearish)\n        winners = str(j.get(\"Winners\", \"\") or sectors_bullish)\n        theme = str(j.get(\"Theme\", \"\") or \"Resultats/Micro\")\n        regime = str(j.get(\"Regime\", \"\") or \"Neutral\")\n        analyzed_at = parse_ts(j.get(\"analyzedAt\")) or now_utc\n        last_seen_at = parse_ts(j.get(\"seenNowAt\")) or now_utc\n        source_tier = safe_int(j.get(\"sourceTier\"), 2)\n        action = str(j.get(\"_action\", \"\") or \"skip\")\n        reason = str(j.get(\"_reason\", \"\") or \"\")\n        impact_region = str(j.get(\"impact_region\", \"\") or \"\")\n        impact_asset_class = str(j.get(\"impact_asset_class\", \"\") or \"\")\n        impact_magnitude = str(j.get(\"impact_magnitude\", \"\") or \"\")\n        impact_fx_pairs = str(j.get(\"impact_fx_pairs\", \"\") or \"\")\n        tagger_version = str(j.get(\"tagger_version\", \"\") or \"\")\n        taxonomy_violations = j.get(\"_taxonomyViolations\", []) or []\n\n        existing = con.execute(\n            \"\"\"\n            SELECT first_seen_at, impact_region, impact_asset_class, impact_magnitude,\n                   impact_fx_pairs, tagger_version\n            FROM news_history\n            WHERE dedupe_key = ?\n            \"\"\",\n            [dedupe_key],\n        ).fetchone()\n        existing_first_seen = parse_ts(existing[0]) if existing and existing[0] is not None else None\n        if existing_first_seen is not None and existing_first_seen < new_first_seen:\n            first_seen_at = existing_first_seen\n        else:\n            first_seen_at = new_first_seen\n\n        if existing:\n            if not impact_region:\n                impact_region = str(existing[1] or \"\")\n            if not impact_asset_class:\n                impact_asset_class = str(existing[2] or \"\")\n            if not impact_magnitude:\n                impact_magnitude = str(existing[3] or \"\")\n            if not impact_fx_pairs:\n                impact_fx_pairs = str(existing[4] or \"\")\n            if not tagger_version:\n                tagger_version = str(existing[5] or \"\")\n\n        con.execute(\n            \"\"\"\n            INSERT OR REPLACE INTO news_history (\n              dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,\n              symbols, type, notes, impact_score, confidence, urgency, snippet, first_seen_at,\n              strategy, losers, winners, sectors_bullish, sectors_bearish,\n              currencies_bullish, currencies_bearish,\n              theme, regime, analyzed_at, last_seen_at,\n              source_tier, action, reason,\n              impact_region, impact_asset_class, impact_magnitude, impact_fx_pairs, tagger_version,\n              updated_at\n            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n            \"\"\",\n            [\n                dedupe_key, event_key, run_id, canonical_url, published_at, title, source, feed_url,\n                symbols, typ, notes, impact_score, confidence, urgency, snippet, first_seen_at,\n                strategy, losers, winners, sectors_bullish, sectors_bearish,\n                currencies_bullish, currencies_bearish,\n                theme, regime, analyzed_at, last_seen_at,\n                source_tier, action, reason,\n                impact_region, impact_asset_class, impact_magnitude, impact_fx_pairs, tagger_version,\n            ],\n        )\n\n        if taxonomy_violations:\n            con.execute(\n                \"\"\"\n                INSERT OR REPLACE INTO news_errors (\n                  dedupe_key, run_id, feed_url, http_code, error_message, raw_error, occurred_at, updated_at\n                ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)\n                \"\"\",\n                [\n                    f\"{dedupe_key}:taxonomy\",\n                    run_id,\n                    feed_url,\n                    None,\n                    \"taxonomy_violation\",\n                    json.dumps(taxonomy_violations, ensure_ascii=False),\n                    now_utc,\n                ],\n            )\n\nreturn items\n"
       },
@@ -799,17 +712,6 @@
       "main": [
         [
           {
-            "node": "20B - Normalize RSS Sources",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "20B - Normalize RSS Sources": {
-      "main": [
-        [
-          {
             "node": "20C - Filter enabled",
             "type": "main",
             "index": 0
@@ -826,23 +728,12 @@
             "index": 0
           },
           {
-            "node": "20A1 - Load Universe",
+            "node": "20A2 - Build Sector Dictionary",
             "type": "main",
             "index": 0
           }
         ],
         []
-      ]
-    },
-    "20A1 - Load Universe": {
-      "main": [
-        [
-          {
-            "node": "20A2 - Build Sector Dictionary",
-            "type": "main",
-            "index": 0
-          }
-        ]
       ]
     },
     "20DB0 - DuckDB Init": {
@@ -1115,7 +1006,7 @@
       "main": [
         [
           {
-            "node": "20Z - Merge analyzed + skipped",
+            "node": "20DBW - Upsert News DuckDB",
             "type": "main",
             "index": 0
           }
@@ -1126,25 +1017,14 @@
       "main": [
         [
           {
-            "node": "20Z - Merge analyzed + skipped",
+            "node": "20DBW - Upsert News DuckDB",
             "type": "main",
-            "index": 1
+            "index": 0
           }
         ]
       ]
     },
     "20S1 - Build Skip Row": {
-      "main": [
-        [
-          {
-            "node": "20Z - Merge analyzed + skipped",
-            "type": "main",
-            "index": 2
-          }
-        ]
-      ]
-    },
-    "20Z - Merge analyzed + skipped": {
       "main": [
         [
           {

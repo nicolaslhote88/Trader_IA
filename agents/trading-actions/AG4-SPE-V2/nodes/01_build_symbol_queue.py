@@ -6,6 +6,7 @@ from contextlib import contextmanager
 
 DB_PATH = "/files/duckdb/ag4_spe_v2.duckdb"
 AG1_DB_PATH = "/files/duckdb/ag1_v4_consensus.duckdb"
+AG2_DB_PATH = "/files/duckdb/ag2_v3.duckdb"
 BATCH_SIZE = 20
 STATE_KEY = "ag4_spe_v2_last_symbol_index"
 
@@ -109,6 +110,28 @@ def load_held_symbols(path=AG1_DB_PATH):
     return held
 
 
+def load_quarantined_symbols(path=AG2_DB_PATH):
+    quarantined = set()
+    con = None
+    try:
+        con = duckdb.connect(path, read_only=True)
+        rows = con.execute(
+            "SELECT DISTINCT UPPER(TRIM(symbol)) FROM main.universe_quarantine "
+            "WHERE symbol IS NOT NULL AND TRIM(symbol) <> '' "
+            "AND COALESCE(active, FALSE)"
+        ).fetchall()
+        quarantined = {r[0] for r in rows if r and r[0]}
+    except Exception:
+        quarantined = set()
+    finally:
+        if con is not None:
+            try:
+                con.close()
+            except Exception:
+                pass
+    return quarantined
+
+
 rows = [dict(it.get("json", {}) or {}) for it in (_items or [])]
 
 candidates = []
@@ -158,8 +181,10 @@ if total_items == 0:
 db_path = to_text(candidates[0].get("db_path")) or DB_PATH
 
 held = load_held_symbols()
+quarantined = load_quarantined_symbols()
 priority = [c for c in candidates if c["symbol"] in held]
-rotation = [c for c in candidates if c["symbol"] not in held]
+rotation = [c for c in candidates if c["symbol"] not in held and c["symbol"] not in quarantined]
+quarantine_excluded = len([c for c in candidates if c["symbol"] in quarantined and c["symbol"] not in held])
 rot_total = len(rotation)
 
 with db_con(db_path) as con:
@@ -198,6 +223,7 @@ for idx, item in enumerate(batch):
         "heldCount": len(priority),
         "rotationFill": len(rot_batch),
         "rotationTotal": rot_total,
+        "quarantineExcluded": quarantine_excluded,
         "totalItems": total_items,
         "nextStart": next_start,
         "rotationStore": "duckdb.workflow_state",
