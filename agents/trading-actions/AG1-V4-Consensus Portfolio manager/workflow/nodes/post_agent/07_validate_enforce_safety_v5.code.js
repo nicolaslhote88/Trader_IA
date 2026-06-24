@@ -273,7 +273,10 @@ for (const a of agentDecision.actions || []) {
     reject(symbol, "LIQUIDITY_GATE", flags);
     continue;
   }
-  if (side === "BUY" && spreadPct === null) { reject(symbol, "LIQUIDITY_UNKNOWN", "spread"); continue; }
+  // A null spread is tolerated only when the preflight vouched for the name's
+  // liquidity (SPREAD_UNQUOTED) and the status resolved to OK. BUYs are LIMIT-only.
+  const spreadUnquotedOk = flags.includes("SPREAD_UNQUOTED") && liquidityStatus === "OK";
+  if (side === "BUY" && spreadPct === null && !spreadUnquotedOk) { reject(symbol, "LIQUIDITY_UNKNOWN", "spread"); continue; }
   if (side === "BUY" && spreadPct !== null && spreadPct > limits.maxSpreadPct) { reject(symbol, "SPREAD_TOO_WIDE", String(spreadPct)); continue; }
 
   const grossNotional = qty * notionalPx;
