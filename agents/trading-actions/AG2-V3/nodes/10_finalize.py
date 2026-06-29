@@ -1,10 +1,12 @@
-import duckdb, time, gc
+import duckdb
+import time
+import gc
 from contextlib import contextmanager
 
 DB_PATH = "/files/duckdb/ag2_v3.duckdb"
 
 @contextmanager
-def db_con(path=DB_PATH, retries=5, delay=0.3):
+def db_con(path=DB_PATH, retries=10, delay=0.2):
     con = None
     for attempt in range(retries):
         try:
@@ -12,7 +14,7 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
             break
         except Exception as e:
             if "lock" in str(e).lower() and attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
+                time.sleep(min(1.5, delay * (2 ** attempt)))
             else:
                 raise
     try:

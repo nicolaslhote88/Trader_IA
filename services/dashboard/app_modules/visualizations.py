@@ -69,7 +69,7 @@ def _normalize_history_symbol(symbol: str) -> str:
 
 
 def _normalize_portfolio_positions(df_portfolio: pd.DataFrame) -> pd.DataFrame:
-    cols = ["symbol", "name", "sector", "industry", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl"]
+    cols = ["symbol", "name", "sector", "industry", "quantity", "avgprice", "lastprice", "marketvalue", "unrealizedpnl", "currency", "fx_rate"]
     if df_portfolio is None or df_portfolio.empty:
         return pd.DataFrame(columns=cols)
 
@@ -86,6 +86,13 @@ def _normalize_portfolio_positions(df_portfolio: pd.DataFrame) -> pd.DataFrame:
         if col not in df.columns:
             df[col] = 0.0
         df[col] = safe_float_series(df[col])
+
+    if "currency" not in df.columns:
+        df["currency"] = "EUR"
+    df["currency"] = df["currency"].fillna("EUR").astype(str).str.strip().str.upper().replace("", "EUR")
+    if "fx_rate" not in df.columns:
+        df["fx_rate"] = 1.0
+    df["fx_rate"] = safe_float_series(df["fx_rate"]).where(lambda x: x > 0, 1.0)
 
     df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
     df = df[~df["symbol"].isin(["", "CASH_EUR", "__META__"])].copy()
@@ -277,6 +284,49 @@ def _extract_trade_events(
         .sort_values("timestamp")
     )
     return ev[cols]
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_fx_to_eur_history(currency: str, yfinance_api_url: str, lookback_days: int = 90) -> pd.DataFrame:
+    """Historique du taux devise->EUR (close), via la paire EUR{ccy}=X inversee.
+    Sert a convertir un historique de cours en devise locale vers l'EUR, date par date."""
+    ccy = str(currency or "").strip().upper()
+    if not ccy or ccy == "EUR":
+        return pd.DataFrame(columns=["timestamp", "fx"])
+    hist = _fetch_one_symbol_history(f"EUR{ccy}{FX_SUFFIX}", yfinance_api_url, "1d", lookback_days)
+    if hist is None or hist.empty:
+        return pd.DataFrame(columns=["timestamp", "fx"])
+    out = hist[hist["close"] > 0].copy()
+    if out.empty:
+        return pd.DataFrame(columns=["timestamp", "fx"])
+    out["fx"] = 1.0 / out["close"]
+    return out[["timestamp", "fx"]]
+
+
+def _convert_history_to_eur(hist, currency, fx_rate_now, yfinance_api_url, lookback_days):
+    """Convertit hist['close'] (devise locale) en EUR. Taux FX historique si dispo,
+    sinon taux courant uniforme. Renvoie (hist_converti, devise_convertie|None)."""
+    ccy = str(currency or "EUR").strip().upper()
+    if ccy == "EUR" or hist is None or hist.empty:
+        return hist, None
+    h = hist.copy()
+    fx_hist = _fetch_fx_to_eur_history(ccy, yfinance_api_url, lookback_days)
+    if fx_hist is not None and not fx_hist.empty:
+        merged = pd.merge_asof(
+            h.sort_values("timestamp"),
+            fx_hist.sort_values("timestamp"),
+            on="timestamp",
+            direction="nearest",
+        )
+        merged["fx"] = merged["fx"].ffill().bfill()
+        if merged["fx"].notna().any():
+            merged["close"] = merged["close"] * merged["fx"]
+            return merged[["timestamp", "close"]], ccy
+    rate = safe_float(fx_rate_now)
+    if rate and rate > 0:
+        h["close"] = h["close"] * rate
+        return h, ccy
+    return hist, None
 
 
 def _build_position_sparkline(
@@ -728,6 +778,9 @@ def render_portfolio_sparklines(
         profitable = bool(lastprice > pru) if (lastprice > 0 and pru and pru > 0) else (bool(pnl_pct and pnl_pct > 0))
 
         hist = histories.get(symbol, pd.DataFrame())
+        currency = str(getattr(pos, "currency", "EUR") or "EUR").upper()
+        fx_rate_now = safe_float(getattr(pos, "fx_rate", 1.0))
+        hist, converted_ccy = _convert_history_to_eur(hist, currency, fx_rate_now, yfinance_api_url, lookback_days)
         start_ts = hist["timestamp"].min() if (hist is not None and not hist.empty) else None
         end_ts = hist["timestamp"].max() if (hist is not None and not hist.empty) else None
         trade_events = _extract_trade_events(symbol, tx, start_ts=start_ts, end_ts=end_ts)
@@ -743,6 +796,8 @@ def render_portfolio_sparklines(
         if label_meta:
             title_bits.append(f"({', '.join(label_meta)})")
         title_text = " - ".join(title_bits)
+        if converted_ccy:
+            title_text = f"{title_text} - cours {converted_ccy}->EUR"
 
         fig = _build_position_sparkline(
             title_text=title_text,

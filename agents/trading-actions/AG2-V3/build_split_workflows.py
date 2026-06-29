@@ -6,6 +6,14 @@ ROOT = Path(__file__).resolve().parent
 BASE = ROOT / "AG2-V3 - Analyse technique actions ETF crypto.json"
 INIT_CODE = (ROOT / "nodes" / "01_init_config.js").read_text(encoding="utf-8")
 DUCKDB_CODE = (ROOT / "nodes" / "02_duckdb_init.py").read_text(encoding="utf-8")
+NODE_CODE_FILES = {
+    "Compute + Filter + Write": ("pythonCode", ROOT / "nodes" / "04_compute.py"),
+    "Snapshot Context": ("jsCode", ROOT / "nodes" / "05_snapshot.js"),
+    "Merge AI + Context": ("jsCode", ROOT / "nodes" / "06a_merge_ai.js"),
+    "Extract AI + Write": ("pythonCode", ROOT / "nodes" / "06_extract_ai.py"),
+    "Hydrate AI from cache": ("pythonCode", ROOT / "nodes" / "07_hydrate_ai_cache.py"),
+    "Finalize Run": ("pythonCode", ROOT / "nodes" / "10_finalize.py"),
+}
 
 VARIANTS = [
     {
@@ -50,7 +58,7 @@ def configure_workflow(base, variant):
     wf["id"] = variant["id"]
     wf["name"] = variant["name"]
     wf["active"] = True
-    wf["versionId"] = variant["id"].lower() + "-v1"
+    wf["versionId"] = variant["id"].lower() + "-v2-duckdb-lock-hardening"
     wf.pop("updatedAt", None)
     wf.pop("createdAt", None)
     wf.pop("shared", None)
@@ -72,6 +80,9 @@ def configure_workflow(base, variant):
             node.setdefault("parameters", {})["jsCode"] = configure_init_code(variant)
         if node.get("name") == "DuckDB Init Schema":
             node.setdefault("parameters", {})["pythonCode"] = DUCKDB_CODE
+        if node.get("name") in NODE_CODE_FILES:
+            parameter, path = NODE_CODE_FILES[node["name"]]
+            node.setdefault("parameters", {})[parameter] = path.read_text(encoding="utf-8")
     return wf
 
 

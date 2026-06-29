@@ -54,6 +54,10 @@ par jour selon IBKR, et plus tot en cas de maintenance serveur ou d'expiration
 SSO. La solution de production retenue est donc :
 
 - maintenir la session active avec `/tickle`;
+- amorcer automatiquement le login via IBeam chaque jour à 07:00
+  `Europe/Paris`, avec validation IB Key humaine uniquement dans la fenêtre
+  07:00–07:30 (voir
+  `docs/operations/20260624_ibkr_daily_assisted_auth.md`);
 - relancer automatiquement la session brokerage via `/iserver/auth/ssodh/init`
   quand la session Gateway/SSO est encore valide;
 - signaler explicitement `manual_login_required=true` quand IBKR impose un

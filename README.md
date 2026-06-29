@@ -35,7 +35,7 @@ Workflows actifs côté Actions/ETF :
 - `AG1V4CONSENSUS` : Portfolio Manager Actions/ETF live, consensus 2/3.
 - `AG1-PF-V1` : mark-to-market horaire V4.
 - `AG2-V3` : analyse technique.
-- `AG3-V2` : analyse fondamentale.
+- `AG3-V2` : analyse fondamentale (split 2026-06-22 en `Fundamental Held+Core` + `Fundamental Watchlist Nightly`).
 - `AG4-V3` : News Watcher macro, dual-branch `reduced/full`.
 - `AG4_Spé-V2` : analyse news par valeur.
 - `YF-ENRICH-V1` : enrichissement Yahoo Finance.

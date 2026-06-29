@@ -143,7 +143,7 @@ def extract_ai_object(d):
 
 
 @contextmanager
-def db_con(path=DB_PATH, retries=5, delay=0.3):
+def db_con(path=DB_PATH, retries=10, delay=0.2):
     con = None
     for attempt in range(retries):
         try:
@@ -151,19 +151,14 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
             break
         except Exception as e:
             if "lock" in str(e).lower() and attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
+                time.sleep(min(1.5, delay * (2 ** attempt)))
             else:
                 raise
     try:
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
+            # Checkpoint centralisé dans Finalize Run.
             try:
                 con.close()
             except Exception:

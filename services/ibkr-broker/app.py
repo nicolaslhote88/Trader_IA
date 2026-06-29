@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -1714,6 +1715,16 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
     # chaine de prompts. Toute erreur IBKR -> FAILED propre (jamais de 500). Le prompt
     # d'origine ayant expire, l'ordre n'avait pas ete place -> pas de doublon.
     try:
+        original_client_order_id = str(ibkr_payload.get("cOID") or "")
+        approved_client_order_id = f"appr-{uuid.uuid4()}"
+        ibkr_payload["cOID"] = approved_client_order_id
+        logger.info(
+            "Approval resubmit with fresh cOID order_id=%s symbol=%s original_cOID=%s approved_cOID=%s",
+            order_id,
+            symbol,
+            original_client_order_id,
+            approved_client_order_id,
+        )
         terminal = await client.place_orders([ibkr_payload])
         steps = 0
         while _reply_required_items(terminal) and steps < AUTO_CONFIRM_MAX_STEPS:
@@ -1730,6 +1741,20 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
         return {"order_id": order_id, "status": "FAILED", "error": str(exc)}
     if _reply_required_items(terminal) or _ibkr_error_messages(terminal):
         await approval.mark(order_id, "FAILED")
-        return {"order_id": order_id, "status": "FAILED", "ibkr_response": terminal}
-    await approval.mark(order_id, "FILLED")
-    return {"order_id": order_id, "status": "APPROVED_SUBMITTED", "ibkr_response": terminal, "sent_at": now_iso()}
+        logger.warning("Approval resubmit failed order_id=%s ibkr_response=%s", order_id, terminal)
+        return {
+            "order_id": order_id,
+            "status": "FAILED",
+            "client_order_id": approved_client_order_id,
+            "original_client_order_id": original_client_order_id,
+            "ibkr_response": terminal,
+        }
+    await approval.mark(order_id, "SUBMITTED")
+    return {
+        "order_id": order_id,
+        "status": "APPROVED_SUBMITTED",
+        "client_order_id": approved_client_order_id,
+        "original_client_order_id": original_client_order_id,
+        "ibkr_response": terminal,
+        "sent_at": now_iso(),
+    }

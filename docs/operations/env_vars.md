@@ -109,6 +109,7 @@ lors de la creation de la base.
 | `AG1_V4_DUCKDB_WRITER_PATH` | Writer externe V4 monte dans n8n/runners. |
 | `AG1_V4_LEDGER_SCHEMA_PATH` | Schema SQL V4 avec tables de propositions, votes, decisions consensus et `core.fill_costs` pour les frais IBKR. |
 | `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS` | Token logique autorise par le node IBKR V4 quand les ordres actions sont ouverts. |
+| `AG1_ACTIONS_MAX_FUNDA_AGE_HOURS` | Gate **STALE_FUNDA** (node `R8 — Data Prep for Matrix`, ajout 2026-06-22). Au-dela de cet age, le fondamental AG3 est juge perime et **neutralise** (Funda_Score/Risk→50, Upside/Target→0, `Funda_Usable=False`) pour ne pas piloter le scoring (poids 0,30-0,34). **Defaut code : `168`** (7 j). Mettre `999999` pour desactiver la gate. Flag ajoute aux `Data_Quality_Flags` mais **pas** un reject dur du risk manager. |
 
 ## Dashboard Streamlit
 

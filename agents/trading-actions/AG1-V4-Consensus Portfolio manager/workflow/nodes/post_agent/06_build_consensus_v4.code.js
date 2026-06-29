@@ -155,6 +155,34 @@ function buildPositionQtyMap(portfolioSummary) {
   return out;
 }
 
+function pickPositionPrice(portfolioSummary, symbol) {
+  const wanted = normSymbol(symbol);
+  for (const p of safeArray(portfolioSummary.positions)) {
+    const s = normSymbol(p?.symbol || p?.Symbol);
+    if (s !== wanted) continue;
+    const direct = toNumOrNull(
+      p?.lastPrice ??
+      p?.LastPrice ??
+      p?.price ??
+      p?.Price ??
+      p?.marketPrice ??
+      p?.MarketPrice
+    );
+    if (direct !== null && direct > 0) return direct;
+    const qty = toNumOrNull(p?.quantity ?? p?.Quantity ?? p?.qty) ?? 0;
+    const marketValue = toNumOrNull(
+      p?.marketValue ??
+      p?.MarketValue ??
+      p?.market_value ??
+      p?.MarketValueEUR ??
+      p?.marketValueEUR ??
+      p?.value
+    );
+    if (qty > 0 && marketValue !== null && marketValue > 0) return marketValue / qty;
+  }
+  return null;
+}
+
 function selectActionName(intent, votes, currentQty) {
   const counts = {};
   for (const v of votes) {
@@ -184,7 +212,7 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
   const maxPosPct = toNumOrNull(config?.max_pos_pct ?? config?.maxPositionPct) ?? 25;
   const votedWeight = conservativeWeight(votes.map((v) => v.targetWeightPct));
   const weight = Math.max(0, Math.min(maxPosPct, votedWeight ?? (intent === "BUY" ? 5 : 0)));
-  const selectedLimit = toNumOrNull(matrix.entry);
+  const selectedLimit = toNumOrNull(matrix.entry) ?? (intent === "SELL" ? pickPositionPrice(portfolioSummary, symbol) : null);
   const totalValue = toNumOrNull(portfolioSummary.totalPortfolioValueEUR) ?? 0;
   let qty = selectedLimit && selectedLimit > 0 && totalValue > 0
     ? Math.floor((totalValue * weight / 100) / selectedLimit)
@@ -243,6 +271,7 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
     targetQty: qty,
     targetWeightPct: weight,
     entryPlan,
+    priceHint: selectedLimit,
     riskPlan: { stopLossPct, takeProfitPct, maxLossEUR },
     Data_Age_H1_Hours: toNumOrNull(matrix.data_age_h1_hours),
     Data_Age_D1_Hours: toNumOrNull(matrix.data_age_d1_hours),

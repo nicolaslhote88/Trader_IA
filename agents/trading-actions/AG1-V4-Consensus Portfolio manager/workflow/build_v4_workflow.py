@@ -52,6 +52,7 @@ CODE_MAP = {
     "Calcul Matrice & Briefing": ("pythonCode", ROOT / "nodes/pre_agent/calcul_matrice_briefing.code.py"),
     "AG1.00 — Assemble Input Packs": ("jsCode", ROOT / "nodes/agent_input/ag1_00_assemble_input_packs.code.js"),
     "AG1.V4 — Liquidity Preflight": ("jsCode", ROOT / "nodes/pre_agent/ag1_v4_liquidity_preflight.code.js"),
+    "AG1.V4 — Build Consensus": ("jsCode", ROOT / "nodes/post_agent/06_build_consensus_v4.code.js"),
     "7 - Validate & Enforce Safety": ("jsCode", ROOT / "nodes/post_agent/07_validate_enforce_safety_v5.code.js"),
     "07b - IBKR Send Orders": ("jsCode", ROOT / "nodes/post_agent/07b_ibkr_send_orders.js"),
     "8 - Build DuckDB Bundle": ("jsCode", ROOT / "nodes/post_agent/08_build_duckdb_bundle.code.js"),

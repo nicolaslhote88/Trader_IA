@@ -155,12 +155,17 @@ Points structurants observÃ©s :
 
 ### 3.5 AG3-V2 â€” Analyse fondamentale
 
-- Fichier : `agents/trading-actions/AG3-V2/AG3-V2-workflow.json`
-- Trigger :
+- **MAJ 2026-06-22 (Sprint 1) : workflow unique splitte en 2** (voir `docs/operations/20260622_ag3_split_stale_funda_deploy_notes.md` et `docs/audits/20260622_ag3_v2_analysis.md`).
+  - `AG3-V2 — Fundamental Held+Core` (cron `0 1 * * *` UTC, segments HELD+CORE_AUTO, SLA <=24h).
+  - `AG3-V2 — Fundamental Watchlist Nightly` (cron `0 2 * * *` UTC, segment WATCHLIST, SLA <5j).
+  - Ancien `AG3-V2-workflow.json` desactive (rollback). Filtre via `ag2_v3.duckdb.universe_segments` (quarantaine exclue).
+  - Gate `STALE_FUNDA` cote AG1 V4 (R8) : fondamental perime (>168h) neutralise.
+- Fichier (legacy, inactif) : `agents/trading-actions/AG3-V2/AG3-V2-workflow.json`
+- Trigger (legacy) :
   - schedule `0 7 * * 1-5`
   - manuel.
 - Sources :
-  - Universe (Google Sheets),
+  - Universe (`ag2_v3.duckdb.universe` + `universe_segments`),
   - `yfinance-api /fundamentals`,
 - Pipeline :
   1. init contexte + queue,
