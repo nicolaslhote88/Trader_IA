@@ -11,7 +11,7 @@
 
 Trader_IA est une **plateforme multi-agents de trading actions/ETF en LIVE réel** sur IBKR (compte `U25651155`), orchestrée par **n8n** sur un VPS Hostinger, avec **DuckDB** comme source de vérité, un **broker FastAPI** devant l'API IBKR Client Portal, une **approbation d'ordres via Telegram**, et un **dashboard Streamlit**.
 
-Le cœur décisionnel est **AG1 V4 Consensus** : trois LLM (GPT-5.5, Grok 4.3, Claude Sonnet 4.6) proposent chacun des décisions de portefeuille ; une règle de **consensus 2/3** filtre ce qui part à l'exécution, derrière un Risk Manager déterministe (gates codés en dur) et un preflight liquidité IBKR. Il tourne **2×/jour ouvré : 14:00 Paris (Euronext) et 16:30 Paris (US ouvert)**.
+Le cœur décisionnel est **AG1 V4 Consensus** : trois LLM (GPT-5.5, Grok 4.3, Claude Fable 5) proposent chacun des décisions de portefeuille ; une règle de **consensus 2/3** filtre ce qui part à l'exécution, derrière un Risk Manager déterministe (gates codés en dur) et un preflight liquidité IBKR. Il tourne **2×/jour ouvré : 14:00 Paris (Euronext) et 16:30 Paris (US ouvert)**.
 
 Les piliers d'analyse sont alimentés par des workflows autonomes : **AG2-V3** (technique, yfinance, split Held+Core / Watchlist), **AG3-V2** (fondamental, yfinance pur sans LLM, split Held+Core / Watchlist), **AG4-V3** (news macro), **AG4_Spé** (news par valeur, 3 sources : Boursorama, IBKR portfolio, Finnhub global).
 
@@ -101,7 +101,7 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
 - Workflow `AG1V4CONSENSUS`, **2 crons : 14:00 et 16:30 Paris L-V** (le 16:30 rend les US tradables : à 14:00 le NYSE est fermé → cotations figées → gate liquidité les bloque, comportement normal).
 - Pipeline interne : R8 (préparation données, fraîcheurs H1≤96 h / D1≤240 h / YF≤72 h / funda≤168 h, `data_age = max(stocké, réel)`, exclusion quarantaine, verdicts AG2, STALE_FUNDA) → `Calcul Matrice & Briefing` (prob_score `0.36 tech + 0.34 funda + 0.20 news + 0.10 régime` ; **risk_score V2** renormalisé sur composantes observées, pondération tactique vol/liq/event ; grades A/B/C par quantiles ; règle `enter_core` ; stop-fallback ≥ plancher ATR) → 3 LLM en parallèle → **consensus 2/3** → safety node 7 (Risk Manager déterministe) → **preflight liquidité IBKR** (warm-up snapshot jusqu'au bid/ask, `SPREAD_UNQUOTED` toléré sur noms prouvés liquides) → envoi broker.
 - Ledger **`ag1_v4_consensus.duckdb`** : `core.runs/orders/fills/consensus_*/model_proposals/positions_snapshot/portfolio_snapshot/…` (17 tables). 99 runs au 02/07 ; `strategy_version`/`prompt_version`/`n8n_execution_id` renseignés sur les runs récents.
-- Modèles : `gpt-5.5-2026-04-23`, `grok-4.3`, `claude-sonnet-4-6` (model_keys persistés : `chatgpt52`, `grok41_reasoning`, `claude_sonnet46`).
+- Modèles : `gpt-5.5-2026-04-23`, `grok-4.3`, `claude-fable-5` (model_keys persistés : `chatgpt52`, `grok41_reasoning`, `claude_sonnet46`, clé historique conservée pour Claude).
 - **AG1-PF-V1 MTM** : valorisation horaire (9-17h Paris) + runs de recon IBKR (`RUN_RECON_IBKR_PF_*`) — IBKR est la **source de vérité unique** du P&L (flag `ibkr_is_source_of_truth`).
 
 ### 3.6 Exécution — broker IBKR + approbation Telegram

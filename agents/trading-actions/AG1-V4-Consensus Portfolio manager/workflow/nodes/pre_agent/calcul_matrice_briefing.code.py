@@ -340,15 +340,7 @@ for r in rows:
         data_quality_score = 0.0
     data_quality_score = clamp(data_quality_score, 0.0, 100.0)
 
-    # --- RISQUE V2 (2026-06-30) : renormalisation sur composantes OBSERVEES + reponderation tactique.
-    #     Avant : moyenne ponderee FIXE de 7 composantes dont 3-5 etaient des constantes par defaut
-    #     (event=42 si earnings inconnu, options=35 sans IV, liq=100 sans spread, news=0 sans couverture)
-    #     -> ces constantes diluaient les 2 seuls vrais signaux (funda+vol) -> risque tasse
-    #     (ecart-type ~7 sur 0-100, tout le monde dans une bande de 30 pts). Desormais :
-    #     (A) une composante n'entre dans la moyenne QUE si elle porte une mesure reelle (sinon trou
-    #         de donnee exclu du denominateur, au lieu de diluer) ;
-    #     (D) reponderation vers le risque TACTIQUE d'entree (vol/liq/event), funda reduit 0.30->0.16
-    #         car deja porte par prob_score (0.34) -> evite le double-comptage du fondamental.
+    # RISQUE V2 (2026-06-30): renorm sur composantes OBSERVEES + repond. tactique (vol/liq/event up, funda 0.30->0.16 car deja dans prob_score).
     funda_usable = truthy(r.get("Funda_Usable"))
     news_count_7d = safe_float(r.get("Symbol_News_Count_7d"), 0.0)
     risk_base_weights = {
@@ -383,7 +375,6 @@ for r in rows:
     if eff_wsum >= 0.20:
         risk_core = sum(risk_values[k] * eff_w[k] for k in eff_w) / eff_wsum
     else:
-        # couverture trop faible (quasi aucune mesure) : neutre ; data_quality_score reflete deja le manque
         risk_core = 50.0
     risk_coverage_pct = round(eff_wsum / sum(risk_base_weights.values()) * 100.0, 1)
     risk_score_100 = clamp(risk_core + stale_penalty, 0.0, 100.0)
@@ -528,6 +519,8 @@ for r in rows:
             "last_tech_date": fmt_date(r.get("Last_Tech_Date")),
             "last_funda_date": fmt_date(r.get("Last_Funda_Date")),
             "last_news_date": fmt_date(r.get("Last_News_Date")),
+            "news": r.get("Symbol_News_Items") or [],
+            "news_generated_at": r.get("News_Generated_At"),
             "yf_fetched_at": fmt_date(r.get("YF_Fetched_At")),
             "data_age_h1_hours": safe_float(r.get("Data_Age_H1_Hours"), None),
             "data_age_d1_hours": safe_float(r.get("Data_Age_D1_Hours"), None),
@@ -788,8 +781,15 @@ for r in selected_rows:
             "data_age_d1_hours": r.get("data_age_d1_hours"),
             "macro_themes": r.get("macro_themes") or "",
             "action_reason": r.get("action_reason") or "",
+            "news": (r.get("news") or [])[:3],
         }
     )
+
+_pack_news_generated_at = None
+for _mr in matrix_rows:
+    _ng = _mr.get("news_generated_at")
+    if _ng and (_pack_news_generated_at is None or _ng > _pack_news_generated_at):
+        _pack_news_generated_at = _ng
 
 opportunity_pack = {
     "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -802,6 +802,7 @@ opportunity_pack = {
         "rows": len(pack_rows),
     },
     "rows": pack_rows,
+    "newsGeneratedAt": _pack_news_generated_at,
 }
 
 return [

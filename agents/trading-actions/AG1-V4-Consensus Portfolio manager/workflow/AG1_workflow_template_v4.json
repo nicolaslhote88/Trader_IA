@@ -10,6 +10,10 @@
             {
               "field": "cronExpression",
               "expression": "0 0 14 * * 1-5"
+            },
+            {
+              "field": "cronExpression",
+              "expression": "0 30 16 * * 1-5"
             }
           ]
         }

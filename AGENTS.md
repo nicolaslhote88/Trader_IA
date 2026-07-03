@@ -20,8 +20,8 @@ lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détai
 
 ## État du projet — VÉRIFIÉ sur le VPS le 2026-07-02
 - **Actions/ETF : AG1 V4 consensus** est le Portfolio Manager **actif** (consensus 2/3).
-  3 modèles : **GPT-5.5** (`gpt-5.5-2026-04-23`), **Grok 4.3** (`grok-4.3`), **Claude Sonnet 4.6** (`claude-sonnet-4-6`).
-  `model_keys` persistés : `chatgpt52`, `grok41_reasoning`, **`claude_sonnet46`**. Workflow n8n `AG1V4CONSENSUS`.
+  3 modèles : **GPT-5.5** (`gpt-5.5-2026-04-23`), **Grok 4.3** (`grok-4.3`), **Claude Fable 5** (`claude-fable-5`).
+  `model_keys` persistés : `chatgpt52`, `grok41_reasoning`, **`claude_sonnet46`** (clé historique conservée pour le 3e modèle Claude). Workflow n8n `AG1V4CONSENSUS`.
   Base `ag1_v4_consensus.duckdb` (ledger v4 : `core.runs/orders/consensus_*/model_proposals/fills/*_mtm_*`). Dashboard Streamlit V4-only (8501).
   **⏰ AG1 V4 tourne 2×/jour (2026-06-29) : 14:00 (Euronext) + 16:30 Paris (US ouvert depuis 15:30 + Euronext jusqu'à 17:30).** Raison : à 14:00 le marché US est FERMÉ → IBKR renvoie les cotations US en "C"/figées (champ 6509 = `D`/closed) → gate liquidité bloque mécaniquement TOUTES les actions US (normal : on ne peut pas acheter quand le NYSE est fermé). Le créneau 16:30 (fenêtre sans contention DuckDB) les rend tradables. Voir `docs/operations/SCHEDULING_AND_LOAD.md`.
 - Autres workflows actifs : `AG1-PF-V1` (MTM horaire V4, **cron H+15 depuis 2026-07-02**), `AG2-V3` (split Held+Core / Watchlist), **AG3 split** (Held+Core / Watchlist, voir ci-dessous), `AG4-V3`, `AG4_Spé-V2`,

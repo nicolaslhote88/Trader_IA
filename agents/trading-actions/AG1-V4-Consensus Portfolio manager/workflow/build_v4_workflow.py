@@ -60,6 +60,22 @@ CODE_MAP = {
     "10 - Post-Run Health (DuckDB)": ("pythonCode", ROOT / "nodes/post_agent/10_post_run_health.code.py"),
 }
 
+CLAUDE_OUTPUT_CONTRACT_SUFFIX = """
+
+CONTRAT DE SORTIE — IMPERATIF (lecture obligatoire)
+Tu es Claude Opus 4.8 : on attend une sortie strictement conforme, du premier coup.
+Retourne EXACTEMENT UN objet JSON unique, sans aucun texte, sans Markdown, sans ``` avant ou apres.
+L'objet contient TOUJOURS ces 6 cles, AUCUNE ne peut etre omise (meme vides) :
+  "marketRegime"      : une valeur parmi RISK_ON | RISK_OFF | ROTATION | NEUTRAL
+  "targetExposurePct" : nombre 0-100 (ou null)
+  "maxNewPositions"   : entier 0-15 (ou null)
+  "actions"           : TABLEAU, TOUJOURS PRESENT. Si tu ne proposes aucune action, renvoie un tableau VIDE []. Ne JAMAIS omettre cette cle.
+  "riskNotes"         : tableau de chaines (mettre [] si rien)
+  "dataCaveats"       : tableau de chaines (mettre [] si rien)
+Decider de ne rien faire (NO_TRADE) est valide et frequent : dans ce cas renvoie l'objet COMPLET avec "actions": [] et explique en riskNotes.
+Interdits absolus : prose hors JSON, objet partiel, cle manquante, valeur d'enum hors liste. Le JSON doit etre parsable sans correction.
+"""
+
 
 def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -123,9 +139,12 @@ def patch_code_nodes(workflow: Dict[str, Any]) -> None:
 
 def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
     source = load_json(ROOT / "nodes/agent_input/agent_1_portfolio_manager.node.json")
-    for branch in MODEL_BRANCHES.values():
+    for model_key, branch in MODEL_BRANCHES.items():
         node = get_node(workflow, branch["agent"])
         node["parameters"] = copy.deepcopy(source["parameters"])
+        if model_key == "claude_sonnet46":
+            options = node["parameters"].setdefault("options", {})
+            options["systemMessage"] = (str(options.get("systemMessage", "")).rstrip() + CLAUDE_OUTPUT_CONTRACT_SUFFIX).rstrip()
         if branch.get("use_output_parser") is False:
             node["parameters"].pop("hasOutputParser", None)
         node["onError"] = "continueRegularOutput"
@@ -168,15 +187,15 @@ def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
         "parameters": {
             "model": {
                 "__rl": True,
-                "value": "claude-sonnet-4-6",
+                "value": "claude-fable-5",
                 "mode": "list",
-                "cachedResultName": "Claude Sonnet 4.6",
+                "cachedResultName": "Claude Fable 5",
             },
-            "options": {},
+            "options": {"thinking": True},
         },
         "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
         "typeVersion": 1.3,
-        "position": [3264, 9664],
+        "position": [2816, 10768],
         "id": "ag1-v4-claude-sonnet46-model",
         "name": "Anthropic Chat Model",
         "credentials": {

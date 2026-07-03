@@ -902,6 +902,15 @@ elif abs(upstream_total_value - computed_total_value) > 0.01:
 else:
     total_value = upstream_total_value
 exposure_pct = (market_value / total_value) * 100 if total_value > 0 else 0.0
+# enrich positions with weight % and unrealized PnL % (expected by the LLM prompt)
+for _p in positions:
+    _mv = to_num(_p.get("marketValue"), 0.0) or 0.0
+    _p["weightPct"] = round2((_mv / total_value) * 100.0) if total_value > 0 else 0.0
+    _q = to_num(_p.get("quantity"), 0.0) or 0.0
+    _avg = to_num(_p.get("avgPrice"), None)
+    _cost = (_q * _avg) if (_avg is not None) else None
+    _upnl = to_num(_p.get("unrealizedPnL"), None)
+    _p["unrealizedPnlPct"] = round2((_upnl / _cost) * 100.0) if (_cost and _cost > 0 and _upnl is not None) else None
 portfolio_updated_at = max((p.get("updatedAt") for p in positions), key=parse_ts_key) if positions else None
 
 recent_ideas = []
