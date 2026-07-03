@@ -717,6 +717,58 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
     return run_id
 
 
+def upsert_ibkr_positions_latest(con, positions, rates, ts):
+    """Ecrit l'etat MTM IBKR live (EUR) dans portfolio_positions_ibkr_latest a CHAQUE run.
+    Source de verite du P&L latent affiche par le dashboard, independante de la cadence
+    (espacee) des snapshots de reconciliation RECON. Conversion EUR via taux ledger IBKR."""
+    con.execute(
+        """
+        CREATE TABLE IF NOT EXISTS portfolio_positions_ibkr_latest (
+          symbol              VARCHAR PRIMARY KEY,
+          quantity            DOUBLE,
+          avg_cost_eur        DOUBLE,
+          last_price_eur      DOUBLE,
+          market_value_eur    DOUBLE,
+          unrealized_pnl_eur  DOUBLE,
+          currency            VARCHAR,
+          fx_rate             DOUBLE,
+          run_id              VARCHAR,
+          updated_at          VARCHAR
+        )
+        """
+    )
+    rows = []
+    for row in positions:
+        if not isinstance(row, dict):
+            continue
+        symbol = ibkr_internal_symbol(row)
+        qty = parse_float(row.get("position") or row.get("quantity") or row.get("qty"), 0.0)
+        if not symbol or qty <= 0:
+            continue
+        ccy = norm_symbol(row.get("currency"))
+        rate = rates.get(ccy, 1.0)
+        avg_cost = parse_float(row.get("avgCost") or row.get("avgPrice") or row.get("avg_price"), 0.0) * rate
+        market_value = position_market_value_eur(row, rates)
+        last_price = market_value / qty if qty else 0.0
+        unrealized = (last_price - avg_cost) * qty
+        rows.append([
+            symbol, qty, avg_cost, last_price, money(market_value), money(unrealized),
+            ccy or None, rate, "RUN_IBKR_LIVE_MTM", ts,
+        ])
+    con.execute("DELETE FROM portfolio_positions_ibkr_latest")
+    if rows:
+        con.executemany(
+            """
+            INSERT INTO portfolio_positions_ibkr_latest (
+              symbol, quantity, avg_cost_eur, last_price_eur, market_value_eur,
+              unrealized_pnl_eur, currency, fx_rate, run_id, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+    return len(rows)
+
+
 def should_write(con, positions, ledger, missing):
     ibkr_pos = ibkr_positions_map(positions)
     db_pos = latest_db_positions(con)
@@ -788,6 +840,15 @@ rates = exchange_rates_from_ledger(ledger)
 
 con = duckdb.connect(db_path)
 try:
+    # FIX P&L live 2026-06-22 : refresh IBKR-sourced MTM a CHAQUE run (hors gate
+    # should_write) -> le dashboard dispose toujours d'un P&L latent IBKR frais
+    # (EUR, taux IBKR), independamment de la cadence espacee des snapshots RECON.
+    try:
+        cfg["ibkr_live_mtm_count"] = upsert_ibkr_positions_latest(con, positions, rates, iso_now())
+        cfg["ibkr_live_mtm_written"] = True
+    except Exception as _live_err:
+        cfg["ibkr_live_mtm_written"] = False
+        cfg["ibkr_live_mtm_error"] = str(_live_err)
     missing, unmatched = build_missing_fills(con, fills, rates)
     write_needed, position_diffs, value_diffs = should_write(con, positions, ledger, missing)
     cfg["ibkr_reconcile_missing_fills"] = [row["fill_id"] for row in missing]

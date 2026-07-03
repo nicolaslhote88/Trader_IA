@@ -1,0 +1,12 @@
+[Unit]
+Description=Start IBKR assisted authentication daily at 07:00 Europe/Paris
+
+[Timer]
+OnCalendar=*-*-* 07:00:00 Europe/Paris
+AccuracySec=1s
+RandomizedDelaySec=0
+Persistent=false
+Unit=ibkr-daily-auth.service
+
+[Install]
+WantedBy=timers.target

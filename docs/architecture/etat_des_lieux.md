@@ -1,676 +1,193 @@
-﻿# Ã‰tat des lieux fonctionnel â€” Trader_IA
+# État des lieux fonctionnel — Trader_IA
 
-**DerniÃ¨re analyse exhaustive : 2026-03-02**
-**DerniÃ¨re mise Ã  jour partielle : 2026-05-04** (AG1-FX compact LLM brief, schedules AG4/AG4-Forex, AG4-FX digest, fallback DuckDB AG1-V3, wiring AG3-V2 â€” cf Â§3.3 / Â§3.3bis / Â§3.5 / Â§3.6 / Â§3.6bis / Â§3.6ter)
-**PÃ©rimÃ¨tre** : repository `Trader_IA` + configuration VPS `infra/vps_hostinger_config/docker-compose.yml`.
-**Objectif** : fournir une base d'entrÃ©e claire et opÃ©rationnelle pour un mode projet LLM.
+**Dernière analyse exhaustive : 2026-07-02** (remplace celle du 2026-03-02, MAJ partielle 2026-05-04).
+**Méthode :** repo + docs + **vérification live sur le VPS le 2026-07-02** (broker `/health`, SQLite n8n, DuckDB en lecture seule). Les chiffres de ce document sont ceux relevés ce jour-là.
+**Document compagnon :** [`../audits/20260702_audit_complet_projet.md`](../audits/20260702_audit_complet_projet.md) (constats, priorités F1-F10).
+**Pour les issues historiques :** [`historique_issues.md`](historique_issues.md). **Point d'entrée opérationnel du projet :** `AGENTS.md` (racine).
 
-> â„¹ï¸ Pour les **issues/Ã©carts connus** (avec statut rÃ©solu / en cours / Ã  faire), voir le document sÃ©parÃ© [`historique_issues.md`](historique_issues.md).
+---
 
-## 1. RÃ©sumÃ© exÃ©cutif
+## 1. Résumé exécutif
 
-Le projet est une plateforme multi-agents de trading organisÃ©e autour de :
+Trader_IA est une **plateforme multi-agents de trading actions/ETF en LIVE réel** sur IBKR (compte `U25651155`), orchestrée par **n8n** sur un VPS Hostinger, avec **DuckDB** comme source de vérité, un **broker FastAPI** devant l'API IBKR Client Portal, une **approbation d'ordres via Telegram**, et un **dashboard Streamlit**.
 
-- `n8n` (orchestration des workflows AG0/AG1/AG2/AG3/AG4/YF enrichment),
-- `DuckDB` (source of truth analytique et exÃ©cution),
-- `yfinance-api` (accÃ¨s Yahoo avec cache/cooldown robuste),
-- `trading-dashboard` (Streamlit, vue opÃ©rationnelle multi-agents),
-- `Traefik` (reverse proxy TLS).
+Le cœur décisionnel est **AG1 V4 Consensus** : trois LLM (GPT-5.5, Grok 4.3, Claude Fable 5) proposent chacun des décisions de portefeuille ; une règle de **consensus 2/3** filtre ce qui part à l'exécution, derrière un Risk Manager déterministe (gates codés en dur) et un preflight liquidité IBKR. Il tourne **2×/jour ouvré : 14:00 Paris (Euronext) et 16:30 Paris (US ouvert)**.
 
-Le systÃ¨me est dÃ©jÃ  en mode "DuckDB-first" sur AG2/AG3/AG4/AG4-SPE et AG1-V3.
+Les piliers d'analyse sont alimentés par des workflows autonomes : **AG2-V3** (technique, yfinance, split Held+Core / Watchlist), **AG3-V2** (fondamental, yfinance pur sans LLM, split Held+Core / Watchlist), **AG4-V3** (news macro), **AG4_Spé** (news par valeur, 3 sources : Boursorama, IBKR portfolio, Finnhub global).
 
-Points structurants observÃ©s :
+**Le Forex est entièrement gelé** (workflows FX inactifs, `fx_orders_enabled=false`, bases conservées). L'ancien ensemble AG1-V3 (3 DuckDB parallèles) est décommissionné au profit du ledger unique V4.
 
-- coexistence de versions V2/V3 dans les paths/environnements,
-- forte interdÃ©pendance AG1 â† AG2/AG3/AG4/YF,
-- ensemble AG1 en 3 modÃ¨les parallÃ¨les (GPT-5.2 / Grok-4.1 / Gemini-3), chacun avec sa DuckDB.
-- ensemble AG1-FX-V1 en 3 portefeuilles Forex-only parallÃ¨les (ChatGPT/Grok/Gemini), chacun avec sa DuckDB et un brief LLM compact.
+État au 2026-07-02 : NAV **9 921,80 €** (−0,78 % depuis le départ à 10 000 €), 7 positions (6 Euronext + NVDA), 13 fills au ledger. Principal point dur : **l'exécution des ordres US n'aboutit quasi jamais** (absence de market data US → prompt IBKR → approbation Telegram expirée) — voir F1 de l'audit.
 
-## 2. Services dÃ©ployÃ©s sur le VPS
+---
 
+## 2. Architecture technique (VPS `srv961978`)
 
-### 2.1 Catalogue des services
+### 2.1 Deux stacks Docker Compose
 
-| Service | RÃ´le principal | Exposition | DÃ©pendances |
+**Stack n8n — projet `root`, `/docker/root` :**
+
+| Service | Rôle | Exposition |
+|---|---|---|
+| `root-traefik-1` | Reverse proxy TLS | 80/443 publics |
+| `root-n8n-1` | Orchestrateur workflows (n8n 2.3.5, runners externes) | via Traefik |
+| `root-task-runners-3/4/5` | Runners Python/JS sandboxés | interne |
+| `root-trading-dashboard-1` | Dashboard Streamlit (V4-only, port 8501) | via Traefik + BasicAuth |
+| `root-toolbox-1` | Debug (curl/jq) | interne |
+
+**Stack marché/broker — projet `yfinance`, `/docker/yfinance` :**
+
+| Service | Rôle | Exposition |
+|---|---|---|
+| `ibkr-gateway` | IBKR Client Portal Gateway (IBeam bridé : maintien de session, pas de login auto LIVE) | 127.0.0.1:5000-5001 |
+| `ibkr-broker` | **FastAPI broker maison** (`services/ibkr-broker/`) : ordres, price-guard, approbations, recon, news portfolio | 127.0.0.1:18080 → :8080 |
+| `yfinance-api` | API marché Yahoo (history/quote/options/fundamentals, cache disque) | interne :8080 |
+| `yf-enrichment` | FastAPI qui exécute `daily_enrichment.py` | interne :8081 |
+| `macro-data-api` | FRED/COT/taux (héritage FX, sert AG4) | interne :8081 |
+
+Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gateway`, `portainer`. La n8n est **partagée** avec SIGA — filtrer les workflows `AG*`/`YF*`.
+
+### 2.2 Persistance et conventions critiques
+
+- **DuckDB** : hôte `/local-files/duckdb/` = `/files/duckdb/` côté containers. **Un seul écrivain par fichier** ; lecteurs en `read_only=True` obligatoire.
+- ⚠️ **Versions duckdb par base** : `ag2_v3` s'écrit en **duckdb 1.4.4 max** (lecteur le plus bas = yf-enrichment) ; `ag4_spe_v2` et `ag1_v4_consensus` s'écrivent en **≤1.4.3** (lecteur task-runner n8n). Ne jamais upgrader le format.
+- **n8n** : crons en fuseau **Europe/Paris** ; base SQLite `/home/node/.n8n/database.sqlite` (volume `n8n_data`, 1,1 Go au 02/07). La version **publiée** d'un workflow (`activeVersionId`) est celle exécutée — déployer = `import:workflow` puis `publish:workflow` puis restart n8n + runners.
+- **Broker = image baked** : source `/opt/trader-ia/services/ibkr-broker/` (pas un clone git) → éditer, `docker compose build ibkr-broker && up -d`, **puis committer dans le repo** (vérifié synchronisé au 02/07).
+- **Login IBKR quotidien assisté** : timer systemd `ibkr-daily-auth.timer` à 07:00 Paris, validation IB Key par Nicolas 07:00-07:30 ; reauth auto (`auto_reauth_enabled=true`) en journée ; fallback login navigateur manuel (`ssh -L 5000:localhost:5000 vps`). Procédure de reconnexion fiable : mémoire projet `21_IBKR_RECONNECT_PROCEDURE`.
+
+---
+
+## 3. Chaîne fonctionnelle — les agents
+
+### 3.0 Taxonomie
+| Rôle métier | Implémentation actuelle |
+|---|---|
+| Univers | table `ag2_v3.universe` + `universe_segments` + quarantaine (`AG2UHQ`) ; outillage `outils/AG0-V1`, `scripts/seed_universe_100_global.py` |
+| Portfolio Manager | **AG1 V4 Consensus** (workflow `AG1V4CONSENSUS`) |
+| Analyste technique | AG2-V3 (split Held+Core / Watchlist) |
+| Analyste fondamental | AG3-V2 (split Held+Core / Watchlist) |
+| Analyste news/sentiment | AG4-V3 (macro) + AG4_Spé-V2/IBKR/Finnhub (par valeur) |
+| Risk Manager | nodes déterministes intégrés à AG1 V4 (safety node 7, gates R8/matrice) |
+| Execution Trader | `ibkr-broker` + workflows Approval Request/Decide |
+
+### 3.1 Univers et segmentation (règle structurante)
+- `universe` : **563 symboles** (extension +100 mondiale du 24/06 : US/Europe/Asie/EM, ADR privilégiés).
+- **La rotation AG2/AG3 est pilotée par `universe_segments`** (PK `(symbol, segment)`) : `HELD` (7), `CORE_AUTO` (50, score dominé par le volume), `CORE_MANUAL` (18 épinglés : ASML, TSM, AMD, NVO…), `WATCHLIST` (282). **Un symbole sans segment n'est jamais analysé** (au 02/07 : 206 sans segment = 128 en quarantaine + **78 paires `FX:*` legacy volontairement hors rotation**, Forex gelé — cf audit F7, résolu).
+- **Quarantaine** (`AG2UHQ`, 20:00 Paris L-V) : audite la qualité de données et exclut les symboles malades de la rotation non détenue ; 128 actives au 02/07. AG1 exclut les entrées/renforts quarantainés, les positions détenues restent surveillées.
+- AG1 (R8) et yf-enrichment lisent **tout** `universe` (hors quarantaine pour les décisions d'entrée).
+
+### 3.2 AG2-V3 — pilier technique
+- Source : `yfinance-api` (H1/D1), indicateurs + LLM (verdict `ai_decision`/`ai_quality`/`ai_rr_theoretical`), base **`ag2_v3.duckdb`** (3,2 Go — goulot du système : écrite par AG2, lue par AG3/AG4/AG1/dashboard).
+- Split live : `AG2-V3 — Technical Held+Core` (9/13/15h Paris L-V, ~23-32 min) et `AG2-V3 — Technical Watchlist Nightly` (22h/02h, 40 symboles/slot → cycle ~3,5 j).
+- **Hybride AG2→AG1 (19/06)** : AG1 consomme le verdict AG2 — REJECT = filtre dur sur « Entrer/Renforcer », APPROVE/WATCH pondérés par qualité, SKIP neutre.
+- Fraîcheur au 02/07 : 320 symboles ≤96 h (les 357 segmentés tournent correctement).
+
+### 3.3 AG3-V2 — pilier fondamental
+- **Source unique yfinance, zéro LLM.** Base `ag3_v2.duckdb` (3,4 Go) : `fundamentals_snapshot`, `analyst_consensus_history`, triage.
+- Split live : Held+Core (01:00 UTC quotidien, ≈56 symboles, SLA ≤24 h) et Watchlist (02:00/04:00 UTC, ≈196 symboles, batch 60 → cycle ~4 j, SLA <5 j).
+- **Gate STALE_FUNDA** (AG1 R8) : funda >168 h (`AG1_ACTIONS_MAX_FUNDA_AGE_HOURS`) → neutralisé (scores à 50, `Funda_Usable=False`), sans geler le trading.
+- Au 02/07 : 524 symboles couverts, âge moyen 14,2 j, 357 frais ≤7 j. Limites structurelles : ~40 % des small caps FR sans analystes ; IBKR ne peut pas remplacer yfinance (tags fondamentaux CP API dépréciés).
+
+### 3.4 AG4 — pilier news
+- **AG4-V3 News Watcher** (macro, RSS + LLM dual-branch Grok/gpt-5-mini via node `20CFG`, mode `reduced` par défaut) → `ag4_v3.duckdb` ; fournit le régime macro à AG1.
+- **News par valeur** → base commune **`ag4_spe_v2.duckdb`** (`news_history` + vue `news_analyzed` = summary ∧ is_relevant) :
+  - `AG4_Spé-V2` : scraping **Boursorama** (FR), 4 créneaux L-V, rotation priorisée portefeuille ;
+  - `AG4_Spé-IBKR-V1` : news **IBKR portfolio** (positions détenues, provider Benzinga) via broker `GET /news/portfolio` — l'endpoint per-contrat IBKR est indisponible (503) ;
+  - `AG4_Spé-Finnhub-V1` : couverture **globale** CORE_MANUAL+CORE_AUTO via collecteur host `/opt/trader-ia/finnhub/` (cron 9/12/15h) + mapping ADR (NESN.SW→NSRGY…), cap 12 art./symbole ; ~95/100 couverts, 5 résiduels (ABB, 6861.T, CBA.AX, MQG.AX, O39.SI).
+  - Volumes 7 j au 02/07 : finnhub 1 457, ibkr 350, boursorama 69 valides (⚠️ + 235 articles à date future — régression, audit F2).
+- **D2** : node `20K — News Digest` injecte dans l'`opportunity_pack` d'AG1 les news ≤14 j (top 3/symbole + `held_news`). `AG4_Spé — Health Alert` (16:30 Paris) alerte Telegram si pipeline stale.
+
+### 3.5 AG1 V4 Consensus — décision
+- Workflow `AG1V4CONSENSUS`, **2 crons : 14:00 et 16:30 Paris L-V** (le 16:30 rend les US tradables : à 14:00 le NYSE est fermé → cotations figées → gate liquidité les bloque, comportement normal).
+- Pipeline interne : R8 (préparation données, fraîcheurs H1≤96 h / D1≤240 h / YF≤72 h / funda≤168 h, `data_age = max(stocké, réel)`, exclusion quarantaine, verdicts AG2, STALE_FUNDA) → `Calcul Matrice & Briefing` (prob_score `0.36 tech + 0.34 funda + 0.20 news + 0.10 régime` ; **risk_score V2** renormalisé sur composantes observées, pondération tactique vol/liq/event ; grades A/B/C par quantiles ; règle `enter_core` ; stop-fallback ≥ plancher ATR) → 3 LLM en parallèle → **consensus 2/3** → safety node 7 (Risk Manager déterministe) → **preflight liquidité IBKR** (warm-up snapshot jusqu'au bid/ask, `SPREAD_UNQUOTED` toléré sur noms prouvés liquides) → envoi broker.
+- Ledger **`ag1_v4_consensus.duckdb`** : `core.runs/orders/fills/consensus_*/model_proposals/positions_snapshot/portfolio_snapshot/…` (17 tables). 99 runs au 02/07 ; `strategy_version`/`prompt_version`/`n8n_execution_id` renseignés sur les runs récents.
+- Modèles : `gpt-5.5-2026-04-23`, `grok-4.3`, `claude-fable-5` (model_keys persistés : `chatgpt52`, `grok41_reasoning`, `claude_sonnet46`, clé historique conservée pour Claude).
+- **AG1-PF-V1 MTM** : valorisation horaire (9-17h Paris) + runs de recon IBKR (`RUN_RECON_IBKR_PF_*`) — IBKR est la **source de vérité unique** du P&L (flag `ibkr_is_source_of_truth`).
+
+### 3.6 Exécution — broker IBKR + approbation Telegram
+1. AG1 V4 envoie les ordres au broker (`dry_run=false`, LIVE).
+2. **Price-guard** (réf. yfinance, âge ≤1 h) : écart limit↔réf **≤5 %** auto-confirmé · **5-15 %** parqué pour approbation · **>15 %** rejeté. Prix non vérifiable (`QUOTE_TOO_OLD`, `NO_REFERENCE_PRICE`) et **prompts IBKR sans market data** (`IBKR_PROMPT_WITHOUT_MARKET_DATA`) → parqués aussi.
+3. **Approbation** : bot Telegram `@CYROLAS_BOT` (boutons Approuver/Rejeter, **TTL 600 s**) → workflows `Order Approval Request` / `Decide` → à l'approbation, **re-soumission fraîche** de l'ordre (fix 18/06) ; `Update Ledger Status` met à jour `core.orders`. Double-tap → 200 idempotent. ⚠️ Store des approbations **en mémoire** (perdu si restart broker).
+4. Limites connues : chaîne price-guard/approbation **LIMIT-only** (un SELL MARKET est rejeté silencieusement — bug documenté 19/06) ; hors séance une approbation finit `FAILED` proprement — approuver en séance.
+- **⚠️ Constat majeur au 02/07 (audit F1)** : faute de souscription market data US, tous les ordres US déclenchent le prompt IBKR → parcage → expiration quasi systématique du TTL 10 min. Un seul fill US depuis le 18/06. Les fills Euronext passent normalement.
+
+### 3.7 Dashboard Streamlit (V4-only, 8501)
+- Lit les DuckDB (+ yfinance pour certains graphes) ; **réimplémente** le scoring/gates d'AG1 (matrice « Vue consolidée », funnel « System Health ») — **parité obligatoire**, voir `docs/operations/SYSTEM_LINKS_AND_PARITY.md` (source de vérité, à consulter avant toute modif scoring/gates/seuils de fraîcheur).
+- Le dashboard montre l'étape **décision matrice**, PAS le preflight IBKR (étape exécution, verdict au moment de l'ordre).
+- ⚠️ La version live `/opt/trading-dashboard/app/app.py` (20 729 l.) a **divergé** du repo `services/dashboard/app.py` (20 454 l.) ; la live est la référence, le repo est à resynchroniser (audit F8).
+
+### 3.8 Forex — gelé
+Workflows AG1-FX/AG2-FX/AG3-FX/AG4-FX/AG5-AG8 tous inactifs (`active=0`), `IBKR_FX_ORDERS_ENABLED=false`. Bases `ag*_fx_v1.duckdb` et `ag4_forex_v1.duckdb` conservées figées (dernières écritures mai-juin 2026). Réactivation = décision explicite de Nicolas uniquement.
+
+---
+
+## 4. Ordonnancement (source de vérité : `docs/operations/SCHEDULING_AND_LOAD.md`)
+
+Résumé des crons actifs (heure Paris) après déconfliction anti-contention du 28/06 :
+
+| Créneau | Workflow | Base écrite |
+|---|---|---|
+| 22:00 / 02:00 (7j/7) | AG2 Watchlist Nightly | ag2_v3 |
+| 00:00 UTC / 01:00+04:00 UTC (7j/7) | AG3 Held+Core / Watchlist | ag3_v2 |
+| 06:15 (7j/7) | YF-ENRICH | yf_enrichment |
+| 06:45 / 10:45 / 18:45 (L-V) | AG4-V3 macro | ag4_v3 |
+| 08:05 / 11:05 / 14:05 / 17:05 (L-V) | AG4_Spé-V2 Boursorama | ag4_spe |
+| 09:00 / 13:00 / 15:00 (L-V) | AG2 Held+Core | ag2_v3 |
+| 10:00 / 13:00 / 16:00 (L-V) | AG4_Spé Finnhub + IBKR news | ag4_spe |
+| 9h-17h horaire (L-V) | AG1-PF MTM | ag1_v4 |
+| **14:00 + 16:30 (L-V)** | **AG1 V4 Consensus** | ag1_v4 |
+| 16:30 (L-V) | AG4_Spé Health Alert | — |
+| 20:00 (L-V) | AG2 Universe Quarantine | ag2_v3 |
+
+Règles : un seul écrivain par base ; écart ≥ durée_max + marge entre écrivains d'une même base ; nodes <20 min (timeout tâche 1200 s) ; ne pas déplacer AG1 V4 sans décision explicite. Contention résiduelle connue sur `ag1_v4` (MTM vs AG1 V4 14:00 / recon, audit F4) ; retry-hardening des `db_con` proposé, non déployé.
+
+---
+
+## 5. Bases DuckDB (au 2026-07-02)
+
+| Base | Taille | Rôle | Écrivain |
 |---|---|---|---|
-| `traefik` | Reverse proxy TLS + routage host-based | `80`, `443` publics | Docker provider |
-| `n8n` | Orchestrateur workflows | `127.0.0.1:5678` (proxyfiÃ© via Traefik) | `yfinance-api` |
-| `task-runners` (x3 replicas) | Runners externes n8n (Python/JS) | interne rÃ©seau Docker | `n8n` |
-| `yfinance-api` | API marchÃ© (history/quote/options/calendar/fundamentals) avec cache disque | interne rÃ©seau Docker | aucune |
-| `yf-enrichment` | Microservice FastAPI qui lance `daily_enrichment.py` | interne rÃ©seau Docker (`:8081`) | `yfinance-api` |
-| `trading-dashboard` | App Streamlit (dashboard) | proxyfiÃ© Traefik (`${DASHBOARD_DOMAIN}`) | sources DuckDB + yfinance-api |
-| `toolbox` | Container utilitaire debug (`curl`, `jq`) | interne | aucune |
+| `ag1_v4_consensus.duckdb` | 188 Mo | Ledger V4 (runs, orders, fills, consensus, MTM) | AG1 V4 + MTM/recon (≤1.4.3) |
+| `ag2_v3.duckdb` | 3,2 Go | Univers, segments, quarantaine, signaux techniques | AG2 (1.4.4) |
+| `ag3_v2.duckdb` | 3,4 Go | Fondamentaux, consensus analystes | AG3 |
+| `ag4_v3.duckdb` | 1,5 Go | News macro | AG4-V3 |
+| `ag4_spe_v2.duckdb` | 587 Mo | News par valeur (3 sources) | AG4_Spé ×3 (≤1.4.3) |
+| `yf_enrichment_v1.duckdb` | 38 Mo | Enrichissement quotidien | YF-ENRICH |
+| `macro_data.duckdb` | 40 Mo | FRED/COT/taux | macro-data-api |
+| `ag*_fx_*.duckdb`, `ag4_forex_v1` | ~1,2 Go cumulés | Forex gelé | — (figées) |
 
-### 2.2 ParamÃ¨tres d'architecture importants
+Pièges transverses : vue `SELECT *` cassée par tout `ALTER TABLE ADD COLUMN` (recréer la vue) ; base souvent lockée par le dashboard → retry sur lock ; sandbox Python n8n (imports whitelistés, un par ligne, `hashlib` interdit) ; éditeurs qui tronquent les gros fichiers (>~160 lignes) → patcher via shell.
 
-- RÃ©seaux : `web` (externe) et `traefik_proxy` (externe).
-- Stockage persistant :
-  - partage cross-services via `/local-files` montÃ© sur `/files`.
-- `n8n` tourne en mode runners externes :
-  - `N8N_RUNNERS_ENABLED=true`
-  - broker `:5679`
-  - `task-runners` en parallÃ©lisme (3 replicas).
-- Dashboard protÃ©gÃ© par BasicAuth Traefik.
+---
 
-### 2.3 Flux inter-services (fonctionnel)
+## 6. Sécurité & garde-fous (vérifiés live le 02/07)
 
-1. `n8n` orchestre les workflows.
-2. AG2/AG3/AG1-PF/YF enrichment interrogent `yfinance-api`.
-5. `trading-dashboard` lit majoritairement DuckDB et appelle `yfinance-api` pour certains graphes/snapshots.
+- `IBKR_DRY_RUN=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true` → **ordres réels**. Ne modifier aucun garde (`IBKR_REQUIRE_PAPER_ACCOUNT=false`, `IBKR_PRICE_GUARD_MAX_DEVIATION_PCT=5.0`, `IBKR_APPROVAL_ENABLED=true`) ni réactiver le FX sans décision explicite de Nicolas.
+- Jamais placer/confirmer un ordre à la main : chaîne n8n + broker + approbation Telegram uniquement.
+- Lectures DuckDB en `read_only=True` ; pas d'écriture directe hors scripts de maintenance dédiés.
+- Secrets : `.ssh/` local gitignoré ; credentials dans `/docker/*/.env` (jamais dans le repo) ; 1 seul credential Telegram n8n (« Jarvis », bot `@CYROLAS_BOT`) — ne pas ajouter de 2ᵉ Telegram Trigger.
+- Workflows live : valider en shadow/replay avant publication ; déploiement chirurgical + backups `.codex-tmp/` ; ⚠️ `import:workflow` désactive le workflow → toujours republier et vérifier `active=1`.
 
-## 3. Workflows et rÃ´le mÃ©tier
+---
 
-### 3.1 AG0 â€” Extraction universe (utilitaire ponctuel)
+## 7. État opérationnel & écarts (2026-07-02)
 
-- Fichier : `outils/AG0-V1 - extraction universe/AG0-V1 - extraction universe.json`
-- Trigger : manuel (workflow inactif en production, conservÃ© dans `outils/` comme utilitaire).
-- RÃ´le :
-  - scrape Boursorama compartiments A/B/C,
-  - normalise `Symbol` (`<ticker>.PA`) + `Name`,
-  - export CSV + XLSX vers Google Drive.
-- Usage : alimentation universe (amont manuel, aujourd'hui pilotÃ© directement via la Google Sheets d'univers).
+**Sain :** auth IBKR quotidienne + reauth auto ; compte live aligné (`gateway_is_paper=false`) ; 15 workflows n8n actifs conformes à AGENTS.md ; fills Euronext réguliers ; NAV 9 921,80 €, 7 positions, cash 6 671 € ; pipeline news 3 sources ; disque VPS 34 % ; code broker repo↔live synchronisé (md5).
 
-### 3.2 AG1-PF-V1 â€” Portfolio MTM (DuckDB-only, multi AG1-V2)
+**Écarts ouverts (détail et priorités dans l'audit du 02/07) :**
+1. **F1-P0** Exécution US bloquée (prompt market data + TTL 10 min) — décision requise (souscription market data / auto-confirm ≤5 % / TTL).
+2. **F2-P0** 235 news Boursorama datées dans le futur (régression parseur dates).
+3. **F3-P1** AG2UHQ en timeout 60 s (2/3 runs) → rafraîchissement quarantaine dégradé.
+4. **F4-P1** Locks résiduels `ag1_v4` (MTM ~4 err/3j).
+5. **F5-P1** Approval Decide en erreur sur tap tardif (idempotence EXPIRED à étendre).
+6. **F6-P1** 4 fichiers réellement modifiés non committés + `SYSTEM_LINKS_AND_PARITY.md` untracked + 233 fichiers de bruit CRLF.
+7. **F8 à F10 - P2** dashboard repo en retard sur le live ; AGENTS.md/README périmés (le bug « 3 champs NULL » de `core.runs` est corrigé pour les runs récents) ; approvals en mémoire ; WAL n8n 407 Mo. (F7 résolu : les 78 sans segment = paires `FX:*` legacy, exclusion volontaire.)
 
-- Fichier : `agents/trading-actions/AG1-PF-V1/AG1-PF-V1-workflow.json`
-- Trigger :
-  - schedule `0 0 9-17 * * 1-5`
-  - manuel.
-- Sources :
-  - bases AG1 `ag1_v2_*` (lecture positions),
-  - `yfinance-api /history` (1H + 1D),
-  - optional enrichment Universe via AG2 DB.
-- Traitement :
-  - normalisation lignes portefeuille,
-  - fetch prix H1/D1,
-  - choix meilleur prix (freshest/fallback),
-  - calcul MTM (`LastPrice`, `MarketValue`, `UnrealizedPnL`),
-  - Ã©criture DuckDB latest/history/run_log.
-- Sorties :
-  - tables `portfolio_positions_mtm_latest`, `portfolio_positions_mtm_history`, `portfolio_positions_mtm_run_log`.
+---
 
-### 3.3 AG1-V3 â€” Portfolio Manager (3 variants modÃ¨les)
+## 8. Renvois documentaires
 
-- Fichiers :
-  - template : `agents/trading-actions/AG1-V3-Portfolio manager/workflow/AG1_workflow_template_v3.json`
-  - variants : `.../variants/AG1_workflow_v3__chatgpt52.json`, `...grok41_reasoning.json`, `...gemini30_pro.json`.
-- Trigger (variant ChatGPT 5.2) : `0 15 9 * * 1-5`, `0 30 12 * * 1-5`, `0 45 16 * * 1-5`.
-- RÃ´le mÃ©tier :
-  - construit contexte portefeuille + marchÃ© (multi-agent pack),
-  - appelle agent LLM Portfolio Manager,
-  - applique garde-fous d'exÃ©cution (`Validate & Enforce Safety`),
-  - produit bundle d'ordres/fills/signaux/alertes,
-  - upsert dans ledger AG1 DuckDB (`core.*` + `cfg.*`),
-  - calcule snapshots + health post-run.
-- RAG utilisÃ© par agent :
-- Notes :
-  - legacy branches Google Sheets conservÃ©es mais dÃ©sactivÃ©es dans variants exportÃ©s.
-  - les nodes de contexte portefeuille et d'enrichissement prix marchÃ© rÃ©solvent les chemins DuckDB `/files/...` et `/local-files/...`, puis retombent sur le ledger par dÃ©faut si le chemin entrant est absent ou inutilisable.
-
-### 3.3bis AG1-FX-V1 â€” Portfolio Manager Forex-only (3 variants modÃ¨les)
-
-- Fichiers :
-  - template : `agents/trading-forex/AG1-FX-V1-Portfolio manager/workflow/AG1_FX_workflow_template_v1.json`
-  - variants : `.../AG1_FX_workflow_chatgpt52_v1.json`, `...grok41_reasoning_v1.json`, `...gemini30_pro_v1.json`.
-- Triggers :
-  - `chatgpt52` : `30 9,14 * * 1-5`
-  - `grok41_reasoning` : `45 9,14 * * 1-5`
-  - `gemini30_pro` : `0 10,15 * * 1-5`
-- Sources :
-  - `ag2_fx_v1.duckdb` pour universe FX + signaux techniques,
-  - `ag4_fx_v1.duckdb` pour digest macro/news FX (`top_news`, `pair_focus`, `macro_regime`),
-  - ledger propre par modÃ¨le (`ag1_fx_v1_chatgpt52.duckdb`, `ag1_fx_v1_grok41_reasoning.duckdb`, `ag1_fx_v1_gemini30_pro.duckdb`).
-- RÃ´le mÃ©tier :
-  - gÃ¨re un portefeuille sandbox Forex-only de 10 000 EUR par modÃ¨le,
-  - envoie au LLM un `llm_brief` compact au lieu du payload brut AG2/AG4 complet,
-  - conserve le `brief` complet dans le contexte workflow pour les checks risque, conversions, fills et snapshots,
-  - filtre le pack `top_news` pour privilÃ©gier les news avec hint directionnel FX quand elles existent,
-  - dÃ©rive `llm_model` depuis le variant; `AG1_FX_LLM_MODEL_OVERRIDE` sert uniquement aux overrides ponctuels.
-- Garde-fous :
-  - leverage max, exposition par paire/devise, daily drawdown, kill switch,
-  - downstream parser + risk manager + simulate fills + ledger write aprÃ¨s chaque agent provider.
-
-### 3.4 AG2-V3 â€” Analyse technique
-
-- Fichiers : `agents/trading-actions/AG2-V3/AG2-V3 - Analyse technique (FX only).json` + `agents/trading-actions/AG2-V3/AG2-V3 - Analyse technique (non-FX).json`
-  - ces deux variants sont les sources de vÃ©ritÃ© (l'ancien canonique `AG2-V3 - Analyse technique.json` a Ã©tÃ© retirÃ© du repo en avril 2026).
-- Trigger :
-  - cron `10 9-17 * * 1-5`
-  - manuel.
-- Sources :
-  - Universe (Google Sheets),
-  - `yfinance-api /history` (1H et 1D),
-  - LLM validation (route FX vs Equity/ETF),
-- Pipeline fonctionnel :
-  1. init config + batch rotation,
-  2. init schema DuckDB,
-  3. loop symboles,
-  4. calcul indicateurs techniques (H1/D1),
-  5. prÃ©-filtres PM + dedup AI cache,
-  6. validation IA (prompts diffÃ©renciÃ©s FX vs actions),
-  7. write `technical_signals`,
-  8. finalize run + optional sync sheets,
-- Sorties principales :
-  - table `technical_signals` + vues `v_latest_signals`, `v_ag1_summary`, `v_ag2_fx_output`.
-
-### 3.5 AG3-V2 â€” Analyse fondamentale
-
-- Fichier : `agents/trading-actions/AG3-V2/AG3-V2-workflow.json`
-- Trigger :
-  - schedule `0 7 * * 1-5`
-  - manuel.
-- Sources :
-  - Universe (Google Sheets),
-  - `yfinance-api /fundamentals`,
-- Pipeline :
-  1. init contexte + queue,
-  2. init schema + run (DuckDB),
-  3. fetch fondamentaux par symbole,
-  4. scoring (quality/growth/valuation/health/consensus/risk),
-  5. Ã©criture triage/consensus/metrics/snapshot,
-  6. finalize run,
-- Note wiring n8n : le `Split In Batches` utilise `main[0]` comme branche done (`Finalize Run`) et `main[1]` comme branche loop (fetch/process/write).
-
-### 3.6 AG4-V3 â€” Macro & News (+ geo-tagging depuis 2026-04-24)
-
-- Fichier : `agents/common/AG4-V3/AG4-V3-workflow.json`
-- Trigger :
-  - schedule `45 1,6,10,18 * * 1-5` (4 runs par jour ouvrÃ©, Europe/Paris)
-  - manuel.
-- Sources :
-  - Google Sheets `Source_RSS`,
-  - Google Sheets `Universe`.
-- Pipeline :
-  1. chargement flux RSS + dictionnaire symboles/secteurs,
-  2. init schema DuckDB + run log,
-  3. lecture index historique,
-  4. normalisation RSS, tagging symboles, dedupe clustering,
-  5. prÃ©-score + routage new/seen + analyse IA news (le prompt LLM produit dÃ©sormais 4 champs additionnels : `impact_region`, `impact_asset_class`, `impact_magnitude`, `impact_fx_pairs`),
-  6. sanitize des 4 champs avec taxonomie fixe + dÃ©rivation automatique de `impact_fx_pairs` Ã  partir de `currencies_bullish/bearish` si manquant,
-  7. Ã©criture `news_history` / `news_errors` avec `tagger_version='geo_v1'`,
-  8. **dual-write conditionnel** vers `ag4_forex_v1.fx_news_history` (`origin='global_base'`) si `impact_asset_class âˆˆ {FX, Mixed}`,
-  9. finalize run et gÃ©nÃ©ration vues FX macro (`ag4_fx_macro`, `ag4_fx_pairs`).
-- RÃ´le : fournir rÃ©gime macro, thÃ¨mes, secteurs/currencies bullish-bearish, ET zone gÃ©ographique + classe d'actif + magnitude + paires FX impactÃ©es pour permettre au PM de router les dÃ©cisions par segment de marchÃ©.
-- Source du prompt et des guardrails : node `20H1 - Analyze with OpenAI` + `nodes/10_parse_llm_output.js` + `nodes/14_write_fx_news_duckdb.py`.
-
-### 3.6bis AG4-Forex â€” Canaux FX dÃ©diÃ©s (ajoutÃ© 2026-04-24)
-
-- Fichier : `agents/trading-forex/AG4-Forex/AG4-Forex-workflow.json`
-- Source de vÃ©ritÃ© : `agents/trading-forex/AG4-Forex/build_workflow.py` + `agents/trading-forex/AG4-Forex/nodes/*`.
-- Trigger :
-  - schedule `45 3,9,15,21 * * 1-5` (4 runs par jour ouvrÃ©, Europe/Paris), dÃ©calÃ© d'AG4-V3 pour limiter les conflits DuckDB.
-- Sources :
-  - `infra/config/sources/fx_sources.yaml` â€” liste dans l'ordre : ForexLive, DailyFX, FXStreet, Investing economic calendar, BIS, Fed, ECB, BoJ. Toutes les entrÃ©es sont dÃ©sormais `enabled: true` pour le passage sandbox complet; le loader AG4-Forex ne consomme toutefois que `type=rss`, donc `investing_econ_calendar` nÃ©cessite encore une branche API avant ingestion effective.
-- Pipeline :
-  1. `00_load_fx_sources.py` â€” chargement YAML + filtre `enabled=true`, init schema, ouverture run log,
-  2. `01_normalize_fx_rss_items.js` â€” normalisation RSS â†’ schÃ©ma commun,
-  3. `02_add_keys.js` â€” calcul `dedupe_key` / `event_key` alignÃ©s sur AG4-V3,
-  4. `03_route_seen_fx_news.py` â€” bypass prÃ©-LLM : si le `dedupe_key` existe dÃ©jÃ  dans `ag4_forex_v1.fx_news_history`, mise Ã  jour de `last_seen_at` puis retour Ã  la boucle sans appel OpenAI,
-  5. `20G2 - Router Analyze vs Skip` â€” route les news nouvelles vers le LLM et les doublons vers `20G - Split FX Items`,
-  6. `03_prepare_llm_input.js` â€” prompt harmonisÃ© avec AG4-V3 (rÃ©utilisation du mÃªme LLM),
-  7. `04_parse_llm_output.js` â€” parsing + sanitize identique,
-  8. `05_write_fx_news_duckdb.py` â€” Ã©criture dans `ag4_forex_v1.fx_news_history` avec `origin='fx_channel'` (`dedupe_key` reste la garde finale cÃ´tÃ© DuckDB),
-  9. `06_finalize_fx_run.py` â€” clÃ´ture `run_log`.
-- RÃ´le : alimenter une base FX isolÃ©e (`ag4_forex_v1.duckdb`) consommÃ©e par AG4-FX-V1 pour produire le digest macro/news FX utilisÃ© par AG1-FX-V1.
-
-### 3.6ter AG4-FX-V1 â€” Digest macro/news FX pour AG1-FX
-
-- Fichier : `agents/trading-forex/AG4-FX-V1/workflow/AG4_FX_workflow_v1.json`
-- Trigger :
-  - schedule `15 9,14 * * 1-5` (09:15 et 14:15, Europe/Paris)
-  - manuel.
-- Sources :
-  - `ag4_v3.duckdb` pour news globales taguÃ©es `FX` ou `Mixed`,
-  - `ag4_forex_v1.duckdb` pour news canal FX, rÃ©gime macro et biais par paire.
-- Sortie :
-  - `ag4_fx_v1.duckdb`, table `main.fx_digest`, avec trois sections JSON : `top_news`, `pair_focus`, `macro_regime`.
-- RÃ´le : fournir Ã  AG1-FX-V1 un pack macro/news mutualisÃ©, dÃ©dupliquÃ© sur la fenÃªtre rÃ©cente, directement consommable par les trois PMs Forex.
-
-### 3.7 AG4-SPE-V2 â€” News spÃ©cifiques par valeur
-
-- Fichier : `agents/trading-actions/AG4-SPE-V2/AG4-SPE-V2-workflow.json` (rÃ©gÃ©nÃ©rÃ© depuis `build_workflow.py` â€” â‰ˆ 112 KB).
-- Source de vÃ©ritÃ© : `agents/trading-actions/AG4-SPE-V2/build_workflow.py` + `agents/trading-actions/AG4-SPE-V2/nodes/*`.
-- Trigger (dans `build_workflow.py`) :
-  - `0 5 9,12,15 * * 1-5` + manuel.
-- Sources :
-  - Universe Google Sheets,
-  - Boursorama listing pages + article pages.
-- Pipeline :
-  1. init DB + queue rotative symboles (`workflow_state`),
-  2. scrape listing actualitÃ©s par symbole,
-  3. extraction URLs + normalisation + dedupe (`news_id=sha1(symbol|canonical_url)`),
-  4. routage new vs seen,
-  5. fetch article + parsing,
-  6. prÃ©paration prompt + analyse OpenAI (schema JSON strict),
-  7. upsert `news_history`, write `news_errors`,
-  8. finalize run,
-
-### 3.8 YF-ENRICH-V1 â€” Enrichissement quotidien marchÃ©
-
-- Workflow : `agents/common/yf-enrichment-v1/YF-ENRICH-V1-daily-workflow.json`
-- Trigger :
-  - schedule `15 6 * * *`
-  - manuel.
-- ExÃ©cution :
-  - n8n fait `POST http://yf-enrichment:8081/run`,
-  - service `yf-enrichment` lance `daily_enrichment.py`.
-- Sources :
-  - symboles de `ag2` table `universe` (ou argument `--symbols`),
-  - `yfinance-api` endpoints `/quote`, `/options`, `/calendar`.
-- Sortie :
-  - DuckDB `yf_enrichment_v1.duckdb` (`run_log`, `yf_symbol_enrichment_history`, `v_latest_symbol_enrichment`).
-
-## 4. Sources de donnÃ©es (dÃ©tail)
-
-### 4.1 Sources externes
-
-| Source | Type | Consommateurs |
-|---|---|---|
-| Yahoo Finance (via `yfinance` python) | MarchÃ© (OHLCV, quote L1, options, earnings, fundamentals) | `yfinance-api`, puis AG1/AG2/AG3/AG1-PF/YF enrichment/dashboard |
-| Boursorama cotations | Universe actions FR | AG0 |
-| Boursorama actualitÃ©s par valeur | News symboles | AG4-SPE-V2 |
-| Flux RSS (liste en Sheet `Source_RSS`) | News macro | AG4-V3 |
-| Flux FX dÃ©diÃ©s (ForexLive, DailyFX, FXStreet, BIS, Fed, ECB, BoJ â€” `infra/config/sources/fx_sources.yaml`) | News forex | AG4-Forex |
-| OpenAI API | LLM analyse news/agent + embeddings (tagging geo/asset-class inclus) | AG1-V3, AG1-FX, AG4-V3, AG4-Forex, AG4-SPE-V2, vectorisation |
-| xAI / Google Gemini APIs | LLM Portfolio Manager variants | AG1-V3, AG1-FX |
-| Google Sheets | Configuration/source universe/rss | AG0, AG2, AG3, AG4, AG4-SPE, dashboard fallback |
-
-### 4.2 Sources internes (data products)
-
-| Source interne | Produit par | ConsommÃ© par |
-|---|---|---|
-| `ag2_v3.duckdb` | AG2 | AG1-V3, dashboard, YF enrichment (universe) |
-| `ag3_v2.duckdb` | AG3 | AG1-V3, dashboard |
-| `ag4_v3.duckdb` | AG4 macro (avec tags geo/asset-class depuis 2026-04-24) | AG1-V3, dashboard |
-| `ag4_forex_v1.duckdb` | AG4-V3 (dual-write) + AG4-Forex (canaux dÃ©diÃ©s) | AG4-FX-V1, dashboard Forex P&L/news |
-| `ag4_fx_v1.duckdb` | AG4-FX-V1 digest macro/news FX | AG1-FX-V1, dashboard |
-| `ag4_spe_v2.duckdb` | AG4-SPE | AG1-V3, dashboard |
-| `yf_enrichment_v1.duckdb` | YF enrichment | AG1-V3, dashboard |
-| `ag1_v3*.duckdb` (Ã—3 modÃ¨les) | AG1-V3 | dashboard, AG1-PF (selon config) |
-| `ag1_fx_v1*.duckdb` (Ã—3 modÃ¨les) | AG1-FX-V1 | dashboard Forex Trading |
-| `ag1_v2*.duckdb` | AG1-V2/AG1-PF | dashboard legacy + compat |
-
-## 5. Bases de donnÃ©es gÃ©nÃ©rÃ©es et schÃ©mas
-
-### 5.1 DuckDB AG1-PF (MTM) â€” `agents/trading-actions/AG1-PF-V1/sql/schema.sql`
-
-Tables :
-- `portfolio_positions_mtm_run_log`
-- `portfolio_positions_mtm_latest`
-- `portfolio_positions_mtm_history`
-- vue `v_portfolio_positions_mtm_latest`
-
-Colonnes clÃ©s :
-- run lifecycle : `run_id`, `started_at`, `finished_at`, `status`, compteurs.
-- positions latest/history : `symbol`, `quantity`, `avg_price`, `last_price`, `market_value`, `unrealized_pnl`, `updated_at`, `run_id`.
-
-### 5.2 DuckDB AG1-V3 ledger â€” `agents/trading-actions/AG1-V3-Portfolio manager/workflow/sql/portfolio_ledger_schema_v2.sql`
-
-Schemas :
-- `core`
-- `cfg`
-
-Tables `core` :
-- `runs`, `instruments`, `market_prices`,
-- `orders`, `fills`, `cash_ledger`,
-- `position_lots`, `positions_snapshot`, `portfolio_snapshot`,
-- `ai_signals`, `risk_metrics`, `alerts`, `backfill_queue`.
-
-Tables `cfg` :
-- `portfolio_config` (seeded avec `kill_switch_active=True`, `max_pos_pct=25`, `max_sector_pct=40`, `max_daily_drawdown_pct=6`).
-
-RÃ´le :
-- modÃ¨le ledger complet exÃ©cution + audit + risque + snapshots portefeuille.
-
-### 5.2bis DuckDB AG1-FX-V1 ledger â€” `agents/trading-forex/AG1-FX-V1-Portfolio manager/sql/ag1_fx_v1_schema.sql`
-
-Schemas :
-- `core`
-- `cfg`
-
-Tables `core` :
-- `runs`, `orders`, `fills`, `position_lots`,
-- `portfolio_snapshot`, `cash_ledger`, `ai_signals`, `alerts`.
-
-Tables `cfg` :
-- `portfolio_config` (seeded avec capital 10 000 EUR, `leverage_max=1.0`, `max_pair_pct=0.20`, `max_currency_exposure_pct=0.50`, `max_daily_drawdown_pct=0.05`, `kill_switch_active=FALSE`, `universe_filter='forex_34'`).
-
-RÃ´le :
-- ledger exÃ©cution + audit + risque pour les trois PMs Forex-only (`chatgpt52`, `grok41_reasoning`, `gemini30_pro`).
-
-### 5.3 DuckDB AG2-V3 â€” `agents/trading-actions/AG2-V3/sql/schema.sql`
-
-Tables :
-- `universe`
-- `technical_signals`
-- `ai_dedup_cache`
-- `run_log`
-- `batch_state`
-
-Vues :
-- `v_latest_signals`
-- `v_pending_vectors`
-- `v_ag1_summary`
-- `v_ag2_fx_output`
-
-Schema notable `technical_signals` :
-- identifiants/run : `id`, `run_id`, `symbol`, `symbol_internal`, `symbol_yahoo`, `asset_class`, `workflow_date`
-- H1/D1 status/actions/scores/confidence
-- indicateurs techniques complets (SMA/EMA/MACD/RSI/ATR/BB/Stoch/ADX/OBV/Support/Resistance)
-- mÃ©tadonnÃ©es FX (`base_ccy`, `quote_ccy`, `pip_size`, `atr_pips_*`)
-- AI validation (`ai_decision`, `ai_quality`, `ai_alignment`, `ai_stop_loss`, `ai_rr_theoretical`, etc.)
-
-### 5.4 DuckDB AG3-V2 â€” `agents/trading-actions/AG3-V2/nodes/06_duckdb_init.py`
-
-Tables :
-- `run_log`
-- `fundamentals_snapshot`
-- `fundamentals_triage_history`
-- `analyst_consensus_history`
-- `fundamental_metrics_history`
-- `batch_state`
-
-Vues :
-- `v_latest_triage`
-- `v_latest_consensus`
-
-Colonnes mÃ©tier :
-- triage : `score`, `risk_score`, `quality_score`, `growth_score`, `valuation_score`, `health_score`, `consensus_score`, `horizon`, `upside_pct`, `recommendation`.
-- consensus : targets mean/high/low + analyst count + dispersion/risk proxy.
-- metrics : donnÃ©es atomiques section/metric/value/unit.
-
-### 5.5 DuckDB AG4-V3 â€” `agents/common/AG4-V3/nodes/12_duckdb_init.py` + migration `infra/migrations/ag4_v3/20260425_add_geo_tagging.sql`
-
-Tables :
-- `news_history`
-- `news_errors`
-- `run_log`
-- `ag4_fx_macro`
-- `ag4_fx_pairs`
-
-Colonnes notables `news_history` :
-- dedupe/event : `dedupe_key`, `event_key`, `canonical_url`
-- contenu : `title`, `snippet`, `theme`, `regime`, `notes`
-- impacts : `impact_score`, `confidence`, `urgency`, `action`
-- tagging macro : `sectors_bullish`, `sectors_bearish`, `currencies_bullish`, `currencies_bearish`
-- **tagging geo / asset class (ajout 2026-04-24)** : `impact_region`, `impact_asset_class`, `impact_magnitude`, `impact_fx_pairs`, `tagger_version`
-- trace run : `run_id`, `analyzed_at`, `first_seen_at`, `last_seen_at`.
-
-Taxonomies fixÃ©es (cf `docs/specs/ag4_geo_tagging_and_forex_base_v1.md`) :
-- `impact_region âˆˆ {Global, US, EU, France, UK, APAC, Emerging, Other}`
-- `impact_asset_class âˆˆ {Equity, FX, Commodity, Bond, Crypto, Mixed, None}`
-- `impact_magnitude âˆˆ {Low, Medium, High}`
-- `impact_fx_pairs` : CSV de paires format `XXXYYY` (sans slash), liste fermee de 34 paires FX.
-
-### 5.5bis DuckDB AG4-Forex â€” `infra/migrations/ag4_forex_v1/20260425_init.sql`
-
-Base dÃ©diÃ©e `ag4_forex_v1.duckdb`, crÃ©Ã©e le 2026-04-24.
-
-Tables :
-- `fx_news_history` â€” news FX avec `origin âˆˆ {global_base, fx_channel}` pour distinguer les news remontÃ©es depuis `ag4_v3` (filtrage `FX|Mixed`) de celles ingÃ©rÃ©es via les canaux spÃ©cifiques. `dedupe_key` partagÃ© avec `ag4_v3.news_history` pour jointure.
-- `fx_macro` â€” snapshot rÃ©gime FX global (biais par devise USD/EUR/JPY/GBP/CHF/AUD/CAD/NZD + `market_regime`). MÃªme schÃ©ma que `ag4_v3.ag4_fx_macro`.
-- `fx_pairs` â€” snapshot par paire avec `directional_bias`, `rationale`, `urgent_event_window`.
-- `run_log` â€” runs AG4-Forex avec dÃ©compte `news_from_global` vs `news_from_fx_channels`.
-- `news_errors` â€” erreurs d'ingestion par source FX.
-
-Alimentation :
-- Ã©criture **primaire** par AG4-V3 (dual-write conditionnel depuis `nodes/14_write_fx_news_duckdb.py` quand `impact_asset_class âˆˆ {FX, Mixed}`) â€” `origin='global_base'`,
-- Ã©criture **secondaire** par AG4-Forex (sources FX dÃ©diÃ©es) â€” `origin='fx_channel'`.
-
-### 5.5ter DuckDB AG4-FX-V1 â€” `agents/trading-forex/AG4-FX-V1/sql/ag4_fx_v1_schema.sql`
-
-Base dÃ©diÃ©e `ag4_fx_v1.duckdb`, digest macro/news FX consommÃ© par AG1-FX-V1.
-
-Tables :
-- `fx_digest` â€” sections JSON `top_news`, `pair_focus`, `macro_regime` par `run_id`, avec `items_count`.
-- `run_log` â€” compteurs `news_global_pulled`, `news_fx_channel_pulled`, `news_after_dedupe`, `sections_written`, `errors`.
-
-Alimentation :
-- lecture de `ag4_v3.duckdb` pour news globales FX/Mixed,
-- lecture de `ag4_forex_v1.duckdb` pour news canal FX, rÃ©gime macro et biais paires,
-- Ã©criture des trois sections compactes dans `main.fx_digest`.
-
-### 5.6 DuckDB AG4-SPE-V2 â€” `agents/trading-actions/AG4-SPE-V2/nodes/00_duckdb_prepare.py`
-
-Tables :
-- `universe_symbols`
-- `news_history`
-- `news_errors`
-- `run_log`
-- `workflow_state`
-
-Colonnes notables `news_history` :
-- identitÃ© : `news_id`, `symbol`, `canonical_url`
-- contenu : `title`, `snippet`, `text`, `summary`, `published_at`
-- IA : `impact_score`, `sentiment`, `confidence_score`, `horizon`, `urgency`, `suggested_signal`, `key_drivers`, `needs_follow_up`, `is_relevant`
-- lifecycle : `first_seen_at`, `last_seen_at`, `analyzed_at`, `fetched_at`.
-
-### 5.7 DuckDB YF enrichment â€” `agents/common/yf-enrichment-v1/daily_enrichment.py`
-
-Tables :
-- `run_log`
-- `yf_symbol_enrichment_history`
-
-Vue :
-- `v_latest_symbol_enrichment`
-
-Colonnes notables :
-- quote : `regular_market_price`, `bid`, `ask`, `spread_pct`, `slippage_proxy_pct`, `market_state`
-- options : `iv_atm`, `skew_put_minus_call_5pct`, `put_call_oi_ratio`, `options_ok/options_error/options_warning`
-- calendar : `next_earnings_date`, `days_to_earnings`, `calendar_ok/calendar_error`.
-
-
-Collections observÃ©es :
-
-- `doc_id` stable,
-- `doc_kind` (`TECH`/`FUNDA`/`NEWS`),
-- delete-by-filter `doc_id` avant upsert pour idempotence.
-
-## 6. Dashboard â€” fonctionnement dÃ©taillÃ©
-
-Fichiers :
-- `services/dashboard/app.py`
-- `services/dashboard/app_modules/core.py`
-- `services/dashboard/app_modules/tables.py`
-- `services/dashboard/app_modules/visualizations.py`
-
-### 6.1 Sources et connecteurs du dashboard
-
-Variables/env lues :
-- `DUCKDB_PATH` (AG2),
-- `AG1_DUCKDB_PATH`,
-- `AG1_CHATGPT52_DUCKDB_PATH`,
-- `AG1_GROK41_REASONING_DUCKDB_PATH`,
-- `AG1_GEMINI30_PRO_DUCKDB_PATH`,
-- `AG3_DUCKDB_PATH`,
-- `AG4_DUCKDB_PATH`,
-- `AG4_FOREX_DB_PATH` (ajoutÃ© 2026-04-24, pointant vers `ag4_forex_v1.duckdb`),
-- `AG4_FX_V1_DUCKDB_PATH` (digest `ag4_fx_v1.duckdb` pour AG1-FX),
-- `AG4_SPE_DUCKDB_PATH`,
-- `AG1_FX_V1_CHATGPT52_DUCKDB_PATH`,
-- `AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH`,
-- `AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH`,
-- `YF_ENRICH_DUCKDB_PATH`,
-- `YFINANCE_API_URL`,
-- `SHEET_ID`, credentials Google.
-
-Chargements data principaux :
-- Google Sheets fallback/metadata (`load_data`),
-- DuckDB read-only avec cache signatures fichiers (`duckdb_file_signature`, `_read_duckdb_df`),
-- loaders par domaine (`load_ag2_overview`, `load_ag3_overview`, `load_ag4_*`, `load_yf_enrichment_latest`),
-- loaders pages composites (`load_system_health_page_data`, `load_multi_agent_page_data`, etc.).
-
-### 6.2 Navigation fonctionnelle (8 entrees visibles)
-
-1. `Dashboard Trading`
-2. `System Health (Monitoring)`
-3. `Vue consolidÃ©e Multi-Agents`
-4. `Analyse Technique V2`
-5. `Analyse Fondamentale V2`
-6. `Macro & News (AG4)`
-7. `Dashboard Forex`
-8. `Three Pillars Monitor`
-
-Note 2026-05-20 : l'ancienne entree visible `Forex` a ete retiree de l'univers Forex, car elle dupliquait le `Dashboard Forex`. Les branches historiques `Forex P&L (LLM x Paire)` et `Forex Trading (AG1-FX)` restent documentees ci-dessous comme references fonctionnelles, mais ne sont plus exposees dans la navigation principale.
-
-### 6.2bis Page 7 â€” Forex P&L (LLM x Paire)
-
-Vue dÃ©diÃ©e Ã  la performance Forex isolÃ©e, depuis l'activation du geo-tagging AG4 (date par dÃ©faut **2026-04-24**, modifiable via le sÃ©lecteur de pÃ©riode).
-
-Source de donnÃ©es :
-- `core.fills`, `core.orders`, `core.position_lots`, `core.runs` des 3 portefeuilles AG1 (`ag1_v3_chatgpt52.duckdb`, `ag1_v3_grok41_reasoning.duckdb`, `ag1_v3_gemini30_pro.duckdb`), filtrÃ©s par le helper `_fx_mask` / `_fx_prepare_symbol_frame` (dÃ©tection FX par `asset_class`, prefixe `FX:`, suffixe `=X` ou parsing XXXYYY).
-- `ag4_forex_v1.duckdb` (`fx_news_history`, `fx_macro`, `run_log`) pour la couverture news.
-
-Composantes UI :
-- 3 KPI cards par LLM (P&L FX net, trades fermÃ©s, winrate, lots ouverts, notional ouvert, frais cumulÃ©s).
-- Matrice LLM Ã— paire FX colorÃ©e (P&L net) + tableau agrÃ©gÃ© (trades, winrate, P&L).
-- Courbe P&L FX cumulÃ©e par LLM (overlay 3 lignes, couleurs `AG1_MULTI_PORTFOLIO_CONFIG[k]["accent"]`).
-- Tableau lots FX ouverts (exposition courante, partial P&L rÃ©alisÃ©).
-- Tableau fills FX dÃ©taillÃ©s (interactif).
-- Couverture AG4-Forex : nb news taguÃ©es FX sur la fenÃªtre, dernier run AG4-Forex (ingestion globale + canal FX dÃ©diÃ©), top paires par volume de news, biais macro courants (table `fx_macro`).
-
-Variables d'environnement requises cÃ´tÃ© `trading-dashboard` :
-- `AG4_FOREX_DUCKDB_PATH=/files/duckdb/ag4_forex_v1.duckdb` (ajoutÃ©e dans le docker-compose).
-
-### 6.2ter Page 8 â€” Forex Trading (AG1-FX)
-
-Vue dÃ©diÃ©e aux trois portefeuilles Forex-only AG1-FX-V1, chacun isolÃ© dans sa propre base DuckDB avec capital initial 10 000 EUR.
-Les dÃ©cisions AG1-FX sont produites Ã  partir d'un `llm_brief` compact (portfolio, macro, `pair_matrix`, `market_watch`) tandis que le workflow conserve le brief complet pour les contrÃ´les downstream.
-
-Source de donnÃ©es :
-- `ag1_fx_v1_chatgpt52.duckdb`, `ag1_fx_v1_grok41_reasoning.duckdb`, `ag1_fx_v1_gemini30_pro.duckdb` (`core.portfolio_snapshot`, `core.position_lots`, `core.orders`, `core.fills`, `core.fill_costs`, `cfg.portfolio_config`).
-- `ag2_fx_v1.duckdb` pour les derniers prix/signaux techniques FX.
-- `ag4_fx_v1.duckdb` pour la couverture digest macro FX.
-
-Composantes UI :
-- 3 cartes KPI par LLM : equity, P&L total, leverage, lots ouverts, winrate, profit factor, ordres rejetÃ©s.
-- Scoreboard de performance nette : P&L realise brut, frais d'execution, P&L net, couverture `core.fill_costs`, sources de commission IBKR/simulees/manquantes.
-- Radar paires FX : matrice momentum technique composite (AG2-FX score + retours 5D/20D + RSI) vs biais macro/news directionnel AG4-Forex (-1 base bearish, +1 base bullish). Le volume/urgence news n'est plus un axe sature; il devient `Event risk` et pilote la taille des bulles, avec quadrants long aligned / short aligned / conflit / neutre. Un bloc d'aide de lecture et un dictionnaire des indicateurs expliquent les axes, la taille, la forme et les cas d'usage.
-- Clic sur une paire dans la matrice : affiche une seconde matrice sous le graphe principal avec la trace historique de la paire. La trajectoire reprend les memes axes et colore les points du blanc (ancien) au bleu fonce (recent), a partir de `technical_signals_fx` et d'une fenetre news AG4-Forex roulante de 72h.
-- Onglet `Cube 3 piliers` *(ajoute 2026-05-20)* : visualisation 3D manipulable avec zoom/rotation. Axes : technique court terme AG2-FX, biais news/event AG4-Forex, puis impact structurel des 3 piliers calcule comme differentiel de `composite_score` entre devise de base et devise de cotation. Les zones du cube distinguent convergence multi-horizon base, convergence multi-horizon cotation, divergence court terme/long terme et information incomplete.
-- Onglet `Sparklines paires` : evolution 90j des 34 paires FX via `yfinance-api`, avec separation paires principales / autres cross.
-- Courbe equity superposÃ©e pour les 3 LLMs.
-- Matrice P&L net LLM x paire FX.
-- Distribution des trades clos.
-- Tables lots ouverts et trades clos.
-- Coverage AG4-FX-V1 et bloc Risk Manager avec raisons de rejet + kill switch.
-
-Variables d'environnement requises cÃ´tÃ© `trading-dashboard` :
-- `AG1_FX_V1_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_chatgpt52.duckdb`
-- `AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_grok41_reasoning.duckdb`
-- `AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v1_gemini30_pro.duckdb`
-- `AG2_FX_V1_DUCKDB_PATH=/files/duckdb/ag2_fx_v1.duckdb`
-- `AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb`
-
-### 6.3 Page 1 â€” Dashboard Trading
-
-Fonctions mÃ©tier :
-- comparaison simultanÃ©e 3 portefeuilles AG1-V3 (GPT/Grok/Gemini),
-- sÃ©lection `Focus` pour dÃ©tails portefeuille actif,
-- scoreboard KPI (valeur, ROI, cash, DD, Sharpe, exposition, frais, score agent),
-- graphe overlay compare (equity + optional drawdown),
-- 5 onglets dÃ©tail :
-  - `Allocation (actif)` :
-    - rÃ©partition secteur/industrie/classe,
-    - sparklines 90j par position (historique `yfinance-api /history`),
-    - table positions enrichie.
-  - `Rendement (actif)` :
-    - sous-onglets `Rendement Financier`, `EfficacitÃ© du Capital`, `QualitÃ© du Trading`, `Risque`,
-    - waterfall PnL, courbes equity, distributions trades/durÃ©es, drawdown/Sharpe/ProfitFactor.
-  - `Cerveau IA (actif)` :
-    - tables signaux + alertes AG1.
-  - `MarchÃ© & Recherche (global)` :
-    - sous-onglets `Macro & Buzz` + `Recherche`,
-    - baromÃ¨tres sectoriels/news, top convictions, treemap opportunitÃ©s, scÃ©narios.
-  - `Benchmarks & Indices` :
-    - compare AG1 vs CAC40/S&P500/EURO STOXX 50,
-    - mode base100 ou performance %, alpha vs benchmark rÃ©fÃ©rence.
-
-### 6.4 Page 2 â€” System Health
-
-Fonctions :
-- freshness par symbole sur AG2 (tech), AG3 (fonda), AG4-SPE (news),
-- freshness macro globale AG4,
-- statut dernier run par workflow (RUNNING stale dÃ©tectÃ©, SUCCESS/PARTIAL/FAILED/NO_DATA),
-- KPI statuts (`Ã€ jour`, `Ã€ surveiller`, `En retard`, `Manquant`),
-- dÃ©tails filtrables par symbole/secteur.
-
-### 6.5 Page 3 â€” Vue consolidÃ©e Multi-Agents
-
-Fonctions :
-- fusion AG2+AG3+AG4(+AG4-SPE)+YF enrichment,
-- construction matrice Risk/Reward/probabilitÃ© (`_build_multi_agent_matrix`),
-- dÃ©cisions finales :
-  - `Entrer / Renforcer`
-  - `Surveiller`
-  - `RÃ©duire / Sortir`
-- grades dynamiques A/B/C, gates data quality/earnings/liquiditÃ©/options,
-- visualisation scatter interactive (sÃ©lection symbole â†’ fiche rapide),
-- mode `Vue par valeur` avec :
-  - KPI dÃ©tail,
-  - panel dÃ©butant,
-  - badges gates hard/soft,
-  - trade card (copie texte/json),
-  - audit data quality.
-
-### 6.6 Page 4 â€” Macro & News (AG4)
-
-Fonctions :
-- fenÃªtre historique configurable,
-- overview macro (alertes rÃ©gime/thÃ¨mes),
-- news par valeur avec scopes (portefeuille actif/tous portefeuilles/universe),
-- historique runs macro + spe,
-- qualitÃ© pipeline news.
-
-### 6.7 Page 5 â€” Analyse Technique V2 (AG2)
-
-Fonctions :
-- onglet `Vue d'ensemble` :
-  - santÃ© run AG2,
-  - KPI BUY/SELL/NEUTRAL/actionables/appels IA/approb IA,
-  - graphes mix signal/heatmap/matrice H1-D1/funnel/scatter quality,
-  - filtres rapides + top BUY/SELL/divergences.
-- onglet `Vue dÃ©taillÃ©e` :
-  - fiche symbole (KPI H1/D1/IA),
-  - indicateurs visuels (RSI gauge, bars indicateurs),
-  - alignement SMA,
-  - chandeliers H1/D1 via `yfinance-api /history`,
-  - carte analyse IA textuelle.
-- onglet `Historique Runs` :
-  - table runs + historique signaux filtrable.
-
-### 6.8 Page 6 â€” Analyse Fondamentale V2 (AG3)
-
-Fonctions :
-- onglet `Vue d'ensemble` :
-  - KPI conviction/risque/potentiel/couverture,
-  - distribution score,
-  - carte conviction vs risque,
-  - qualitÃ© des runs dans le temps,
-  - table synthÃ¨se triage.
-- onglet `Vue dÃ©taillÃ©e` :
-  - fiche symbole (triage/risque/horizon/upside/analystes),
-  - gauges multi-facteurs,
-  - table interprÃ©tation indicateurs,
-  - Ã©volution historique symbole,
-  - consensus analystes,
-  - scÃ©narios 12 mois (Bear/Base/Bull) + historique prix.
-- onglet `Historique Runs` :
-  - KPIs dernier run + bar chart OK/erreurs + table historique.
-
-### 6.9 Fonctions utilitaires transverses
-
-- `app_modules/tables.py` : recherche globale, filtres colonnes (num/date/text), tri, rendu table interactive.
-- `app_modules/visualizations.py` : prefetch concurrent `yfinance-api`, sparklines portefeuille, extraction events BUY/SELL.
-- `app_modules/core.py` : parsing robuste, normalisation colonnes, enrichissement universe, calcul sentiment sectoriel et momentum symbole.
-
-## 7. Inventaire des fonctions dashboard
-
-> Pour le dÃ©tail exhaustif des noms de fonctions (snapshot 2026-03-02), consulter l'historique Git de ce fichier ou relancer un pass de dÃ©couverte sur `services/dashboard/app.py`.
-
-Les modules sont structurÃ©s comme suit :
-
-- **`services/dashboard/app.py`** : point d'entrÃ©e Streamlit, contient les loaders (Google Sheets + DuckDB), les rendus de chaque page, et les helpers UI (badges, KPI, charts).
-- **`services/dashboard/app_modules/core.py`** : normalisation, fresheness check, valorisations, sentiment sectoriel, momentum symbole.
-- **`services/dashboard/app_modules/tables.py`** : helpers de tri / recherche / filtres sur DataFrames.
-- **`services/dashboard/app_modules/visualizations.py`** : sparklines portefeuille, extraction events de trade, prefetch concurrent historiques.
+- Opérations : `SCHEDULING_AND_LOAD.md` (crons — source de vérité), `SYSTEM_LINKS_AND_PARITY.md` (parité dashboard↔AG1 — source de vérité), `deploy.md`, `env_vars.md`, `ibkr_execution.md`, `vps-access.md`, `runbook_n8n_investigation.md`, `order_approval_deploy_notes.md`, `20260624_ibkr_daily_assisted_auth.md`.
+- Audits : `20260702_audit_complet_projet.md` (ce jour), `20260622_ag3_v2_analysis.md`, `20260619_ag2_v3_analyse_pertinence_efficience.md`, `20260617_ag4_spe_v2_analysis.md`, `20260617_ag4_v3_news_watcher_audit.md`.
+- Specs : `ag1_v4_consensus_actions.md`, `ag1_v4_d2_news_digest.md`, `ag4_spe_v3_ibkr_news.md`, `ag1_v4_order_approval_notification_v1.md`.
+- Déploiements 06/2026 : notes `20260619_*` (hybride AG2, quarantaine, split rotation), `20260622_*` (AG3 split + STALE_FUNDA), `20260624_*` (expansion +100, Finnhub, durcissement AG2HC, auth quotidienne assistée).

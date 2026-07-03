@@ -55,7 +55,7 @@ def _candidate_db_paths(path):
 
 
 @contextmanager
-def db_con(path=DB_PATH, retries=5, delay=0.3):
+def db_con(path=DB_PATH, retries=10, delay=0.2):
     con = None
     last_exc = None
     selected = None
@@ -69,7 +69,7 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
                 last_exc = e
                 msg = str(e).lower()
                 if "lock" in msg and attempt < retries - 1:
-                    time.sleep(delay * (2 ** attempt))
+                    time.sleep(min(1.5, delay * (2 ** attempt)))
                     continue
                 # If legacy DB/WAL is broken, transparently fallback to V3 DB.
                 if candidate == LEGACY_DB_PATH and _is_wal_internal_error(e):
@@ -87,13 +87,8 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Sans ça, ag2_v3.duckdb a
-            # fragmenté jusqu'à 3.6 GB pour ~6 MB de données utiles.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
+            # Pas de CHECKPOINT ici : ce nœud est sur le chemin critique 60 s.
+            # Le checkpoint est centralisé dans Finalize Run, une seule fois.
             try:
                 con.close()
             except Exception:
@@ -619,6 +614,18 @@ with db_con() as con:
         except Exception:
             pass
 
+    # Réconcilie les runs interrompus avant Finalize Run.
+    con.execute(
+        """
+        UPDATE run_log
+        SET finished_at = COALESCE(finished_at, CURRENT_TIMESTAMP),
+            status = 'STALE',
+            error_detail = COALESCE(error_detail, 'Auto-reconciled: previous workflow execution did not finalize')
+        WHERE (status IS NULL OR status = 'RUNNING')
+          AND started_at < CURRENT_TIMESTAMP - INTERVAL '2 hours'
+        """
+    )
+
     legacy_migration_report = migrate_legacy_v2(con, LEGACY_SOURCE_PATH)
 
     # Universe sync
@@ -689,8 +696,10 @@ with db_con() as con:
 
     con.execute(
         """
-        INSERT OR REPLACE INTO run_log (run_id, started_at, batch_start, batch_size, total_pool, version)
-        VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?)
+        INSERT OR REPLACE INTO run_log (
+          run_id, started_at, status, batch_start, batch_size, total_pool, version
+        )
+        VALUES (?, CURRENT_TIMESTAMP, 'RUNNING', ?, ?, ?, ?)
         """,
         [run_id, idx, len(batch), total, WORKFLOW_VERSION],
     )

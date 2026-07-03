@@ -11,6 +11,10 @@ const maxSpreadPct = Number(input.config?.max_spread_pct ?? 1.5);
 const maxEntryQuoteDeviationPct = Number($env.AG1_LIQUIDITY_MAX_ENTRY_QUOTE_DEVIATION_PCT || 3);
 const maxQuoteAgeSeconds = Number($env.IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS || 28800);
 const defaultWeightPct = Math.min(5, Number(input.config?.max_pos_pct ?? 25));
+// When the instantaneous bid/ask is unavailable (e.g. Euronext outside RTH, or a
+// momentary quoting gap) but the name is demonstrably liquid, treat the spread as
+// "unquoted" rather than "unknown" so a LIMIT entry is not hard-rejected. Reversible.
+const allowUnquotedSpread = String($env.AG1_LIQUIDITY_ALLOW_UNQUOTED_SPREAD ?? "true").trim().toLowerCase() !== "false";
 
 function isObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
 function normSymbol(v) { return String(v ?? "").trim().toUpperCase(); }
@@ -37,6 +41,11 @@ async function getJson(url) {
 function snapshotHasPrice(row) {
   return num(row?.["31"] ?? row?.lastPrice ?? row?.price) !== null;
 }
+function snapshotHasBidAsk(row) {
+  const b = num(row?.["84"] ?? row?.bid);
+  const a = num(row?.["86"] ?? row?.ask);
+  return b !== null && a !== null && b > 0 && a > 0;
+}
 function historyBarPrice(row) {
   return num(row?.c ?? row?.close ?? row?.o ?? row?.open);
 }
@@ -45,6 +54,9 @@ function historyBarTime(row) {
   if (t !== null) return new Date(t).toISOString();
   return row?.date || row?.datetime || row?.ts || null;
 }
+// Field-by-field merge across polls: IBKR snapshots stream incrementally, so
+// the last price (31) often arrives one poll before bid/ask (84/86). Keep the
+// most complete value seen for every field instead of choosing one row.
 function mergeSnapshotRows(batches) {
   const out = new Map();
   for (const batch of batches) {
@@ -52,26 +64,43 @@ function mergeSnapshotRows(batches) {
       const conid = row?.conid ?? row?.conidEx;
       if (conid === null || conid === undefined) continue;
       const key = String(conid);
-      const current = out.get(key) || {};
-      const merged = { ...current, ...row };
-      if (snapshotHasPrice(row) || !snapshotHasPrice(current)) out.set(key, merged);
-      else out.set(key, { ...row, ...current });
+      const merged = { ...(out.get(key) || {}) };
+      for (const k of Object.keys(row)) {
+        const v = row[k];
+        if (v !== null && v !== undefined && v !== "") merged[k] = v;
+      }
+      out.set(key, merged);
     }
   }
   return Array.from(out.values());
 }
 async function getIbkrSnapshots(conids) {
-  const batches = [];
   const fields = "31,84,86,85,88,55,6509";
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    if (attempt > 0) await sleep(750);
-    const response = await getJson(`${brokerUrl}/marketdata/snapshot?conids=${encodeURIComponent(conids.join(","))}&fields=${fields}`);
-    batches.push(Array.isArray(response) ? response : []);
-    const merged = mergeSnapshotRows(batches);
-    const priced = merged.filter(snapshotHasPrice).length;
-    if (priced >= conids.length) return { snapshots: merged, attempts: attempt + 1 };
+  // Robust warm-up: IBKR streams snapshots incrementally and a large batch can
+  // take several polls to populate bid/ask for every name. Process in sub-batches
+  // so each chunk warms up reliably, and poll each chunk up to maxAttempts.
+  const maxAttempts = Math.max(2, Number($env.AG1_LIQUIDITY_SNAPSHOT_MAX_ATTEMPTS || 8));
+  const chunkSize = Math.max(5, Number($env.AG1_LIQUIDITY_SNAPSHOT_CHUNK || 20));
+  const all = new Map();
+  let totalAttempts = 0;
+  for (let i = 0; i < conids.length; i += chunkSize) {
+    const chunk = conids.slice(i, i + chunkSize);
+    const batches = [];
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      if (attempt > 0) await sleep(750);
+      const response = await getJson(`${brokerUrl}/marketdata/snapshot?conids=${encodeURIComponent(chunk.join(","))}&fields=${fields}`);
+      batches.push(Array.isArray(response) ? response : []);
+      totalAttempts += 1;
+      const merged = mergeSnapshotRows(batches);
+      const quoted = merged.filter(snapshotHasBidAsk).length;
+      const last = attempt === maxAttempts - 1;
+      if (quoted >= chunk.length || last) {
+        for (const r of merged) all.set(String(r.conid ?? r.conidEx), r);
+        break;
+      }
+    }
   }
-  return { snapshots: mergeSnapshotRows(batches), attempts: batches.length };
+  return { snapshots: Array.from(all.values()), attempts: totalAttempts };
 }
 async function getIbkrHistoryPrice(conid) {
   const plans = [
@@ -186,10 +215,35 @@ for (const row of rows) {
   const orderVolumePct = targetQty !== null && volume > 0 ? targetQty / volume * 100 : null;
   const entry = num(row.entry);
   const priceDivergencePct = entry && price ? Math.abs(price - entry) / entry * 100 : null;
-  const gates = new Set(gateList(row.gates));
+  // The preflight is the AUTHORITATIVE liquidity gate (fresh IBKR data). Discard
+  // the matrix's stale liquidity verdict (built from yfinance, unreliable for US)
+  // and recompute it below; non-liquidity gates from the matrix are preserved.
+  const STALE_LIQ = new Set(["LIQUIDITY_UNKNOWN", "LIQUIDITY_STRESS", "SPREAD_UNQUOTED", "STALE_QUOTE", "PRICE_DIVERGENCE", "IBKR_CONTRACT_UNRESOLVED"]);
+  const gates = new Set(gateList(row.gates).filter((g) => !STALE_LIQ.has(g)));
 
   if (unresolved.has(symbol) || conid === null) gates.add("IBKR_CONTRACT_UNRESOLVED");
-  if (volume === null || spreadPct === null || quoteAgeMinutes === null) gates.add("LIQUIDITY_UNKNOWN");
+  // Strong liquidity evidence: resolved contract, fresh non-stale price, daily
+  // volume above floor, and a target order within the volume cap. BUYs are
+  // LIMIT-only downstream, so a missing instantaneous spread on such a name is a
+  // quoting gap, not a tradability risk.
+  const highVolumeBar = Number($env.AG1_LIQUIDITY_HIGH_VOLUME || 1000000);
+  const orderWithinCap = (orderVolumePct === null || orderVolumePct <= maxOrderVolumePct);
+  const contractOk = conid !== null && !unresolved.has(symbol);
+  const pricedOk = price !== null && price > 0;
+  // A name trading >= highVolumeBar shares/day with a resolved contract and a
+  // usable price IS liquid, even if the instantaneous bid/ask is momentarily
+  // missing or the quote is a touch stale.
+  const highVolumeLiquid = volume !== null && volume >= highVolumeBar && contractOk && pricedOk && orderWithinCap;
+  const liquidityEvidenceOk = (volume !== null && volume >= minVolume
+    && pricedOk && contractOk
+    && quoteAgeMinutes !== null && quoteAgeMinutes <= maxQuoteAgeSeconds / 60
+    && orderWithinCap) || highVolumeLiquid;
+  if (volume === null || quoteAgeMinutes === null) {
+    gates.add("LIQUIDITY_UNKNOWN");
+  } else if (spreadPct === null) {
+    if (allowUnquotedSpread && liquidityEvidenceOk) gates.add("SPREAD_UNQUOTED");
+    else gates.add("LIQUIDITY_UNKNOWN");
+  }
   if (volume !== null && volume < minVolume) gates.add("LIQUIDITY_STRESS");
   if (spreadPct !== null && spreadPct > maxSpreadPct) gates.add("LIQUIDITY_STRESS");
   if (orderVolumePct !== null && orderVolumePct > maxOrderVolumePct) gates.add("LIQUIDITY_STRESS");
@@ -222,6 +276,8 @@ for (const row of rows) {
     bid: ibkrHasFreshPrice ? ibkrBid : num(quote.bid),
     ask: ibkrHasFreshPrice ? ibkrAsk : num(quote.ask),
     spreadPct,
+    spreadObserved: spreadPct !== null,
+    spreadUnquoted: gates.has("SPREAD_UNQUOTED"),
     volume,
     estimatedTargetWeightPct: defaultWeightPct,
     estimatedTargetQty: targetQty,

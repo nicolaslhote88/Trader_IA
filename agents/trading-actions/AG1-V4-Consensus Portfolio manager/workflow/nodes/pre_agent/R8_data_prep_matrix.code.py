@@ -20,6 +20,10 @@ MAX_SYMBOL_NEWS_ROWS = int(os.getenv("AG1_R8_MAX_SYMBOL_NEWS_ROWS", "6000") or "
 MAX_H1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_H1_AGE_HOURS", "96") or "96")
 MAX_D1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_D1_AGE_HOURS", "240") or "240")
 MAX_YF_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_YF_AGE_HOURS", "72") or "72")
+# Sprint 1 AG3 (2026-06-22) gate STALE_FUNDA : funda pese 0,30-0,34 dans le scoring AG1.
+# Au-dela du seuil, la donnee AG3 est perimee -> NEUTRALISEE (50/50/0). Flag ajoute aux
+# Data_Quality_Flags (visibilite) mais PAS un reject dur (un funda perime ne gele pas le trading).
+MAX_FUNDA_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_FUNDA_AGE_HOURS", "168") or "168")
 
 # D1 (2026-06-17) — published_at de la base AG4_Spé est corrompu (années 2016->2031,
 # cf docs/audits/20260617_ag4_spe_v2_analysis.md). On ne fait confiance à published_at que
@@ -251,6 +255,8 @@ tech_rows = run_query(
            ts.last_close,
            ts.data_age_h1_hours,
            ts.data_age_d1_hours,
+           date_diff('hour', CAST(ts.h1_date AS TIMESTAMP), CAST(now() AS TIMESTAMP)) AS h1_age_real,
+           date_diff('hour', CAST(ts.d1_date AS TIMESTAMP), CAST(now() AS TIMESTAMP)) AS d1_age_real,
            COALESCE(ts.workflow_date, ts.updated_at, ts.created_at) AS tech_ts
     FROM technical_signals ts
     INNER JOIN (
@@ -573,6 +579,47 @@ for r in symbol_news_rows:
             rec["count_7d"] += 1
             rec["impact_7d"] += impact
 
+# --- per-symbol news ARTICLE TEXT (top-3) so the LLM can reason on catalysts ---
+symbol_news_items_rows = run_query(
+    cfg["ag4_spe_db_path"],
+    f"""
+    SELECT symbol, title, snippet, impact_score, sentiment, "source", CAST(published_at AS VARCHAR) AS published_at
+    FROM (
+      SELECT UPPER(TRIM(symbol)) AS symbol,
+        COALESCE(title, '') AS title,
+        COALESCE(NULLIF(TRIM(summary), ''), snippet, '') AS snippet,
+        COALESCE(impact_score, 0) AS impact_score,
+        COALESCE(sentiment, '') AS sentiment,
+        COALESCE("source", '') AS "source",
+        published_at,
+        ROW_NUMBER() OVER (PARTITION BY UPPER(TRIM(symbol)) ORDER BY published_at DESC) AS rn
+      FROM news_analyzed
+      WHERE symbol IS NOT NULL AND TRIM(symbol) <> ''
+        AND published_at >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_NEWS_DAYS} days'
+        AND published_at <= CURRENT_TIMESTAMP + INTERVAL '2 days'
+    ) WHERE rn <= 3
+    ORDER BY symbol, rn
+    """,
+)
+news_items_by_symbol = {}
+news_generated_at = None
+for _nr in symbol_news_items_rows:
+    _sym = str(_nr.get("symbol") or "").strip().upper()
+    if not _sym:
+        continue
+    _dt = parse_dt(_nr.get("published_at"))
+    news_items_by_symbol.setdefault(_sym, []).append({
+        "title": str(_nr.get("title") or "")[:200],
+        "snippet": str(_nr.get("snippet") or "")[:300],
+        "impact": round(safe_float(_nr.get("impact_score"), 0.0), 1),
+        "sentiment": str(_nr.get("sentiment") or "").strip(),
+        "source": str(_nr.get("source") or "").strip(),
+        "date": to_iso(_dt),
+    })
+    if _dt is not None and (news_generated_at is None or _dt > news_generated_at):
+        news_generated_at = _dt
+news_generated_at_iso = to_iso(news_generated_at)
+
 macro_recent = []
 for r in macro_rows:
     dt = parse_dt(r.get("publishedat"))
@@ -619,8 +666,14 @@ for sym in sorted(symbols):
     sector = str(u.get("sector") or "").strip()
     industry = str(u.get("industry") or "").strip()
     yf_age = age_hours(yf.get("fetched_at"), now)
-    h1_age = safe_float(t.get("data_age_h1_hours"), 0.0)
-    d1_age = safe_float(t.get("data_age_d1_hours"), 0.0)
+    h1_age_stored = safe_float(t.get("data_age_h1_hours"), 0.0)
+    d1_age_stored = safe_float(t.get("data_age_d1_hours"), 0.0)
+    # Guard: a frozen data_age must not mask a stale bar. Take the worse of the
+    # stored age and the real age recomputed from the bar timestamp (now - bar).
+    h1_age_real = safe_float(t.get("h1_age_real"), None)
+    d1_age_real = safe_float(t.get("d1_age_real"), None)
+    h1_age = max(h1_age_stored, h1_age_real) if h1_age_real is not None else h1_age_stored
+    d1_age = max(d1_age_stored, d1_age_real) if d1_age_real is not None else d1_age_stored
     data_flags = []
     if not t:
         data_flags.append("MISSING_TECH")
@@ -632,8 +685,13 @@ for sym in sorted(symbols):
         data_flags.append("MISSING_YF")
     elif yf_age is None or yf_age > MAX_YF_AGE_HOURS:
         data_flags.append("STALE_YF")
+    funda_age_h = age_hours(f.get("funda_ts"), now) if f else None
+    funda_usable = bool(f)
     if not f:
         data_flags.append("MISSING_FUNDA")
+    elif funda_age_h is None or funda_age_h > MAX_FUNDA_AGE_HOURS:
+        data_flags.append("STALE_FUNDA")
+        funda_usable = False
 
     sec_tok = norm_token(sector)
     ind_tok = norm_token(industry)
@@ -690,18 +748,22 @@ for sym in sorted(symbols):
             "Data_Age_H1_Hours": h1_age,
             "Data_Age_D1_Hours": d1_age,
             "Last_Tech_Date": to_iso(t.get("tech_ts")),
-            "Funda_Score": safe_float(f.get("score"), 50.0),
-            "Funda_Risk": safe_float(f.get("risk_score"), 50.0),
-            "Funda_Upside": safe_float(f.get("upside_pct"), 0.0),
+            "Funda_Score": safe_float(f.get("score"), 50.0) if funda_usable else 50.0,
+            "Funda_Risk": safe_float(f.get("risk_score"), 50.0) if funda_usable else 50.0,
+            "Funda_Upside": safe_float(f.get("upside_pct"), 0.0) if funda_usable else 0.0,
             "Recommendation": str(f.get("recommendation") or "").strip(),
-            "Target_Price": safe_float(f.get("target_price"), 0.0),
+            "Target_Price": safe_float(f.get("target_price"), 0.0) if funda_usable else 0.0,
             "Funda_Horizon": str(f.get("horizon") or "").strip(),
             "Last_Funda_Date": to_iso(f.get("funda_ts")),
+            "Funda_Age_Hours": round(funda_age_h, 2) if funda_age_h is not None else None,
+            "Funda_Usable": funda_usable,
             "Symbol_News_Count_7d": int(sn.get("count_7d", 0)),
             "Symbol_News_Count_30d": int(sn.get("count_30d", 0)),
             "Symbol_News_Impact_7d": safe_float(sn.get("impact_7d"), 0.0),
             "Symbol_News_Impact_30d": safe_float(sn.get("impact_30d"), 0.0),
             "Symbol_News_Last_Date": to_iso(sym_news_last),
+            "Symbol_News_Items": news_items_by_symbol.get(sym, []),
+            "News_Generated_At": news_generated_at_iso,
             "Macro_News_Count_30d": int(macro_count),
             "Macro_Impact_30d": safe_float(macro_impact, 0.0),
             "Macro_Last_Date": to_iso(macro_last),

@@ -1,0 +1,15 @@
+[Unit]
+Description=IBKR daily assisted authentication window
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=IBKR_BROKER_URL=http://127.0.0.1:18080
+Environment=IBKR_AUTH_TIMEZONE=Europe/Paris
+Environment=IBKR_AUTH_WINDOW_START_MINUTE=420
+Environment=IBKR_AUTH_WINDOW_END_MINUTE=450
+Environment="IBKR_AUTH_ATTEMPT_OFFSETS_MINUTES=0 10 20"
+ExecStart=/opt/trader-ia/ops/ibkr_daily_auth.sh
+TimeoutStartSec=31min
+TimeoutStopSec=20s

@@ -20,7 +20,7 @@ async function runNode(relPath, json, inputItems = null, env = {}) {
   return await fn(json, input, env);
 }
 
-function action(symbol, confidence, rationale) {
+function action(symbol, confidence, rationale, overrides = {}) {
   return {
     symbol,
     action: "OPEN",
@@ -28,7 +28,32 @@ function action(symbol, confidence, rationale) {
     targetWeightPct: 5,
     rationale,
     nextReviewDays: 3,
+    ...overrides,
   };
+}
+
+async function runPostAgentChain(context, proposals, env = {}) {
+  const consensus = (await runNode(
+    "nodes/post_agent/06_build_consensus_v4.code.js",
+    {},
+    [{ json: context }, ...proposals.map((json) => ({ json }))]
+  ))[0].json;
+  const safety = (await runNode("nodes/post_agent/07_validate_enforce_safety_v5.code.js", consensus))[0].json;
+  const ibkr = (await runNode("nodes/post_agent/07b_ibkr_send_orders.js", safety, null, {
+    IBKR_DRY_RUN: "true",
+    IBKR_SEND_DRY_RUN_TO_BROKER: "false",
+    AG1_ACTIONS_LIVE_ORDERS_ENABLED: "false",
+    AG1_V4_ACTIONS_IBKR_ENABLED_MODELS: "ag1_v4_consensus",
+    ...env,
+  }))[0].json;
+  const bundle = (await runNode("nodes/post_agent/08_build_duckdb_bundle.code.js", ibkr))[0].json;
+  return { consensus, safety, ibkr, bundle };
+}
+
+function assertEqual(actual, expected, label) {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${expected}, got ${actual}`);
+  }
 }
 
 async function main() {
@@ -89,7 +114,7 @@ async function main() {
     db_path: smokeDbPath,
   };
 
-  const proposals = [
+  const buyProposals = [
     {
       modelKey: "chatgpt52",
       modelName: "OpenAI GPT-5.5",
@@ -113,36 +138,88 @@ async function main() {
     },
   ];
 
-  const consensus = (await runNode(
-    "nodes/post_agent/06_build_consensus_v4.code.js",
-    {},
-    [{ json: context }, ...proposals.map((json) => ({ json }))]
-  ))[0].json;
-  const safety = (await runNode("nodes/post_agent/07_validate_enforce_safety_v5.code.js", consensus))[0].json;
-  const ibkr = (await runNode("nodes/post_agent/07b_ibkr_send_orders.js", safety, null, {
-    IBKR_DRY_RUN: "true",
-    IBKR_SEND_DRY_RUN_TO_BROKER: "false",
-    AG1_ACTIONS_LIVE_ORDERS_ENABLED: "false",
-    AG1_V4_ACTIONS_IBKR_ENABLED_MODELS: "ag1_v4_consensus",
-  }))[0].json;
-  const bundle = (await runNode("nodes/post_agent/08_build_duckdb_bundle.code.js", ibkr))[0].json;
+  const buy = await runPostAgentChain(context, buyProposals);
+  assertEqual(buy.consensus.decision, "TRADE", "buy consensus decision");
+  assertEqual(buy.safety.decision, "TRADE", "buy safety decision");
+  assertEqual(Array.isArray(buy.safety.orders) ? buy.safety.orders.length : 0, 1, "buy order count");
+
+  const sellContext = JSON.parse(JSON.stringify(context));
+  sellContext.run = { ...context.run, runId: "RUN_SMOKE_AG1_V4_SELL_HELD" };
+  sellContext.portfolioBrief = {
+    cash: 9240,
+    totalValue: 10000,
+    marketValue: 760,
+    exposurePct: 7.6,
+    positions: [{
+      Symbol: "ELEC.PA",
+      Quantity: 8,
+      LastPrice: 95,
+      MarketValue: 760,
+      Sector: "Utilities",
+      AssetClass: "EQUITY",
+    }],
+    summary: {
+      cash: 9240,
+      totalValue: 10000,
+      marketValue: 760,
+      exposurePct: 7.6,
+      positionsCount: 1,
+    },
+  };
+  sellContext.opportunity_pack.rows = [];
+
+  const sellProposals = [
+    {
+      modelKey: "chatgpt52",
+      modelName: "OpenAI GPT-5.5",
+      modelId: "gpt-5.5-2026-04-23",
+      extractorStatus: "OK_OBJECT",
+      output: { actions: [action("ELEC.PA", 65, "Reduce held utility", { action: "DECREASE", targetWeightPct: 4, assetClass: "EQUITY", sector: "Utilities" })] },
+    },
+    {
+      modelKey: "claude_sonnet46",
+      modelName: "Anthropic Claude Sonnet 4.6",
+      modelId: "claude-sonnet-4-6",
+      extractorStatus: "OK_OBJECT",
+      output: { actions: [action("ELEC.PA", 66, "Reduce held utility", { action: "DECREASE", targetWeightPct: 4, assetClass: "EQUITY", sector: "Utilities" })] },
+    },
+    {
+      modelKey: "grok41_reasoning",
+      modelName: "xAI Grok 4.3",
+      modelId: "grok-4.3",
+      extractorStatus: "OK_OBJECT",
+      output: { actions: [{ symbol: "ELEC.PA", action: "WATCH", confidence: 55, targetWeightPct: null, rationale: "Wait", nextReviewDays: 3 }] },
+    },
+  ];
+
+  const sell = await runPostAgentChain(sellContext, sellProposals);
+  assertEqual(sell.consensus.decision, "TRADE", "held sell consensus decision");
+  assertEqual(sell.consensus.agentDecision.actions[0].targetQty, 4, "held sell final target qty");
+  assertEqual(sell.safety.decision, "TRADE", "held sell safety decision");
+  assertEqual(sell.safety.orders[0].side, "SELL", "held sell order side");
+  assertEqual(sell.safety.orders[0].quantity, 4, "held sell order quantity");
 
   const summary = {
-    decision: consensus.decision,
-    consensusActions: consensus.agentDecision.actions.length,
-    safetyDecision: safety.decision,
-    orders: Array.isArray(safety.orders) ? safety.orders.length : 0,
-    ibkrDryRun: ibkr.ibkr?.dryRun,
-    bundleOrders: bundle.bundle.orders.length,
-    bundleFills: bundle.bundle.fills.length,
-    modelProposals: bundle.bundle.model_proposals.length,
-    consensusVotes: bundle.bundle.consensus_votes.length,
-    consensusDecisions: bundle.bundle.consensus_decisions.length,
-    dbPath: bundle.db_path,
+    buyDecision: buy.consensus.decision,
+    buyConsensusActions: buy.consensus.agentDecision.actions.length,
+    buySafetyDecision: buy.safety.decision,
+    buyOrders: Array.isArray(buy.safety.orders) ? buy.safety.orders.length : 0,
+    sellHeldDecision: sell.consensus.decision,
+    sellHeldConsensusActions: sell.consensus.agentDecision.actions.length,
+    sellHeldSafetyDecision: sell.safety.decision,
+    sellHeldOrders: Array.isArray(sell.safety.orders) ? sell.safety.orders.length : 0,
+    sellHeldQuantity: sell.safety.orders[0]?.quantity,
+    ibkrDryRun: buy.ibkr.ibkr?.dryRun && sell.ibkr.ibkr?.dryRun,
+    bundleOrders: buy.bundle.bundle.orders.length + sell.bundle.bundle.orders.length,
+    bundleFills: buy.bundle.bundle.fills.length + sell.bundle.bundle.fills.length,
+    modelProposals: buy.bundle.bundle.model_proposals.length + sell.bundle.bundle.model_proposals.length,
+    consensusVotes: buy.bundle.bundle.consensus_votes.length + sell.bundle.bundle.consensus_votes.length,
+    consensusDecisions: buy.bundle.bundle.consensus_decisions.length + sell.bundle.bundle.consensus_decisions.length,
+    dbPath: buy.bundle.db_path,
   };
 
   if (outPath) {
-    fs.writeFileSync(outPath, JSON.stringify(bundle.bundle, null, 2));
+    fs.writeFileSync(outPath, JSON.stringify({ buy: buy.bundle.bundle, sell: sell.bundle.bundle }, null, 2));
   }
   console.log(JSON.stringify(summary, null, 2));
 }

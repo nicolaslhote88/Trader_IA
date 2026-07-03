@@ -128,7 +128,7 @@ return $input.all().map((item) => {
       ...j,
       title,
       articleTitle: title,
-      publishedAt: publishedAt || j.publishedAt || null,
+      publishedAt: publishedAt || null, // F2 (2026-07-02) : ne plus contourner le garde B1 via j.publishedAt corrompu
       snippet,
       text,
       parseMethod: "html_regex_v3",

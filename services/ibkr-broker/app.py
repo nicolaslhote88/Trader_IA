@@ -36,6 +36,7 @@ import asyncio
 import json
 import logging
 import os
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -121,6 +122,10 @@ PRICE_GUARD_MAX_QUOTE_AGE_SECONDS = _env_int(
 )
 AUTO_CONFIRM_MAX_STEPS = _env_int("IBKR_AUTO_CONFIRM_MAX_STEPS", 4, minimum=1)
 AUTO_CONFIRM_MARKET_SELL = _env_bool("IBKR_AUTO_CONFIRM_MARKET_SELL", True)
+# 2026-07-02 (F1 audit) : auto-confirmer le prompt IBKR "without market data" (pas de
+# souscription market data US) quand le garde prix yfinance valide l'ecart <= bande auto.
+# Rollback = passer l'env a false (comportement precedent : parcage approbation Telegram).
+AUTO_CONFIRM_NO_MARKET_DATA_PROMPT = _env_bool("IBKR_AUTO_CONFIRM_NO_MARKET_DATA_PROMPT", False)
 
 # ─── Global client ───────────────────────────────────────────────────────────
 _cpapi: CPAPIClient | None = None
@@ -694,8 +699,15 @@ async def _price_confirmation_guard(client: Any, order: Any, ibkr_payload: dict,
         guard["reason"] = "ORDER_TYPE_NOT_LIMIT"
         return guard
     if not _is_price_confirmation_prompt(messages):
-        guard["reason"] = "PROMPT_NOT_PRICE_CONFIRMATION"
-        return guard
+        # 2026-07-02 (F1) : le prompt "without market data" passe par la MEME verification
+        # prix yfinance que les prompts prix (limit vs reference <= bande auto -> confirm).
+        # Les marqueurs danger (margin/short/restricted) restent exclus par
+        # approval._is_without_market_data_prompt. Sinon : comportement inchange.
+        if AUTO_CONFIRM_NO_MARKET_DATA_PROMPT and approval._is_without_market_data_prompt(messages):
+            guard["prompt_class"] = "WITHOUT_MARKET_DATA"
+        else:
+            guard["reason"] = "PROMPT_NOT_PRICE_CONFIRMATION"
+            return guard
     if normalize_order_type(ibkr_payload.get("orderType")) != "LMT":
         guard["reason"] = "ORDER_TYPE_NOT_LIMIT"
         return guard
@@ -1673,6 +1685,10 @@ def _approval_decision_error(order_id: str, err: str) -> dict[str, Any]:
     """Decision deja prise / double-tap = no-op idempotent (200). Vrais problemes = 4xx."""
     if err.startswith("ALREADY_"):
         return {"order_id": order_id, "status": err.replace("ALREADY_", "", 1), "idempotent": True}
+    # 2026-07-02 (F5) : tap apres TTL (EXPIRED) ou apres restart broker (NOT_FOUND, store
+    # en memoire) = no-op idempotent 200 -> le workflow n8n Decide ne part plus en erreur.
+    if err in ("EXPIRED", "NOT_FOUND"):
+        return {"order_id": order_id, "status": err, "idempotent": True}
     if err == "BAD_TOKEN":
         raise HTTPException(status_code=403, detail="APPROVAL_BAD_TOKEN")
     raise HTTPException(status_code=409, detail="APPROVAL_" + err)
@@ -1714,6 +1730,16 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
     # chaine de prompts. Toute erreur IBKR -> FAILED propre (jamais de 500). Le prompt
     # d'origine ayant expire, l'ordre n'avait pas ete place -> pas de doublon.
     try:
+        original_client_order_id = str(ibkr_payload.get("cOID") or "")
+        approved_client_order_id = f"appr-{uuid.uuid4()}"
+        ibkr_payload["cOID"] = approved_client_order_id
+        logger.info(
+            "Approval resubmit with fresh cOID order_id=%s symbol=%s original_cOID=%s approved_cOID=%s",
+            order_id,
+            symbol,
+            original_client_order_id,
+            approved_client_order_id,
+        )
         terminal = await client.place_orders([ibkr_payload])
         steps = 0
         while _reply_required_items(terminal) and steps < AUTO_CONFIRM_MAX_STEPS:
@@ -1730,6 +1756,20 @@ async def approvals_approve(order_id: str, body: dict = ApprovalBody(default={})
         return {"order_id": order_id, "status": "FAILED", "error": str(exc)}
     if _reply_required_items(terminal) or _ibkr_error_messages(terminal):
         await approval.mark(order_id, "FAILED")
-        return {"order_id": order_id, "status": "FAILED", "ibkr_response": terminal}
-    await approval.mark(order_id, "FILLED")
-    return {"order_id": order_id, "status": "APPROVED_SUBMITTED", "ibkr_response": terminal, "sent_at": now_iso()}
+        logger.warning("Approval resubmit failed order_id=%s ibkr_response=%s", order_id, terminal)
+        return {
+            "order_id": order_id,
+            "status": "FAILED",
+            "client_order_id": approved_client_order_id,
+            "original_client_order_id": original_client_order_id,
+            "ibkr_response": terminal,
+        }
+    await approval.mark(order_id, "SUBMITTED")
+    return {
+        "order_id": order_id,
+        "status": "APPROVED_SUBMITTED",
+        "client_order_id": approved_client_order_id,
+        "original_client_order_id": original_client_order_id,
+        "ibkr_response": terminal,
+        "sent_at": now_iso(),
+    }

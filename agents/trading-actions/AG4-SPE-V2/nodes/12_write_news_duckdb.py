@@ -154,6 +154,10 @@ with db_con(db_path) as con:
         reason = to_text(j.get("reason", ""))
         status = to_text(j.get("status", ""))
         now_utc = datetime.now(timezone.utc)
+        # F2 (2026-07-02) : garde-fou ecriture — published_at futur implausible -> NULL
+        # (les consommateurs retombent sur first_seen_at). Cf docs/audits/20260702_audit_complet_projet.md.
+        if published_at is not None and (published_at - now_utc).total_seconds() > 86400:
+            published_at = None
         incoming_first_seen = parse_ts(j.get("firstSeenAt")) or parse_ts(j.get("publishedAt")) or now_utc
         incoming_last_seen = parse_ts(j.get("lastSeenAt")) or now_utc
         analyzed_at = parse_ts(j.get("analyzedAt")) or now_utc

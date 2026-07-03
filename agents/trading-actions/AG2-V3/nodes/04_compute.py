@@ -10,7 +10,7 @@ DB_PATH = "/files/duckdb/ag2_v3.duckdb"
 
 
 @contextmanager
-def db_con(path=DB_PATH, retries=5, delay=0.3):
+def db_con(path=DB_PATH, retries=10, delay=0.2):
     con = None
     for attempt in range(retries):
         try:
@@ -18,19 +18,15 @@ def db_con(path=DB_PATH, retries=5, delay=0.3):
             break
         except Exception as e:
             if "lock" in str(e).lower() and attempt < retries - 1:
-                time.sleep(delay * (2 ** attempt))
+                time.sleep(min(1.5, delay * (2 ** attempt)))
             else:
                 raise
     try:
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
+            # Checkpoint centralisé dans Finalize Run pour éviter 20-40 s
+            # de verrouillage par symbole.
             try:
                 con.close()
             except Exception:
@@ -562,6 +558,23 @@ IND_KEYS = [
     "dist_sup_pct",
 ]
 
+# Valeurs DETENUES en portefeuille : on garantit une analyse IA systematique (securite),
+# meme sur signal NEUTRAL. Source = universe_segments (segment HELD, alimente depuis les
+# positions du portefeuille). Cout negligeable (poignee de symboles), TTL regule la frequence.
+_held_set = set()
+try:
+    with db_con() as _hcon:
+        _held_set = {
+            str(r[0]).strip().upper()
+            for r in _hcon.execute(
+                "SELECT UPPER(TRIM(symbol)) FROM universe_segments "
+                "WHERE COALESCE(active, TRUE) AND UPPER(TRIM(segment)) = 'HELD'"
+            ).fetchall()
+            if r and r[0]
+        }
+except Exception:
+    _held_set = set()
+
 for it in items:
     d = it.get("json", {}) or {}
     run_id = str(d.get("run_id", "") or "")
@@ -620,6 +633,11 @@ for it in items:
         if pass_ai and not h1_fresh:
             pass_ai = False
             filter_reason = "STALE_H1_DATA"
+        # Securite valeurs detenues : forcer l'eligibilite IA (bypass du filtre qualite/NEUTRAL)
+        # tant que les donnees sont fraiches. Le dedup/TTL en aval evite les appels redondants.
+        if (not pass_ai) and h1_fresh and (symbol_internal in _held_set):
+            pass_ai = True
+            filter_reason = "HELD_FORCED"
 
         dedup_key = symbol_internal
         sig_hash = compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind)

@@ -2261,10 +2261,41 @@ def load_universe_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.Dat
     df = _read_duckdb_df(
         db_path,
         """
-        SELECT *
-        FROM universe
-        WHERE COALESCE(enabled, TRUE)
-        ORDER BY symbol
+        WITH seg AS (
+            SELECT
+                UPPER(TRIM(symbol)) AS symbol,
+                STRING_AGG(segment, ', ' ORDER BY segment) AS segments,
+                MAX(CASE WHEN segment = 'HELD' AND COALESCE(active, TRUE) THEN 1 ELSE 0 END) AS is_held,
+                MAX(CASE WHEN segment IN ('CORE_AUTO', 'CORE_MANUAL') AND COALESCE(active, TRUE) THEN 1 ELSE 0 END) AS is_core,
+                MAX(CASE WHEN segment = 'WATCHLIST' AND COALESCE(active, TRUE) THEN 1 ELSE 0 END) AS is_watchlist
+            FROM universe_segments
+            WHERE COALESCE(active, TRUE)
+            GROUP BY 1
+        ),
+        q AS (
+            SELECT
+                UPPER(TRIM(symbol)) AS symbol,
+                COALESCE(active, FALSE) AS quarantine_active,
+                reason AS quarantine_reason,
+                reason_detail AS quarantine_reason_detail,
+                last_evaluated_at AS quarantine_last_evaluated_at
+            FROM universe_quarantine
+        )
+        SELECT
+            u.*,
+            COALESCE(q.quarantine_active, FALSE) AS quarantine_active,
+            q.quarantine_reason,
+            q.quarantine_reason_detail,
+            q.quarantine_last_evaluated_at,
+            COALESCE(seg.segments, '') AS segments,
+            COALESCE(seg.is_held, 0) AS is_held,
+            COALESCE(seg.is_core, 0) AS is_core,
+            COALESCE(seg.is_watchlist, 0) AS is_watchlist
+        FROM universe u
+        LEFT JOIN q ON UPPER(TRIM(u.symbol)) = q.symbol
+        LEFT JOIN seg ON UPPER(TRIM(u.symbol)) = seg.symbol
+        WHERE COALESCE(u.enabled, TRUE)
+        ORDER BY u.symbol
         """,
     )
     if df is None or df.empty:
@@ -2581,6 +2612,22 @@ def load_ag4_symbol_runs(db_path: str, db_sig: tuple[str, float, int], run_log_l
 
 
 @st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
+def load_ag1_health_runs(db_path: str, db_sig: tuple[str, float, int], run_log_limit: int) -> pd.DataFrame:
+    _ = db_sig
+    run_limit = max(1, int(run_log_limit))
+    return _read_duckdb_df(
+        db_path,
+        """
+        SELECT *
+        FROM core.runs
+        ORDER BY COALESCE(ts_end, ts_start) DESC
+        LIMIT ?
+        """,
+        (run_limit,),
+    )
+
+
+@st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
 def load_yf_enrichment_latest(db_path: str, db_sig: tuple[str, float, int]) -> pd.DataFrame:
     _ = db_sig
     df = _read_duckdb_df(db_path, "SELECT * FROM v_latest_symbol_enrichment ORDER BY symbol")
@@ -2634,6 +2681,8 @@ def load_dashboard_market_data(
 
 @st.cache_data(ttl=DUCKDB_CACHE_TTL_SEC)
 def load_system_health_page_data(
+    ag1_db_path: str,
+    ag1_db_sig: tuple[str, float, int],
     ag2_db_path: str,
     ag2_db_sig: tuple[str, float, int],
     ag3_db_path: str,
@@ -2642,6 +2691,8 @@ def load_system_health_page_data(
     ag4_db_sig: tuple[str, float, int],
     ag4_spe_db_path: str,
     ag4_spe_db_sig: tuple[str, float, int],
+    yf_db_path: str,
+    yf_db_sig: tuple[str, float, int],
     history_days: int,
     history_limit: int,
     run_log_limit: int,
@@ -2658,6 +2709,7 @@ def load_system_health_page_data(
             history_limit,
         )
     return {
+        "df_ag1_runs": load_ag1_health_runs(ag1_db_path, ag1_db_sig, run_log_limit),
         "df_signals": ag2_data.get("df_signals", pd.DataFrame()),
         "df_runs": ag2_data.get("df_runs", pd.DataFrame()),
         "df_funda_latest": ag3_data.get("df_funda_latest", pd.DataFrame()),
@@ -2666,6 +2718,7 @@ def load_system_health_page_data(
         "df_news_macro_runs": load_ag4_macro_runs(ag4_db_path, ag4_db_sig, run_log_limit),
         "df_news_symbol_history": symbol_history,
         "df_news_symbol_runs": load_ag4_symbol_runs(ag4_spe_db_path, ag4_spe_db_sig, run_log_limit),
+        "df_yf_enrichment_latest": load_yf_enrichment_latest(yf_db_path, yf_db_sig),
     }
 
 
@@ -4640,12 +4693,19 @@ def _build_multi_agent_matrix(
         d1_atr_pct = safe_float(r.get("d1_atr_pct", 0))
 
         if entry > 0:
-            if stop <= 0 or stop >= entry:
+            stop_from_ai = (stop > 0 and stop < entry)
+            if not stop_from_ai:
                 if d1_support > 0 and d1_support < entry:
                     stop = d1_support * 0.998
                 else:
                     fallback_risk = max(2.0, d1_dist_sup if d1_dist_sup > 0 else d1_atr_pct * 2.0)
                     stop = entry * (1.0 - fallback_risk / 100.0)
+                # Parite avec AG1 Calcul Matrice : stop de repli >= plancher ATR (evite micro-stop
+                # quand prix colle au support D1 -> faux rr_outlier). N'affecte pas les vrais stops AI.
+                atr_floor_pct_fb = max(0.8 * d1_atr_pct, 0.75 if d1_atr_pct > 0 else 1.2)
+                max_allowed_stop = entry * (1.0 - atr_floor_pct_fb / 100.0)
+                if stop > max_allowed_stop:
+                    stop = max_allowed_stop
         else:
             stop = 0.0
 
@@ -4836,14 +4896,19 @@ def _build_multi_agent_matrix(
             data_quality_score = 0.0
         data_quality_score = max(0.0, min(100.0, data_quality_score))
 
-        risk_weights = {
-            "funda": 0.30,
-            "vol": 0.18,
-            "liq": 0.14,
-            "event": 0.14,
+        # RISQUE V2 (2026-06-30) parité AG1 : renorm sur composantes OBSERVEES + repond. tactique.
+        funda_usable = pd.notna(pd.to_numeric(pd.Series([r.get("funda_risk", pd.NA)]), errors="coerce").iloc[0])
+        news_count_7d = safe_float(r.get("symbol_news_count_7d", 0))
+        spread_obs = pd.notna(pd.to_numeric(pd.Series([r.get("spreadPct", pd.NA)]), errors="coerce").iloc[0])
+        slip_obs = pd.notna(pd.to_numeric(pd.Series([r.get("slippageProxyPct", pd.NA)]), errors="coerce").iloc[0])
+        risk_base_weights = {
+            "vol": 0.26,
+            "liq": 0.18,
+            "event": 0.16,
+            "funda": 0.16,
             "news": 0.10,
             "concentration": 0.09,
-            "options": 0.05 if options_has_iv else 0.01,
+            "options": 0.05,
         }
         risk_values = {
             "funda": min(100.0, max(0.0, funda_risk)),
@@ -4854,10 +4919,22 @@ def _build_multi_agent_matrix(
             "concentration": concentration_risk,
             "options": options_risk,
         }
-        wsum = sum(risk_weights.values())
-        risk_core = sum(risk_values[k] * risk_weights[k] for k in risk_weights) / wsum if wsum > 0 else 50.0
-        risk_score_100 = risk_core + stale_penalty
-        risk_score_100 = max(0.0, min(100.0, risk_score_100))
+        risk_observed = {
+            "vol": d1_atr_pct > 0,
+            "liq": bool(spread_obs or slip_obs),
+            "event": bool(pd.notna(days_to_next_earnings) or pd.notna(days_since_last_earnings)),
+            "funda": bool(funda_usable),
+            "news": news_count_7d > 0,
+            "concentration": (sector_weight > 0 or symbol_weight > 0),
+            "options": bool(options_has_iv),
+        }
+        eff_w = {k: risk_base_weights[k] for k in risk_base_weights if risk_observed.get(k)}
+        eff_wsum = sum(eff_w.values())
+        if eff_wsum >= 0.20:
+            risk_core = sum(risk_values[k] * eff_w[k] for k in eff_w) / eff_wsum
+        else:
+            risk_core = 50.0
+        risk_score_100 = max(0.0, min(100.0, risk_core + stale_penalty))
 
         reward_r = min(100.0, max(0.0, r_multiple_capped * 35.0))
         reward_upside = min(100.0, max(0.0, funda_upside * 3.0))
@@ -8048,6 +8125,212 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
     }
 
 
+def _ag1_apply_ibkr_live_overlay(conn, df_pos):
+    """P&L latent LIVE : portfolio_positions_ibkr_latest (ecrite par PF.00C a chaque run,
+    valeurs deja en EUR au taux IBKR) est la source prioritaire et override le snapshot
+    RECON et l'ancien overlay yfinance. Si IBKR est injoignable (table perimee/absente),
+    repli sur yfinance avec conversion FX en EUR (prix natif x taux, P&L recalcule depuis
+    l'avg_cost EUR). Renvoie (df_pos, diag). Defensif : ne leve jamais."""
+    diag = {"ibkr_live_rows": 0, "ibkr_live_last_updated": None, "ibkr_live_age_hours": None,
+            "ibkr_stale": None, "source_counts": {}, "fallback_yfinance_used": False}
+    if df_pos is None or df_pos.empty:
+        return df_pos, diag
+    STALE_HOURS = 18.0
+    try:
+        ibkr = _ag1_fetchdf(conn, """
+            SELECT UPPER(symbol) AS symbol,
+                   CAST(avg_cost_eur AS DOUBLE) AS avg_cost_eur,
+                   CAST(last_price_eur AS DOUBLE) AS last_price_eur,
+                   CAST(market_value_eur AS DOUBLE) AS market_value_eur,
+                   CAST(unrealized_pnl_eur AS DOUBLE) AS unrealized_pnl_eur,
+                   UPPER(COALESCE(currency, '')) AS currency,
+                   CAST(fx_rate AS DOUBLE) AS fx_rate,
+                   updated_at AS updated_at
+            FROM portfolio_positions_ibkr_latest
+        """)
+    except Exception:
+        ibkr = pd.DataFrame()
+
+    fx_by_ccy = {"EUR": 1.0}
+    ibkr_age_h = None
+    if ibkr is not None and not ibkr.empty:
+        for _, rr in ibkr.iterrows():
+            c = str(rr.get("currency") or "").upper()
+            rt = safe_float(rr.get("fx_rate"))
+            if c and rt > 0:
+                fx_by_ccy[c] = rt
+        ts_live = pd.to_datetime(ibkr["updated_at"], errors="coerce", utc=True)
+        last_upd = ts_live.max()
+        if pd.notna(last_upd):
+            ibkr_age_h = (pd.Timestamp.now(tz="UTC") - last_upd).total_seconds() / 3600.0
+            diag["ibkr_live_last_updated"] = last_upd.isoformat()
+            diag["ibkr_live_age_hours"] = round(ibkr_age_h, 2)
+        diag["ibkr_live_rows"] = int(len(ibkr))
+    # taux FX de secours depuis le meta_json du dernier snapshot RECON (si IBKR-latest vide)
+    if not any(c != "EUR" for c in fx_by_ccy):
+        try:
+            _meta = _ag1_fetchdf(conn, "SELECT meta_json FROM core.portfolio_snapshot WHERE meta_json IS NOT NULL ORDER BY ts DESC LIMIT 5")
+            for _, _mr in _meta.iterrows():
+                _d = json.loads(_mr.get("meta_json") or "{}")
+                for _c, _rt in (_d.get("rates") or {}).items():
+                    _c = str(_c).upper(); _rt = safe_float(_rt)
+                    if _c and _rt > 0 and _c not in fx_by_ccy:
+                        fx_by_ccy[_c] = _rt
+                if any(c != "EUR" for c in fx_by_ccy):
+                    break
+        except Exception:
+            pass
+    ibkr_fresh = bool(ibkr is not None and not ibkr.empty and ibkr_age_h is not None and ibkr_age_h <= STALE_HOURS)
+    diag["ibkr_stale"] = (not ibkr_fresh)
+
+    ibkr_map = {}
+    if ibkr is not None and not ibkr.empty:
+        for _, rr in ibkr.iterrows():
+            ibkr_map[str(rr.get("symbol") or "").upper()] = rr
+
+    try:
+        yf = _ag1_fetchdf(conn, """
+            SELECT UPPER(m.symbol) AS symbol,
+                   CAST(m.last_price AS DOUBLE) AS last_price,
+                   CAST(m.avg_price AS DOUBLE) AS avg_price,
+                   UPPER(COALESCE(i.currency, '')) AS currency
+            FROM portfolio_positions_mtm_latest m
+            LEFT JOIN core.instruments i ON UPPER(i.symbol) = UPPER(m.symbol)
+            WHERE m.symbol NOT IN ('CASH_EUR', '__META__')
+        """)
+    except Exception:
+        yf = pd.DataFrame()
+    yf_map = {}
+    if yf is not None and not yf.empty:
+        for _, rr in yf.iterrows():
+            yf_map[str(rr.get("symbol") or "").upper()] = rr
+
+    counts = {}
+    df = df_pos.copy()
+    if "currency" not in df.columns:
+        df["currency"] = "EUR"
+    if "fx_rate" not in df.columns:
+        df["fx_rate"] = 1.0
+    for idx in df.index:
+        sym = str(df.at[idx, "symbol"]).upper()
+        if ibkr_fresh and sym in ibkr_map:
+            r = ibkr_map[sym]
+            df.at[idx, "lastprice"] = safe_float(r.get("last_price_eur"))
+            df.at[idx, "marketvalue"] = safe_float(r.get("market_value_eur"))
+            df.at[idx, "unrealizedpnl"] = safe_float(r.get("unrealized_pnl_eur"))
+            df.at[idx, "avgprice"] = safe_float(r.get("avg_cost_eur"))
+            df.at[idx, "currency"] = (str(r.get("currency") or "EUR").upper() or "EUR")
+            df.at[idx, "fx_rate"] = safe_float(r.get("fx_rate")) or 1.0
+            src = "ibkr_live"
+        elif sym in yf_map:
+            r = yf_map[sym]
+            ccy = (str(r.get("currency") or "EUR").upper() or "EUR")
+            rate = fx_by_ccy.get(ccy, 1.0)
+            qty = safe_float(df.at[idx, "quantity"])
+            avg_eur = safe_float(r.get("avg_price"))
+            lp_eur = safe_float(r.get("last_price")) * rate
+            df.at[idx, "lastprice"] = lp_eur
+            df.at[idx, "avgprice"] = avg_eur
+            df.at[idx, "marketvalue"] = lp_eur * qty
+            df.at[idx, "unrealizedpnl"] = (lp_eur - avg_eur) * qty
+            df.at[idx, "currency"] = ccy
+            df.at[idx, "fx_rate"] = rate if rate > 0 else 1.0
+            src = "yfinance_fx" if rate != 1.0 else "yfinance"
+            diag["fallback_yfinance_used"] = True
+        else:
+            src = "recon_snapshot"
+        counts[src] = counts.get(src, 0) + 1
+    diag["source_counts"] = counts
+    return df, diag
+
+
+def _ag1_attach_fx_breakdown(conn, df):
+    """Decompose chaque position en valeur locale / EUR et separe la perf prix de l'impact FX.
+    - Devise, taux courant (r1) et valeurs EUR : portfolio_positions_ibkr_latest (derniere ligne,
+      INDEPENDAMMENT de la fraicheur : la devise ne perime pas, contrairement au prix).
+    - Cout d'entree EUR reel (ce qui a ete paye) : core.position_lots (lots ouverts, ponderes).
+    - P&L prix (EUR) = unrealized IBKR (mouvement du cours au taux courant).
+    - Impact FX (EUR) = P&L total (valeur - cout paye) - P&L prix. Titres EUR => 0.
+    Defensif : ne leve jamais."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    ibkr = {}
+    try:
+        for row in conn.execute(
+            "SELECT UPPER(symbol), UPPER(COALESCE(currency,'EUR')), CAST(fx_rate AS DOUBLE), "
+            "CAST(avg_cost_eur AS DOUBLE), CAST(last_price_eur AS DOUBLE), "
+            "CAST(market_value_eur AS DOUBLE), CAST(unrealized_pnl_eur AS DOUBLE) "
+            "FROM portfolio_positions_ibkr_latest"
+        ).fetchall():
+            ibkr[str(row[0]).upper()] = {
+                "ccy": row[1] or "EUR", "r1": (float(row[2]) if row[2] else 1.0) or 1.0,
+                "avg_eur": float(row[3] or 0.0), "last_eur": float(row[4] or 0.0),
+                "mv_eur": float(row[5] or 0.0), "up_eur": float(row[6] or 0.0),
+            }
+    except Exception:
+        ibkr = {}
+    cost_paid = {}
+    try:
+        for row in conn.execute(
+            "SELECT UPPER(symbol), SUM(CAST(remaining_qty AS DOUBLE)*CAST(open_price AS DOUBLE)), "
+            "SUM(CAST(remaining_qty AS DOUBLE)) FROM core.position_lots "
+            "WHERE UPPER(COALESCE(status,''))='OPEN' AND remaining_qty>0 GROUP BY 1"
+        ).fetchall():
+            q = float(row[2] or 0.0)
+            if q > 0:
+                cost_paid[str(row[0]).upper()] = float(row[1] or 0.0) / q
+    except Exception:
+        cost_paid = {}
+    cols = ["currency", "fx_rate", "fx_rate_entry", "avg_loc", "last_loc", "mktval_loc",
+            "cost_eur", "mktval_eur", "pnl_prix_eur", "pnl_fx_eur", "pnl_total_eur", "perf_prix_pct"]
+    for c in cols:
+        if c not in out.columns:
+            out[c] = 0.0
+    for idx in out.index:
+        sym = str(out.at[idx, "symbol"]).upper()
+        if sym in ("CASH_EUR", "__META__"):
+            continue
+        qty = safe_float(out.at[idx, "quantity"])
+        meta = ibkr.get(sym)
+        if not meta:
+            avg_eur = safe_float(out.at[idx, "avgprice"]); last_eur = safe_float(out.at[idx, "lastprice"])
+            mv_eur = safe_float(out.at[idx, "marketvalue"]); up_eur = safe_float(out.at[idx, "unrealizedpnl"])
+            ccy = str(out.at[idx, "currency"] if "currency" in out.columns else "EUR") or "EUR"
+            out.at[idx, "currency"] = ccy.upper(); out.at[idx, "fx_rate"] = 1.0; out.at[idx, "fx_rate_entry"] = 1.0
+            out.at[idx, "avg_loc"] = avg_eur; out.at[idx, "last_loc"] = last_eur; out.at[idx, "mktval_loc"] = mv_eur
+            out.at[idx, "cost_eur"] = qty * avg_eur; out.at[idx, "mktval_eur"] = mv_eur
+            out.at[idx, "pnl_prix_eur"] = up_eur; out.at[idx, "pnl_fx_eur"] = 0.0; out.at[idx, "pnl_total_eur"] = up_eur
+            out.at[idx, "perf_prix_pct"] = ((last_eur / avg_eur - 1.0) * 100.0) if avg_eur else 0.0
+            continue
+        ccy = meta["ccy"]; r1 = meta["r1"] or 1.0
+        avg_eur = meta["avg_eur"]; last_eur = meta["last_eur"]; mv_eur = meta["mv_eur"]; up_eur = meta["up_eur"]
+        avg_loc = avg_eur / r1 if r1 else avg_eur
+        last_loc = last_eur / r1 if r1 else last_eur
+        mktval_loc = mv_eur / r1 if r1 else mv_eur
+        if ccy == "EUR":
+            cost_eur = qty * avg_eur; pnl_prix = up_eur; pnl_fx = 0.0; r0 = 1.0
+        else:
+            avg_paid = cost_paid.get(sym, avg_eur)
+            cost_eur = qty * avg_paid
+            pnl_prix = up_eur
+            pnl_fx = (mv_eur - cost_eur) - pnl_prix
+            r0 = (avg_paid / avg_loc) if avg_loc else r1
+        out.at[idx, "currency"] = ccy
+        out.at[idx, "fx_rate"] = r1
+        out.at[idx, "fx_rate_entry"] = r0
+        out.at[idx, "avg_loc"] = avg_loc
+        out.at[idx, "last_loc"] = last_loc
+        out.at[idx, "mktval_loc"] = mktval_loc
+        out.at[idx, "cost_eur"] = cost_eur
+        out.at[idx, "mktval_eur"] = mv_eur
+        out.at[idx, "pnl_prix_eur"] = pnl_prix
+        out.at[idx, "pnl_fx_eur"] = pnl_fx
+        out.at[idx, "pnl_total_eur"] = pnl_prix + pnl_fx
+        out.at[idx, "perf_prix_pct"] = ((last_loc / avg_loc - 1.0) * 100.0) if avg_loc else 0.0
+    return out
+
+
 def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str, object]:
     payload = _ag1_default_payload(key, cfg)
     db_path = str(cfg.get("db_path") or "").strip()
@@ -8439,6 +8722,14 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         latest = df_latest.iloc[0].to_dict() if df_latest is not None and not df_latest.empty else {}
         latest_run_id = str(latest.get("run_id") or "").strip()
+        # FIX ecart P&L 2026-06-22 : en mode IBKR live, le snapshot de reconciliation
+        # IBKR (run_id RUN_RECON_IBKR_*) est la SOURCE DE VERITE UNIQUE pour
+        # qty / prix / valeur de marche / P&L non realise (deja convertis en EUR au
+        # taux IBKR). On neutralise l'overlay MTM yfinance : faute de conversion FX
+        # dans 07_compute_mtm.js, il melangeait un prix yfinance en devise locale
+        # (ex: NVDA en USD) avec un avg_cost deja en EUR -> P&L absurde (+52 EUR sur
+        # NVDA) et market_value mal etiquetee, qui ecrasaient les valeurs IBKR exactes.
+        ibkr_is_source_of_truth = latest_run_id.upper().startswith("RUN_RECON_IBKR")
         _has_mtm_price_cols = bool(
             mtm_selected_cols
             and "last_price" in mtm_selected_cols
@@ -8473,7 +8764,13 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 """,
                 [latest_run_id],
             )
-            if _has_mtm_price_cols and df_mtm_latest is not None and not df_mtm_latest.empty and not df_pos.empty:
+            if (
+                not ibkr_is_source_of_truth
+                and _has_mtm_price_cols
+                and df_mtm_latest is not None
+                and not df_mtm_latest.empty
+                and not df_pos.empty
+            ):
                 mtm_overlay = df_mtm_latest.copy()
                 mtm_overlay.columns = [str(c).strip().lower() for c in mtm_overlay.columns]
                 if "symbol" in mtm_overlay.columns:
@@ -8688,6 +8985,15 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                         ascending=[False, True],
                         na_position="last",
                     ).reset_index(drop=True)
+        # FIX P&L live 2026-06-22 : overlay IBKR prioritaire (PF.00C) + repli yfinance FX.
+        try:
+            df_pos, _ibkr_live_diag = _ag1_apply_ibkr_live_overlay(conn, df_pos)
+        except Exception as _ov_err:
+            _ibkr_live_diag = {"error": str(_ov_err)}
+        try:
+            df_pos = _ag1_attach_fx_breakdown(conn, df_pos)
+        except Exception:
+            pass
         latest_run_meta: dict[str, object] = {}
         if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
             last_run_id_guess = str(latest.get("run_id") or "").strip()
@@ -8808,6 +9114,8 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         diagnostics = {
             "positions_source_table": "core.positions_snapshot+mtm_overlay" if _mtm_overlay_applied else "core.positions_snapshot",
+            "ibkr_source_of_truth": bool(ibkr_is_source_of_truth),
+            "ibkr_live": _ibkr_live_diag,
             "ledger_run_id": str(latest.get("run_id") or ""),
             "ledger_positions_count": 0,
             "mtm_run_id": "",
@@ -10857,6 +11165,51 @@ def _load_ibkr_currency_balances(broker_url: str) -> dict[str, object]:
         return payload
 
 
+@st.cache_data(ttl=30, show_spinner=False)
+def _load_ibkr_operational_health(broker_url: str) -> dict[str, object]:
+    base_url = str(broker_url or "").strip().rstrip("/")
+    out: dict[str, object] = {
+        "reachable": False,
+        "authenticated": None,
+        "connected": None,
+        "established": None,
+        "dry_run": None,
+        "pending_approvals": None,
+        "error": "",
+    }
+    if not base_url:
+        out["error"] = "IBKR_BROKER_URL absent"
+        return out
+    try:
+        response = requests.get(f"{base_url}/health", timeout=5)
+        response.raise_for_status()
+        health = response.json()
+        ibkr_status = health.get("ibkr_status") if isinstance(health.get("ibkr_status"), dict) else {}
+        out["reachable"] = True
+        out["authenticated"] = bool(health.get("authenticated"))
+        out["connected"] = bool(ibkr_status.get("connected"))
+        out["established"] = bool(ibkr_status.get("established"))
+        out["dry_run"] = bool(health.get("dry_run"))
+    except Exception as exc:
+        out["error"] = f"health: {str(exc)[:180]}"
+        return out
+
+    try:
+        response = requests.get(f"{base_url}/orders/approvals/pending", timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, list):
+            rows = payload
+        elif isinstance(payload, dict):
+            rows = payload.get("items", payload.get("pending", []))
+        else:
+            rows = []
+        out["pending_approvals"] = len(rows) if isinstance(rows, list) else None
+    except Exception as exc:
+        out["error"] = (str(out.get("error") or "") + f" approvals: {str(exc)[:180]}").strip()
+    return out
+
+
 def _fx_ibkr_session_level(payload: dict[str, object]) -> tuple[str, str, str]:
     if not isinstance(payload, dict):
         return "ERROR", "IBKR inconnu", "Lecture de statut IBKR impossible."
@@ -11175,6 +11528,143 @@ def _build_ibkr_currency_exposure_map(df: pd.DataFrame, mode_label: str = "LIVE 
         font=dict(size=11, color="#d8ffff"),
         align="right",
     )
+    return fig
+
+
+_EQUITY_GEO_BY_SUFFIX = {
+    "PA": (48.8566, 2.3522, "France", "EUR"),
+    "DE": (50.1109, 8.6821, "Allemagne", "EUR"), "F": (50.1109, 8.6821, "Allemagne", "EUR"),
+    "L": (51.5074, -0.1278, "Royaume-Uni", "GBP"),
+    "MI": (45.4642, 9.19, "Italie", "EUR"),
+    "AS": (52.3676, 4.9041, "Pays-Bas", "EUR"),
+    "MC": (40.4168, -3.7038, "Espagne", "EUR"),
+    "SW": (47.3769, 8.5417, "Suisse", "CHF"), "VX": (47.3769, 8.5417, "Suisse", "CHF"),
+    "BR": (50.8503, 4.3517, "Belgique", "EUR"),
+    "ST": (59.3293, 18.0686, "Suede", "SEK"),
+    "HE": (60.1699, 24.9384, "Finlande", "EUR"),
+    "OL": (59.9139, 10.7522, "Norvege", "NOK"),
+    "LS": (38.7223, -9.1393, "Portugal", "EUR"),
+    "VI": (48.2082, 16.3738, "Autriche", "EUR"),
+    "IR": (53.3498, -6.2603, "Irlande", "EUR"),
+    "CO": (55.6761, 12.5683, "Danemark", "DKK"),
+    "TO": (43.6532, -79.3832, "Canada", "CAD"),
+    "HK": (22.3193, 114.1694, "Hong Kong", "HKD"),
+    "T": (35.6762, 139.6503, "Japon", "JPY"),
+    "AX": (-33.8688, 151.2093, "Australie", "AUD"),
+    "SI": (1.3521, 103.8198, "Singapour", "SGD"),
+    "MX": (19.4326, -99.1332, "Mexique", "MXN"),
+}
+_EQUITY_GEO_BY_CCY = {
+    "USD": (39.0, -98.0, "Etats-Unis", "USD"),
+    "EUR": (48.8566, 2.3522, "Zone euro", "EUR"),
+    "GBP": (51.5074, -0.1278, "Royaume-Uni", "GBP"), "GBX": (51.5074, -0.1278, "Royaume-Uni", "GBP"),
+    "CHF": (47.3769, 8.5417, "Suisse", "CHF"),
+    "JPY": (35.6762, 139.6503, "Japon", "JPY"),
+    "CAD": (45.4215, -75.6972, "Canada", "CAD"),
+    "AUD": (-33.8688, 151.2093, "Australie", "AUD"),
+    "HKD": (22.3193, 114.1694, "Hong Kong", "HKD"),
+    "SEK": (59.3293, 18.0686, "Suede", "SEK"),
+    "NOK": (59.9139, 10.7522, "Norvege", "NOK"),
+    "DKK": (55.6761, 12.5683, "Danemark", "DKK"),
+    "SGD": (1.3521, 103.8198, "Singapour", "SGD"),
+}
+
+
+def _equity_geo_for(symbol: object, currency: object) -> tuple[float, float, str, str]:
+    """Geolocalise une action. Priorite au suffixe de cotation Yahoo (.PA, .DE, .L...),
+    fiable. Un ticker SANS suffixe = cotation US (NYSE/NASDAQ) par construction (les titres
+    en EUR ont toujours un suffixe) -> on ignore une devise EUR erronee remontee du pipeline.
+    Renvoie (lat, lon, pays, devise_deduite)."""
+    sym = str(symbol or "").strip().upper()
+    suffix = sym.rsplit(".", 1)[-1] if "." in sym else ""
+    if suffix and suffix in _EQUITY_GEO_BY_SUFFIX:
+        return _EQUITY_GEO_BY_SUFFIX[suffix]
+    ccy = str(currency or "").strip().upper()
+    if not suffix:
+        if ccy and ccy not in ("", "EUR") and ccy in _EQUITY_GEO_BY_CCY:
+            return _EQUITY_GEO_BY_CCY[ccy]
+        return _EQUITY_GEO_BY_CCY["USD"]
+    if ccy in _EQUITY_GEO_BY_CCY:
+        return _EQUITY_GEO_BY_CCY[ccy]
+    return (20.0, 0.0, "Autre", ccy or "USD")
+
+
+def _build_ibkr_equity_exposure_map(df_positions: pd.DataFrame, mode_label: str = "IBKR ACTIONS | VALORISATION EUR") -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scattergeo(lon=[-180, 180], lat=[-62, 78], mode="markers",
+        marker=dict(size=1, color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False))
+    rows = []
+    if df_positions is not None and not df_positions.empty:
+        wk = df_positions.copy()
+        wk["symbol"] = wk.get("symbol", pd.Series("", index=wk.index)).astype(str).str.strip().str.upper()
+        wk = wk[~wk["symbol"].isin(["", "CASH_EUR", "__META__"])]
+        for _, r in wk.iterrows():
+            # valeur EUR + P&L total fiables (memes colonnes que la table Positions) ;
+            # repli sur marketvalue/unrealizedpnl si le breakdown n'est pas dispo
+            mv = safe_float(r.get("mktval_eur"))
+            if mv <= 0:
+                mv = safe_float(r.get("marketvalue"))
+            if mv <= 0:
+                continue
+            _pnl = r.get("pnl_total_eur")
+            up = safe_float(_pnl) if (_pnl is not None and not pd.isna(_pnl)) else safe_float(r.get("unrealizedpnl"))
+            lat, lon, country, ccy_geo = _equity_geo_for(r.get("symbol"), r.get("currency"))
+            rows.append({
+                "symbol": str(r.get("symbol")), "name": str(r.get("name") or r.get("symbol") or ""),
+                "mv": mv, "lat": float(lat), "lon": float(lon), "country": country,
+                "currency": ccy_geo,
+                "unrealized": up,
+            })
+    if rows:
+        total_mv = sum(x["mv"] for x in rows) or 1.0
+        by_loc: dict[tuple[float, float], list[dict[str, object]]] = {}
+        for x in rows:
+            by_loc.setdefault((round(x["lat"], 2), round(x["lon"], 2)), []).append(x)
+        for (blat, blon), group in by_loc.items():
+            n = len(group)
+            for i, x in enumerate(sorted(group, key=lambda z: -z["mv"])):
+                x["lon_plot"] = blon + (i - (n - 1) / 2.0) * 4.2
+                x["lat_plot"] = blat
+        for x in rows:
+            weight = x["mv"] / total_mv
+            height = 3.0 + 40.0 * weight
+            lon = x["lon_plot"]; lat = x["lat_plot"]
+            target_lat = min(80.0, lat + height)
+            up = x["unrealized"]
+            bar_color = "#45ff9a" if up >= 0 else "#ef4444"
+            glow = "#67e8f9"
+            label = f"{x['symbol']}<br>{html.escape(_fmt_eur_amount(x['mv']))}"
+            hover = (f"<b>{html.escape(str(x['symbol']))} - {html.escape(str(x['name']))}</b><br>"
+                     f"Pays: {html.escape(str(x['country']))} ({html.escape(str(x['currency']))})<br>"
+                     f"Valeur de marche: {html.escape(_fmt_eur_amount(x['mv']))}<br>"
+                     f"Poids portefeuille: {weight * 100:.1f}%<br>"
+                     f"P&L latent: {html.escape(_fmt_eur_amount(up))}<extra></extra>")
+            for width, opacity, color in [(22, 0.12, glow), (14, 0.28, glow), (7, 0.96, bar_color)]:
+                fig.add_trace(go.Scattergeo(lon=[lon, lon], lat=[lat, target_lat], mode="lines",
+                    line=dict(color=color, width=width), opacity=opacity, hoverinfo="skip", showlegend=False))
+            fig.add_trace(go.Scattergeo(lon=[lon], lat=[lat], mode="markers",
+                marker=dict(size=15, color=bar_color, opacity=0.34, line=dict(color=glow, width=2)),
+                hovertemplate=hover, showlegend=False))
+            fig.add_trace(go.Scattergeo(lon=[lon], lat=[target_lat], mode="markers+text",
+                marker=dict(size=8, color="#eaffff", opacity=0.98, line=dict(color=bar_color, width=2)),
+                text=[label], textfont=dict(size=12, color="#f8ffff"), textposition="top right",
+                hovertemplate=hover, showlegend=False))
+    fig.update_geos(projection_type="natural earth", showframe=False, showcoastlines=True,
+        coastlinecolor="rgba(83,224,255,.68)", coastlinewidth=0.7, showcountries=True,
+        countrycolor="rgba(83,224,255,.38)", countrywidth=0.45, showland=True, landcolor="rgb(8,35,50)",
+        showocean=True, oceancolor="rgb(1,12,26)", showlakes=True, lakecolor="rgb(1,18,32)",
+        lonaxis=dict(showgrid=True, gridcolor="rgba(71,212,255,.12)", dtick=30),
+        lataxis=dict(showgrid=True, gridcolor="rgba(71,212,255,.12)", dtick=20), bgcolor="rgba(0,0,0,0)")
+    fig.update_layout(height=560, margin=dict(l=8, r=8, t=58, b=8), paper_bgcolor="rgb(3,8,18)",
+        plot_bgcolor="rgb(3,8,18)",
+        title=dict(text="GLOBAL EQUITY EXPOSURE DASHBOARD | IBKR ACTIONS PORTFOLIO", x=0.02, y=0.98,
+            font=dict(size=18, color="#f8ffff")),
+        font=dict(family="Arial, sans-serif", color="#e5faff"))
+    fig.add_annotation(x=0.985, y=0.98, xref="paper", yref="paper", xanchor="right", yanchor="top",
+        text=mode_label, showarrow=False, font=dict(size=12, color="#73f7ff"), align="right")
+    fig.add_annotation(x=0.985, y=0.035, xref="paper", yref="paper", xanchor="right", yanchor="bottom",
+        text=f"LAST UPDATE: {pd.Timestamp.now(tz='UTC').strftime('%H:%M:%S UTC')}", showarrow=False,
+        font=dict(size=11, color="#d8ffff"), align="right")
     return fig
 
 
@@ -11692,6 +12182,7 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 
 if page == "Dashboard Trading":
     st.title("AI Trading Executor Dashboard")
+    _render_fx_ibkr_session_status(_load_ibkr_currency_balances(IBKR_BROKER_URL))
 
     ag1_multi: dict[str, dict[str, object]] = {}
     ag1_v4_consensus = load_ag1_v4_consensus_portfolio()
@@ -12361,6 +12852,22 @@ if page == "Dashboard Trading":
                 df_clean["assetclass"] = _canonicalize_asset_class_series(df_clean["assetclass"])
             df_clean = enrich_portfolio_metadata(df_clean, df_univ, df_yf_enrichment_latest)
             df_clean = sanitize_allocation_metadata_labels(df_clean)
+            # Exposer la devise + taux FX (impact du change) — robuste si enrich a drop les colonnes
+            _bd_cols = ["currency", "fx_rate", "fx_rate_entry", "avg_loc", "last_loc", "mktval_loc",
+                        "cost_eur", "mktval_eur", "pnl_prix_eur", "pnl_fx_eur", "pnl_total_eur", "perf_prix_pct"]
+            try:
+                _present = [c for c in _bd_cols if c in df_port.columns]
+                if "currency" in _present:
+                    _src = df_port[["symbol"] + _present].drop_duplicates("symbol")
+                    df_clean = df_clean.drop(columns=[c for c in _present if c in df_clean.columns], errors="ignore").merge(_src, on="symbol", how="left")
+            except Exception:
+                pass
+            if "currency" not in df_clean.columns:
+                df_clean["currency"] = "EUR"
+            df_clean["currency"] = df_clean["currency"].fillna("EUR").astype(str).str.upper().replace("", "EUR")
+            if "fx_rate" not in df_clean.columns:
+                df_clean["fx_rate"] = 1.0
+            df_clean["fx_rate"] = df_clean["fx_rate"].apply(safe_float).fillna(1.0).replace(0.0, 1.0)
 
             df_clean.loc[
                 df_clean["symbol"].astype(str).str.upper() == "CASH_EUR",
@@ -12396,7 +12903,7 @@ if page == "Dashboard Trading":
                     st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
-            port_subtab_sparks, port_subtab_positions = st.tabs(["Sparklines (90j)", "Positions"])
+            port_subtab_sparks, port_subtab_positions, port_subtab_map = st.tabs(["Sparklines (90j)", "Positions", "Map Monde"])
 
             with port_subtab_sparks:
                 st.subheader("Portfolio Sparklines (90j)")
@@ -12410,40 +12917,45 @@ if page == "Dashboard Trading":
 
             with port_subtab_positions:
                 st.subheader("Positions")
-                qty_basis = (
-                    df_clean.get("avgprice", pd.Series(0.0, index=df_clean.index))
-                    * df_clean.get("quantity", pd.Series(0.0, index=df_clean.index))
+                st.caption(
+                    "Valeurs en **devise locale** (loc) puis en **euros**. "
+                    "**P&L prix (EUR)** = performance de la valeur dans sa propre devise (convertie au taux actuel) ; "
+                    "**Impact FX (EUR)** = effet du change entre l'achat et aujourd'hui ; "
+                    "**P&L total (EUR)** = P&L prix + Impact FX. Pour les titres en EUR, l'impact FX est nul."
                 )
-                mv_basis = (
-                    df_clean.get("marketvalue", pd.Series(0.0, index=df_clean.index))
-                    - df_clean.get("unrealizedpnl", pd.Series(0.0, index=df_clean.index))
-                )
-                cost_basis = qty_basis.where(qty_basis > 0, mv_basis)
-                df_clean["unrealizedpnl_pct"] = 0.0
-                valid_basis = cost_basis != 0
-                df_clean.loc[valid_basis, "unrealizedpnl_pct"] = (
-                    df_clean.loc[valid_basis, "unrealizedpnl"] / cost_basis[valid_basis] * 100
-                )
-                df_clean["unrealizedpnl_pct"] = df_clean["unrealizedpnl_pct"].round(2)
-
-                cols_show = [
-                    "name",
-                    "symbol",
-                    "sector",
-                    "industry",
-                    "quantity",
-                    "avgprice",
-                    "lastprice",
-                    "marketvalue",
-                    "unrealizedpnl",
-                    "unrealizedpnl_pct",
+                _bd_display = [
+                    ("name", "Nom"), ("symbol", "Symbole"), ("sector", "Secteur"),
+                    ("quantity", "Qte"), ("currency", "Devise"),
+                    ("avg_loc", "PRU (loc)"), ("last_loc", "Cours (loc)"), ("mktval_loc", "Valeur (loc)"),
+                    ("fx_rate_entry", "Taux achat"), ("fx_rate", "Taux actuel"),
+                    ("cost_eur", "Cout (EUR)"), ("mktval_eur", "Valeur (EUR)"),
+                    ("pnl_prix_eur", "P&L prix (EUR)"), ("pnl_fx_eur", "Impact FX (EUR)"),
+                    ("pnl_total_eur", "P&L total (EUR)"), ("perf_prix_pct", "Perf prix %"),
                 ]
-                cols_exist = [c for c in cols_show if c in df_clean.columns]
-                df_view = df_clean[cols_exist].copy()
-                if "marketvalue" in df_view.columns:
-                    df_view = df_view.sort_values("marketvalue", ascending=False)
+                _avail = [(c, lbl) for c, lbl in _bd_display if c in df_clean.columns]
+                df_view = df_clean[[c for c, _ in _avail]].copy()
+                df_view = df_view[~df_view["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])]
+                for c in ["avg_loc", "last_loc", "mktval_loc", "cost_eur", "mktval_eur",
+                          "pnl_prix_eur", "pnl_fx_eur", "pnl_total_eur", "perf_prix_pct"]:
+                    if c in df_view.columns:
+                        df_view[c] = pd.to_numeric(df_view[c], errors="coerce").round(2)
+                for c in ["fx_rate", "fx_rate_entry"]:
+                    if c in df_view.columns:
+                        df_view[c] = pd.to_numeric(df_view[c], errors="coerce").round(4)
+                if "mktval_eur" in df_view.columns:
+                    df_view = df_view.sort_values("mktval_eur", ascending=False)
+                df_view = df_view.rename(columns=dict(_avail))
                 pos_key = f"positions_{selected_portfolio_key}" if selected_portfolio_key else "positions"
                 render_interactive_table(df_view, key_suffix=pos_key, hide_index=True)
+
+            with port_subtab_map:
+                st.subheader("Map Monde - Valorisation des positions")
+                st.plotly_chart(
+                    _build_ibkr_equity_exposure_map(df_clean),
+                    use_container_width=True,
+                    key=f"equity_exposure_map_{selected_portfolio_key or 'default'}",
+                )
+                st.caption("Chaque position est placee a son pays de cotation ; hauteur de barre proportionnelle a la valeur de marche EUR (vert = en gain, rouge = en perte). Survolez pour le detail.")
         else:
             st.info("Allocation vide.")
 
@@ -13367,15 +13879,21 @@ if page == "Dashboard Trading":
 # ============================================================
 
 elif page == "System Health (Monitoring)":
-    st.title("System Health - Fraicheur des donnees")
-    st.caption("Controle par symbole (AG2/AG3/AG4-SPE) + controle macro global (AG4) + verification des derniers runs.")
+    st.title("System Health — couverture et tradabilité AG1")
+    st.caption(
+        "Vue opérationnelle : état du système, couverture durable de l'univers et pré-éligibilité des symboles "
+        "aux entrées AG1. Les contrôles IBKR de contrat, permissions et liquidité restent exécutés au moment de l'ordre."
+    )
 
     if st.button("Rafraichir", key="refresh_system_health"):
         load_data.clear()
         load_system_health_page_data.clear()
+        _load_ibkr_operational_health.clear()
         st.rerun()
 
     system_health_data = load_system_health_page_data(
+        AG1_V4_CONSENSUS_DUCKDB_PATH,
+        ag1_v4_db_sig,
         DUCKDB_PATH,
         ag2_db_sig,
         AG3_DUCKDB_PATH,
@@ -13384,6 +13902,8 @@ elif page == "System Health (Monitoring)":
         ag4_db_sig,
         AG4_SPE_DUCKDB_PATH,
         ag4_spe_db_sig,
+        YF_ENRICH_DUCKDB_PATH,
+        yf_db_sig,
         HISTORY_DAYS_DEFAULT,
         HISTORY_LIMIT_DEFAULT,
         RUN_LOG_LIMIT,
@@ -13394,6 +13914,8 @@ elif page == "System Health (Monitoring)":
     funda_latest = _load_fundamentals_for_dashboard(system_health_data)
     symbol_news = _normalize_symbol_news_df(system_health_data.get("df_news_symbol_history", pd.DataFrame()))
     macro_news = _normalize_macro_news_df(system_health_data.get("df_news_macro_history", pd.DataFrame()))
+    yf_latest = normalize_cols(system_health_data.get("df_yf_enrichment_latest", pd.DataFrame()).copy())
+    ibkr_health = _load_ibkr_operational_health(IBKR_BROKER_URL)
 
     # Base symboles
     universe = normalize_cols(df_univ.copy()) if df_univ is not None and not df_univ.empty else pd.DataFrame()
@@ -13419,8 +13941,83 @@ elif page == "System Health (Monitoring)":
         universe["sector"] = ""
     if "industry" not in universe.columns:
         universe["industry"] = ""
+    if "asset_class" not in universe.columns:
+        universe["asset_class"] = "EQUITY"
+    if "symbol_yahoo" not in universe.columns:
+        universe["symbol_yahoo"] = universe["symbol"]
+    for col in ["exchange", "currency", "country"]:
+        if col not in universe.columns:
+            universe[col] = ""
 
-    health_df = universe[["symbol", "name", "sector", "industry"]].drop_duplicates(subset=["symbol"]).copy()
+    def _bool_series(df: pd.DataFrame, col: str, default: bool = False) -> pd.Series:
+        if col not in df.columns:
+            return pd.Series(default, index=df.index, dtype=bool)
+        raw = df[col]
+        out = pd.Series(default, index=df.index, dtype=bool)
+        numeric = pd.to_numeric(raw, errors="coerce")
+        out.loc[numeric.notna()] = numeric.loc[numeric.notna()] != 0
+        text = raw.astype(str).str.strip().str.lower()
+        out.loc[text.isin(["true", "yes", "y", "oui", "ok", "enabled"])] = True
+        out.loc[text.isin(["false", "no", "n", "non", "disabled", "", "none", "nan"])] = False
+        return out.fillna(default).astype(bool)
+
+    for col in ["segments", "quarantine_reason", "quarantine_reason_detail"]:
+        if col not in universe.columns:
+            universe[col] = ""
+        universe[col] = universe[col].fillna("").astype(str)
+
+    universe["quarantine_active"] = _bool_series(universe, "quarantine_active", default=False)
+    universe["is_held"] = _bool_series(universe, "is_held", default=False)
+    universe["is_core"] = _bool_series(universe, "is_core", default=False)
+    universe["is_watchlist"] = _bool_series(universe, "is_watchlist", default=False)
+    universe["asset_class"] = universe["asset_class"].fillna("EQUITY").astype(str).str.strip().str.upper()
+    universe["symbol_yahoo"] = universe["symbol_yahoo"].fillna(universe["symbol"]).astype(str).str.strip().str.upper()
+    universe["segment_active"] = universe["is_held"] | universe["is_core"] | universe["is_watchlist"]
+    universe["ag1_scanned"] = (
+        universe["asset_class"].isin(["EQUITY", "ETF", "CRYPTO"])
+        & ~universe["symbol_yahoo"].str.endswith("=X", na=False)
+    )
+    # Le validateur d'ordres AG1 V4 n'autorise actuellement que EQUITY et ETF.
+    universe["ag1_order_asset_supported"] = universe["asset_class"].isin(["EQUITY", "ETF"])
+
+    def _monitor_scope(row: pd.Series) -> str:
+        if bool(row.get("is_held")):
+            return "Held"
+        if bool(row.get("quarantine_active")):
+            return "Quarantaine"
+        if bool(row.get("is_core")):
+            return "Core"
+        if bool(row.get("is_watchlist")):
+            return "Watchlist"
+        return "Autre"
+
+    universe["perimetre_monitoring"] = universe.apply(_monitor_scope, axis=1)
+    universe["monitor_active"] = (~universe["quarantine_active"]) | universe["is_held"]
+
+    base_cols = [
+        "symbol",
+        "name",
+        "sector",
+        "industry",
+        "asset_class",
+        "symbol_yahoo",
+        "exchange",
+        "currency",
+        "country",
+        "segments",
+        "perimetre_monitoring",
+        "monitor_active",
+        "quarantine_active",
+        "quarantine_reason",
+        "quarantine_reason_detail",
+        "is_held",
+        "is_core",
+        "is_watchlist",
+        "segment_active",
+        "ag1_scanned",
+        "ag1_order_asset_supported",
+    ]
+    health_df = universe[[c for c in base_cols if c in universe.columns]].drop_duplicates(subset=["symbol"]).copy()
 
     # Dates AG2 (technique)
     if tech_latest is not None and not tech_latest.empty and "symbol" in tech_latest.columns:
@@ -13431,7 +14028,17 @@ elif page == "System Health (Monitoring)":
             tk["last_tech_date"] = pd.to_datetime(tk[tech_ts_col], errors="coerce", utc=True)
             tk = tk.sort_values("last_tech_date", ascending=False)
             tk = tk.drop_duplicates(subset=["symbol"], keep="first")
-            health_df = health_df.merge(tk[["symbol", "last_tech_date"]], on="symbol", how="left")
+            tech_cols = [
+                "symbol",
+                "last_tech_date",
+                "data_age_h1_hours",
+                "data_age_d1_hours",
+                "h1_status",
+                "d1_status",
+                "ai_decision",
+                "ai_quality",
+            ]
+            health_df = health_df.merge(tk[[c for c in tech_cols if c in tk.columns]], on="symbol", how="left")
 
     # Dates AG3 (fondamentale)
     if funda_latest is not None and not funda_latest.empty and "symbol" in funda_latest.columns:
@@ -13443,6 +14050,28 @@ elif page == "System Health (Monitoring)":
             fd = fd.sort_values("last_funda_date", ascending=False)
             fd = fd.drop_duplicates(subset=["symbol"], keep="first")
             health_df = health_df.merge(fd[["symbol", "last_funda_date"]], on="symbol", how="left")
+
+    # Enrichissement YFinance lu par R8 AG1.
+    if yf_latest is not None and not yf_latest.empty and "symbol" in yf_latest.columns:
+        yf = yf_latest.copy()
+        yf["symbol"] = yf["symbol"].astype(str).str.strip().str.upper()
+        yf_ts_col = _first_existing_column(yf, ["fetched_at", "quote_fetched_at", "created_at"])
+        if yf_ts_col:
+            yf["last_yf_date"] = pd.to_datetime(yf[yf_ts_col], errors="coerce", utc=True)
+        else:
+            yf["last_yf_date"] = pd.NaT
+        yf = yf.sort_values("last_yf_date", ascending=False).drop_duplicates(subset=["symbol"], keep="first")
+        yf_cols = [
+            "symbol",
+            "last_yf_date",
+            "quote_ok",
+            "regular_market_price",
+            "spread_pct",
+            "volume",
+            "market_state",
+            "quote_error",
+        ]
+        health_df = health_df.merge(yf[[c for c in yf_cols if c in yf.columns]], on="symbol", how="left")
 
     # Dates AG4-SPE (news symbole)
     if symbol_news is not None and not symbol_news.empty and "symbol" in symbol_news.columns:
@@ -13475,9 +14104,70 @@ elif page == "System Health (Monitoring)":
 
     health_df["tech_age_days"] = _age_days(health_df.get("last_tech_date", pd.Series(pd.NaT, index=health_df.index)))
     health_df["funda_age_days"] = _age_days(health_df.get("last_funda_date", pd.Series(pd.NaT, index=health_df.index)))
+    health_df["yf_age_days"] = _age_days(health_df.get("last_yf_date", pd.Series(pd.NaT, index=health_df.index)))
     health_df["news_age_days"] = _age_days(health_df.get("last_news_date", pd.Series(pd.NaT, index=health_df.index)))
 
-    def _status_fr(age_series: pd.Series, date_series: pd.Series, ok_days: int, warn_days: int) -> pd.Series:
+    tech_present = pd.to_datetime(
+        health_df.get("last_tech_date", pd.Series(pd.NaT, index=health_df.index)),
+        errors="coerce",
+        utc=True,
+    ).notna()
+    funda_present = pd.to_datetime(
+        health_df.get("last_funda_date", pd.Series(pd.NaT, index=health_df.index)),
+        errors="coerce",
+        utc=True,
+    ).notna()
+    yf_present = pd.to_datetime(
+        health_df.get("last_yf_date", pd.Series(pd.NaT, index=health_df.index)),
+        errors="coerce",
+        utc=True,
+    ).notna()
+
+    h1_age_h = pd.to_numeric(
+        health_df.get("data_age_h1_hours", pd.Series(float("nan"), index=health_df.index)),
+        errors="coerce",
+    )
+    d1_age_h = pd.to_numeric(
+        health_df.get("data_age_d1_hours", pd.Series(float("nan"), index=health_df.index)),
+        errors="coerce",
+    )
+    # Repli sur l'âge du signal si les colonnes d'âge marché ne sont pas disponibles.
+    signal_age_h = pd.to_numeric(health_df["tech_age_days"], errors="coerce") * 24.0
+    # Guard against a frozen data_age masking a stale bar: take the worse of the
+    # stored market-data age and the real age from the last signal/bar date.
+    health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, signal_age_h], axis=1).max(axis=1)
+    health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, signal_age_h], axis=1).max(axis=1)
+    health_df["yf_age_hours"] = pd.to_numeric(health_df["yf_age_days"], errors="coerce") * 24.0
+
+    health_df["tech_gate_ready"] = (
+        tech_present
+        & (health_df["h1_age_hours_effective"] <= 96.0)
+        & (health_df["d1_age_hours_effective"] <= 240.0)
+    )
+    health_df["funda_usable"] = funda_present & (health_df["funda_age_days"] <= 7.0)
+    quote_ok = _bool_series(health_df, "quote_ok", default=False)
+    regular_price = pd.to_numeric(
+        health_df.get("regular_market_price", pd.Series(float("nan"), index=health_df.index)),
+        errors="coerce",
+    )
+    spread_pct = pd.to_numeric(
+        health_df.get("spread_pct", pd.Series(float("nan"), index=health_df.index)),
+        errors="coerce",
+    )
+    health_df["yf_fresh"] = yf_present & (health_df["yf_age_hours"] <= 72.0)
+    health_df["quote_ok_bool"] = quote_ok
+    health_df["yf_quote_usable"] = health_df["yf_fresh"] & quote_ok & regular_price.gt(0)
+    health_df["spread_observed"] = spread_pct.notna()
+    # Mirror the AG1 V4 liquidity gate (SPREAD_UNQUOTED): a usable quote with an
+    # adequate daily volume is pre-tradable even when the instantaneous bid/ask is
+    # unquoted (e.g. Euronext .PA outside RTH). The final spread is resolved from
+    # IBKR snapshots at order time; the volume floor keeps thin/nano names out.
+    _min_daily_volume = 5000.0
+    _volume_num = pd.to_numeric(health_df.get("volume", pd.Series(float("nan"), index=health_df.index)), errors="coerce")
+    health_df["volume_ok"] = _volume_num >= _min_daily_volume
+    health_df["spread_exploitable"] = health_df["yf_quote_usable"] & (health_df["spread_observed"] | health_df["volume_ok"])
+
+    def _status_fr(age_series: pd.Series, date_series: pd.Series, ok_days: float, warn_days: float) -> pd.Series:
         out = pd.Series("Manquant", index=age_series.index, dtype=object)
         valid = pd.to_datetime(date_series, errors="coerce", utc=True).notna()
         out.loc[valid & (age_series <= ok_days)] = "A jour"
@@ -13485,35 +14175,624 @@ elif page == "System Health (Monitoring)":
         out.loc[valid & (age_series > warn_days)] = "En retard"
         return out
 
-    health_df["tech_statut"] = _status_fr(health_df["tech_age_days"], health_df.get("last_tech_date"), ok_days=3, warn_days=7)
-    health_df["funda_statut"] = _status_fr(health_df["funda_age_days"], health_df.get("last_funda_date"), ok_days=30, warn_days=90)
-    health_df["news_statut"] = _status_fr(health_df["news_age_days"], health_df.get("last_news_date"), ok_days=2, warn_days=7)
+    def _status_by_scope(
+        age_col: str,
+        date_col: str,
+        held_core_ok_days: float,
+        held_core_warn_days: float,
+        watch_ok_days: float,
+        watch_warn_days: float,
+        other_ok_days: float,
+        other_warn_days: float,
+    ) -> pd.Series:
+        out = pd.Series("Hors perimetre", index=health_df.index, dtype=object)
+        active = health_df.get("monitor_active", pd.Series(True, index=health_df.index)).fillna(True).astype(bool)
+        scope = health_df.get("perimetre_monitoring", pd.Series("Autre", index=health_df.index)).fillna("Autre").astype(str)
+        age = health_df.get(age_col, pd.Series(float("nan"), index=health_df.index))
+        dates = health_df.get(date_col, pd.Series(pd.NaT, index=health_df.index))
 
-    sev_map = {"A jour": 0, "A surveiller": 1, "En retard": 2, "Manquant": 3}
-    inv_sev = {0: "A jour", 1: "A surveiller", 2: "En retard", 3: "Manquant"}
+        masks = [
+            (active & scope.isin(["Held", "Core"]), held_core_ok_days, held_core_warn_days),
+            (active & scope.eq("Watchlist"), watch_ok_days, watch_warn_days),
+            (active & ~scope.isin(["Held", "Core", "Watchlist"]), other_ok_days, other_warn_days),
+        ]
+        for mask, ok_days, warn_days in masks:
+            if mask.any():
+                out.loc[mask] = _status_fr(age.loc[mask], dates.loc[mask], ok_days=ok_days, warn_days=warn_days)
+
+        out.loc[~active] = "Quarantaine"
+        return out
+
+    health_df["tech_statut"] = _status_by_scope(
+        "tech_age_days",
+        "last_tech_date",
+        held_core_ok_days=1.5,
+        held_core_warn_days=3.5,
+        watch_ok_days=7,
+        watch_warn_days=14,
+        other_ok_days=7,
+        other_warn_days=14,
+    )
+    health_df["funda_statut"] = _status_by_scope(
+        "funda_age_days",
+        "last_funda_date",
+        held_core_ok_days=2,
+        held_core_warn_days=5,
+        watch_ok_days=6,
+        watch_warn_days=10,
+        other_ok_days=10,
+        other_warn_days=20,
+    )
+
+    news_dates = pd.to_datetime(health_df.get("last_news_date", pd.Series(pd.NaT, index=health_df.index)), errors="coerce", utc=True)
+    health_df["news_statut"] = pd.Series("Sans news", index=health_df.index, dtype=object)
+    active_monitor = health_df.get("monitor_active", pd.Series(True, index=health_df.index)).fillna(True).astype(bool)
+    health_df.loc[active_monitor & news_dates.notna() & (health_df["news_age_days"] <= 7), "news_statut"] = "News recente"
+    health_df.loc[active_monitor & news_dates.notna() & (health_df["news_age_days"] > 7), "news_statut"] = "News ancienne"
+    health_df.loc[~active_monitor, "news_statut"] = "Quarantaine"
+
+    sev_map = {"Quarantaine": -1, "Hors perimetre": -1, "A jour": 0, "A surveiller": 1, "En retard": 2, "Manquant": 3}
+    inv_sev = {-1: "Hors perimetre", 0: "A jour", 1: "A surveiller", 2: "En retard", 3: "Manquant"}
     sev_cols = []
-    for src in ["tech", "funda", "news"]:
+    for src in ["tech", "funda"]:
         sev_col = f"{src}_sev"
         health_df[sev_col] = health_df[f"{src}_statut"].map(sev_map).fillna(3).astype(int)
         sev_cols.append(sev_col)
     health_df["global_sev"] = health_df[sev_cols].max(axis=1)
     health_df["statut_global"] = health_df["global_sev"].map(inv_sev).fillna("Manquant")
+    health_df.loc[~active_monitor, "statut_global"] = "Quarantaine"
+    health_df.loc[~active_monitor, "global_sev"] = -1
 
-    # KPI symboles
+    # Couverture et pré-éligibilité AG1.
+    active_monitor = health_df["monitor_active"].fillna(True).astype(bool)
+    quarantine = health_df["quarantine_active"].fillna(False).astype(bool)
+    supported_asset = health_df["ag1_order_asset_supported"].fillna(False).astype(bool)
+    scanned_by_ag1 = health_df["ag1_scanned"].fillna(False).astype(bool)
+    segmented = health_df["segment_active"].fillna(False).astype(bool)
+    ai_decision = health_df.get("ai_decision", pd.Series("", index=health_df.index)).fillna("").astype(str).str.upper()
+
+    health_df["ag1_entry_scope"] = scanned_by_ag1 & supported_asset & ~quarantine
+    health_df["ag1_entry_ready_data"] = (
+        health_df["ag1_entry_scope"]
+        & segmented
+        & health_df["tech_gate_ready"]
+        & health_df["spread_exploitable"]
+        & ai_decision.ne("REJECT")
+    )
+    ibkr_session_ok = bool(
+        ibkr_health.get("reachable")
+        and ibkr_health.get("authenticated")
+        and ibkr_health.get("connected")
+        and ibkr_health.get("established")
+    )
+    health_df["ag1_entry_executable_now"] = health_df["ag1_entry_ready_data"] & ibkr_session_ok
+
+    def _ag1_block_reasons(row: pd.Series) -> str:
+        reasons: list[str] = []
+        if not bool(row.get("ag1_scanned")):
+            reasons.append("hors périmètre R8")
+        elif not bool(row.get("ag1_order_asset_supported")):
+            reasons.append(f"ordre {str(row.get('asset_class') or 'inconnu')} non supporté")
+        if bool(row.get("quarantine_active")):
+            reasons.append("quarantaine active")
+        if not bool(row.get("segment_active")):
+            reasons.append("aucun segment AG2/AG3")
+        if not bool(row.get("tech_gate_ready")):
+            if pd.isna(row.get("last_tech_date")):
+                reasons.append("technique absente")
+            else:
+                if safe_float(row.get("h1_age_hours_effective")) > 96.0:
+                    reasons.append("H1 > 96h")
+                if safe_float(row.get("d1_age_hours_effective")) > 240.0:
+                    reasons.append("D1 > 240h")
+        if not bool(row.get("yf_quote_usable")):
+            if pd.isna(row.get("last_yf_date")):
+                reasons.append("YF absent")
+            elif safe_float(row.get("yf_age_hours")) > 72.0:
+                reasons.append("YF > 72h")
+            elif not bool(row.get("quote_ok_bool")):
+                reasons.append("quote YF KO")
+            else:
+                reasons.append("prix YF absent")
+        if bool(row.get("yf_quote_usable")) and not bool(row.get("spread_exploitable")):
+            reasons.append("liquidité non préqualifiée")
+        if str(row.get("ai_decision") or "").upper() == "REJECT":
+            reasons.append("AG2 LLM REJECT")
+        return " · ".join(dict.fromkeys(reasons))
+
+    health_df["blocages_ag1"] = health_df.apply(_ag1_block_reasons, axis=1)
+
+    def _ag1_state(row: pd.Series) -> str:
+        if bool(row.get("is_held")) and bool(row.get("quarantine_active")):
+            return "SURVEILLANCE / SORTIE"
+        if not bool(row.get("ag1_scanned")):
+            return "HORS PÉRIMÈTRE"
+        if not bool(row.get("ag1_order_asset_supported")):
+            return "ORDRE NON SUPPORTÉ"
+        if bool(row.get("ag1_entry_ready_data")):
+            if not bool(row.get("funda_usable")):
+                return "PRÉ-ÉLIGIBLE · FUNDA NEUTRALISÉ"
+            return "PRÉ-ÉLIGIBLE ENTRÉE"
+        return "BLOQUÉ ENTRÉE"
+
+    health_df["etat_ag1"] = health_df.apply(_ag1_state, axis=1)
+
+    monitored_df = health_df[active_monitor & scanned_by_ag1].copy()
+    entry_scope_df = health_df[health_df["ag1_entry_scope"]].copy()
     total_symbols = len(health_df)
-    k_ok = int((health_df["statut_global"] == "A jour").sum())
-    k_warn = int((health_df["statut_global"] == "A surveiller").sum())
-    k_late = int((health_df["statut_global"] == "En retard").sum())
-    k_miss = int((health_df["statut_global"] == "Manquant").sum())
+    total_quarantine = int(quarantine.sum())
+    total_scanned = int(scanned_by_ag1.sum())
+    segmented_scanned = int((scanned_by_ag1 & segmented).sum())
+    tech_ready_count = int((scanned_by_ag1 & active_monitor & health_df["tech_gate_ready"]).sum())
+    funda_ready_count = int((scanned_by_ag1 & active_monitor & health_df["funda_usable"]).sum())
+    yf_ready_count = int((scanned_by_ag1 & active_monitor & health_df["yf_quote_usable"]).sum())
+    entry_ready_count = int(health_df["ag1_entry_ready_data"].sum())
+    entry_scope_count = len(entry_scope_df)
+    entry_ready_pct = (entry_ready_count / entry_scope_count * 100.0) if entry_scope_count else 0.0
+    segment_pct = (segmented_scanned / total_scanned * 100.0) if total_scanned else 0.0
 
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Symboles suivis", total_symbols)
-    c2.metric("A jour", k_ok)
-    c3.metric("A surveiller", k_warn)
-    c4.metric("En retard", k_late)
-    c5.metric("Manquant", k_miss)
+    held_mask = health_df["is_held"].fillna(False).astype(bool)
+    held_issues = health_df[
+        held_mask
+        & (
+            ~health_df["tech_gate_ready"]
+            | ~health_df["yf_quote_usable"]
+            | ~health_df["segment_active"]
+        )
+    ]
+    unsegmented_count = int((scanned_by_ag1 & ~segmented).sum())
 
-    # Macro globale (independante des symboles)
+    def _pipeline_probe(df_runs: pd.DataFrame, max_age_h: float) -> dict[str, object]:
+        result = {"ok": False, "age_h": None, "status": "NO_DATA"}
+        if df_runs is None or df_runs.empty:
+            return result
+        wk = normalize_cols(df_runs.copy())
+        start_col = _first_existing_column(wk, ["started_at", "ts_start", "created_at"])
+        end_col = _first_existing_column(wk, ["finished_at", "ts_end"])
+        if not start_col:
+            return result
+        wk["_start"] = pd.to_datetime(wk[start_col], errors="coerce", utc=True)
+        wk["_end"] = pd.to_datetime(wk[end_col], errors="coerce", utc=True) if end_col else pd.NaT
+        wk["_ref"] = wk["_end"].where(wk["_end"].notna(), wk["_start"])
+        wk = wk.dropna(subset=["_ref"]).sort_values("_ref", ascending=False)
+        if wk.empty:
+            return result
+        if "status" in wk.columns:
+            status_series = wk["status"].fillna("").astype(str).str.upper().str.strip()
+            final_mask = wk["_end"].notna() | status_series.isin(["SUCCESS", "PARTIAL", "FAILED", "NO_DATA"])
+            final_rows = wk[final_mask]
+            row = final_rows.iloc[0] if not final_rows.empty else wk.iloc[0]
+        else:
+            row = wk.iloc[0]
+        status_value = row.get("status")
+        if status_value is None or pd.isna(status_value) or not str(status_value).strip():
+            status_value = "SUCCESS" if pd.notna(row["_end"]) else "RUNNING"
+        raw_status = str(status_value).upper().strip()
+        age_h = max(0.0, (now_utc - row["_ref"]).total_seconds() / 3600.0)
+        result["age_h"] = age_h
+        result["status"] = raw_status
+        result["ok"] = raw_status not in {"FAILED", "ERROR", "BLOQUE"} and age_h <= max_age_h
+        return result
+
+    pipeline_checks = {
+        "AG1": _pipeline_probe(system_health_data.get("df_ag1_runs", pd.DataFrame()), 18.0),
+        "AG2": _pipeline_probe(system_health_data.get("df_runs", pd.DataFrame()), 36.0),
+        "AG3": _pipeline_probe(system_health_data.get("df_funda_runs", pd.DataFrame()), 30.0),
+        "AG4": _pipeline_probe(system_health_data.get("df_news_macro_runs", pd.DataFrame()), 36.0),
+        "AG4-SPE": _pipeline_probe(system_health_data.get("df_news_symbol_runs", pd.DataFrame()), 36.0),
+    }
+
+    system_reasons: list[str] = []
+    system_level = "NOMINAL"
+    if not ibkr_session_ok:
+        system_level = "CRITIQUE"
+        system_reasons.append("session IBKR non opérationnelle")
+    if entry_scope_count and entry_ready_count == 0:
+        system_level = "CRITIQUE"
+        system_reasons.append("aucun symbole pré-éligible à une entrée")
+    if not held_issues.empty:
+        system_level = "CRITIQUE" if system_level == "CRITIQUE" else "DÉGRADÉ"
+        system_reasons.append(f"{len(held_issues)} position(s) détenue(s) avec couverture incomplète")
+    if unsegmented_count:
+        system_level = "CRITIQUE" if system_level == "CRITIQUE" else "DÉGRADÉ"
+        system_reasons.append(f"{unsegmented_count} symbole(s) AG1 sans segment AG2/AG3")
+    if entry_scope_count and entry_ready_pct < 90.0:
+        system_level = "CRITIQUE" if system_level == "CRITIQUE" else "DÉGRADÉ"
+        system_reasons.append(f"pré-éligibilité entrée {entry_ready_pct:.1f}%")
+    failed_pipelines = [name for name, check in pipeline_checks.items() if not bool(check.get("ok"))]
+    if failed_pipelines:
+        if "AG1" in failed_pipelines:
+            system_level = "CRITIQUE"
+        elif system_level != "CRITIQUE":
+            system_level = "DÉGRADÉ"
+        system_reasons.append("pipeline(s) à vérifier : " + ", ".join(failed_pipelines))
+    if not system_reasons:
+        system_reasons.append("IBKR connecté, positions détenues couvertes, univers segmenté et données AG1 dans les seuils")
+
+    # Vue synthétique : l'entonnoir contient uniquement des filtres cumulatifs réels.
+    # Les absences Funda/News restent affichées séparément car elles ne bloquent pas
+    # une entrée AG1 dans la logique live.
+    ag1_asset_scope = scanned_by_ag1 & supported_asset
+    funnel_masks = [
+        pd.Series(True, index=health_df.index, dtype=bool),
+        ag1_asset_scope,
+        health_df["ag1_entry_scope"],
+        health_df["ag1_entry_scope"] & segmented,
+        health_df["ag1_entry_scope"] & segmented & health_df["tech_gate_ready"],
+        (
+            health_df["ag1_entry_scope"]
+            & segmented
+            & health_df["tech_gate_ready"]
+            & health_df["spread_exploitable"]
+        ),
+        health_df["ag1_entry_ready_data"],
+    ]
+    funnel_labels = [
+        "Univers complet",
+        "Actifs exécutables AG1",
+        "Hors quarantaine",
+        "Classifiés AG2/AG3",
+        "Technique dans les seuils",
+        "Quote + spread exploitables",
+        "Pré-tradables AG1",
+    ]
+    funnel_values = [int(mask.sum()) for mask in funnel_masks]
+
+    no_news_mask = health_df["ag1_entry_scope"] & pd.to_datetime(
+        health_df.get("last_news_date", pd.Series(pd.NaT, index=health_df.index)),
+        errors="coerce",
+        utc=True,
+    ).isna()
+    coverage_losses = pd.DataFrame(
+        {
+            "Défaut": [
+                "Quarantaine",
+                "Fondamental absent/périmé",
+                "Technique absente/hors seuil",
+                "News symbole absente (30j)",
+            ],
+            "Symboles": [
+                total_quarantine,
+                int((health_df["ag1_entry_scope"] & ~health_df["funda_usable"]).sum()),
+                int((health_df["ag1_entry_scope"] & ~health_df["tech_gate_ready"]).sum()),
+                int(no_news_mask.sum()),
+            ],
+            "Nature": ["Bloquant", "Neutralisé", "Bloquant", "Informatif"],
+        }
+    )
+
+    def _symbol_examples(mask: pd.Series, limit: int = 8) -> str:
+        if mask is None or not bool(mask.any()):
+            return ""
+        return ", ".join(health_df.loc[mask, "symbol"].astype(str).head(limit).tolist())
+
+    def _loss_pct(before: int, loss: int) -> str:
+        return f"{(loss / before * 100.0):.1f}%" if before else "n/a"
+
+    funnel_transition_rows: list[dict[str, object]] = []
+    transition_specs = [
+        (
+            "Univers complet → Actifs exécutables AG1",
+            funnel_masks[0],
+            funnel_masks[1],
+            "Actifs hors périmètre d'ordre AG1 ou non scannés par R8.",
+            "Nettoyer le typage asset_class / whitelist AG1 ; garder FX hors périmètre tant que désactivé.",
+            "Faible sauf erreur de mapping asset_class.",
+            False,
+        ),
+        (
+            "Actifs exécutables AG1 → Hors quarantaine",
+            funnel_masks[1],
+            funnel_masks[2],
+            "Symboles placés en quarantaine par Universe Health.",
+            "Pas d'action de masse : investiguer seulement les symboles stratégiques ou détenus.",
+            "Volontairement limité : la quarantaine protège le système.",
+            True,
+        ),
+        (
+            "Hors quarantaine → Classifiés AG2/AG3",
+            funnel_masks[2],
+            funnel_masks[3],
+            "Symboles sans segment actif HELD / CORE / WATCHLIST.",
+            "Classer les symboles non segmentés ou laisser le refresh AG2UHQ les mettre en WATCHLIST au prochain run.",
+            "Élevé si des ajouts récents restent non classifiés.",
+            False,
+        ),
+        (
+            "Classifiés AG2/AG3 → Technique dans les seuils",
+            funnel_masks[3],
+            funnel_masks[4],
+            "Analyse technique AG2 absente ou hors seuil AG1 : H1 > 96 h ou D1 > 240 h.",
+            "Relancer/corriger AG2 Held+Core ou Watchlist ; vérifier locks DuckDB et volumes de batch.",
+            "Élevé sur WATCHLIST si la rotation nocturne n'a pas encore couvert tout le lot.",
+            False,
+        ),
+        (
+            "Technique dans les seuils → Quote + spread exploitables",
+            funnel_masks[4],
+            funnel_masks[5],
+            "Quote YF inutilisable ou spread non observé.",
+            "Priorité : diagnostiquer spread_pct absent ; si quote OK mais spread absent, ajouter une source IBKR market-data ou assouplir le pré-gate UI et laisser IBKR trancher au moment de l'ordre.",
+            "Très élevé : c'est le plus gros levier visible dans l'entonnoir.",
+            False,
+        ),
+        (
+            "Quote + spread exploitables → Pré-tradables AG1",
+            funnel_masks[5],
+            funnel_masks[6],
+            "Filtre hybride AG2→AG1 : ai_decision=REJECT.",
+            "Auditer les REJECT si trop agressifs ; ne pas forcer sans revoir la logique AG2.",
+            "Variable, dépend du signal technique.",
+            False,
+        ),
+    ]
+    for etage, before_mask, after_mask, cause, action, leverage, muted in transition_specs:
+        before_count = int(before_mask.sum())
+        after_count = int(after_mask.sum())
+        loss_mask = before_mask & ~after_mask
+        loss_count = int(loss_mask.sum())
+        if loss_count or not muted:
+            funnel_transition_rows.append(
+                {
+                    "Transition": etage,
+                    "Avant": before_count,
+                    "Après": after_count,
+                    "Perte": loss_count,
+                    "% perte": _loss_pct(before_count, loss_count),
+                    "Cause principale": cause,
+                    "Plan d'action / levier": action,
+                    "Effet attendu": leverage,
+                    "Exemples": _symbol_examples(loss_mask),
+                }
+            )
+
+    tech_to_quote_loss = funnel_masks[4] & ~funnel_masks[5]
+    quote_price_ok = regular_price.gt(0)
+    tech_quote_detail_specs = [
+        (
+            "YF absent",
+            tech_to_quote_loss & ~yf_present,
+            "Aucune ligne fraîche dans l'enrichissement YF.",
+            "Relancer YF-ENRICH ; vérifier ticker local / suffixe place.",
+        ),
+        (
+            "YF trop ancien (>72h)",
+            tech_to_quote_loss & yf_present & health_df["yf_age_hours"].gt(72.0),
+            "La dernière quote YF dépasse le seuil AG1 de 72 h.",
+            "Relancer YF-ENRICH ; surveiller les échecs par place de cotation.",
+        ),
+        (
+            "quote_ok=false",
+            tech_to_quote_loss
+            & yf_present
+            & health_df["yf_age_hours"].le(72.0)
+            & ~quote_ok,
+            "YF a répondu mais le flag quote_ok est faux.",
+            "Corriger mapping ticker/source ou exclure les tickers non servis.",
+        ),
+        (
+            "Prix YF absent/non positif",
+            tech_to_quote_loss
+            & yf_present
+            & health_df["yf_age_hours"].le(72.0)
+            & quote_ok
+            & ~quote_price_ok,
+            "regular_market_price est manquant ou non exploitable.",
+            "Vérifier le champ prix dans YF-ENRICH ; fallback possible sur previous_close si validé.",
+        ),
+        (
+            "Spread + volume insuffisants",
+            tech_to_quote_loss
+            & health_df["yf_quote_usable"]
+            & ~health_df["spread_exploitable"],
+            "Ni spread coté ni volume quotidien suffisant. Les noms liquides sans spread instantané (ex. .PA hors séance) sont désormais comptés exploitables et résolus via IBKR à l'ordre.",
+            "Le contrôle IBKR tranche le spread au moment de l'ordre ; n'investiguer que si le volume est réellement absent.",
+        ),
+    ]
+    remaining_tech_quote_loss = tech_to_quote_loss.copy()
+    tech_quote_detail_rows: list[dict[str, object]] = []
+    for cause, mask, detail, action in tech_quote_detail_specs:
+        exclusive_mask = mask & remaining_tech_quote_loss
+        remaining_tech_quote_loss = remaining_tech_quote_loss & ~exclusive_mask
+        count = int(exclusive_mask.sum())
+        if count:
+            tech_quote_detail_rows.append(
+                {
+                    "Cause exclusive": cause,
+                    "Symboles": count,
+                    "% de la perte": _loss_pct(int(tech_to_quote_loss.sum()), count),
+                    "Diagnostic": detail,
+                    "Bras de levier": action,
+                    "Exemples": _symbol_examples(exclusive_mask),
+                }
+            )
+    if bool(remaining_tech_quote_loss.any()):
+        count = int(remaining_tech_quote_loss.sum())
+        tech_quote_detail_rows.append(
+            {
+                "Cause exclusive": "Autre",
+                "Symboles": count,
+                "% de la perte": _loss_pct(int(tech_to_quote_loss.sum()), count),
+                "Diagnostic": "Perte non expliquée par les champs YF/spread attendus.",
+                "Bras de levier": "Inspecter les colonnes de l'enrichissement et la règle de pré-gate.",
+                "Exemples": _symbol_examples(remaining_tech_quote_loss),
+            }
+        )
+
+    st.markdown("## Entonnoir de tradabilité")
+    funnel_col, losses_col = st.columns([1.45, 1.0])
+    with funnel_col:
+        funnel_fig = go.Figure(
+            go.Funnel(
+                y=funnel_labels,
+                x=funnel_values,
+                texttemplate="%{value} · %{percentInitial:.1%} de l'univers",
+                textposition="inside",
+                marker={
+                    "color": ["#4f8cff", "#3d9de8", "#27aeba", "#20b486", "#70b85b", "#c5a63b", "#f59e0b"],
+                    "line": {"color": "rgba(255,255,255,.24)", "width": 1},
+                },
+                connector={"line": {"color": "rgba(148,163,184,.35)", "width": 1}},
+                hovertemplate="<b>%{y}</b><br>%{x} symboles<br>%{percentInitial:.1%} de l'univers<extra></extra>",
+            )
+        )
+        funnel_fig.update_layout(
+            height=430,
+            margin=dict(l=10, r=10, t=18, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e5e7eb"),
+            showlegend=False,
+        )
+        st.plotly_chart(funnel_fig, use_container_width=True, key="system_health_ag1_funnel")
+
+    with losses_col:
+        loss_colors = coverage_losses["Nature"].map(
+            {"Bloquant": "#ef4444", "Neutralisé": "#f59e0b", "Informatif": "#38bdf8"}
+        ).tolist()
+        losses_fig = go.Figure(
+            go.Bar(
+                x=coverage_losses["Symboles"],
+                y=coverage_losses["Défaut"],
+                orientation="h",
+                text=coverage_losses["Symboles"],
+                textposition="outside",
+                marker_color=loss_colors,
+                customdata=coverage_losses[["Nature"]],
+                hovertemplate="<b>%{y}</b><br>%{x} symboles<br>%{customdata[0]}<extra></extra>",
+            )
+        )
+        losses_fig.update_layout(
+            title="Pertes de couverture par source",
+            height=430,
+            margin=dict(l=10, r=35, t=55, b=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e5e7eb"),
+            xaxis=dict(title="Symboles", gridcolor="rgba(148,163,184,.16)"),
+            yaxis=dict(autorange="reversed"),
+            showlegend=False,
+        )
+        st.plotly_chart(losses_fig, use_container_width=True, key="system_health_coverage_losses")
+
+    st.caption(
+        "L'entonnoir applique uniquement les filtres cumulatifs réellement bloquants. "
+        "Fondamental absent/périmé : score neutralisé à 50, sans blocage. "
+        "News symbole absente : information de couverture, pas un rejet AG1. "
+        "Le dernier étage reste une pré-tradabilité avant résolution contrat, permissions de place, cash et liquidité IBKR."
+    )
+
+    with st.expander("Plan d'action par perte entre étages", expanded=True):
+        st.markdown(
+            "Lecture opérationnelle : chaque ligne compare deux étages consécutifs de l'entonnoir. "
+            "La quarantaine est affichée pour traçabilité, mais n'appelle pas d'action de masse."
+        )
+        render_interactive_table(
+            pd.DataFrame(funnel_transition_rows),
+            key_suffix="system_health_funnel_transition_actions",
+            height=330,
+        )
+
+        st.markdown("#### Zoom : chute `Technique dans les seuils` → `Quote + spread exploitables`")
+        tech_quote_loss_count = int(tech_to_quote_loss.sum())
+        if tech_quote_loss_count:
+            st.info(
+                f"{tech_quote_loss_count} symbole(s) sortent à cette transition. "
+                "Le tableau ci-dessous force une cause exclusive par symbole, afin d'identifier le levier dominant."
+            )
+            render_interactive_table(
+                pd.DataFrame(tech_quote_detail_rows),
+                key_suffix="system_health_tech_quote_loss_detail",
+                height=280,
+            )
+            if tech_quote_detail_rows and tech_quote_detail_rows[0].get("Cause exclusive") == "Spread absent":
+                st.warning(
+                    "Si la majorité de la perte est `Spread absent`, le problème n'est probablement pas la fraîcheur technique : "
+                    "les quotes sont présentes mais le dashboard ne dispose pas d'un bid/ask exploitable. "
+                    "Le levier structurel est d'alimenter ce champ avec une source de market data plus proche de l'exécution "
+                    "ou de déplacer le contrôle spread au broker IBKR final."
+                )
+        else:
+            st.success("Aucune perte entre technique prête et quote+spread exploitable.")
+
+    tone = {"NOMINAL": ("#0f5132", "#d1e7dd"), "DÉGRADÉ": ("#664d03", "#fff3cd"), "CRITIQUE": ("#842029", "#f8d7da")}
+    fg, bg = tone[system_level]
+    st.markdown(
+        (
+            f"<div style='border-left:8px solid {fg};background:{bg};padding:18px 20px;border-radius:10px;margin:8px 0 18px 0'>"
+            f"<div style='font-size:0.85rem;font-weight:700;letter-spacing:.08em;color:{fg}'>ÉTAT GLOBAL</div>"
+            f"<div style='font-size:2rem;font-weight:800;color:{fg};line-height:1.15'>{system_level}</div>"
+            f"<div style='margin-top:8px;color:{fg}'>{html.escape(' · '.join(system_reasons))}</div>"
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("Univers activé", total_symbols, delta=f"{total_quarantine} en quarantaine")
+    k2.metric("Classifié AG2/AG3", f"{segment_pct:.1f}%", delta=f"{segmented_scanned}/{total_scanned} scannés AG1")
+    k3.metric("Technique AG1 prête", tech_ready_count, delta=f"sur {len(monitored_df)} actifs")
+    k4.metric("Fondamental utilisable", funda_ready_count, delta="sinon neutralisé, non bloquant")
+    k5.metric("Quotes YF utilisables", yf_ready_count, delta=f"sur {len(monitored_df)} actifs")
+    k6.metric(
+        "Pré-éligibles entrée",
+        f"{entry_ready_count}/{entry_scope_count}",
+        delta=f"{entry_ready_pct:.1f}% · IBKR {'OK' if ibkr_session_ok else 'KO'}",
+    )
+    st.caption(
+        "Seuils alignés sur AG1 V4 : H1 ≤ 96 h, D1 ≤ 240 h, YF ≤ 72 h. "
+        "Le fondamental AG3 est utilisable jusqu'à 168 h ; au-delà il est neutralisé, sans bloquer une entrée. "
+        "Une pré-éligibilité n'est pas une garantie d'exécution : contrat, permissions de place, spread et cash sont revalidés ensuite."
+    )
+
+    if ibkr_health.get("pending_approvals"):
+        st.warning(f"{int(ibkr_health['pending_approvals'])} approbation(s) d'ordre en attente.")
+
+    issue_rows = []
+    issue_specs = [
+        ("Sans segment AG2/AG3", scanned_by_ag1 & ~segmented, "Classer dans HELD, CORE ou WATCHLIST."),
+        ("Technique hors seuil AG1", health_df["ag1_entry_scope"] & ~health_df["tech_gate_ready"], "Relancer/corriger la rotation AG2."),
+        ("Quote YF inutilisable", health_df["ag1_entry_scope"] & ~health_df["yf_quote_usable"], "Vérifier YF enrichissement, ticker et quote."),
+        ("Liquidité non préqualifiée", health_df["ag1_entry_scope"] & health_df["yf_quote_usable"] & ~health_df["spread_exploitable"], "Ni spread coté ni volume suffisant ; IBKR tranche le spread à l'ordre."),
+        ("Fondamental neutralisé", health_df["ag1_entry_scope"] & ~health_df["funda_usable"], "AG1 peut trader, mais AG3 est neutralisé à 50."),
+        ("AG2 LLM REJECT", health_df["ag1_entry_scope"] & ai_decision.eq("REJECT"), "Entrée exclue par le filtre hybride AG2→AG1."),
+    ]
+    for label, mask, action in issue_specs:
+        count = int(mask.sum())
+        if count:
+            examples = ", ".join(health_df.loc[mask, "symbol"].astype(str).head(8).tolist())
+            issue_rows.append({"Problème": label, "Symboles": count, "Exemples": examples, "Action": action})
+
+    st.markdown("### À traiter")
+    if issue_rows:
+        render_interactive_table(pd.DataFrame(issue_rows), key_suffix="system_health_action_queue", height=260)
+    else:
+        st.success("Aucun défaut de couverture ou de pré-éligibilité détecté.")
+
+    scope_summary_rows = []
+    for scope_name in ["Held", "Core", "Watchlist", "Autre", "Quarantaine"]:
+        scope_mask = health_df["perimetre_monitoring"].eq(scope_name)
+        count = int(scope_mask.sum())
+        if not count:
+            continue
+        scope_summary_rows.append(
+            {
+                "Périmètre": scope_name,
+                "Symboles": count,
+                "Segmentés": int((scope_mask & segmented).sum()),
+                "Tech prête": int((scope_mask & health_df["tech_gate_ready"]).sum()),
+                "Funda utilisable": int((scope_mask & health_df["funda_usable"]).sum()),
+                "YF utilisable": int((scope_mask & health_df["yf_quote_usable"]).sum()),
+                "Pré-éligibles entrée": int((scope_mask & health_df["ag1_entry_ready_data"]).sum()),
+            }
+        )
+    st.markdown("### Couverture par périmètre")
+    render_interactive_table(pd.DataFrame(scope_summary_rows), key_suffix="system_health_scope_summary", height=260)
+
+    st.divider()
+    st.markdown("## Diagnostics des pipelines")
+
+    # Macro globale (indépendante des symboles et non bloquante pour la couverture titre).
     st.markdown("### Macro globale (AG4)")
     if pd.notna(macro_last_date):
         macro_age = max(0.0, (now_utc - macro_last_date).total_seconds() / 86400.0)
@@ -13562,6 +14841,10 @@ elif page == "System Health (Monitoring)":
             return out
 
         wk = normalize_cols(df_runs.copy())
+        if "started_at" not in wk.columns and "ts_start" in wk.columns:
+            wk["started_at"] = wk["ts_start"]
+        if "finished_at" not in wk.columns and "ts_end" in wk.columns:
+            wk["finished_at"] = wk["ts_end"]
         if "started_at" not in wk.columns:
             return out
 
@@ -13571,7 +14854,11 @@ elif page == "System Health (Monitoring)":
         else:
             wk["finished_at"] = pd.NaT
 
-        wk["status_u"] = wk.get("status", pd.Series("", index=wk.index)).fillna("").astype(str).str.upper().str.strip()
+        if "status" in wk.columns:
+            wk["status_u"] = wk["status"].fillna("").astype(str).str.upper().str.strip()
+        else:
+            wk["status_u"] = pd.Series("SUCCESS", index=wk.index, dtype=object)
+            wk.loc[wk["finished_at"].isna(), "status_u"] = "RUNNING"
         wk = wk.dropna(subset=["started_at"]).copy()
         if wk.empty:
             return out
@@ -13619,15 +14906,15 @@ elif page == "System Health (Monitoring)":
         return out
 
     run_rows = [
-        _latest_run_snapshot(system_health_data.get("df_runs", pd.DataFrame()), "AG2 Technique"),
-        _latest_run_snapshot(system_health_data.get("df_funda_runs", pd.DataFrame()), "AG3 Fondamentale"),
+        _latest_run_snapshot(system_health_data.get("df_ag1_runs", pd.DataFrame()), "AG1 V4 Consensus"),
+        _latest_run_snapshot(system_health_data.get("df_runs", pd.DataFrame()), "AG2 Technique split"),
+        _latest_run_snapshot(system_health_data.get("df_funda_runs", pd.DataFrame()), "AG3 Fondamentale split"),
         _latest_run_snapshot(system_health_data.get("df_news_macro_runs", pd.DataFrame()), "AG4 Macro"),
         _latest_run_snapshot(system_health_data.get("df_news_symbol_runs", pd.DataFrame()), "AG4 SPE News Symbole"),
     ]
     runs_df = pd.DataFrame(run_rows)
 
-    r1, r2, r3, r4 = st.columns(4)
-    run_cards = [r1, r2, r3, r4]
+    run_cards = st.columns(len(run_rows))
     for idx, rec in enumerate(run_rows):
         delta_txt = f"{rec['age_h']}h" if pd.notna(rec.get("age_h")) else "n/a"
         run_cards[idx].metric(rec["workflow"], str(rec["status"]), delta=delta_txt)
@@ -13648,78 +14935,88 @@ elif page == "System Health (Monitoring)":
     )
 
     st.divider()
-    st.markdown("### Fraicheur par source (symboles)")
-    status_counts = []
-    for src, label in [("tech_statut", "Technique AG2"), ("funda_statut", "Fondamentale AG3"), ("news_statut", "News Symbole AG4-SPE")]:
-        vc = health_df[src].value_counts(dropna=False)
-        for stt in ["A jour", "A surveiller", "En retard", "Manquant"]:
-            status_counts.append({"Source": label, "Statut": stt, "Count": int(vc.get(stt, 0))})
-    df_counts = pd.DataFrame(status_counts)
-    fig_counts = px.bar(
-        df_counts,
-        x="Source",
-        y="Count",
-        color="Statut",
-        barmode="stack",
-        color_discrete_map={"A jour": "#28a745", "A surveiller": "#ffc107", "En retard": "#fd7e14", "Manquant": "#dc3545"},
-        title="Repartition des statuts de fraicheur",
-    )
-    fig_counts.update_layout(height=320, margin=dict(t=40, b=20, l=20, r=20))
-    st.plotly_chart(fig_counts, use_container_width=True)
+    st.markdown("### Diagnostic par symbole")
 
-    st.divider()
-    st.markdown("### Detail par symbole")
-
-    f1, f2 = st.columns([1, 1])
+    f1, f2, f3 = st.columns([1, 1, 1])
     view_mode = f1.selectbox(
-        "Filtre statut",
-        ["Tous", "Critiques (En retard/Manquant)", "A surveiller et plus", "A jour uniquement"],
+        "Vue",
+        [
+            "Bloqués entrée",
+            "Pré-éligibles entrée",
+            "Positions détenues",
+            "Sans segment",
+            "Fondamental neutralisé",
+            "Quarantaine",
+            "Tous",
+        ],
         index=0,
         key="health_filter_mode",
     )
     sectors = sorted([s for s in health_df["sector"].dropna().astype(str).str.strip().unique().tolist() if s != ""])
     sector_sel = f2.selectbox("Secteur", ["Tous"] + sectors, index=0, key="health_filter_sector")
+    scopes = sorted([s for s in health_df["perimetre_monitoring"].dropna().astype(str).str.strip().unique().tolist() if s != ""])
+    scope_sel = f3.selectbox("Perimetre", ["Tous"] + scopes, index=0, key="health_filter_scope")
 
     show_df = health_df.copy()
-    if view_mode == "Critiques (En retard/Manquant)":
-        show_df = show_df[show_df["global_sev"] >= 2]
-    elif view_mode == "A surveiller et plus":
-        show_df = show_df[show_df["global_sev"] >= 1]
-    elif view_mode == "A jour uniquement":
-        show_df = show_df[show_df["global_sev"] == 0]
+    if view_mode == "Bloqués entrée":
+        show_df = show_df[show_df["ag1_entry_scope"] & ~show_df["ag1_entry_ready_data"]]
+    elif view_mode == "Pré-éligibles entrée":
+        show_df = show_df[show_df["ag1_entry_ready_data"]]
+    elif view_mode == "Positions détenues":
+        show_df = show_df[show_df["is_held"]]
+    elif view_mode == "Sans segment":
+        show_df = show_df[show_df["ag1_scanned"] & ~show_df["segment_active"]]
+    elif view_mode == "Fondamental neutralisé":
+        show_df = show_df[show_df["ag1_entry_scope"] & ~show_df["funda_usable"]]
+    elif view_mode == "Quarantaine":
+        show_df = show_df[show_df["quarantine_active"]]
 
     if sector_sel != "Tous":
         show_df = show_df[show_df["sector"].astype(str) == sector_sel]
+    if scope_sel != "Tous":
+        show_df = show_df[show_df["perimetre_monitoring"].astype(str) == scope_sel]
 
-    for age_col in ["tech_age_days", "funda_age_days", "news_age_days"]:
-        show_df[age_col] = pd.to_numeric(show_df[age_col], errors="coerce").round(1)
+    for age_col in ["h1_age_hours_effective", "d1_age_hours_effective", "funda_age_days", "yf_age_hours", "news_age_days"]:
+        if age_col in show_df.columns:
+            show_df[age_col] = pd.to_numeric(show_df[age_col], errors="coerce").round(1)
 
     cols_detail = [
-        "symbol", "name", "sector", "industry", "statut_global",
-        "tech_statut", "tech_age_days", "last_tech_date",
-        "funda_statut", "funda_age_days", "last_funda_date",
-        "news_statut", "news_age_days", "last_news_date",
+        "symbol", "name", "etat_ag1", "blocages_ag1", "perimetre_monitoring", "segments",
+        "asset_class", "exchange", "currency", "sector",
+        "tech_gate_ready", "h1_age_hours_effective", "d1_age_hours_effective", "ai_decision",
+        "funda_usable", "funda_age_days",
+        "yf_quote_usable", "yf_age_hours", "regular_market_price", "spread_pct", "volume",
+        "quarantine_active", "quarantine_reason",
     ]
     cols_detail = [c for c in cols_detail if c in show_df.columns]
-    show_df = show_df.sort_values(["global_sev", "symbol"], ascending=[False, True], na_position="last")
+    show_df = show_df.sort_values(["ag1_entry_ready_data", "global_sev", "symbol"], ascending=[True, False, True], na_position="last")
 
     render_interactive_table(
         show_df[cols_detail].rename(
             columns={
                 "symbol": "Symbole",
                 "name": "Nom",
+                "etat_ag1": "État AG1",
+                "blocages_ag1": "Pourquoi",
+                "perimetre_monitoring": "Perimetre",
+                "segments": "Segments",
+                "asset_class": "Classe",
+                "exchange": "Place",
+                "currency": "Devise",
                 "sector": "Secteur",
-                "industry": "Industrie",
-                "statut_global": "Statut global",
-                "tech_statut": "Statut Tech",
-                "tech_age_days": "Age Tech (j)",
-                "last_tech_date": "Derniere date Tech",
-                "funda_statut": "Statut Funda",
+                "tech_gate_ready": "Tech AG1 prête",
+                "h1_age_hours_effective": "Âge H1 (h)",
+                "d1_age_hours_effective": "Âge D1 (h)",
+                "ai_decision": "Décision AG2",
+                "funda_usable": "Funda utilisé",
                 "funda_age_days": "Age Funda (j)",
-                "last_funda_date": "Derniere date Funda",
-                "news_statut": "Statut News",
-                "news_age_days": "Age News (j)",
-                "last_news_date": "Derniere date News",
+                "yf_quote_usable": "Quote YF utilisable",
+                "yf_age_hours": "Âge YF (h)",
+                "regular_market_price": "Prix YF",
+                "spread_pct": "Spread %",
+                "volume": "Volume",
+                "quarantine_active": "Quarantaine active",
+                "quarantine_reason": "Raison quarantaine",
             }
         ),
         key_suffix="system_health_symbols",
@@ -13917,7 +15214,52 @@ elif page == "Vue consolidee Multi-Agents":
 """
             )
 
-            plot_df = view_df.copy()
+            # --- Filtre gates (combobox) pour reduire le nuage de points ---
+            _gate_label_map = {
+                "DATA_QUALITY_LOW": "Data quality faible",
+                "EARNINGS_IMMINENT": "Earnings imminent (<=7j)",
+                "LIQUIDITY_STRESS": "Liquidite (stress)",
+                "INVALID_OPTIONS_STATE": "Options invalides",
+                "RR_OUTLIER_STOP_TROP_PROCHE_OU_TARGET_TROP_LOIN": "RR outlier (stop/target)",
+            }
+            _gate_series_all = view_df.get("gate_summary", pd.Series("", index=view_df.index)).fillna("").astype(str)
+            _present_tokens = sorted({t.strip() for s in _gate_series_all for t in s.split("|") if t.strip()})
+            _fc1, _fc2, _fc3 = st.columns([2, 1, 1])
+            with _fc1:
+                _selected_gates = st.multiselect(
+                    "Filtrer par gate actif",
+                    options=_present_tokens,
+                    default=[],
+                    format_func=lambda t: _gate_label_map.get(t, t),
+                    key="matrix_gate_filter",
+                    help="Selectionnez un ou plusieurs gates pour reduire le nuage de points.",
+                )
+            with _fc2:
+                _gate_mode = st.selectbox(
+                    "Mode de filtre",
+                    options=["Tous", "Avec ces gates", "Sans ces gates", "Sans aucun gate"],
+                    index=0,
+                    key="matrix_gate_filter_mode",
+                    help="'Avec ces gates' = garder seulement les points portant un des gates choisis ; 'Sans ces gates' = les exclure ; 'Sans aucun gate' = uniquement les points propres.",
+                )
+            matrix_df = view_df.copy()
+            _row_gate_sets = (
+                matrix_df.get("gate_summary", pd.Series("", index=matrix_df.index))
+                .fillna("")
+                .astype(str)
+                .apply(lambda s: {t.strip() for t in s.split("|") if t.strip()})
+            )
+            _sel = set(_selected_gates)
+            if _gate_mode == "Sans aucun gate":
+                matrix_df = matrix_df[_row_gate_sets.apply(lambda x: len(x) == 0)]
+            elif _gate_mode == "Avec ces gates" and _sel:
+                matrix_df = matrix_df[_row_gate_sets.apply(lambda x: bool(x & _sel))]
+            elif _gate_mode == "Sans ces gates" and _sel:
+                matrix_df = matrix_df[_row_gate_sets.apply(lambda x: not (x & _sel))]
+            with _fc3:
+                st.metric("Points affiches", f"{len(matrix_df)} / {len(view_df)}")
+
+            plot_df = matrix_df.copy()
             plot_df["bubble_size"] = (plot_df.get("ev_r", pd.Series(0.0, index=plot_df.index)).abs() * 24.0 + 10.0).clip(lower=10, upper=60)
             plot_df["p_win_pct"] = plot_df.get("p_win", pd.Series(0.0, index=plot_df.index)) * 100.0
             plot_df["risk_score_u"] = safe_float_series(plot_df.get("risk_score_u", pd.Series(50.0, index=plot_df.index))).fillna(50.0)

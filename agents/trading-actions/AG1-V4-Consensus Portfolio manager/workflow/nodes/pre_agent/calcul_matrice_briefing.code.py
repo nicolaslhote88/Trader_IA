@@ -156,12 +156,22 @@ for r in rows:
     d1_atr_pct = safe_float(r.get("D1_ATR_Pct"), 0.0)
 
     if entry > 0:
-        if stop <= 0 or stop >= entry:
+        stop_from_ai = (stop > 0 and stop < entry)
+        if not stop_from_ai:
             if d1_support > 0 and d1_support < entry:
                 stop = d1_support * 0.998
             else:
                 fallback_risk = max(2.0, d1_dist_sup if d1_dist_sup > 0 else d1_atr_pct * 2.0)
                 stop = entry * (1.0 - fallback_risk / 100.0)
+            # Garde-fou fallback : un stop de repli (support/ATR) ne doit jamais etre plus serre
+            # que le plancher ATR. Sinon, quand le prix colle a son support D1, stop=support*0.998
+            # produit un micro-stop (risque 0.2-1%) -> faux rr_outlier qui gate a tort des titres
+            # parfaitement valides. On aligne le fallback sur la logique ATR2X d'AG2.
+            # N'affecte PAS les vrais stops AI (stop_from_ai) qui restent honores tels quels.
+            atr_floor_pct_fb = max(0.8 * d1_atr_pct, 0.75 if d1_atr_pct > 0 else 1.2)
+            max_allowed_stop = entry * (1.0 - atr_floor_pct_fb / 100.0)
+            if stop > max_allowed_stop:
+                stop = max_allowed_stop
 
     d1_res = safe_float(r.get("D1_Resistance"), 0.0)
     d1_dist_res = safe_float(r.get("D1_Dist_Res_Pct"), 0.0)
@@ -330,14 +340,17 @@ for r in rows:
         data_quality_score = 0.0
     data_quality_score = clamp(data_quality_score, 0.0, 100.0)
 
-    risk_weights = {
-        "funda": 0.30,
-        "vol": 0.18,
-        "liq": 0.14,
-        "event": 0.14,
+    # RISQUE V2 (2026-06-30): renorm sur composantes OBSERVEES + repond. tactique (vol/liq/event up, funda 0.30->0.16 car deja dans prob_score).
+    funda_usable = truthy(r.get("Funda_Usable"))
+    news_count_7d = safe_float(r.get("Symbol_News_Count_7d"), 0.0)
+    risk_base_weights = {
+        "vol": 0.26,
+        "liq": 0.18,
+        "event": 0.16,
+        "funda": 0.16,
         "news": 0.10,
         "concentration": 0.09,
-        "options": 0.05 if options_has_iv else 0.01,
+        "options": 0.05,
     }
     risk_values = {
         "funda": clamp(funda_risk, 0.0, 100.0),
@@ -348,8 +361,22 @@ for r in rows:
         "concentration": concentration_risk,
         "options": options_risk,
     }
-    wsum = sum(risk_weights.values())
-    risk_core = sum(risk_values[k] * risk_weights[k] for k in risk_weights) / wsum if wsum > 0 else 50.0
+    risk_observed = {
+        "vol": d1_atr_pct > 0,
+        "liq": bool(liq_observations) or (volume is not None and volume < 5000),
+        "event": (days_to_next_earnings is not None) or (days_since_last_earnings is not None),
+        "funda": funda_usable,
+        "news": news_count_7d > 0,
+        "concentration": (symbol_weight > 0 or sector_weight > 0),
+        "options": options_has_iv,
+    }
+    eff_w = {k: risk_base_weights[k] for k in risk_base_weights if risk_observed.get(k)}
+    eff_wsum = sum(eff_w.values())
+    if eff_wsum >= 0.20:
+        risk_core = sum(risk_values[k] * eff_w[k] for k in eff_w) / eff_wsum
+    else:
+        risk_core = 50.0
+    risk_coverage_pct = round(eff_wsum / sum(risk_base_weights.values()) * 100.0, 1)
     risk_score_100 = clamp(risk_core + stale_penalty, 0.0, 100.0)
 
     reward_r = clamp(r_multiple_capped * 35.0, 0.0, 100.0)
@@ -492,6 +519,8 @@ for r in rows:
             "last_tech_date": fmt_date(r.get("Last_Tech_Date")),
             "last_funda_date": fmt_date(r.get("Last_Funda_Date")),
             "last_news_date": fmt_date(r.get("Last_News_Date")),
+            "news": r.get("Symbol_News_Items") or [],
+            "news_generated_at": r.get("News_Generated_At"),
             "yf_fetched_at": fmt_date(r.get("YF_Fetched_At")),
             "data_age_h1_hours": safe_float(r.get("Data_Age_H1_Hours"), None),
             "data_age_d1_hours": safe_float(r.get("Data_Age_D1_Hours"), None),
@@ -752,8 +781,15 @@ for r in selected_rows:
             "data_age_d1_hours": r.get("data_age_d1_hours"),
             "macro_themes": r.get("macro_themes") or "",
             "action_reason": r.get("action_reason") or "",
+            "news": (r.get("news") or [])[:3],
         }
     )
+
+_pack_news_generated_at = None
+for _mr in matrix_rows:
+    _ng = _mr.get("news_generated_at")
+    if _ng and (_pack_news_generated_at is None or _ng > _pack_news_generated_at):
+        _pack_news_generated_at = _ng
 
 opportunity_pack = {
     "generatedAt": datetime.now(timezone.utc).isoformat(),
@@ -766,6 +802,7 @@ opportunity_pack = {
         "rows": len(pack_rows),
     },
     "rows": pack_rows,
+    "newsGeneratedAt": _pack_news_generated_at,
 }
 
 return [

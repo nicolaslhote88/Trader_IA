@@ -116,6 +116,19 @@ Correctif :
 - au clic **Approuver**, le broker répond au `reply_id` IBKR déjà ouvert via `/iserver/reply/{id}` ;
 - la resoumission complète via `/orders` reste seulement un fallback si aucun prompt stocké n'est disponible.
 
+### v3.2 (2026-06-26) — resoumission approval avec `cOID` frais + réponse webhook réelle
+Découverte sur le run manuel AG1 V4 `RUN_20260626_142628_19506` : clic Telegram reçu, mais l'endpoint
+broker retournait `FAILED` car la resoumission utilisait encore le `cOID` de l'ordre initial parqué
+(`Local order ID=... is already registered`). Le workflow n8n répondait en plus immédiatement
+« Décision enregistrée », avant de connaître le statut broker.
+
+Correctifs déployés :
+- `services/ibkr-broker/app.py` génère un `cOID` frais `appr-{uuid}` au moment du clic **Approuver**,
+  journalise l'ancien et le nouveau `cOID`, et marque l'approbation `SUBMITTED` au lieu de `FILLED`
+  quand IBKR accepte la soumission.
+- `AG1 V4 — Order Approval Decide` (`1uDcsNpDyXyAG616`) passe le webhook en `responseNode` et renvoie
+  maintenant la réponse réelle du broker après le node HTTP (`APPROVED_SUBMITTED`, `FAILED`, etc.).
+
 ## 5. Limites connues (v1)
 - Store PENDING **en mémoire** (perdu au restart broker ; OK pour TTL 10 min). Table DuckDB d'audit = évolution.
 - Pas de watchdog in-broker : l'expiration se fait à la lecture (`get_for_decision`/`sweep_expired`).
