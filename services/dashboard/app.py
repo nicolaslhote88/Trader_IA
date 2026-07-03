@@ -4693,12 +4693,19 @@ def _build_multi_agent_matrix(
         d1_atr_pct = safe_float(r.get("d1_atr_pct", 0))
 
         if entry > 0:
-            if stop <= 0 or stop >= entry:
+            stop_from_ai = (stop > 0 and stop < entry)
+            if not stop_from_ai:
                 if d1_support > 0 and d1_support < entry:
                     stop = d1_support * 0.998
                 else:
                     fallback_risk = max(2.0, d1_dist_sup if d1_dist_sup > 0 else d1_atr_pct * 2.0)
                     stop = entry * (1.0 - fallback_risk / 100.0)
+                # Parite avec AG1 Calcul Matrice : stop de repli >= plancher ATR (evite micro-stop
+                # quand prix colle au support D1 -> faux rr_outlier). N'affecte pas les vrais stops AI.
+                atr_floor_pct_fb = max(0.8 * d1_atr_pct, 0.75 if d1_atr_pct > 0 else 1.2)
+                max_allowed_stop = entry * (1.0 - atr_floor_pct_fb / 100.0)
+                if stop > max_allowed_stop:
+                    stop = max_allowed_stop
         else:
             stop = 0.0
 
@@ -4889,14 +4896,19 @@ def _build_multi_agent_matrix(
             data_quality_score = 0.0
         data_quality_score = max(0.0, min(100.0, data_quality_score))
 
-        risk_weights = {
-            "funda": 0.30,
-            "vol": 0.18,
-            "liq": 0.14,
-            "event": 0.14,
+        # RISQUE V2 (2026-06-30) parité AG1 : renorm sur composantes OBSERVEES + repond. tactique.
+        funda_usable = pd.notna(pd.to_numeric(pd.Series([r.get("funda_risk", pd.NA)]), errors="coerce").iloc[0])
+        news_count_7d = safe_float(r.get("symbol_news_count_7d", 0))
+        spread_obs = pd.notna(pd.to_numeric(pd.Series([r.get("spreadPct", pd.NA)]), errors="coerce").iloc[0])
+        slip_obs = pd.notna(pd.to_numeric(pd.Series([r.get("slippageProxyPct", pd.NA)]), errors="coerce").iloc[0])
+        risk_base_weights = {
+            "vol": 0.26,
+            "liq": 0.18,
+            "event": 0.16,
+            "funda": 0.16,
             "news": 0.10,
             "concentration": 0.09,
-            "options": 0.05 if options_has_iv else 0.01,
+            "options": 0.05,
         }
         risk_values = {
             "funda": min(100.0, max(0.0, funda_risk)),
@@ -4907,10 +4919,22 @@ def _build_multi_agent_matrix(
             "concentration": concentration_risk,
             "options": options_risk,
         }
-        wsum = sum(risk_weights.values())
-        risk_core = sum(risk_values[k] * risk_weights[k] for k in risk_weights) / wsum if wsum > 0 else 50.0
-        risk_score_100 = risk_core + stale_penalty
-        risk_score_100 = max(0.0, min(100.0, risk_score_100))
+        risk_observed = {
+            "vol": d1_atr_pct > 0,
+            "liq": bool(spread_obs or slip_obs),
+            "event": bool(pd.notna(days_to_next_earnings) or pd.notna(days_since_last_earnings)),
+            "funda": bool(funda_usable),
+            "news": news_count_7d > 0,
+            "concentration": (sector_weight > 0 or symbol_weight > 0),
+            "options": bool(options_has_iv),
+        }
+        eff_w = {k: risk_base_weights[k] for k in risk_base_weights if risk_observed.get(k)}
+        eff_wsum = sum(eff_w.values())
+        if eff_wsum >= 0.20:
+            risk_core = sum(risk_values[k] * eff_w[k] for k in eff_w) / eff_wsum
+        else:
+            risk_core = 50.0
+        risk_score_100 = max(0.0, min(100.0, risk_core + stale_penalty))
 
         reward_r = min(100.0, max(0.0, r_multiple_capped * 35.0))
         reward_upside = min(100.0, max(0.0, funda_upside * 3.0))
@@ -8142,6 +8166,20 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
             diag["ibkr_live_last_updated"] = last_upd.isoformat()
             diag["ibkr_live_age_hours"] = round(ibkr_age_h, 2)
         diag["ibkr_live_rows"] = int(len(ibkr))
+    # taux FX de secours depuis le meta_json du dernier snapshot RECON (si IBKR-latest vide)
+    if not any(c != "EUR" for c in fx_by_ccy):
+        try:
+            _meta = _ag1_fetchdf(conn, "SELECT meta_json FROM core.portfolio_snapshot WHERE meta_json IS NOT NULL ORDER BY ts DESC LIMIT 5")
+            for _, _mr in _meta.iterrows():
+                _d = json.loads(_mr.get("meta_json") or "{}")
+                for _c, _rt in (_d.get("rates") or {}).items():
+                    _c = str(_c).upper(); _rt = safe_float(_rt)
+                    if _c and _rt > 0 and _c not in fx_by_ccy:
+                        fx_by_ccy[_c] = _rt
+                if any(c != "EUR" for c in fx_by_ccy):
+                    break
+        except Exception:
+            pass
     ibkr_fresh = bool(ibkr is not None and not ibkr.empty and ibkr_age_h is not None and ibkr_age_h <= STALE_HOURS)
     diag["ibkr_stale"] = (not ibkr_fresh)
 
@@ -8169,6 +8207,10 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
 
     counts = {}
     df = df_pos.copy()
+    if "currency" not in df.columns:
+        df["currency"] = "EUR"
+    if "fx_rate" not in df.columns:
+        df["fx_rate"] = 1.0
     for idx in df.index:
         sym = str(df.at[idx, "symbol"]).upper()
         if ibkr_fresh and sym in ibkr_map:
@@ -8177,6 +8219,8 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
             df.at[idx, "marketvalue"] = safe_float(r.get("market_value_eur"))
             df.at[idx, "unrealizedpnl"] = safe_float(r.get("unrealized_pnl_eur"))
             df.at[idx, "avgprice"] = safe_float(r.get("avg_cost_eur"))
+            df.at[idx, "currency"] = (str(r.get("currency") or "EUR").upper() or "EUR")
+            df.at[idx, "fx_rate"] = safe_float(r.get("fx_rate")) or 1.0
             src = "ibkr_live"
         elif sym in yf_map:
             r = yf_map[sym]
@@ -8189,6 +8233,8 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
             df.at[idx, "avgprice"] = avg_eur
             df.at[idx, "marketvalue"] = lp_eur * qty
             df.at[idx, "unrealizedpnl"] = (lp_eur - avg_eur) * qty
+            df.at[idx, "currency"] = ccy
+            df.at[idx, "fx_rate"] = rate if rate > 0 else 1.0
             src = "yfinance_fx" if rate != 1.0 else "yfinance"
             diag["fallback_yfinance_used"] = True
         else:
@@ -8196,6 +8242,93 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
         counts[src] = counts.get(src, 0) + 1
     diag["source_counts"] = counts
     return df, diag
+
+
+def _ag1_attach_fx_breakdown(conn, df):
+    """Decompose chaque position en valeur locale / EUR et separe la perf prix de l'impact FX.
+    - Devise, taux courant (r1) et valeurs EUR : portfolio_positions_ibkr_latest (derniere ligne,
+      INDEPENDAMMENT de la fraicheur : la devise ne perime pas, contrairement au prix).
+    - Cout d'entree EUR reel (ce qui a ete paye) : core.position_lots (lots ouverts, ponderes).
+    - P&L prix (EUR) = unrealized IBKR (mouvement du cours au taux courant).
+    - Impact FX (EUR) = P&L total (valeur - cout paye) - P&L prix. Titres EUR => 0.
+    Defensif : ne leve jamais."""
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    ibkr = {}
+    try:
+        for row in conn.execute(
+            "SELECT UPPER(symbol), UPPER(COALESCE(currency,'EUR')), CAST(fx_rate AS DOUBLE), "
+            "CAST(avg_cost_eur AS DOUBLE), CAST(last_price_eur AS DOUBLE), "
+            "CAST(market_value_eur AS DOUBLE), CAST(unrealized_pnl_eur AS DOUBLE) "
+            "FROM portfolio_positions_ibkr_latest"
+        ).fetchall():
+            ibkr[str(row[0]).upper()] = {
+                "ccy": row[1] or "EUR", "r1": (float(row[2]) if row[2] else 1.0) or 1.0,
+                "avg_eur": float(row[3] or 0.0), "last_eur": float(row[4] or 0.0),
+                "mv_eur": float(row[5] or 0.0), "up_eur": float(row[6] or 0.0),
+            }
+    except Exception:
+        ibkr = {}
+    cost_paid = {}
+    try:
+        for row in conn.execute(
+            "SELECT UPPER(symbol), SUM(CAST(remaining_qty AS DOUBLE)*CAST(open_price AS DOUBLE)), "
+            "SUM(CAST(remaining_qty AS DOUBLE)) FROM core.position_lots "
+            "WHERE UPPER(COALESCE(status,''))='OPEN' AND remaining_qty>0 GROUP BY 1"
+        ).fetchall():
+            q = float(row[2] or 0.0)
+            if q > 0:
+                cost_paid[str(row[0]).upper()] = float(row[1] or 0.0) / q
+    except Exception:
+        cost_paid = {}
+    cols = ["currency", "fx_rate", "fx_rate_entry", "avg_loc", "last_loc", "mktval_loc",
+            "cost_eur", "mktval_eur", "pnl_prix_eur", "pnl_fx_eur", "pnl_total_eur", "perf_prix_pct"]
+    for c in cols:
+        if c not in out.columns:
+            out[c] = 0.0
+    for idx in out.index:
+        sym = str(out.at[idx, "symbol"]).upper()
+        if sym in ("CASH_EUR", "__META__"):
+            continue
+        qty = safe_float(out.at[idx, "quantity"])
+        meta = ibkr.get(sym)
+        if not meta:
+            avg_eur = safe_float(out.at[idx, "avgprice"]); last_eur = safe_float(out.at[idx, "lastprice"])
+            mv_eur = safe_float(out.at[idx, "marketvalue"]); up_eur = safe_float(out.at[idx, "unrealizedpnl"])
+            ccy = str(out.at[idx, "currency"] if "currency" in out.columns else "EUR") or "EUR"
+            out.at[idx, "currency"] = ccy.upper(); out.at[idx, "fx_rate"] = 1.0; out.at[idx, "fx_rate_entry"] = 1.0
+            out.at[idx, "avg_loc"] = avg_eur; out.at[idx, "last_loc"] = last_eur; out.at[idx, "mktval_loc"] = mv_eur
+            out.at[idx, "cost_eur"] = qty * avg_eur; out.at[idx, "mktval_eur"] = mv_eur
+            out.at[idx, "pnl_prix_eur"] = up_eur; out.at[idx, "pnl_fx_eur"] = 0.0; out.at[idx, "pnl_total_eur"] = up_eur
+            out.at[idx, "perf_prix_pct"] = ((last_eur / avg_eur - 1.0) * 100.0) if avg_eur else 0.0
+            continue
+        ccy = meta["ccy"]; r1 = meta["r1"] or 1.0
+        avg_eur = meta["avg_eur"]; last_eur = meta["last_eur"]; mv_eur = meta["mv_eur"]; up_eur = meta["up_eur"]
+        avg_loc = avg_eur / r1 if r1 else avg_eur
+        last_loc = last_eur / r1 if r1 else last_eur
+        mktval_loc = mv_eur / r1 if r1 else mv_eur
+        if ccy == "EUR":
+            cost_eur = qty * avg_eur; pnl_prix = up_eur; pnl_fx = 0.0; r0 = 1.0
+        else:
+            avg_paid = cost_paid.get(sym, avg_eur)
+            cost_eur = qty * avg_paid
+            pnl_prix = up_eur
+            pnl_fx = (mv_eur - cost_eur) - pnl_prix
+            r0 = (avg_paid / avg_loc) if avg_loc else r1
+        out.at[idx, "currency"] = ccy
+        out.at[idx, "fx_rate"] = r1
+        out.at[idx, "fx_rate_entry"] = r0
+        out.at[idx, "avg_loc"] = avg_loc
+        out.at[idx, "last_loc"] = last_loc
+        out.at[idx, "mktval_loc"] = mktval_loc
+        out.at[idx, "cost_eur"] = cost_eur
+        out.at[idx, "mktval_eur"] = mv_eur
+        out.at[idx, "pnl_prix_eur"] = pnl_prix
+        out.at[idx, "pnl_fx_eur"] = pnl_fx
+        out.at[idx, "pnl_total_eur"] = pnl_prix + pnl_fx
+        out.at[idx, "perf_prix_pct"] = ((last_loc / avg_loc - 1.0) * 100.0) if avg_loc else 0.0
+    return out
 
 
 def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str, object]:
@@ -8857,6 +8990,10 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             df_pos, _ibkr_live_diag = _ag1_apply_ibkr_live_overlay(conn, df_pos)
         except Exception as _ov_err:
             _ibkr_live_diag = {"error": str(_ov_err)}
+        try:
+            df_pos = _ag1_attach_fx_breakdown(conn, df_pos)
+        except Exception:
+            pass
         latest_run_meta: dict[str, object] = {}
         if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
             last_run_id_guess = str(latest.get("run_id") or "").strip()
@@ -11394,6 +11531,143 @@ def _build_ibkr_currency_exposure_map(df: pd.DataFrame, mode_label: str = "LIVE 
     return fig
 
 
+_EQUITY_GEO_BY_SUFFIX = {
+    "PA": (48.8566, 2.3522, "France", "EUR"),
+    "DE": (50.1109, 8.6821, "Allemagne", "EUR"), "F": (50.1109, 8.6821, "Allemagne", "EUR"),
+    "L": (51.5074, -0.1278, "Royaume-Uni", "GBP"),
+    "MI": (45.4642, 9.19, "Italie", "EUR"),
+    "AS": (52.3676, 4.9041, "Pays-Bas", "EUR"),
+    "MC": (40.4168, -3.7038, "Espagne", "EUR"),
+    "SW": (47.3769, 8.5417, "Suisse", "CHF"), "VX": (47.3769, 8.5417, "Suisse", "CHF"),
+    "BR": (50.8503, 4.3517, "Belgique", "EUR"),
+    "ST": (59.3293, 18.0686, "Suede", "SEK"),
+    "HE": (60.1699, 24.9384, "Finlande", "EUR"),
+    "OL": (59.9139, 10.7522, "Norvege", "NOK"),
+    "LS": (38.7223, -9.1393, "Portugal", "EUR"),
+    "VI": (48.2082, 16.3738, "Autriche", "EUR"),
+    "IR": (53.3498, -6.2603, "Irlande", "EUR"),
+    "CO": (55.6761, 12.5683, "Danemark", "DKK"),
+    "TO": (43.6532, -79.3832, "Canada", "CAD"),
+    "HK": (22.3193, 114.1694, "Hong Kong", "HKD"),
+    "T": (35.6762, 139.6503, "Japon", "JPY"),
+    "AX": (-33.8688, 151.2093, "Australie", "AUD"),
+    "SI": (1.3521, 103.8198, "Singapour", "SGD"),
+    "MX": (19.4326, -99.1332, "Mexique", "MXN"),
+}
+_EQUITY_GEO_BY_CCY = {
+    "USD": (39.0, -98.0, "Etats-Unis", "USD"),
+    "EUR": (48.8566, 2.3522, "Zone euro", "EUR"),
+    "GBP": (51.5074, -0.1278, "Royaume-Uni", "GBP"), "GBX": (51.5074, -0.1278, "Royaume-Uni", "GBP"),
+    "CHF": (47.3769, 8.5417, "Suisse", "CHF"),
+    "JPY": (35.6762, 139.6503, "Japon", "JPY"),
+    "CAD": (45.4215, -75.6972, "Canada", "CAD"),
+    "AUD": (-33.8688, 151.2093, "Australie", "AUD"),
+    "HKD": (22.3193, 114.1694, "Hong Kong", "HKD"),
+    "SEK": (59.3293, 18.0686, "Suede", "SEK"),
+    "NOK": (59.9139, 10.7522, "Norvege", "NOK"),
+    "DKK": (55.6761, 12.5683, "Danemark", "DKK"),
+    "SGD": (1.3521, 103.8198, "Singapour", "SGD"),
+}
+
+
+def _equity_geo_for(symbol: object, currency: object) -> tuple[float, float, str, str]:
+    """Geolocalise une action. Priorite au suffixe de cotation Yahoo (.PA, .DE, .L...),
+    fiable. Un ticker SANS suffixe = cotation US (NYSE/NASDAQ) par construction (les titres
+    en EUR ont toujours un suffixe) -> on ignore une devise EUR erronee remontee du pipeline.
+    Renvoie (lat, lon, pays, devise_deduite)."""
+    sym = str(symbol or "").strip().upper()
+    suffix = sym.rsplit(".", 1)[-1] if "." in sym else ""
+    if suffix and suffix in _EQUITY_GEO_BY_SUFFIX:
+        return _EQUITY_GEO_BY_SUFFIX[suffix]
+    ccy = str(currency or "").strip().upper()
+    if not suffix:
+        if ccy and ccy not in ("", "EUR") and ccy in _EQUITY_GEO_BY_CCY:
+            return _EQUITY_GEO_BY_CCY[ccy]
+        return _EQUITY_GEO_BY_CCY["USD"]
+    if ccy in _EQUITY_GEO_BY_CCY:
+        return _EQUITY_GEO_BY_CCY[ccy]
+    return (20.0, 0.0, "Autre", ccy or "USD")
+
+
+def _build_ibkr_equity_exposure_map(df_positions: pd.DataFrame, mode_label: str = "IBKR ACTIONS | VALORISATION EUR") -> go.Figure:
+    fig = go.Figure()
+    fig.add_trace(go.Scattergeo(lon=[-180, 180], lat=[-62, 78], mode="markers",
+        marker=dict(size=1, color="rgba(0,0,0,0)"), hoverinfo="skip", showlegend=False))
+    rows = []
+    if df_positions is not None and not df_positions.empty:
+        wk = df_positions.copy()
+        wk["symbol"] = wk.get("symbol", pd.Series("", index=wk.index)).astype(str).str.strip().str.upper()
+        wk = wk[~wk["symbol"].isin(["", "CASH_EUR", "__META__"])]
+        for _, r in wk.iterrows():
+            # valeur EUR + P&L total fiables (memes colonnes que la table Positions) ;
+            # repli sur marketvalue/unrealizedpnl si le breakdown n'est pas dispo
+            mv = safe_float(r.get("mktval_eur"))
+            if mv <= 0:
+                mv = safe_float(r.get("marketvalue"))
+            if mv <= 0:
+                continue
+            _pnl = r.get("pnl_total_eur")
+            up = safe_float(_pnl) if (_pnl is not None and not pd.isna(_pnl)) else safe_float(r.get("unrealizedpnl"))
+            lat, lon, country, ccy_geo = _equity_geo_for(r.get("symbol"), r.get("currency"))
+            rows.append({
+                "symbol": str(r.get("symbol")), "name": str(r.get("name") or r.get("symbol") or ""),
+                "mv": mv, "lat": float(lat), "lon": float(lon), "country": country,
+                "currency": ccy_geo,
+                "unrealized": up,
+            })
+    if rows:
+        total_mv = sum(x["mv"] for x in rows) or 1.0
+        by_loc: dict[tuple[float, float], list[dict[str, object]]] = {}
+        for x in rows:
+            by_loc.setdefault((round(x["lat"], 2), round(x["lon"], 2)), []).append(x)
+        for (blat, blon), group in by_loc.items():
+            n = len(group)
+            for i, x in enumerate(sorted(group, key=lambda z: -z["mv"])):
+                x["lon_plot"] = blon + (i - (n - 1) / 2.0) * 4.2
+                x["lat_plot"] = blat
+        for x in rows:
+            weight = x["mv"] / total_mv
+            height = 3.0 + 40.0 * weight
+            lon = x["lon_plot"]; lat = x["lat_plot"]
+            target_lat = min(80.0, lat + height)
+            up = x["unrealized"]
+            bar_color = "#45ff9a" if up >= 0 else "#ef4444"
+            glow = "#67e8f9"
+            label = f"{x['symbol']}<br>{html.escape(_fmt_eur_amount(x['mv']))}"
+            hover = (f"<b>{html.escape(str(x['symbol']))} - {html.escape(str(x['name']))}</b><br>"
+                     f"Pays: {html.escape(str(x['country']))} ({html.escape(str(x['currency']))})<br>"
+                     f"Valeur de marche: {html.escape(_fmt_eur_amount(x['mv']))}<br>"
+                     f"Poids portefeuille: {weight * 100:.1f}%<br>"
+                     f"P&L latent: {html.escape(_fmt_eur_amount(up))}<extra></extra>")
+            for width, opacity, color in [(22, 0.12, glow), (14, 0.28, glow), (7, 0.96, bar_color)]:
+                fig.add_trace(go.Scattergeo(lon=[lon, lon], lat=[lat, target_lat], mode="lines",
+                    line=dict(color=color, width=width), opacity=opacity, hoverinfo="skip", showlegend=False))
+            fig.add_trace(go.Scattergeo(lon=[lon], lat=[lat], mode="markers",
+                marker=dict(size=15, color=bar_color, opacity=0.34, line=dict(color=glow, width=2)),
+                hovertemplate=hover, showlegend=False))
+            fig.add_trace(go.Scattergeo(lon=[lon], lat=[target_lat], mode="markers+text",
+                marker=dict(size=8, color="#eaffff", opacity=0.98, line=dict(color=bar_color, width=2)),
+                text=[label], textfont=dict(size=12, color="#f8ffff"), textposition="top right",
+                hovertemplate=hover, showlegend=False))
+    fig.update_geos(projection_type="natural earth", showframe=False, showcoastlines=True,
+        coastlinecolor="rgba(83,224,255,.68)", coastlinewidth=0.7, showcountries=True,
+        countrycolor="rgba(83,224,255,.38)", countrywidth=0.45, showland=True, landcolor="rgb(8,35,50)",
+        showocean=True, oceancolor="rgb(1,12,26)", showlakes=True, lakecolor="rgb(1,18,32)",
+        lonaxis=dict(showgrid=True, gridcolor="rgba(71,212,255,.12)", dtick=30),
+        lataxis=dict(showgrid=True, gridcolor="rgba(71,212,255,.12)", dtick=20), bgcolor="rgba(0,0,0,0)")
+    fig.update_layout(height=560, margin=dict(l=8, r=8, t=58, b=8), paper_bgcolor="rgb(3,8,18)",
+        plot_bgcolor="rgb(3,8,18)",
+        title=dict(text="GLOBAL EQUITY EXPOSURE DASHBOARD | IBKR ACTIONS PORTFOLIO", x=0.02, y=0.98,
+            font=dict(size=18, color="#f8ffff")),
+        font=dict(family="Arial, sans-serif", color="#e5faff"))
+    fig.add_annotation(x=0.985, y=0.98, xref="paper", yref="paper", xanchor="right", yanchor="top",
+        text=mode_label, showarrow=False, font=dict(size=12, color="#73f7ff"), align="right")
+    fig.add_annotation(x=0.985, y=0.035, xref="paper", yref="paper", xanchor="right", yanchor="bottom",
+        text=f"LAST UPDATE: {pd.Timestamp.now(tz='UTC').strftime('%H:%M:%S UTC')}", showarrow=False,
+        font=dict(size=11, color="#d8ffff"), align="right")
+    return fig
+
+
 def _fx_signal_cell_style(value: object, column: str) -> str:
     if value is None or pd.isna(value):
         text = ""
@@ -11908,6 +12182,7 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 
 if page == "Dashboard Trading":
     st.title("AI Trading Executor Dashboard")
+    _render_fx_ibkr_session_status(_load_ibkr_currency_balances(IBKR_BROKER_URL))
 
     ag1_multi: dict[str, dict[str, object]] = {}
     ag1_v4_consensus = load_ag1_v4_consensus_portfolio()
@@ -12577,6 +12852,22 @@ if page == "Dashboard Trading":
                 df_clean["assetclass"] = _canonicalize_asset_class_series(df_clean["assetclass"])
             df_clean = enrich_portfolio_metadata(df_clean, df_univ, df_yf_enrichment_latest)
             df_clean = sanitize_allocation_metadata_labels(df_clean)
+            # Exposer la devise + taux FX (impact du change) — robuste si enrich a drop les colonnes
+            _bd_cols = ["currency", "fx_rate", "fx_rate_entry", "avg_loc", "last_loc", "mktval_loc",
+                        "cost_eur", "mktval_eur", "pnl_prix_eur", "pnl_fx_eur", "pnl_total_eur", "perf_prix_pct"]
+            try:
+                _present = [c for c in _bd_cols if c in df_port.columns]
+                if "currency" in _present:
+                    _src = df_port[["symbol"] + _present].drop_duplicates("symbol")
+                    df_clean = df_clean.drop(columns=[c for c in _present if c in df_clean.columns], errors="ignore").merge(_src, on="symbol", how="left")
+            except Exception:
+                pass
+            if "currency" not in df_clean.columns:
+                df_clean["currency"] = "EUR"
+            df_clean["currency"] = df_clean["currency"].fillna("EUR").astype(str).str.upper().replace("", "EUR")
+            if "fx_rate" not in df_clean.columns:
+                df_clean["fx_rate"] = 1.0
+            df_clean["fx_rate"] = df_clean["fx_rate"].apply(safe_float).fillna(1.0).replace(0.0, 1.0)
 
             df_clean.loc[
                 df_clean["symbol"].astype(str).str.upper() == "CASH_EUR",
@@ -12612,7 +12903,7 @@ if page == "Dashboard Trading":
                     st.plotly_chart(fig, use_container_width=True)
 
             st.divider()
-            port_subtab_sparks, port_subtab_positions = st.tabs(["Sparklines (90j)", "Positions"])
+            port_subtab_sparks, port_subtab_positions, port_subtab_map = st.tabs(["Sparklines (90j)", "Positions", "Map Monde"])
 
             with port_subtab_sparks:
                 st.subheader("Portfolio Sparklines (90j)")
@@ -12626,40 +12917,45 @@ if page == "Dashboard Trading":
 
             with port_subtab_positions:
                 st.subheader("Positions")
-                qty_basis = (
-                    df_clean.get("avgprice", pd.Series(0.0, index=df_clean.index))
-                    * df_clean.get("quantity", pd.Series(0.0, index=df_clean.index))
+                st.caption(
+                    "Valeurs en **devise locale** (loc) puis en **euros**. "
+                    "**P&L prix (EUR)** = performance de la valeur dans sa propre devise (convertie au taux actuel) ; "
+                    "**Impact FX (EUR)** = effet du change entre l'achat et aujourd'hui ; "
+                    "**P&L total (EUR)** = P&L prix + Impact FX. Pour les titres en EUR, l'impact FX est nul."
                 )
-                mv_basis = (
-                    df_clean.get("marketvalue", pd.Series(0.0, index=df_clean.index))
-                    - df_clean.get("unrealizedpnl", pd.Series(0.0, index=df_clean.index))
-                )
-                cost_basis = qty_basis.where(qty_basis > 0, mv_basis)
-                df_clean["unrealizedpnl_pct"] = 0.0
-                valid_basis = cost_basis != 0
-                df_clean.loc[valid_basis, "unrealizedpnl_pct"] = (
-                    df_clean.loc[valid_basis, "unrealizedpnl"] / cost_basis[valid_basis] * 100
-                )
-                df_clean["unrealizedpnl_pct"] = df_clean["unrealizedpnl_pct"].round(2)
-
-                cols_show = [
-                    "name",
-                    "symbol",
-                    "sector",
-                    "industry",
-                    "quantity",
-                    "avgprice",
-                    "lastprice",
-                    "marketvalue",
-                    "unrealizedpnl",
-                    "unrealizedpnl_pct",
+                _bd_display = [
+                    ("name", "Nom"), ("symbol", "Symbole"), ("sector", "Secteur"),
+                    ("quantity", "Qte"), ("currency", "Devise"),
+                    ("avg_loc", "PRU (loc)"), ("last_loc", "Cours (loc)"), ("mktval_loc", "Valeur (loc)"),
+                    ("fx_rate_entry", "Taux achat"), ("fx_rate", "Taux actuel"),
+                    ("cost_eur", "Cout (EUR)"), ("mktval_eur", "Valeur (EUR)"),
+                    ("pnl_prix_eur", "P&L prix (EUR)"), ("pnl_fx_eur", "Impact FX (EUR)"),
+                    ("pnl_total_eur", "P&L total (EUR)"), ("perf_prix_pct", "Perf prix %"),
                 ]
-                cols_exist = [c for c in cols_show if c in df_clean.columns]
-                df_view = df_clean[cols_exist].copy()
-                if "marketvalue" in df_view.columns:
-                    df_view = df_view.sort_values("marketvalue", ascending=False)
+                _avail = [(c, lbl) for c, lbl in _bd_display if c in df_clean.columns]
+                df_view = df_clean[[c for c, _ in _avail]].copy()
+                df_view = df_view[~df_view["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])]
+                for c in ["avg_loc", "last_loc", "mktval_loc", "cost_eur", "mktval_eur",
+                          "pnl_prix_eur", "pnl_fx_eur", "pnl_total_eur", "perf_prix_pct"]:
+                    if c in df_view.columns:
+                        df_view[c] = pd.to_numeric(df_view[c], errors="coerce").round(2)
+                for c in ["fx_rate", "fx_rate_entry"]:
+                    if c in df_view.columns:
+                        df_view[c] = pd.to_numeric(df_view[c], errors="coerce").round(4)
+                if "mktval_eur" in df_view.columns:
+                    df_view = df_view.sort_values("mktval_eur", ascending=False)
+                df_view = df_view.rename(columns=dict(_avail))
                 pos_key = f"positions_{selected_portfolio_key}" if selected_portfolio_key else "positions"
                 render_interactive_table(df_view, key_suffix=pos_key, hide_index=True)
+
+            with port_subtab_map:
+                st.subheader("Map Monde - Valorisation des positions")
+                st.plotly_chart(
+                    _build_ibkr_equity_exposure_map(df_clean),
+                    use_container_width=True,
+                    key=f"equity_exposure_map_{selected_portfolio_key or 'default'}",
+                )
+                st.caption("Chaque position est placee a son pays de cotation ; hauteur de barre proportionnelle a la valeur de marche EUR (vert = en gain, rouge = en perte). Survolez pour le detail.")
         else:
             st.info("Allocation vide.")
 
@@ -13837,8 +14133,10 @@ elif page == "System Health (Monitoring)":
     )
     # Repli sur l'âge du signal si les colonnes d'âge marché ne sont pas disponibles.
     signal_age_h = pd.to_numeric(health_df["tech_age_days"], errors="coerce") * 24.0
-    health_df["h1_age_hours_effective"] = h1_age_h.where(h1_age_h.notna(), signal_age_h)
-    health_df["d1_age_hours_effective"] = d1_age_h.where(d1_age_h.notna(), signal_age_h)
+    # Guard against a frozen data_age masking a stale bar: take the worse of the
+    # stored market-data age and the real age from the last signal/bar date.
+    health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, signal_age_h], axis=1).max(axis=1)
+    health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, signal_age_h], axis=1).max(axis=1)
     health_df["yf_age_hours"] = pd.to_numeric(health_df["yf_age_days"], errors="coerce") * 24.0
 
     health_df["tech_gate_ready"] = (
@@ -13860,6 +14158,14 @@ elif page == "System Health (Monitoring)":
     health_df["quote_ok_bool"] = quote_ok
     health_df["yf_quote_usable"] = health_df["yf_fresh"] & quote_ok & regular_price.gt(0)
     health_df["spread_observed"] = spread_pct.notna()
+    # Mirror the AG1 V4 liquidity gate (SPREAD_UNQUOTED): a usable quote with an
+    # adequate daily volume is pre-tradable even when the instantaneous bid/ask is
+    # unquoted (e.g. Euronext .PA outside RTH). The final spread is resolved from
+    # IBKR snapshots at order time; the volume floor keeps thin/nano names out.
+    _min_daily_volume = 5000.0
+    _volume_num = pd.to_numeric(health_df.get("volume", pd.Series(float("nan"), index=health_df.index)), errors="coerce")
+    health_df["volume_ok"] = _volume_num >= _min_daily_volume
+    health_df["spread_exploitable"] = health_df["yf_quote_usable"] & (health_df["spread_observed"] | health_df["volume_ok"])
 
     def _status_fr(age_series: pd.Series, date_series: pd.Series, ok_days: float, warn_days: float) -> pd.Series:
         out = pd.Series("Manquant", index=age_series.index, dtype=object)
@@ -13950,8 +14256,7 @@ elif page == "System Health (Monitoring)":
         health_df["ag1_entry_scope"]
         & segmented
         & health_df["tech_gate_ready"]
-        & health_df["yf_quote_usable"]
-        & health_df["spread_observed"]
+        & health_df["spread_exploitable"]
         & ai_decision.ne("REJECT")
     )
     ibkr_session_ok = bool(
@@ -13989,8 +14294,8 @@ elif page == "System Health (Monitoring)":
                 reasons.append("quote YF KO")
             else:
                 reasons.append("prix YF absent")
-        if not bool(row.get("spread_observed")):
-            reasons.append("spread absent")
+        if bool(row.get("yf_quote_usable")) and not bool(row.get("spread_exploitable")):
+            reasons.append("liquidité non préqualifiée")
         if str(row.get("ai_decision") or "").upper() == "REJECT":
             reasons.append("AG2 LLM REJECT")
         return " · ".join(dict.fromkeys(reasons))
@@ -14118,8 +14423,7 @@ elif page == "System Health (Monitoring)":
             health_df["ag1_entry_scope"]
             & segmented
             & health_df["tech_gate_ready"]
-            & health_df["yf_quote_usable"]
-            & health_df["spread_observed"]
+            & health_df["spread_exploitable"]
         ),
         health_df["ag1_entry_ready_data"],
     ]
@@ -14277,12 +14581,12 @@ elif page == "System Health (Monitoring)":
             "Vérifier le champ prix dans YF-ENRICH ; fallback possible sur previous_close si validé.",
         ),
         (
-            "Spread absent",
+            "Spread + volume insuffisants",
             tech_to_quote_loss
             & health_df["yf_quote_usable"]
-            & ~health_df["spread_observed"],
-            "Quote OK, mais bid/ask ou spread_pct absent : la liquidité n'est pas préqualifiée par le dashboard.",
-            "Levier recommandé : alimenter spread_pct depuis IBKR market data / snapshot, ou renommer cette étape en pré-quote et déléguer le spread au contrôle IBKR final.",
+            & ~health_df["spread_exploitable"],
+            "Ni spread coté ni volume quotidien suffisant. Les noms liquides sans spread instantané (ex. .PA hors séance) sont désormais comptés exploitables et résolus via IBKR à l'ordre.",
+            "Le contrôle IBKR tranche le spread au moment de l'ordre ; n'investiguer que si le volume est réellement absent.",
         ),
     ]
     remaining_tech_quote_loss = tech_to_quote_loss.copy()
@@ -14449,7 +14753,7 @@ elif page == "System Health (Monitoring)":
         ("Sans segment AG2/AG3", scanned_by_ag1 & ~segmented, "Classer dans HELD, CORE ou WATCHLIST."),
         ("Technique hors seuil AG1", health_df["ag1_entry_scope"] & ~health_df["tech_gate_ready"], "Relancer/corriger la rotation AG2."),
         ("Quote YF inutilisable", health_df["ag1_entry_scope"] & ~health_df["yf_quote_usable"], "Vérifier YF enrichissement, ticker et quote."),
-        ("Spread absent", health_df["ag1_entry_scope"] & ~health_df["spread_observed"], "Le contrôle final IBKR devra fournir une liquidité exploitable."),
+        ("Liquidité non préqualifiée", health_df["ag1_entry_scope"] & health_df["yf_quote_usable"] & ~health_df["spread_exploitable"], "Ni spread coté ni volume suffisant ; IBKR tranche le spread à l'ordre."),
         ("Fondamental neutralisé", health_df["ag1_entry_scope"] & ~health_df["funda_usable"], "AG1 peut trader, mais AG3 est neutralisé à 50."),
         ("AG2 LLM REJECT", health_df["ag1_entry_scope"] & ai_decision.eq("REJECT"), "Entrée exclue par le filtre hybride AG2→AG1."),
     ]
@@ -14910,7 +15214,52 @@ elif page == "Vue consolidee Multi-Agents":
 """
             )
 
-            plot_df = view_df.copy()
+            # --- Filtre gates (combobox) pour reduire le nuage de points ---
+            _gate_label_map = {
+                "DATA_QUALITY_LOW": "Data quality faible",
+                "EARNINGS_IMMINENT": "Earnings imminent (<=7j)",
+                "LIQUIDITY_STRESS": "Liquidite (stress)",
+                "INVALID_OPTIONS_STATE": "Options invalides",
+                "RR_OUTLIER_STOP_TROP_PROCHE_OU_TARGET_TROP_LOIN": "RR outlier (stop/target)",
+            }
+            _gate_series_all = view_df.get("gate_summary", pd.Series("", index=view_df.index)).fillna("").astype(str)
+            _present_tokens = sorted({t.strip() for s in _gate_series_all for t in s.split("|") if t.strip()})
+            _fc1, _fc2, _fc3 = st.columns([2, 1, 1])
+            with _fc1:
+                _selected_gates = st.multiselect(
+                    "Filtrer par gate actif",
+                    options=_present_tokens,
+                    default=[],
+                    format_func=lambda t: _gate_label_map.get(t, t),
+                    key="matrix_gate_filter",
+                    help="Selectionnez un ou plusieurs gates pour reduire le nuage de points.",
+                )
+            with _fc2:
+                _gate_mode = st.selectbox(
+                    "Mode de filtre",
+                    options=["Tous", "Avec ces gates", "Sans ces gates", "Sans aucun gate"],
+                    index=0,
+                    key="matrix_gate_filter_mode",
+                    help="'Avec ces gates' = garder seulement les points portant un des gates choisis ; 'Sans ces gates' = les exclure ; 'Sans aucun gate' = uniquement les points propres.",
+                )
+            matrix_df = view_df.copy()
+            _row_gate_sets = (
+                matrix_df.get("gate_summary", pd.Series("", index=matrix_df.index))
+                .fillna("")
+                .astype(str)
+                .apply(lambda s: {t.strip() for t in s.split("|") if t.strip()})
+            )
+            _sel = set(_selected_gates)
+            if _gate_mode == "Sans aucun gate":
+                matrix_df = matrix_df[_row_gate_sets.apply(lambda x: len(x) == 0)]
+            elif _gate_mode == "Avec ces gates" and _sel:
+                matrix_df = matrix_df[_row_gate_sets.apply(lambda x: bool(x & _sel))]
+            elif _gate_mode == "Sans ces gates" and _sel:
+                matrix_df = matrix_df[_row_gate_sets.apply(lambda x: not (x & _sel))]
+            with _fc3:
+                st.metric("Points affiches", f"{len(matrix_df)} / {len(view_df)}")
+
+            plot_df = matrix_df.copy()
             plot_df["bubble_size"] = (plot_df.get("ev_r", pd.Series(0.0, index=plot_df.index)).abs() * 24.0 + 10.0).clip(lower=10, upper=60)
             plot_df["p_win_pct"] = plot_df.get("p_win", pd.Series(0.0, index=plot_df.index)) * 100.0
             plot_df["risk_score_u"] = safe_float_series(plot_df.get("risk_score_u", pd.Series(50.0, index=plot_df.index))).fillna(50.0)
