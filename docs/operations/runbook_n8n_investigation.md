@@ -38,7 +38,7 @@ PY
 `[⚠]` **n8n est une instance PARTAGÉE** (167 workflows, 23 actifs : Trader_IA + SIGA + templates).
 Toujours **filtrer sur `AG*` / `YF*`** pour isoler Trader_IA.
 Pour la vérité métier (décisions, ordres, fills) → DuckDB `/local-files/duckdb/` (§5), pas n8n.
-Un script tout-en-un existe : `scripts/verify_vps_n8n.sh` (lecture seule).
+Un script tout-en-un existe : `outils/scripts/verify_vps_n8n.sh` (lecture seule).
 
 ---
 
@@ -247,6 +247,6 @@ Erreur Code node (Python/JS)       -> §3 logs task-runners + pièges sandbox
 ---
 
 ## Sources
-- Vérifié en direct sur le VPS le 2026-06-15 (script `scripts/verify_vps_n8n.sh`).
+- Vérifié en direct sur le VPS le 2026-06-15 (script `outils/scripts/verify_vps_n8n.sh`).
 - `docs/operations/vps-access.md`, `deploy.md`, `ibkr_execution.md`, `env_vars.md`
 - `infra/vps_hostinger_config/docker-compose.yml`

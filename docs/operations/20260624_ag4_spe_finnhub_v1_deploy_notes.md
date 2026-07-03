@@ -7,9 +7,9 @@ Boursorama (FR) insuffisant pour l'extension +100 (US/Asie/EM). IBKR per-contrat
 Finnhub `company-news` (gratuit, 60/min) couvre ~95/100 via mapping `symbole → ticker ADR/OTC US`.
 
 ## Architecture (contrainte sandbox : pas de réseau/urllib dans les nodes Python n8n)
-1. **Collecte hors n8n** : `scripts/finnhub_news_collector.py` (cron VPS) → table **`news_finnhub_staging`**
+1. **Collecte hors n8n** : `outils/scripts/finnhub_news_collector.py` (cron VPS) → table **`news_finnhub_staging`**
    dans `ag4_spe_v2.duckdb`. Mapping ticker validé inclus (29/34 cotations locales via ADR/OTC).
-2. **Analyse n8n** : workflow **`AG4_Spé-Finnhub-V1`** (`agents/trading-actions/AG4-SPE-V2/AG4-SPE-FINNHUB-V1-workflow.json`),
+2. **Analyse n8n** : workflow **`AG4_Spé-Finnhub-V1`** (`agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-FINNHUB-V1-workflow.json`),
    clone de IBKR-V1. Node `Load+Normalize Finnhub Staging` lit le staging (dédup vs `news_history`) →
    `S18 IF → S19 OpenAI (gpt-5-mini, schéma specific_stock_news_v2) → S19M Merge → S20 Parse → Write Finnhub DuckDB`
    → `news_history` (`source='finnhub'`, status ANALYZED/SKIPPED) → vue `news_analyzed` → AG1.

@@ -198,7 +198,7 @@ Changements livrés (repo `agents/common/AG4-V3/`, régénérés via `build_work
   Le heap des task-runners n'a **pas** été gonflé : host contraint (7,8 Go, 3 replicas) → risque d'OOM hôte.
   À surveiller sur le 1er gros run ; si OOM persiste, envisager `NODE_OPTIONS=--max-old-space-size` mesuré.
 - **P2 Provenance** — `source` redérivée de l'URL dans les deux parsers (corrige le 100 % `unknown`).
-- **P2 Maintenance** — `scripts/ag4_duckdb_maintenance.py` : finalise les `run_log` zombies, rétention
+- **P2 Maintenance** — `outils/scripts/ag4_duckdb_maintenance.py` : finalise les `run_log` zombies, rétention
   (news 60 j / errors 30 j), `CHECKPOINT`, et `--rebuild` (EXPORT/IMPORT) pour réclamer le disque (4 Go).
   Safe sous lock (skip propre). À planifier hors des 4 fenêtres de run.
 

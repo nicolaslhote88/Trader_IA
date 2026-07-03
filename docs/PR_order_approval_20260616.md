@@ -30,7 +30,7 @@ dans le repo séparément si tu veux les versionner).
 - `docs/operations/order_approval_deploy_notes.md` (nouveau) : déploiement + activation + rollback.
 - `docs/audits/20260615_ag1_v4_prompt_audit.md` (nouveau) : audit du brief LLM AG1 V4.
 - `docs/specs/ag1_v4_order_approval_notification_v1.md` (nouveau) : spec du système d'approbation.
-- `scripts/verify_vps_n8n.sh` (nouveau) : vérif VPS lecture seule.
+- `outils/scripts/verify_vps_n8n.sh` (nouveau) : vérif VPS lecture seule.
 - `.gitignore` : exclusion de `.ssh/` (clé VPS locale).
 
 **Issue connexe non résolue ici** : `core.runs.strategy_version`/`prompt_version`/`n8n_execution_id`
@@ -50,7 +50,7 @@ git add AGENTS.md README.md .gitignore `
   "docs/audits/20260615_ag1_v4_prompt_audit.md" `
   "docs/specs/ag1_v4_order_approval_notification_v1.md" `
   "docs/PR_order_approval_20260616.md" `
-  "scripts/verify_vps_n8n.sh"
+  "outils/scripts/verify_vps_n8n.sh"
 
 git diff --cached --stat        # VÉRIFIE que seuls ces fichiers sont stagés
 git commit -m "AG1 V4: approbation Telegram des ordres hors-bande + price-guard 5% + docs"

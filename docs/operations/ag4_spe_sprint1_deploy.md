@@ -14,7 +14,7 @@
 | **D1** | `…/AG1-V4-Consensus…/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py` | Fenêtre news : `published_at` n'est utilisé que s'il est dans `[now-730j ; now+7j]`, sinon repli sur `first_seen_at`. 2 requêtes (ag4_spe + fallback ag4_v3). | Shadow : `last_news_date` max 2031-12-25 → **2026-06-17** ; `count_7d` EURUSD 22→0. `ast.parse` OK. |
 | **B1** | `…/AG4-SPE-V2/nodes/07_parse_article.js` | `normalizeDate()` réécrite : ISO d'abord, fallback FR ancré (année 4 chiffres), garde-fou plausibilité → `null` si aberrant. | 8 cas Node OK (futur→null, « 2031 » texte→null, FR réelle conservée). |
 | **A1** | `…/AG4-SPE-V2/nodes/02_start_run.py` | Auto-réconciliation : tout `RUNNING` > 1 h passé en `STALE` au démarrage de chaque run. | Shadow : 47 zombies ciblés, tous > 1 h. |
-| **B2** | `scripts/ag4_spe_backfill_published_at.py` (nouveau) | Neutralise (`NULL`) les `published_at` hors plage. Dry-run par défaut. | Dry-run : 12 922/19 518 (66,2 %) à neutraliser ; `first_seen_at` rempli à 100 % (repli sûr). |
+| **B2** | `outils/scripts/ag4_spe_backfill_published_at.py` (nouveau) | Neutralise (`NULL`) les `published_at` hors plage. Dry-run par défaut. | Dry-run : 12 922/19 518 (66,2 %) à neutraliser ; `first_seen_at` rempli à 100 % (repli sûr). |
 
 Artefacts régénérés : `AG4-SPE-V2/AG4-SPE-V2-workflow.json` (contient B1+A1).
 
@@ -38,14 +38,14 @@ ssh vps "docker restart root-n8n-1"   # ~60 s
 ```bash
 ssh vps "cp /local-files/duckdb/ag4_spe_v2.duckdb /local-files/duckdb/ag4_spe_v2.duckdb.bak_20260617"
 # hors run AG4_Spé (éviter lock) :
-docker cp scripts/ag4_spe_backfill_published_at.py yf-enrichment:/tmp/
+docker cp outils/scripts/ag4_spe_backfill_published_at.py yf-enrichment:/tmp/
 ssh vps "docker exec yf-enrichment python3 /tmp/ag4_spe_backfill_published_at.py"          # dry-run
 ssh vps "docker exec yf-enrichment python3 /tmp/ag4_spe_backfill_published_at.py --apply"  # apply
 ```
 
 ### Étape 3 — AG1 V4 (D1) — **trading LIVE, prudence maximale**
 ```bash
-cd "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow"
+cd "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow"
 python3 build_v4_workflow.py                 # régénère le JSON avec D1
 # DIFF du JSON régénéré vs export n8n live -> confirmer que la SEULE diff fonctionnelle = R8/D1
 # puis import n8n + docker restart root-n8n-1

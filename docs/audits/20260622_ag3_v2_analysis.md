@@ -177,7 +177,7 @@ Uniquement sur les **financials reportés** (marges, dette/équité, FCF, croiss
 
 ## Annexe — Sources & commandes de vérification
 
-- Code : `agents/trading-actions/AG3-V2/` (`nodes/02_score_fundamentals.js`, `06_duckdb_init.py`, `AG3-V2-workflow.json`).
+- Code : `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/` (`nodes/02_score_fundamentals.js`, `06_duckdb_init.py`, `AG3-V2-workflow.json`).
 - Consommateurs : `AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py` + `calcul_matrice_briefing.code.py` ; `AG2-V3/nodes/12_universe_quarantine_audit.py`.
 - Inspection live (lecture seule) :
   ```bash

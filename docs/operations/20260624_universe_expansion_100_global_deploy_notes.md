@@ -38,11 +38,11 @@ Le refresh `AG2UHQ` (jours ouvrés 18:35 UTC) **reclasse automatiquement** toute
 2. `universe_segments` : **+100** → 18 `CORE_MANUAL` (piliers) + 82 `WATCHLIST`. CORE_AUTO 50 / HELD 5 inchangés.
    - CORE_MANUAL épinglés : ASML, TSM, 005930.KS (Samsung), SAP, AMD, NVS, NVO, AZN, UNH, NESN.SW, UL, TM, SIE.DE, RHM.DE, SHEL, RIO, BHP, BABA.
 
-## Scripts (repo `scripts/`, idempotents)
+## Scripts (repo `outils/scripts/`, idempotents)
 
-- `scripts/seed_universe_100_global.py` — insert des 100 (`ON CONFLICT(symbol) DO NOTHING`).
-- `scripts/classify_universe_100_segments.py` — classe en WATCHLIST (HELD si détenu).
-- `scripts/pin_core_manual_18.py` — épingle les 18 CORE_MANUAL + retire leur WATCHLIST auto.
+- `outils/scripts/seed_universe_100_global.py` — insert des 100 (`ON CONFLICT(symbol) DO NOTHING`).
+- `outils/scripts/classify_universe_100_segments.py` — classe en WATCHLIST (HELD si détenu).
+- `outils/scripts/pin_core_manual_18.py` — épingle les 18 CORE_MANUAL + retire leur WATCHLIST auto.
 
 ### Contrainte d'exécution CRITIQUE
 Écrire **avec `duckdb==1.4.4`** (venv VPS `/tmp/ddb144`, à recréer si besoin :

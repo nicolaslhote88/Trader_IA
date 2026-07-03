@@ -13,11 +13,16 @@ Agents et workflows partagés :
 
 Agents spécifiques au système actions/ETF/crypto existant :
 
-- `AG1-V3-Portfolio manager/`
-- `AG1-PF-V1/`
-- `AG2-V3/`
-- `AG3-V2/`
-- `AG4-SPE-V2/`
+- `AG1 - Portfolio manager/`
+  - `AG1-V4-Consensus Portfolio manager/` : Portfolio Manager actions actif.
+  - `AG1-PF-V1/` : mark-to-market portefeuille V4.
+  - `AG1-V3-Portfolio manager/` : ancienne génération conservée en historique.
+- `AG2 - La technique/`
+  - `AG2-V3/` : signaux techniques Held+Core, Watchlist et Universe Quarantine.
+- `AG3 - Les fondamentaux/`
+  - `AG3-V2/` : fondamentaux Held+Core et Watchlist.
+- `AG4 - Les news/`
+  - `AG4-SPE-V2/` : news single-stock Boursorama, IBKR, Finnhub et Health Alert.
 
 ## `trading-forex/`
 

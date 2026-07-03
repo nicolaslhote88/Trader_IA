@@ -1,11 +1,11 @@
-﻿# Reconstruire le pack AG1 (`rebuild_pack.py`)
+# Reconstruire le pack AG1 (`rebuild_pack.py`)
 
-Depuis avril 2026, le pack `agents/trading-actions/AG1-V3-Portfolio manager/` est **entiÃ¨rement centralisÃ© dans `workflow/`**. Le parent ne contient plus que ce script, un README pointeur et `export_to_github.ps1`.
+Depuis avril 2026, le pack `agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/` est **entiÃ¨rement centralisÃ© dans `workflow/`**. Le parent ne contient plus que ce script, un README pointeur et `export_to_github.ps1`.
 
 ## Arborescence cible
 
 ```
-agents/trading-actions/AG1-V3-Portfolio manager/
+agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/
 â”œâ”€â”€ README.md                    # pointeur vers workflow/
 â”œâ”€â”€ rebuild_pack.py              # ce script
 â”œâ”€â”€ export_to_github.ps1         # helper commit/push
@@ -46,7 +46,7 @@ agents/trading-actions/AG1-V3-Portfolio manager/
 ## Usage
 
 ```bash
-cd "agents/trading-actions/AG1-V3-Portfolio manager"
+cd "agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager"
 python3 rebuild_pack.py
 ```
 
@@ -64,7 +64,7 @@ Les variants par modÃ¨le (`workflow/variants/AG1_workflow_v3__*.json`) sont r�
 
 ## Helpers
 
-- `export_to_github.ps1` : commit + push ciblÃ© uniquement sur `agents/trading-actions/AG1-V3-Portfolio manager/`.
+- `export_to_github.ps1` : commit + push ciblÃ© uniquement sur `agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/`.
 
 ## Notes
 

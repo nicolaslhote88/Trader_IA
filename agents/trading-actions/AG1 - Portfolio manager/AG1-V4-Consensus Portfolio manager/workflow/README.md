@@ -8,7 +8,7 @@ Export importable dans n8n et source de verite operationnelle:
 ## Generation
 
 ```bash
-python "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/build_v4_workflow.py"
+python "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/build_v4_workflow.py"
 ```
 
 Le script injecte les codes extraits dans le workflow, garde les trois branches

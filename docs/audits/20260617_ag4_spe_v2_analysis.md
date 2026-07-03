@@ -1,7 +1,7 @@
 # Analyse AG4_Spé-V2 — pertinence, efficacité, efficience LLM
 
 **Date** : 2026-06-17 · **Auteur** : Nicolas × Claude · **Périmètre** : workflow n8n `AG4_Spé-V2` (news single-stock Boursorama → `ag4_spe_v2.duckdb`) et sa consommation par `AG1 V4 Consensus`.
-**Sources** : code repo (`agents/trading-actions/AG4-SPE-V2/`, `…/AG1-V4-Consensus…/nodes/pre_agent/`), DuckDB live VPS `/local-files/duckdb/ag4_spe_v2.duckdb` (614 Mo, lecture seule via `yf-enrichment`), `run_log` n8n.
+**Sources** : code repo (`agents/trading-actions/AG4 - Les news/AG4-SPE-V2/`, `…/AG1-V4-Consensus…/nodes/pre_agent/`), DuckDB live VPS `/local-files/duckdb/ag4_spe_v2.duckdb` (614 Mo, lecture seule via `yf-enrichment`), `run_log` n8n.
 
 ---
 

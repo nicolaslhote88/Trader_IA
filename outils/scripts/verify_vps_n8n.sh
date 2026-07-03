@@ -4,9 +4,9 @@
 # (docs/operations/runbook_n8n_investigation.md) et AGENTS.md collent à la réalité.
 #
 # Lance ce script SUR le VPS, ou depuis ton poste Windows (PowerShell) avec :
-#     Get-Content "D:\N8N\Assistant IA complet\Trader_IA\scripts\verify_vps_n8n.sh" -Raw | ssh vps "bash -s"
+#     Get-Content "D:\N8N\Assistant IA complet\Trader_IA\outils\scripts\verify_vps_n8n.sh" -Raw | ssh vps "bash -s"
 # ou depuis un shell POSIX :
-#     ssh vps 'bash -s' < scripts/verify_vps_n8n.sh
+#     ssh vps 'bash -s' < outils/scripts/verify_vps_n8n.sh
 #
 # Il ne MODIFIE rien (lectures seules). Copie-colle toute la sortie à Claude.
 # =============================================================================

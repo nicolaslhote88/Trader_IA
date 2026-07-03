@@ -1,4 +1,4 @@
-﻿# Historique â€” Ã©carts, risques et points d'attention
+# Historique â€” Ã©carts, risques et points d'attention
 
 Ce document consolide les Ã©carts identifiÃ©s au fil des analyses successives.
 Chaque entrÃ©e est annotÃ©e avec son statut :
@@ -13,8 +13,8 @@ Chaque entrÃ©e est annotÃ©e avec son statut :
 
 ### âœ… 1. AG4-SPE-V2 workflow JSON corrompu
 
-**Constat 2026-03-02** : `agents/trading-actions/AG4-SPE-V2/AG4-SPE-V2-workflow.json` pesait 4 octets (BOM + newline).
-**Workaround initial** : rÃ©gÃ©nÃ©rer via `python agents/trading-actions/AG4-SPE-V2/build_workflow.py`.
+**Constat 2026-03-02** : `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-V2-workflow.json` pesait 4 octets (BOM + newline).
+**Workaround initial** : rÃ©gÃ©nÃ©rer via `python agents/trading-actions/AG4 - Les news/AG4-SPE-V2/build_workflow.py`.
 **Statut 2026-04-21** : le fichier fait environ 112 KB et est Ã  jour. La rÃ©gÃ©nÃ©ration via `build_workflow.py` est documentÃ©e dans le `README.md` d'AG4-SPE-V2. Issue clÃ´turÃ©e.
 
 ### âŒ 2. Coexistence V2/V3 dans les paths n8n
@@ -51,7 +51,7 @@ Chaque entrÃ©e est annotÃ©e avec son statut :
 
 ## Issues ouvertes depuis l'analyse broker (2026-04-20)
 
-Ces points sont issus de `ANALYSE_SYSTEME_AVANT_AGENT6.md` (racine) et bloquent la mise en production live.
+Ces points sont issus de `docs/archives/legacy-root/ANALYSE_SYSTEME_AVANT_AGENT6.md` et bloquent la mise en production live.
 
 ### âŒ 8. `client_order_id` absent cÃ´tÃ© broker
 

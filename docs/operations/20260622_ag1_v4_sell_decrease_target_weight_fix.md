@@ -12,16 +12,16 @@
   `REJECTED_MISSING_TARGET_WEIGHT`.
 
 ## Correctif deploye
-- Fichier : `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/06_build_consensus_v4.code.js`
+- Fichier : `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/06_build_consensus_v4.code.js`
   - Ajout `pickPositionPrice(portfolioSummary, symbol)`.
   - Pour `intent === "SELL"`, fallback de reference prix : `matrix.entry` puis prix position (`LastPrice` / `lastPrice` / `MarketValue / Quantity`).
   - Ajout `priceHint` dans l'action consensus pour le node safety.
-- Fichier : `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/build_v4_workflow.py`
+- Fichier : `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/build_v4_workflow.py`
   - Ajout de `AG1.V4 - Build Consensus` dans `CODE_MAP`, sinon le builder ne recopiait pas le node modifie dans l'export JSON.
-- Fichier : `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/tests/smoke_post_agent_v4.js`
+- Fichier : `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/tests/smoke_post_agent_v4.js`
   - Ajout d'un cas SELL held hors pack : deux votes `DECREASE targetWeightPct=4` sur `ELEC.PA`, position 8 titres a 95 EUR, attendu ordre SELL 4.
 - Export regenere :
-  `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json`.
+  `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json`.
 
 ## Validation
 - Smoke test execute dans `root-n8n-1` avec copie temporaire :

@@ -41,7 +41,7 @@ Sortie automatique :
 
 ## Workflow n8n
 
-Fichier repo : `agents/trading-actions/AG2-V3/AG2-Universe-Health-Quarantine.workflow.json`
+Fichier repo : `agents/trading-actions/AG2 - La technique/AG2-V3/AG2-Universe-Health-Quarantine.workflow.json`
 
 Nom : `AG2 — Universe Health Quarantine`
 

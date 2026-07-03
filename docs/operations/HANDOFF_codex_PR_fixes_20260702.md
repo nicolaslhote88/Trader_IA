@@ -12,7 +12,7 @@
 
 ## Commit 1 — sync live 29-30/06 (risk-score V2 + stop-fallback ATR)
 ```
-git add "agents/trading-actions/AG1-V4-Consensus Portfolio manager/nodes/pre_agent/calcul_matrice_briefing.code.py"
+git add "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/nodes/pre_agent/calcul_matrice_briefing.code.py"
 git add services/dashboard/app.py
 ```
 Message proposé :
@@ -45,9 +45,9 @@ Deploye live 2026-07-02 (build ibkr-broker), /health verifie.
 
 ## Commit 3 — AG4_Spé F2 (dates)
 ```
-git add agents/trading-actions/AG4-SPE-V2/nodes/04_normalize_articles.js
-git add agents/trading-actions/AG4-SPE-V2/nodes/07_parse_article.js
-git add agents/trading-actions/AG4-SPE-V2/nodes/12_write_news_duckdb.py
+git add agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/04_normalize_articles.js
+git add agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/07_parse_article.js
+git add agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/12_write_news_duckdb.py
 ```
 Message proposé :
 ```
@@ -91,8 +91,8 @@ docs: audit complet 2026-07-02 + analyse fonctionnelle reecrite + MAJ operations
 - Table de backup `ag4_spe_v2.news_history_date_repair_20260702`.
 
 ## Optionnel (si Codex veut être exhaustif)
-- Rafraîchir l'export repo `agents/trading-actions/AG4-SPE-V2/AG4-SPE-V2-workflow.json` depuis le live (`n8n export:workflow --id=H0cfY1coMx8dvMuXScMc_`) pour que le JSON complet reflète S07/S16/S22 — les fichiers nodes/ ci-dessus sont déjà le miroir canonique.
-- Idem `agents/trading-actions/AG1-PF-V1/AG1-PF-V1-workflow.json` (cron H+15).
+- Rafraîchir l'export repo `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-V2-workflow.json` depuis le live (`n8n export:workflow --id=H0cfY1coMx8dvMuXScMc_`) pour que le JSON complet reflète S07/S16/S22 — les fichiers nodes/ ci-dessus sont déjà le miroir canonique.
+- Idem `agents/trading-actions/AG1 - Portfolio manager/AG1-PF-V1/AG1-PF-V1-workflow.json` (cron H+15).
 
 ## Vérifications post-commit
 1. `git log --oneline -5` : 4 commits au-dessus de `06ab868`.

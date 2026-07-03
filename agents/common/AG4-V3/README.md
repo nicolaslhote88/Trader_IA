@@ -1,4 +1,4 @@
-﻿# AG4-V3 - News Watcher (DuckDB-first)
+# AG4-V3 - News Watcher (DuckDB-first)
 
 ## Objectif
 AG4-V3 collecte les flux RSS, dedupe les news, analyse les impacts marche/secteurs/devise pour Agent #1, et utilise DuckDB (VPS) comme source de verite.
@@ -38,7 +38,7 @@ Configuration:
 
 Seed RSS:
 ```bash
-python scripts/ag4_v3_seed_rss_sources.py --db /files/duckdb/ag4_v3.duckdb
+python outils/scripts/ag4_v3_seed_rss_sources.py --db /files/duckdb/ag4_v3.duckdb
 ```
 
 ## Regeneration

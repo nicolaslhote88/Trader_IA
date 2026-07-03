@@ -10,7 +10,7 @@ The sole user-facing product is a **Streamlit dashboard** called "AI Trading Exe
 - **Codebase:** https://github.com/nicolaslhote88/Trader_IA (branch: `main`)
   - Primary UI source: `services/dashboard/app.py` (13,457 lines)
   - Modules: `services/dashboard/app_modules/core.py`, `visualizations.py`, `tables.py`
-  - Architecture docs: `ANALYSE_SYSTEME_AVANT_AGENT6.md`, `docs/architecture/`
+  - Architecture docs: `docs/archives/legacy-root/ANALYSE_SYSTEME_AVANT_AGENT6.md`, `docs/architecture/`
 - No Figma file provided.
 - No brand assets (logos, illustrations) found in the repository.
 

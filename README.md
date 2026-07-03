@@ -5,10 +5,10 @@ Le système combine des Portfolio Managers LLM, des analystes spécialisés, un
 Risk Manager déterministe, un broker FastAPI branché sur IBKR Client Portal et
 un dashboard Streamlit.
 
-**État opérationnel au 2026-06-18.** Le système Actions/ETF fonctionne en
+**État opérationnel au 2026-07-03.** Le système Actions/ETF fonctionne en
 **LIVE réel** sur le compte IBKR `U25651155` (`IBKR_DRY_RUN=false`,
 `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`). Le Portfolio Manager actif est
-**AG1 V4 consensus** : GPT-5.5, Grok 4.3 et Claude Sonnet 4.6 votent, puis le
+**AG1 V4 consensus** : GPT-5.5, Grok 4.3 et Claude Fable 5 votent, puis le
 workflow applique une règle de consensus 2/3 avant toute exécution. Gemini a été
 retiré. Le Forex est entièrement désactivé (`fx_orders_enabled=false`, workflows
 FX inactifs) ; les bases FX sont conservées mais figées.
@@ -22,11 +22,11 @@ Ne jamais déclencher ni confirmer un ordre manuellement depuis le code.
 | # | Agent | Rôle | Implémentation principale |
 |---|---|---|---|
 | 1 | Univers | Extraction et maintenance de l'univers d'investissement : tickers, métadonnées, secteurs | `outils/AG0-V1 - extraction universe/` |
-| 2 | Portfolio Manager | Allocation, cibles de position et ordres théoriques. En production Actions/ETF : AG1 V4 consensus GPT-5.5 + Grok 4.3 + Claude Sonnet 4.6 | `agents/trading-actions/AG1-V4-Consensus Portfolio manager/` |
-| 3 | Analyste Technique | Indicateurs, patterns et signaux de prix | `agents/trading-actions/AG2-V3/` |
-| 4 | Analyste Fondamental | Financials, valorisation, earnings | `agents/trading-actions/AG3-V2/` |
-| 5 | Analyste Sentiment / News | News macro, sentiment marché, signaux par valeur et mode AG4 dual-branch | `agents/common/AG4-V3/`, `agents/trading-actions/AG4-SPE-V2/` |
-| 6 | Risk Manager + Execution Trader | Validation déterministe, consensus, écriture DuckDB, envoi IBKR et approbation Telegram | `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `services/ibkr-broker/` |
+| 2 | Portfolio Manager | Allocation, cibles de position et ordres théoriques. En production Actions/ETF : AG1 V4 consensus GPT-5.5 + Grok 4.3 + Claude Fable 5 | `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/` |
+| 3 | Analyste Technique | Indicateurs, patterns et signaux de prix | `agents/trading-actions/AG2 - La technique/AG2-V3/` |
+| 4 | Analyste Fondamental | Financials, valorisation, earnings | `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/` |
+| 5 | Analyste Sentiment / News | News macro, sentiment marché, signaux par valeur et mode AG4 dual-branch | `agents/common/AG4-V3/`, `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/` |
+| 6 | Risk Manager + Execution Trader | Validation déterministe, consensus, écriture DuckDB, envoi IBKR et approbation Telegram | `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `services/ibkr-broker/` |
 
 ## 2. Workflows actifs
 
@@ -107,25 +107,33 @@ Trader_IA/
 │   │   ├── AG4-V3/
 │   │   └── yf-enrichment-v1/
 │   ├── trading-actions/
-│   │   ├── AG1-PF-V1/
-│   │   ├── AG1-V4-Consensus Portfolio manager/
-│   │   ├── AG1-V3-Portfolio manager/
-│   │   ├── AG2-V3/
-│   │   ├── AG3-V2/
-│   │   └── AG4-SPE-V2/
+│   │   ├── AG1 - Portfolio manager/
+│   │   │   ├── AG1-PF-V1/
+│   │   │   ├── AG1-V3-Portfolio manager/
+│   │   │   └── AG1-V4-Consensus Portfolio manager/
+│   │   ├── AG2 - La technique/
+│   │   │   └── AG2-V3/
+│   │   ├── AG3 - Les fondamentaux/
+│   │   │   └── AG3-V2/
+│   │   └── AG4 - Les news/
+│   │       └── AG4-SPE-V2/
 │   └── trading-forex/
 ├── docs/
+│   ├── archives/
 │   ├── audits/
 │   ├── operations/
+│   ├── studies/
 │   └── specs/
 ├── infra/
-├── scripts/
+├── outils/
+│   ├── AG0-V1 - extraction universe/
+│   └── scripts/
 ├── services/
 │   ├── dashboard/
 │   ├── ibkr-broker/
 │   ├── macro-data-api/
 │   └── yfinance-api/
-└── outils/
+└── snapshots/
 ```
 
 Le layout GitHub n'est pas identique au layout VPS. En particulier,

@@ -83,7 +83,7 @@ Côté repo : le code broker est **synchronisé repo↔live** (vérifié par md5
 ### 🔴 F2 — P0 · Régression des dates de publication Boursorama
 **Faits validés :** 235 articles `source='boursorama'` avec `published_at` **dans le futur** (max 2030-12-19) dans `news_history` ; sur 7 j glissants, seuls 69 articles boursorama ont une date valide (dernier : 30/06).
 **Analyse :** le fix B1 (`07_parse_article.js`, 18/06) est en régression ou un format de date non couvert est apparu. Les dates futures polluent la vue `news_analyzed`, la fenêtre 14 j du digest 20K d'AG1 et le tri par fraîcheur.
-**Actions :** (1) re-diagnostiquer `07_parse_article.js` sur les articles fautifs ; (2) purge ciblée (`scripts/ag4_spe_cleanup_history.py` à étendre) ; (3) **garde-fou à l'écriture** : rejeter/clamper tout `published_at > now() + 24 h` dans le node d'écriture DuckDB.
+**Actions :** (1) re-diagnostiquer `07_parse_article.js` sur les articles fautifs ; (2) purge ciblée (`outils/scripts/ag4_spe_cleanup_history.py` à étendre) ; (3) **garde-fou à l'écriture** : rejeter/clamper tout `published_at > now() + 24 h` dans le node d'écriture DuckDB.
 
 ### 🔴 F3 — P1 · `AG2 Universe Health Quarantine` en timeout 2 runs sur 3
 **Faits validés :** échecs 30/06 et 01/07 (18:00 UTC) — « Task execution timed out after 60 seconds » (timeout du Code node task-runner, distinct du timeout 1200 s par tâche). La quarantaine a néanmoins été partiellement mise à jour le 01/07 (MAX(updated_at) 18:00:28) : le timeout frappe un node aval.
@@ -103,7 +103,7 @@ Côté repo : le code broker est **synchronisé repo↔live** (vérifié par md5
 ### ⚠️ F6 — P1 · Hygiène git : travaux live non committés + bruit CRLF
 **Faits validés :**
 - Branche `codex/live-trading-sync-20260629`, dernier commit `06ab868`.
-- **4 fichiers avec de vraies modifications non committées** : `AGENTS.md` (+2 blocs), `docs/operations/SCHEDULING_AND_LOAD.md` (2ᵉ créneau AG1), `agents/trading-actions/AG1-V4-Consensus Portfolio manager/nodes/pre_agent/calcul_matrice_briefing.code.py` (+54/−… : risk-score V2 + stop-fallback ATR du 29-30/06), `services/dashboard/app.py` (+86/−12, miroir des mêmes fixes).
+- **4 fichiers avec de vraies modifications non committées** : `AGENTS.md` (+2 blocs), `docs/operations/SCHEDULING_AND_LOAD.md` (2ᵉ créneau AG1), `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/nodes/pre_agent/calcul_matrice_briefing.code.py` (+54/−… : risk-score V2 + stop-fallback ATR du 29-30/06), `services/dashboard/app.py` (+86/−12, miroir des mêmes fixes).
 - **`docs/operations/SYSTEM_LINKS_AND_PARITY.md` est untracked** alors qu'AGENTS.md le désigne « SOURCE DE VÉRITÉ ».
 - 233 autres fichiers modifiés = pur bruit CRLF (`git diff --ignore-cr-at-eol` ne montre que les 4 ci-dessus).
 **Actions :** commit ciblé des 4 fichiers + add du doc parité ; puis traiter le bruit : `git add --renormalize .` après pose d'un `.gitattributes` (`* text=auto eol=lf`) dans un commit dédié.
@@ -133,7 +133,7 @@ Côté repo : le code broker est **synchronisé repo↔live** (vérifié par md5
 | # | Priorité | Constat | Action recommandée | Où |
 |---|---|---|---|---|
 | F1 | **P0** | Exécution US bloquée (prompt market data + TTL 10 min) | Décision : souscription market data US **ou** auto-confirm ≤5 % **ou** TTL allongé | IBKR account mgmt · `services/ibkr-broker/approval.py` |
-| F2 | **P0** | 235 news Boursorama datées futur (régression B1) | Fix parseur + purge + clamp `published_at` à l'écriture | `agents/trading-actions/AG4-SPE-V2/nodes/07_parse_article.js` |
+| F2 | **P0** | 235 news Boursorama datées futur (régression B1) | Fix parseur + purge + clamp `published_at` à l'écriture | `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/07_parse_article.js` |
 | F3 | P1 | AG2UHQ timeout 60 s (2/3 échecs) | Batcher le node fautif | workflow `AG2UHQ20260619` |
 | F4 | P1 | Locks `ag1_v4` (MTM 4 err/3j) | Décaler MTM à H+15 ou retry-backoff | `AG1-PF-V1` nodes 00/01 |
 | F5 | P1 | Approval Decide erreur sur tap tardif | Idempotence étendue à EXPIRED | `services/ibkr-broker/app.py` |

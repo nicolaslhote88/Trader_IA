@@ -45,22 +45,22 @@ Détails complets : `docs/audits/20260617_ag4_spe_v2_analysis.md`, `…_remediat
 - `services/ibkr-broker/cpapi_client.py` — `get_portfolio_news()`
 
 **Nodes AG4_Spé-V2 (sources)**
-- `agents/trading-actions/AG4-SPE-V2/nodes/01_build_symbol_queue.py` — C1/C3
-- `agents/trading-actions/AG4-SPE-V2/nodes/02_start_run.py` — A1
-- `agents/trading-actions/AG4-SPE-V2/nodes/07_parse_article.js` — B1
-- `agents/trading-actions/AG4-SPE-V2/nodes/A3_health_check.py` — A3 (source du Code node)
+- `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/01_build_symbol_queue.py` — C1/C3
+- `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/02_start_run.py` — A1
+- `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/07_parse_article.js` — B1
+- `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/nodes/A3_health_check.py` — A3 (source du Code node)
 
 **AG1 V4 (D1)**
-- `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py`
+- `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py`
 
 **Workflows n8n (JSON importables) — voir §3 pour la canonicalisation**
-- `agents/trading-actions/AG4-SPE-V2/AG4-SPE-V2-workflow.json` (B1+A1 ; **à régénérer**, cf §3)
-- `agents/trading-actions/AG4-SPE-V2/AG4-SPE-IBKR-V1-workflow.json` (V3, nouveau)
+- `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-V2-workflow.json` (B1+A1 ; **à régénérer**, cf §3)
+- `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-IBKR-V1-workflow.json` (V3, nouveau)
 - workflow A3 (alerte santé) : à exporter de n8n (cf §3)
 
 **Scripts maintenance (nouveaux)**
-- `scripts/ag4_spe_backfill_published_at.py`
-- `scripts/ag4_spe_cleanup_history.py`
+- `outils/scripts/ag4_spe_backfill_published_at.py`
+- `outils/scripts/ag4_spe_cleanup_history.py`
 
 **Docs (nouveaux)**
 - `docs/audits/20260617_ag4_spe_v2_analysis.md`
@@ -132,7 +132,7 @@ Travaux supplémentaires **déployés et vérifiés en prod**, à inclure dans l
 
 ### Fichiers additionnels à committer
 **D2 — exploitation news par AG1 V4 (node 20K)**
-- `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/20K_news_digest.code.py` (source du node)
+- `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/20K_news_digest.code.py` (source du node)
 - workflow AG1 V4 : exporter de n8n (`id=AG1V4CONSENSUS`) pour capter le node `20K — News Digest (Pack+Held)` + le rewire `Calcul Matrice → 20K → Merge7[1]`. (NE PAS committer un export brut qui réverserait D1 — vérifier que `RECENCY_SPE` ET `20K` sont présents.)
 - `docs/specs/ag1_v4_d2_news_digest.md`
 
@@ -163,11 +163,11 @@ Travaux supplémentaires **déployés et vérifiés en prod**, à inclure dans l
 Travail additionnel déployé et vérifié le 2026-06-18 après constat d'un écart entre le portefeuille IBKR live et le dashboard.
 
 ### Fichiers additionnels à committer
-- `agents/trading-actions/AG1-PF-V1/build_workflow.py`
-- `agents/trading-actions/AG1-PF-V1/AG1-PF-V1-workflow.json`
-- `agents/trading-actions/AG1-PF-V1/nodes/00b_fetch_ibkr_state.js`
-- `agents/trading-actions/AG1-PF-V1/nodes/00c_reconcile_ibkr_ledger.py`
-- `scripts/ag1_v4_reconcile_ibkr_live.py`
+- `agents/trading-actions/AG1 - Portfolio manager/AG1-PF-V1/build_workflow.py`
+- `agents/trading-actions/AG1 - Portfolio manager/AG1-PF-V1/AG1-PF-V1-workflow.json`
+- `agents/trading-actions/AG1 - Portfolio manager/AG1-PF-V1/nodes/00b_fetch_ibkr_state.js`
+- `agents/trading-actions/AG1 - Portfolio manager/AG1-PF-V1/nodes/00c_reconcile_ibkr_ledger.py`
+- `outils/scripts/ag1_v4_reconcile_ibkr_live.py`
 - `docs/operations/ag1_v4_ibkr_reconcile_20260618.md`
 
 ### Cause racine
