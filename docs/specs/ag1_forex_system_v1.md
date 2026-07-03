@@ -417,7 +417,7 @@ Lecture directe du dernier `fx_macro` :
 
 ### 7.1 Schema `ag1_fx_v1_*.duckdb` (1 base par LLM, schema identique)
 
-Reprend les tables `core.*` et `cfg.*` de AG1-V3 (`agents/trading-actions/AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql`) avec les **adaptations FX suivantes** :
+Reprend les tables `core.*` et `cfg.*` de AG1-V3 (`agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/sql/portfolio_ledger_schema_v2.sql`) avec les **adaptations FX suivantes** :
 
 ```sql
 CREATE SCHEMA IF NOT EXISTS core;
@@ -718,7 +718,7 @@ Insertion litterale du brief assemble en 7.3 (serialise JSON, encadre par 3 back
 
 ### 7.7 Risk Manager FX - `11_validate_enforce_safety_fx.js`
 
-**Reprend la structure de `agents/trading-actions/AG1-V3-Portfolio manager/nodes/post_agent/07_validate_enforce_safety_v5.code.js` avec les corrections suivantes** (issues #8/9/10 de `historique_issues.md`) :
+**Reprend la structure de `agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/nodes/post_agent/07_validate_enforce_safety_v5.code.js` avec les corrections suivantes** (issues #8/9/10 de `historique_issues.md`) :
 
 Pipeline de checks (un echec -> ordre rejete avec `rejection_reason`, pas crash) :
 
@@ -761,7 +761,7 @@ avec le dernier snapshot PF, puis P&L net officiel.
 
 ### 7.9 Generation des variants 3 LLMs (v1.1)
 
-`generate_model_variants.py` (calque sur `agents/trading-actions/AG1-V3-Portfolio manager/generate_model_variants.py`) prend le template et produit 3 workflows :
+`generate_model_variants.py` (calque sur `agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/generate_model_variants.py`) prend le template et produit 3 workflows :
 
 | Variant | LLM | Cron Paris | Cron expression |
 |---|---|---|---|

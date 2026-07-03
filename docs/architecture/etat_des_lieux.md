@@ -62,7 +62,7 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
 ### 3.0 Taxonomie
 | Rôle métier | Implémentation actuelle |
 |---|---|
-| Univers | table `ag2_v3.universe` + `universe_segments` + quarantaine (`AG2UHQ`) ; outillage `outils/AG0-V1`, `scripts/seed_universe_100_global.py` |
+| Univers | table `ag2_v3.universe` + `universe_segments` + quarantaine (`AG2UHQ`) ; outillage `outils/AG0-V1`, `outils/scripts/seed_universe_100_global.py` |
 | Portfolio Manager | **AG1 V4 Consensus** (workflow `AG1V4CONSENSUS`) |
 | Analyste technique | AG2-V3 (split Held+Core / Watchlist) |
 | Analyste fondamental | AG3-V2 (split Held+Core / Watchlist) |

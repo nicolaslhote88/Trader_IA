@@ -150,20 +150,20 @@ AG1 V4 s'installe a cote de V3 et ne reprend aucun historique. Le workflow n8n
 importable est:
 
 ```text
-agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json
+agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json
 ```
 
 Pack a copier sur le VPS:
 
 ```bash
 rsync -av \
-  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/" \
+  "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/" \
   root@<vps>:/local-files/AG1-V4-EXPORT/nodes/
 rsync -av \
-  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/sql/" \
+  "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/sql/" \
   root@<vps>:/local-files/AG1-V4-EXPORT/sql/
 scp \
-  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json" \
+  "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json" \
   root@<vps>:/local-files/AG1-V4-EXPORT/AG1_workflow_v4_consensus.json
 ```
 

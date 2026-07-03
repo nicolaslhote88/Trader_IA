@@ -16,7 +16,7 @@ base `ag3_v2.duckdb` :
 | AG3-V2 — Fundamental Held+Core | `AG3V2HELDCORE20260622` | `0 1 * * *` | HELD+CORE_AUTO (~56) | 80 | ≤24 h | `ag3_v2_held_core_last_index` |
 | AG3-V2 — Fundamental Watchlist Nightly | `AG3V2WATCHNIGHT20260622` | `0 2 * * *` | WATCHLIST (~196) | 60 | <5 j (~4 j) | `ag3_v2_watchlist_last_index` |
 
-Générateur : `agents/trading-actions/AG3-V2/build_split_workflows.py` (part de l'export live
+Générateur : `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/build_split_workflows.py` (part de l'export live
 `AG3-V2-workflow.json` ; `build_workflow.py` est périmé=GoogleSheets). Node `AG3V2.01 - Read Universe`
 patché avec `symbol IN (SELECT symbol FROM universe_segments WHERE active AND segment IN (...))`.
 
@@ -82,7 +82,7 @@ docker restart root-n8n-1
   type FMP — ne comble PAS le trou analystes) et Sprint 3 (seuils horizon, digest PM) — voir l'audit.
 
 ## À committer côté Windows
-`AGENTS.md`, `agents/trading-actions/AG3-V2/build_split_workflows.py`, les 2
+`AGENTS.md`, `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/build_split_workflows.py`, les 2
 `AG3-V2-Fundamental-*.workflow.json`, `AG3-V2/README.md`, R8 patché
 (`AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py`),
 `docs/audits/20260622_ag3_v2_analysis.md`, ce fichier.

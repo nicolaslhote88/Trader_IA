@@ -16,27 +16,27 @@ AGENTS.md                                                                       
 docs/audits/20260619_ag2_v3_analyse_pertinence_efficience.md                                (NOUVEAU)
 docs/operations/20260619_ag2_hybrid_deploy_notes.md                                         (NOUVEAU)
 docs/operations/HANDOFF_codex_PR_ag2_hybrid_20260619.md                                     (NOUVEAU, ce fichier)
-agents/trading-actions/AG2-V3/AG2-V3 - Analyse technique actions ETF crypto.json            (1 ligne)
-agents/trading-actions/AG2-V3/nodes/06_extract_ai.py                                        (+6)
-agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json   (1 ligne)
-agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py       (+5/-1)
-agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/calcul_matrice_briefing.code.py   (+35/-1)
+agents/trading-actions/AG2 - La technique/AG2-V3/AG2-V3 - Analyse technique actions ETF crypto.json            (1 ligne)
+agents/trading-actions/AG2 - La technique/AG2-V3/nodes/06_extract_ai.py                                        (+6)
+agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json   (1 ligne)
+agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py       (+5/-1)
+agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/calcul_matrice_briefing.code.py   (+35/-1)
 ```
 
 ## ⚠️ À NE PAS committer
 - Le **bruit CRLF** (~200 fichiers `M` non liés : AG4-V3, AG1-PF-V1, AG1-V3, AG2-FX, AG3-FX, AG4-FX, etc.) et le **backlog AG4_Spé** (handoff séparé `HANDOFF_codex_PR_ag4_spe_v3_20260618.md`). **Stager uniquement les 9 chemins ci-dessus.**
 - `.codex-tmp/` et `.ssh/` (gitignorés).
 - **2 fichiers vides parasites à SUPPRIMER** (doublons créés par erreur, n'ont pas pu être rm dans l'env précédent) :
-  `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/r8_data_prep_for_matrix.code.py`
-  `agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/calcul_matrice_briefing.code.py`
+  `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/r8_data_prep_for_matrix.code.py`
+  `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/calcul_matrice_briefing.code.py`
   → `rm` ces deux fichiers (0 octet) avant le commit. Ne pas les `git add`.
 
 ## Procédure git (chemins avec espaces → quoter ; `git add` explicite par chemin)
 ```bash
 cd <repo>
 # 0. supprimer les 2 doublons vides
-rm -f "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/r8_data_prep_for_matrix.code.py" \
-      "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/calcul_matrice_briefing.code.py"
+rm -f "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/r8_data_prep_for_matrix.code.py" \
+      "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/agent_input/calcul_matrice_briefing.code.py"
 
 # 1. branche dédiée (isole du backlog AG4 non commité, qui reste non stagé)
 git checkout -b feat/ag2-hybrid-ag1-20260619
@@ -46,18 +46,18 @@ git add -- AGENTS.md \
   "docs/audits/20260619_ag2_v3_analyse_pertinence_efficience.md" \
   "docs/operations/20260619_ag2_hybrid_deploy_notes.md" \
   "docs/operations/HANDOFF_codex_PR_ag2_hybrid_20260619.md" \
-  "agents/trading-actions/AG2-V3/AG2-V3 - Analyse technique actions ETF crypto.json" \
-  "agents/trading-actions/AG2-V3/nodes/06_extract_ai.py" \
-  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json" \
-  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py" \
-  "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/calcul_matrice_briefing.code.py"
+  "agents/trading-actions/AG2 - La technique/AG2-V3/AG2-V3 - Analyse technique actions ETF crypto.json" \
+  "agents/trading-actions/AG2 - La technique/AG2-V3/nodes/06_extract_ai.py" \
+  "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/AG1_workflow_v4_consensus.json" \
+  "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/R8_data_prep_matrix.code.py" \
+  "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/calcul_matrice_briefing.code.py"
 
 # 3. CONTRÔLE OBLIGATOIRE : le diff stagé ne doit contenir QUE le changement logique
 git diff --cached --stat
 # Attendu : 9 fichiers, ~+? lignes ; les 2 JSON = 1 ligne modifiée chacun (code de nœud sur une ligne).
 # Vérifier qu'aucun fichier hors-périmètre n'est stagé, et qu'aucun JSON n'est reformaté en entier (sinon = bruit CRLF → unstage et re-cibler le hunk).
-git diff --cached -- "agents/trading-actions/AG2-V3/nodes/06_extract_ai.py" | grep -E "ai_rr_theoretical|ALTER"   # doit montrer le fix RR
-git diff --cached -- "agents/trading-actions/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/calcul_matrice_briefing.code.py" | grep -E "llm_adj|AG2_LLM_APPROVE|REJECT"  # doit montrer l'hybride
+git diff --cached -- "agents/trading-actions/AG2 - La technique/AG2-V3/nodes/06_extract_ai.py" | grep -E "ai_rr_theoretical|ALTER"   # doit montrer le fix RR
+git diff --cached -- "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/pre_agent/calcul_matrice_briefing.code.py" | grep -E "llm_adj|AG2_LLM_APPROVE|REJECT"  # doit montrer l'hybride
 
 # 4. commit
 git commit -F - <<'MSG'

@@ -12,14 +12,14 @@
 Commande source utilisée depuis le repo local :
 
 ```bash
-Get-Content scripts/ag1_v4_reconcile_ibkr_live.py -Raw \
+Get-Content outils/scripts/ag1_v4_reconcile_ibkr_live.py -Raw \
   | ssh vps 'docker exec -i yf-enrichment python - --db-path /files/duckdb/ag1_v4_consensus.duckdb --broker-url http://ibkr-broker:8080 --apply'
 ```
 
 Script copié sur le VPS :
 
 ```text
-/opt/trader-ia/scripts/ag1_v4_reconcile_ibkr_live.py
+/opt/trader-ia/outils/scripts/ag1_v4_reconcile_ibkr_live.py
 ```
 
 Backup créé avant écriture :

@@ -300,8 +300,8 @@ Sur le VPS actuel, cela passe par `/opt/trader-ia/n8n-task-runners.clean.json` :
 
 Actions AG1-V3 :
 
-- fichier code : `agents/trading-actions/AG1-V3-Portfolio manager/workflow/nodes/post_agent/07b_ibkr_send_orders.js`
-- node importable : `agents/trading-actions/AG1-V3-Portfolio manager/workflow/nodes/post_agent/07b_ibkr_send_orders.node.json`
+- fichier code : `agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/workflow/nodes/post_agent/07b_ibkr_send_orders.js`
+- node importable : `agents/trading-actions/AG1 - Portfolio manager/AG1-V3-Portfolio manager/workflow/nodes/post_agent/07b_ibkr_send_orders.node.json`
 - deja cable dans le template et les variantes entre `7 - Validate & Enforce Safety`
   et `8 - Build DuckDB Bundle`.
 
