@@ -138,6 +138,8 @@ const limits = {
   maxPosPct: cfgNumber(configRaw, ["max_pos_pct", "maxPositionPct", "max_position_pct"], 25),
   maxSectorPct: cfgNumber(configRaw, ["max_sector_pct", "maxSectorPct"], 40),
   maxOrderValuePct: cfgNumber(configRaw, ["max_order_value_pct", "maxOrderValuePct"], 15),
+  minOrderValueEUR: cfgNumber(configRaw, ["min_order_value_eur", "minOrderValueEUR"], 1000),
+  maxOpenPositions: cfgNumber(configRaw, ["max_open_positions", "maxOpenPositions"], 10),
   defaultFeeBps: cfgNumber(configRaw, ["default_fee_bps", "fee_bps", "defaultFeeBps"], 10),
   maxSpreadPct: cfgNumber(configRaw, ["max_spread_pct", "maxSpreadPct"], 1.5),
   maxH1AgeHours: cfgNumber(configRaw, ["max_h1_age_hours", "maxH1AgeHours"], 96),
@@ -171,6 +173,8 @@ for (const p of posList) {
 
 const cashEUR = toNum(portfolioSummary?.cashEUR, 0);
 const portfolioValue = toNum(portfolioSummary?.totalPortfolioValueEUR, cashEUR + inferredEquity) || Math.max(1, cashEUR + inferredEquity);
+// Nombre de lignes distinctes reellement detenues (pour plafonner les nouvelles ouvertures).
+const openPositionsCount = Object.values(posQty).filter((q) => toNum(q, 0) > 0).length;
 const sectorValue = {};
 for (const [sym, mv] of Object.entries(posMarketValue)) {
   const sector = posSector[sym] || "UNKNOWN";
@@ -288,6 +292,11 @@ for (const a of agentDecision.actions || []) {
   const postSectorPct = portfolioValue > 0 ? (postSectorValue / portfolioValue) * 100 : 0;
   const orderValuePct = portfolioValue > 0 ? (grossNotional / portfolioValue) * 100 : 0;
 
+  // Plancher de ticket : rejette les micro-ordres d'achat manges par les frais fixes.
+  if (side === "BUY" && grossNotional < limits.minOrderValueEUR) { reject(symbol, "MIN_ORDER_VALUE_EUR", `${grossNotional.toFixed(0)}<${limits.minOrderValueEUR}`); continue; }
+  // Plafond du nombre de lignes : rejette une NOUVELLE ouverture au-dela du max (concentration).
+  const isNewOpen = side === "BUY" && (action === "OPEN" || currentQty <= 0);
+  if (isNewOpen && openPositionsCount >= limits.maxOpenPositions) { reject(symbol, "MAX_OPEN_POSITIONS", `${openPositionsCount}>=${limits.maxOpenPositions}`); continue; }
   if (side === "BUY" && postSymbolPct > limits.maxPosPct) { reject(symbol, "MAX_POSITION_PCT", postSymbolPct.toFixed(2)); continue; }
   if (side === "BUY" && sector !== "UNKNOWN" && postSectorPct > limits.maxSectorPct) { reject(symbol, "MAX_SECTOR_PCT", `${sector}:${postSectorPct.toFixed(2)}`); continue; }
   if (side === "BUY" && orderValuePct > limits.maxOrderValuePct) { reject(symbol, "MAX_ORDER_VALUE_PCT", orderValuePct.toFixed(2)); continue; }

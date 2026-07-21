@@ -279,6 +279,32 @@ def pick_best_probe(probes):
     return best
 
 
+def load_fx_ref_map(db_path):
+    # FIX 2026-07-13 : taux/devise autoritaires IBKR pour convertir les prix natifs (USD...) en EUR.
+    out = {}
+    try:
+        with db_con(db_path) as con:
+            if con is None or not table_exists(con, "portfolio_positions_ibkr_latest"):
+                return out
+            rows = query_rows(con, """
+                SELECT symbol, currency, CAST(fx_rate AS DOUBLE) AS fx_rate,
+                       CAST(last_price_eur AS DOUBLE) AS last_price_eur
+                FROM portfolio_positions_ibkr_latest
+            """)
+            for r in rows:
+                sym = norm_symbol(r.get("symbol"))
+                if not sym:
+                    continue
+                out[sym] = {
+                    "currency": (str(r.get("currency") or "").strip().upper() or None),
+                    "fx": to_num(r.get("fx_rate"), None),
+                    "lp_eur": to_num(r.get("last_price_eur"), None),
+                }
+    except Exception:
+        return out
+    return out
+
+
 def load_position_overrides(db_path):
     out = {}
     source = None
@@ -688,8 +714,9 @@ def build_agent_brief(summary, positions, recent_ideas):
 
             lines.append(
                 f"- {sym} ({p.get('name')}) [{p.get('sector')}]: qty={fmt_num(p.get('quantity'))} "
-                f"avg={fmt_num(p.get('avgPrice'))} last={fmt_num(p.get('lastPrice'))} "
-                f"value={fmt_num(p.get('marketValue'))} pnl={fmt_num(p.get('unrealizedPnL'))}"
+                f"avg={fmt_num(p.get('avgPrice'))} last={fmt_num(p.get('lastPrice'))} devise={'EUR' if '.' in str(sym) else 'USD'} "
+                f"perfLocalPct={fmt_num(p.get('perfLocalPct'), 1)} "
+                f"value={fmt_num(p.get('marketValue'))} pnlEUR={fmt_num(p.get('unrealizedPnL'))}"
             )
             opened_at = p.get("openedAt")
             holding_days = p.get("holdingDays")
@@ -808,6 +835,7 @@ db_path = str(db_probe_selected.get("path") or normalize_db_path(db_path_raw))
 position_overrides, override_source = load_position_overrides(db_path)
 instrument_overrides = load_instrument_overrides(db_path)
 position_lifecycle = load_position_lifecycle(db_path)
+fx_ref_map = load_fx_ref_map(db_path)
 
 base_rows = []
 if isinstance(portfolio_summary_in, dict) and isinstance(portfolio_summary_in.get("positions"), list):
@@ -832,8 +860,31 @@ for row in base_rows:
     quantity = to_num(ov.get("quantity"), to_num(row.get("Quantity"), to_num(row.get("qty"), 0.0)))
     avg_price = to_num(ov.get("avgPrice"), to_num(row.get("AvgPrice"), to_num(row.get("avgPrice"), None)))
     last_price = to_num(ov.get("lastPrice"), to_num(row.get("LastPrice"), to_num(row.get("price"), 0.0)))
+    _perf_local_pct = ((last_price / avg_price - 1.0) * 100.0) if (avg_price and last_price and avg_price > 0) else None  # perf PRIX devise locale (avant conversion FX)
     market_value = to_num(ov.get("marketValue"), to_num(row.get("MarketValue"), to_num(row.get("value"), quantity * last_price)))
     unrealized_pnl = to_num(ov.get("unrealizedPnL"), to_num(row.get("UnrealizedPnL"), to_num(row.get("pnl"), 0.0)))
+    # FIX 2026-07-13 : conversion FX -> EUR des positions non-EUR (MTM/consensus stockent en devise
+    # native -> equity gonflee + ecart positions vs snapshot IBKR). Detection d'echelle pour ne
+    # jamais double-convertir ; avg_price est deja en EUR. Gardee (try/except) : ne casse jamais le run.
+    try:
+        _fx = fx_ref_map.get(symbol)
+        if _fx and _fx.get("currency") and _fx.get("currency") != "EUR" and _fx.get("fx") and _fx["fx"] > 0:
+            _factor = float(_fx["fx"])
+            _lp_ref = _fx.get("lp_eur")
+            _lp = to_num(last_price, None)
+            if _lp is not None and _lp > 0:
+                _cand = _lp * _factor
+                _do = True
+                if _lp_ref is not None and _lp_ref > 0:
+                    _do = abs(_cand - _lp_ref) < abs(_lp - _lp_ref)
+                if _do:
+                    _qty = to_num(quantity, 0.0) or 0.0
+                    last_price = _cand
+                    market_value = _qty * last_price
+                    if avg_price is not None:
+                        unrealized_pnl = (last_price - avg_price) * _qty
+    except Exception:
+        pass
     updated_at = ov.get("updatedAt") or to_iso(row.get("UpdatedAt"), None) or datetime.now(timezone.utc).isoformat()
 
     last_decision = normalize_last_decision((decision_memory or {}).get(symbol), symbol_hint=symbol)
@@ -873,6 +924,7 @@ for row in base_rows:
             "quantity": quantity,
             "avgPrice": round2(avg_price) if avg_price is not None else None,
             "lastPrice": round2(last_price),
+            "perfLocalPct": (round2(_perf_local_pct) if _perf_local_pct is not None else None),
             "marketValue": round2(market_value),
             "unrealizedPnL": round2(unrealized_pnl),
             "updatedAt": updated_at,

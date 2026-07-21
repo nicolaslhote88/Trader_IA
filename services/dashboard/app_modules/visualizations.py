@@ -270,19 +270,22 @@ def _extract_trade_events(
     if ev.empty:
         return pd.DataFrame(columns=cols)
 
+    ev["trade_day"] = ev["timestamp"].dt.floor("D")
     if start_ts is not None:
-        ev = ev[ev["timestamp"] >= start_ts]
+        start_day = pd.Timestamp(start_ts).floor("D")
+        ev = ev[ev["trade_day"] >= start_day]
     if end_ts is not None:
-        ev = ev[ev["timestamp"] <= end_ts]
+        end_day = pd.Timestamp(end_ts).floor("D")
+        ev = ev[ev["trade_day"] <= end_day]
     if ev.empty:
         return pd.DataFrame(columns=cols)
 
-    ev["trade_day"] = ev["timestamp"].dt.floor("D")
     ev = (
         ev.sort_values("timestamp")
         .drop_duplicates(subset=["trade_day", "side"], keep="first")
         .sort_values("timestamp")
     )
+    ev["timestamp"] = ev["trade_day"]
     return ev[cols]
 
 
@@ -327,6 +330,209 @@ def _convert_history_to_eur(hist, currency, fx_rate_now, yfinance_api_url, lookb
         h["close"] = h["close"] * rate
         return h, ccy
     return hist, None
+
+
+# Suffixes d'echange NON americains : un ticker qui les porte n'est pas libelle en USD.
+_NON_US_EXCHANGE_SUFFIXES = (
+    ".PA", ".AS", ".BR", ".LS", ".MC", ".MI", ".DE", ".F", ".DU", ".MU", ".SG",
+    ".BE", ".HM", ".L", ".IL", ".SW", ".VX", ".ST", ".HE", ".OL", ".CO", ".VI",
+    ".IR", ".LS", ".AT", ".WA", ".PR", ".BD", ".TO", ".V", ".HK", ".T", ".AX",
+    ".NZ", ".SI", ".JO", ".SA", ".MX", ".BO", ".NS", ".KS", ".KQ", ".TW", ".TWO",
+)
+
+
+def _build_currency_map(df_pos: pd.DataFrame) -> dict[str, str]:
+    """symbole (upper) -> devise, issu du portefeuille normalise."""
+    ccy_map: dict[str, str] = {}
+    if df_pos is None or df_pos.empty or "symbol" not in df_pos.columns:
+        return ccy_map
+    for _, row in df_pos.iterrows():
+        sym = str(row.get("symbol") or "").strip().upper()
+        ccy = str(row.get("currency") or "").strip().upper()
+        if sym and ccy:
+            ccy_map[sym] = ccy
+    return ccy_map
+
+
+def _is_usd_symbol(symbol: str, ccy_map: dict[str, str]) -> bool:
+    """Vrai si le titre se traite en USD (achat => besoin de dollars).
+
+    1. Si la devise est connue via le portefeuille : USD => True, autre => False.
+    2. Sinon heuristique : un suffixe d'echange non-US => False ; ticker nu / ADR => True.
+    """
+    sym = str(symbol or "").strip().upper()
+    if not sym:
+        return False
+    ccy = ccy_map.get(sym)
+    if ccy:
+        return ccy == "USD"
+    if any(sym.endswith(suffix) for suffix in _NON_US_EXCHANGE_SUFFIXES):
+        return False
+    if "." in sym:
+        # Suffixe inconnu et non liste : on ne suppose pas USD pour eviter les faux positifs.
+        return False
+    return True
+
+
+def _extract_usd_flow_events(
+    tx: pd.DataFrame,
+    ccy_map: dict[str, str],
+    *,
+    start_ts: pd.Timestamp | None,
+    end_ts: pd.Timestamp | None,
+) -> pd.DataFrame:
+    """Evenements BUY/SELL agreges (jour x side) sur les titres libelles en USD.
+
+    Renvoie colonnes : timestamp (jour), side, symbols (str), n (nb de trades).
+    """
+    cols = ["timestamp", "side", "symbols", "n"]
+    if tx is None or tx.empty:
+        return pd.DataFrame(columns=cols)
+
+    ev = tx[tx["side"].isin(["BUY", "SELL"])].copy()
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+    ev = ev.dropna(subset=["timestamp"])
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    ev = ev[ev["symbol"].map(lambda s: _is_usd_symbol(s, ccy_map))].copy()
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    ev["trade_day"] = ev["timestamp"].dt.floor("D")
+    if start_ts is not None:
+        ev = ev[ev["trade_day"] >= pd.Timestamp(start_ts).floor("D")]
+    if end_ts is not None:
+        ev = ev[ev["trade_day"] <= pd.Timestamp(end_ts).floor("D")]
+    if ev.empty:
+        return pd.DataFrame(columns=cols)
+
+    grouped = (
+        ev.groupby(["trade_day", "side"], as_index=False)
+        .agg(symbols=("symbol", lambda s: ", ".join(sorted(set(s)))), n=("symbol", "size"))
+        .rename(columns={"trade_day": "timestamp"})
+        .sort_values("timestamp")
+    )
+    return grouped[cols]
+
+
+def _build_eurusd_flow_sparkline(
+    hist: pd.DataFrame,
+    flow_events: pd.DataFrame,
+) -> go.Figure:
+    """Sparkline EUR/USD 90j avec tirets verticaux : vert = achat USD, rouge = vente USD."""
+    title_suffix = "n/a"
+    profitable: bool | None = None
+    if hist is not None and not hist.empty:
+        first_close = safe_float(hist["close"].iloc[0])
+        last_close = safe_float(hist["close"].iloc[-1])
+        if first_close > 0 and last_close > 0:
+            ret_pct = (last_close / first_close - 1.0) * 100.0
+            title_suffix = f"{ret_pct:+.2f}%"
+            profitable = ret_pct >= 0
+
+    title_text = f"EUR/USD - flux devises (achats/ventes titres USD) | {title_suffix}"
+
+    if hist is None or hist.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"{title_text} | no history",
+            height=230,
+            margin=dict(t=40, b=26, l=48, r=12),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            annotations=[
+                dict(
+                    text="EUR/USD indisponible",
+                    x=0.5, y=0.5, xref="paper", yref="paper",
+                    showarrow=False, font=dict(size=11, color="#999"),
+                )
+            ],
+        )
+        return fig
+
+    line_color = "#4ea1ff"
+    fill_color = "rgba(40,167,69,0.14)" if profitable else "rgba(220,53,69,0.12)"
+
+    y_vals = pd.to_numeric(hist["close"], errors="coerce").dropna()
+    y_min = float(y_vals.min())
+    y_max = float(y_vals.max())
+    if y_max <= y_min:
+        y_max = y_min + 0.0005
+    pad = (y_max - y_min) * 0.15
+    y_floor, y_ceiling = y_min - pad, y_max + pad
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=hist["timestamp"],
+            y=hist["close"],
+            mode="lines",
+            line=dict(color=line_color, width=1.8),
+            fill="tozeroy",
+            fillcolor=fill_color,
+            name="EUR/USD",
+            hovertemplate="%{x|%Y-%m-%d}<br>EUR/USD: %{y:.4f}<extra></extra>",
+        )
+    )
+
+    green = "rgba(40,167,69,0.9)"
+    red = "rgba(220,53,69,0.9)"
+    legend_seen: set[str] = set()
+    if flow_events is not None and not flow_events.empty:
+        for ev in flow_events.itertuples(index=False):
+            is_buy = str(ev.side).upper() == "BUY"
+            color = green if is_buy else red
+            fig.add_shape(
+                type="line",
+                x0=ev.timestamp, x1=ev.timestamp,
+                y0=y_floor, y1=y_ceiling,
+                line=dict(color=color, width=1.6, dash="dash"),
+            )
+            # Marqueur invisible pour le hover (quels titres ce jour-la).
+            label = "Achat USD" if is_buy else "Vente USD"
+            symbols = getattr(ev, "symbols", "")
+            fig.add_trace(
+                go.Scatter(
+                    x=[ev.timestamp],
+                    y=[y_ceiling],
+                    mode="markers",
+                    marker=dict(size=8, color=color, symbol="triangle-down" if not is_buy else "triangle-up"),
+                    name=label,
+                    legendgroup=label,
+                    showlegend=label not in legend_seen,
+                    hovertemplate=f"%{{x|%Y-%m-%d}}<br>{label}<br>{symbols}<extra></extra>",
+                )
+            )
+            legend_seen.add(label)
+
+    fig.update_layout(
+        title=title_text,
+        height=240,
+        margin=dict(t=44, b=30, l=52, r=12),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        showlegend=bool(legend_seen),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+        xaxis=dict(
+            showgrid=False, zeroline=False, nticks=8,
+            tickformat="%d/%m",
+            tickfont=dict(size=10, color="rgba(230,230,230,0.75)"),
+        ),
+        yaxis=dict(
+            showgrid=True, gridcolor="rgba(255,255,255,0.10)",
+            ticks="outside", ticklen=3, zeroline=False, nticks=5,
+            tickformat=".4f",
+            range=[y_floor, y_ceiling],
+            tickfont=dict(size=10, color="rgba(230,230,230,0.78)"),
+        ),
+        hovermode="closest",
+        title_font=dict(size=14),
+    )
+    return fig
 
 
 def _build_position_sparkline(
@@ -747,6 +953,26 @@ def render_portfolio_sparklines(
         interval="1d",
         lookback_days=lookback_days,
     )
+
+    # --- Sparkline EUR/USD dediee : flux devises lies aux titres USD ---
+    ccy_map = _build_currency_map(df_pos)
+    fx_hist = _prefetch_histories(
+        symbols=("EURUSD=X",),
+        yfinance_api_url=yfinance_api_url,
+        interval="1d",
+        lookback_days=lookback_days,
+    ).get("EURUSD=X", pd.DataFrame())
+    fx_start = fx_hist["timestamp"].min() if (fx_hist is not None and not fx_hist.empty) else None
+    fx_end = fx_hist["timestamp"].max() if (fx_hist is not None and not fx_hist.empty) else None
+    flow_events = _extract_usd_flow_events(tx, ccy_map, start_ts=fx_start, end_ts=fx_end)
+    fx_fig = _build_eurusd_flow_sparkline(fx_hist, flow_events)
+    st.plotly_chart(fx_fig, use_container_width=True, key="spark_eurusd_flow")
+    st.caption(
+        "EUR/USD sur 90j — tiret **vert** = achat d'un titre en USD (achat de dollars), "
+        "tiret **rouge** = vente d'un titre en USD (retour en euros). "
+        "Survolez un marqueur pour voir les titres concernes ce jour-la."
+    )
+    st.divider()
 
     grid_cols = st.columns(max(1, int(columns_per_row)))
     for idx, pos in enumerate(df_pos.itertuples(index=False)):

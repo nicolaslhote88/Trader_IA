@@ -8994,6 +8994,23 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             df_pos = _ag1_attach_fx_breakdown(conn, df_pos)
         except Exception:
             pass
+        # FIX 2026-07-16 : latent ECONOMIQUE EUR (prix + change) = somme des P&L total par position,
+        # identique au total du tableau Positions. Sert de "P&L latent" du bandeau (le
+        # base_ledger.unrealizedpnl d'IBKR est "prix seul" et ignore l'impact FX sur les titres USD).
+        latent_economic_eur = None
+        latent_prix_eur = None
+        latent_fx_eur = None
+        try:
+            if isinstance(df_pos, pd.DataFrame) and not df_pos.empty and "symbol" in df_pos.columns:
+                _posmask = ~df_pos["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
+                if "pnl_total_eur" in df_pos.columns:
+                    latent_economic_eur = float(pd.to_numeric(df_pos.loc[_posmask, "pnl_total_eur"], errors="coerce").fillna(0.0).sum())
+                if "pnl_prix_eur" in df_pos.columns:
+                    latent_prix_eur = float(pd.to_numeric(df_pos.loc[_posmask, "pnl_prix_eur"], errors="coerce").fillna(0.0).sum())
+                if "pnl_fx_eur" in df_pos.columns:
+                    latent_fx_eur = float(pd.to_numeric(df_pos.loc[_posmask, "pnl_fx_eur"], errors="coerce").fillna(0.0).sum())
+        except Exception:
+            pass
         latest_run_meta: dict[str, object] = {}
         if df_runs is not None and not df_runs.empty and "run_id" in df_runs.columns:
             last_run_id_guess = str(latest.get("run_id") or "").strip()
@@ -9008,9 +9025,17 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
 
         model_info = _ag1_resolve_display_model(key, cfg, latest, latest_run_meta, df_runs)
 
+        snapshot_base_ledger = _decode_snapshot_base_ledger(latest.get("meta_json"))
+        snapshot_unrealized_pnl = safe_float(snapshot_base_ledger.get("unrealizedpnl"))
+        snapshot_realized_pnl = safe_float(snapshot_base_ledger.get("realizedpnl"))
+        snapshot_dividends_eur = safe_float(snapshot_base_ledger.get("dividends"))
+
         cash = safe_float(latest.get("cash_eur"))
         invest = safe_float(latest.get("equity_eur"))
         total_val = safe_float(latest.get("total_value_eur"))
+        snapshot_cash = float(cash)
+        snapshot_invest = float(invest)
+        snapshot_total_val = float(total_val)
         has_position_rows = df_pos is not None and not df_pos.empty
         if init_cap > 0 and total_val <= 0 and cash <= 0 and invest <= 0 and not has_position_rows:
             cash = init_cap
@@ -9094,11 +9119,24 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             df_portfolio,
             fallback_cash=float(cash),
         )
-        if total_val_cur > 0:
+        position_vs_snapshot_equity_gap = float(invest_cur - snapshot_invest)
+        position_vs_snapshot_total_gap = float(total_val_cur - snapshot_total_val)
+        trust_snapshot_totals = bool(ibkr_is_source_of_truth and snapshot_total_val > 0)
+        if total_val_cur > 0 and not trust_snapshot_totals:
             total_val = float(total_val_cur)
             cash = float(cash_cur)
             invest = float(invest_cur)
             roi = ((total_val / init_cap) - 1.0) if init_cap else 0.0
+            cash_pct = (cash / total_val * 100.0) if total_val > 0 else 0.0
+        elif trust_snapshot_totals:
+            cash = snapshot_cash
+            invest = snapshot_invest
+            total_val = snapshot_total_val
+            roi = (
+                float(latest.get("roi"))
+                if pd.notna(latest.get("roi"))
+                else ((total_val - init_cap) / init_cap if init_cap else 0.0)
+            )
             cash_pct = (cash / total_val * 100.0) if total_val > 0 else 0.0
 
         # Signals/alerts activity in the last 24h for header.
@@ -9128,6 +9166,15 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
             "mtm_reason": "",
             "positions_only_in_ledger": [],
             "positions_only_in_mtm": [],
+            "trust_snapshot_totals": trust_snapshot_totals,
+            "snapshot_total_value_eur": snapshot_total_val,
+            "snapshot_cash_eur": snapshot_cash,
+            "snapshot_equity_eur": snapshot_invest,
+            "positions_total_value_eur": float(total_val_cur),
+            "positions_cash_eur": float(cash_cur),
+            "positions_equity_eur": float(invest_cur),
+            "positions_vs_snapshot_total_gap_eur": position_vs_snapshot_total_gap,
+            "positions_vs_snapshot_equity_gap_eur": position_vs_snapshot_equity_gap,
         }
 
         ledger_syms = set()
@@ -9304,6 +9351,17 @@ def _ag1_load_single_portfolio_ledger(key: str, cfg: dict[str, str]) -> dict[str
                 ],
                 default=pd.NaT,
             ),
+            "snapshot_unrealized_pnl": float(snapshot_unrealized_pnl),
+            "snapshot_realized_pnl": float(snapshot_realized_pnl),
+            "snapshot_dividends_eur": float(snapshot_dividends_eur),
+            "latent_economic_eur": (float(latent_economic_eur) if latent_economic_eur is not None else None),
+            "latent_prix_eur": (float(latent_prix_eur) if latent_prix_eur is not None else None),
+            "latent_fx_eur": (float(latent_fx_eur) if latent_fx_eur is not None else None),
+            "position_table_equity_eur": float(invest_cur),
+            "position_table_total_value_eur": float(total_val_cur),
+            "position_vs_snapshot_equity_gap_eur": float(position_vs_snapshot_equity_gap),
+            "position_vs_snapshot_total_gap_eur": float(position_vs_snapshot_total_gap),
+            "trust_snapshot_totals": bool(trust_snapshot_totals),
         }
 
         payload.update(
@@ -9760,6 +9818,17 @@ def _compute_portfolio_totals_from_positions(
     return total_val, cash_val, invest_val
 
 
+def _decode_snapshot_base_ledger(meta_json: object) -> dict[str, object]:
+    try:
+        payload = json.loads(str(meta_json or "{}"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    ledger = payload.get("base_ledger")
+    return ledger if isinstance(ledger, dict) else {}
+
+
 def _compute_concentration_and_sectors(df_port: pd.DataFrame) -> dict[str, object]:
     out = {
         "equity_pct": 0.0,
@@ -10193,7 +10262,9 @@ def _prepare_compare_card(portfolio_key: str, payload: dict[str, object], period
         _mtm_total_syn = None
         _mtm_cash_syn = cash_local
         _mtm_invest_syn = invest_local
-        if isinstance(df_port, pd.DataFrame) and not df_port.empty:
+        if isinstance(diag, dict) and bool(diag.get("trust_snapshot_totals")):
+            _mtm_total_syn = total_val_local
+        elif isinstance(df_port, pd.DataFrame) and not df_port.empty:
             _pw = df_port.copy()
             _pw.columns = [str(c).strip().lower() for c in _pw.columns]
             if "symbol" in _pw.columns and "marketvalue" in _pw.columns:
@@ -12252,6 +12323,7 @@ if page == "Dashboard Trading":
         v4_costs = ag1_v4_consensus.get("df_fill_costs", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
         v4_orders = ag1_v4_consensus.get("df_orders", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
         v4_portfolio = ag1_v4_consensus.get("df_portfolio", pd.DataFrame()) if isinstance(ag1_v4_consensus, dict) else pd.DataFrame()
+        v4_diag = ag1_v4_consensus.get("diagnostics", {}) if isinstance(ag1_v4_consensus, dict) else {}
 
         gross_realized_v4 = 0.0
         fees_v4 = 0.0
@@ -12282,7 +12354,23 @@ if page == "Dashboard Trading":
                 ~v4_portfolio["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
             ]
             latent_pnl_v4 = float(pd.to_numeric(visible_positions.get("unrealizedpnl"), errors="coerce").fillna(0.0).sum())
+        snapshot_latent_v4 = safe_float(v4_summary.get("snapshot_unrealized_pnl"))
+        if bool(v4_summary.get("trust_snapshot_totals")) and abs(snapshot_latent_v4) >= 0.005:
+            latent_pnl_v4 = snapshot_latent_v4
+        # FIX 2026-07-16 : utiliser le latent ECONOMIQUE EUR (prix + change), identique au tableau
+        # Positions, au lieu du "prix seul" IBKR qui sous-estimait la perte de change sur les titres USD.
+        latent_prix_v4 = safe_float(v4_summary.get("latent_prix_eur")) if v4_summary.get("latent_prix_eur") is not None else latent_pnl_v4
+        latent_fx_v4 = safe_float(v4_summary.get("latent_fx_eur"))
+        _lat_eco = v4_summary.get("latent_economic_eur")
+        if _lat_eco is not None:
+            latent_pnl_v4 = safe_float(_lat_eco)
         total_net_pnl_v4 = safe_float(v4_summary.get("total_val")) - safe_float(v4_summary.get("init_cap"))
+        # FIX 2026-07-16 : le realise net CUMULE est derive de la reconciliation IBKR (Total - Latent).
+        # C'est la seule mesure fiable : elle boucle exactement avec le NetLiq. Le "realise brut" et les
+        # "frais" du ledger interne (position_lots / fill_costs) sont sur une base DIFFERENTE (change USD
+        # sur clotures comptees en natif, periode, conventions) et ne bouclent pas avec le realise IBKR :
+        # ils sont affiches a titre indicatif dans un bloc separe pour ne plus induire en erreur.
+        net_realized_v4 = total_net_pnl_v4 - latent_pnl_v4
 
         v4_cols = st.columns(5)
         v4_cols[0].metric("Valeur", f"{safe_float(v4_summary.get('total_val')):,.2f} EUR")
@@ -12291,15 +12379,32 @@ if page == "Dashboard Trading":
         v4_cols[3].metric("Positions", int(safe_float(v4_summary.get("positions_count"))))
         v4_cols[4].metric("Runs", int(safe_float(v4_summary.get("runs_count"))))
 
-        v4_cost_cols = st.columns(5)
-        v4_cost_cols[0].metric("P&L realise brut", _fmt_currency(gross_realized_v4, 2))
-        v4_cost_cols[1].metric("Fees IBKR", _fmt_currency(fees_v4, 2))
-        v4_cost_cols[2].metric("P&L realise net", _fmt_currency(net_realized_v4, 2), _fmt_delta_eur(net_realized_v4 - gross_realized_v4))
-        v4_cost_cols[3].metric("P&L latent", _fmt_currency(latent_pnl_v4, 2))
-        v4_cost_cols[4].metric(
-            "Couverture fees",
+        # --- Bloc 1 : decomposition P&L IBKR (source de verite, boucle exactement) ---
+        st.markdown("**Decomposition P&L — source IBKR NetLiq (boucle exactement)**")
+        v4_pnl_cols = st.columns(3)
+        v4_pnl_cols[0].metric("P&L realise net (cumule)", _fmt_currency(net_realized_v4, 2))
+        v4_pnl_cols[1].metric("+ P&L latent", _fmt_currency(latent_pnl_v4, 2))
+        v4_pnl_cols[2].metric("= P&L total net", _fmt_currency(total_net_pnl_v4, 2), f"{safe_float(v4_summary.get('roi')) * 100:,.2f}%")
+        st.caption(
+            f"P&L latent {latent_pnl_v4:,.2f} EUR = P&L prix {latent_prix_v4:,.2f} (perf du cours au taux courant) "
+            f"+ Impact FX {latent_fx_v4:,.2f} (change EUR/USD depuis l'achat) — identique au P&L total du tableau Positions. "
+            "P&L realise net = P&L total - P&L latent (reconciliation IBKR). Total = realise net + latent."
+        )
+
+        # --- Bloc 2 : ledger interne (indicatif, base differente, NON reconcilie au bloc 1) ---
+        st.markdown("**Ledger interne (indicatif — base differente, non reconcilie ci-dessus)**")
+        v4_led_cols = st.columns(3)
+        v4_led_cols[0].metric("Trades fermes (P&L prix brut)", _fmt_currency(gross_realized_v4, 2))
+        v4_led_cols[1].metric("Frais bruts payes (cumul)", _fmt_currency(fees_v4, 2))
+        v4_led_cols[2].metric(
+            "Couverture frais",
             f"{cost_coverage_v4:.0f}%" if cost_coverage_v4 is not None else "-",
             f"{cost_rows_v4}/{fills_count_v4} fills",
+        )
+        st.caption(
+            "Base ledger interne (position_lots / fill_costs), a titre indicatif. Recoupe le realise net "
+            "IBKR du bloc 1 a quelques euros pres ; l'ecart residuel vient des clotures USD comptees en "
+            "devise native (non converties EUR) dans position_lots."
         )
         st.caption(
             "Source AG1 V4: "
@@ -12307,6 +12412,15 @@ if page == "Dashboard Trading":
             f"last_run={v4_summary.get('last_run_id') or 'n/a'} | "
             f"decision={v4_summary.get('last_decision_summary') or 'n/a'}"
         )
+        pos_equity_gap_v4 = safe_float(v4_diag.get("positions_vs_snapshot_equity_gap_eur"))
+        if bool(v4_diag.get("trust_snapshot_totals")) and abs(pos_equity_gap_v4) >= 1.0:
+            st.warning(
+                "Ecart positions vs snapshot IBKR: "
+                f"positions={safe_float(v4_diag.get('positions_equity_eur')):,.2f} EUR, "
+                f"snapshot actions={safe_float(v4_diag.get('snapshot_equity_eur')):,.2f} EUR, "
+                f"ecart={pos_equity_gap_v4:+,.2f} EUR. "
+                "Les KPI Valeur/P&L utilisent NetLiq IBKR; les tableaux positions peuvent contenir une ligne en retard apres execution."
+            )
         if fills_count_v4 > 0 and cost_rows_v4 < fills_count_v4:
             st.warning(f"{fills_count_v4 - cost_rows_v4} fill(s) V4 n'ont pas encore de ligne `core.fill_costs` associee.")
         if missing_costs_v4 > 0:
@@ -12965,9 +13079,15 @@ if page == "Dashboard Trading":
         tx_norm = _prepare_transactions(df_trans)
 
         latent_pnl = 0.0
+        position_latent_pnl = 0.0
         if df_port is not None and not df_port.empty and "unrealizedpnl" in df_port.columns:
             sym = df_port.get("symbol", pd.Series("", index=df_port.index)).astype(str).str.upper().str.strip()
             latent_pnl = float(safe_float_series(df_port[~sym.isin(["CASH_EUR", "__META__"])]["unrealizedpnl"]).sum())
+            position_latent_pnl = latent_pnl
+        if bool(selected_summary.get("trust_snapshot_totals")):
+            snapshot_latent = safe_float(selected_summary.get("snapshot_unrealized_pnl"))
+            if abs(snapshot_latent) >= 0.005:
+                latent_pnl = snapshot_latent
 
         realized_closed_pnl = float(tx_norm["realized_pnl"].sum()) if not tx_norm.empty else 0.0
         realized_partial_pnl = 0.0
@@ -13008,39 +13128,88 @@ if page == "Dashboard Trading":
                     f"Ecart residuel de {residual_other:,.2f} EUR entre realise+latent et gain total. "
                     "Cela correspond a des flux hors P&L de position (couts IA, dividendes, ajustements cash, etc.)."
                 )
+            perf_diag = active_portfolio.get("diagnostics", {}) if isinstance(active_portfolio, dict) else {}
+            if isinstance(perf_diag, dict) and bool(perf_diag.get("trust_snapshot_totals")):
+                pos_gap = safe_float(perf_diag.get("positions_vs_snapshot_equity_gap_eur"))
+                if abs(pos_gap) >= 1.0:
+                    st.warning(
+                        "La decomposition utilise le snapshot IBKR pour le total et le latent. "
+                        "La table positions est en ecart avec le snapshot broker; voir la reconciliation ci-dessous."
+                    )
+                with st.expander("Reconciliation broker vs table positions", expanded=abs(pos_gap) >= 1.0):
+                    recon_rows = [
+                        {"Bloc": "Snapshot IBKR - NetLiq total", "Montant EUR": total_val},
+                        {"Bloc": "Snapshot IBKR - cash", "Montant EUR": safe_float(perf_diag.get("snapshot_cash_eur"))},
+                        {"Bloc": "Snapshot IBKR - actions", "Montant EUR": safe_float(perf_diag.get("snapshot_equity_eur"))},
+                        {"Bloc": "Table positions - actions", "Montant EUR": safe_float(perf_diag.get("positions_equity_eur"))},
+                        {"Bloc": "Ecart positions - snapshot actions", "Montant EUR": pos_gap},
+                        {"Bloc": "P&L latent table positions", "Montant EUR": position_latent_pnl},
+                        {"Bloc": "P&L latent broker snapshot", "Montant EUR": safe_float(selected_summary.get("snapshot_unrealized_pnl"))},
+                        {"Bloc": "P&L realise broker snapshot", "Montant EUR": safe_float(selected_summary.get("snapshot_realized_pnl"))},
+                        {"Bloc": "Dividendes broker snapshot", "Montant EUR": safe_float(selected_summary.get("snapshot_dividends_eur"))},
+                    ]
+                    recon_df = pd.DataFrame(recon_rows)
+                    recon_df["Montant EUR"] = pd.to_numeric(recon_df["Montant EUR"], errors="coerce").round(2)
+                    render_interactive_table(
+                        recon_df,
+                        key_suffix=f"ag1_v4_snapshot_position_reconciliation_{selected_portfolio_key or 'active'}",
+                        hide_index=True,
+                    )
 
-            wf_x = ["Capital initial", "P&L realise clos"]
-            wf_y = [init_cap, realized_closed_pnl]
-            wf_measure = ["absolute", "relative"]
-            if abs(realized_partial_pnl) >= 0.005:
-                wf_x.append("P&L realise partiel")
-                wf_y.append(realized_partial_pnl)
-                wf_measure.append("relative")
-            wf_x.append("P&L latent")
-            wf_y.append(latent_pnl)
-            wf_measure.append("relative")
-            if abs(residual_other) >= 0.005:
-                wf_x.append("Autres flux")
-                wf_y.append(residual_other)
-                wf_measure.append("relative")
-            wf_x.append("Total equity")
-            wf_y.append(0)
-            wf_measure.append("total")
-
-            fig_wf = go.Figure(
-                go.Waterfall(
-                    orientation="v",
-                    measure=wf_measure,
-                    x=wf_x,
-                    y=wf_y,
-                    increasing={"marker": {"color": "#28a745"}},
-                    decreasing={"marker": {"color": "#dc3545"}},
-                    totals={"marker": {"color": "#0d6efd"}},
-                    connector={"line": {"color": "#666"}},
+            try:
+                from app_modules.waterfall import (
+                    compute_financial_waterfall,
+                    build_financial_waterfall_figure,
                 )
-            )
-            fig_wf.update_layout(title="Cascade de valeur", height=360, margin=dict(t=50, b=20, l=20, r=20))
-            st.plotly_chart(fig_wf, use_container_width=True)
+
+                _pos_wf = pd.DataFrame()
+                if isinstance(df_port, pd.DataFrame) and not df_port.empty and "symbol" in df_port.columns:
+                    _pos_wf = df_port[
+                        ~df_port["symbol"].astype(str).str.upper().isin(["CASH_EUR", "__META__"])
+                    ].copy()
+
+                # Taux USD->EUR courant (moyenne des positions USD) pour le barème frais de change.
+                _usd_rate_now = None
+                if not _pos_wf.empty and "currency" in _pos_wf.columns and "fx_rate" in _pos_wf.columns:
+                    _usd_rows = _pos_wf[_pos_wf["currency"].astype(str).str.upper() == "USD"]
+                    if not _usd_rows.empty:
+                        _r = safe_float_series(_usd_rows["fx_rate"])
+                        _r = _r[_r > 0]
+                        if not _r.empty:
+                            _usd_rate_now = float(_r.mean())
+
+                _wf = compute_financial_waterfall(
+                    init_cap=init_cap,
+                    realized_closed_gross=realized_closed_pnl,
+                    realized_partial_gross=realized_partial_pnl,
+                    df_positions=_pos_wf,
+                    df_fill_costs=(
+                        active_portfolio.get("df_fill_costs", pd.DataFrame())
+                        if isinstance(active_portfolio, dict)
+                        else pd.DataFrame()
+                    ),
+                    df_transactions=tx_norm,
+                    usd_cash=None,
+                    usd_eur_rate_now=_usd_rate_now,
+                    usd_eur_rate_acq=None,
+                )
+                fig_wf = build_financial_waterfall_figure(_wf["bars"])
+                st.plotly_chart(fig_wf, use_container_width=True)
+                _wfm = _wf["meta"]
+                st.caption(
+                    "Cascade **hypothetique** : du capital initial a l'equity si l'on liquidait tout et "
+                    "rapatriait en EUR, net de tous frais. Postes **reels** (P&L des lots, frais enregistres, "
+                    "impact FX deja porte), **estimes** (`· est.` : frais de change, impact FX cash) et "
+                    "**simules** (`· sim.` : frais de vente du latent). "
+                    f"Frais reels enregistres: {safe_float(_wfm.get('real_fees_total')):,.2f} EUR ; "
+                    f"frais de change estimes: {safe_float(_wfm.get('fx_conv_fees_est')):,.2f} EUR ; "
+                    f"frais de vente simules: {safe_float(_wfm.get('est_latent_exit_fees')):,.2f} EUR ; "
+                    f"resultat intermediaire: {safe_float(_wfm.get('intermediate')):,.2f} EUR ; "
+                    f"resultat final estime: {safe_float(_wfm.get('final')):,.2f} EUR. "
+                    "Impact FX sur la liquidite USD non chiffre (cash USD non persiste en base ; a journaliser)."
+                )
+            except Exception as _wf_exc:  # garde-fou : ne jamais casser l'onglet
+                st.warning(f"Cascade de valeur indisponible : {type(_wf_exc).__name__}: {_wf_exc}")
 
             if df_realized_open is not None and not df_realized_open.empty:
                 with st.expander("Detail du realise partiel sur lots ouverts", expanded=False):
