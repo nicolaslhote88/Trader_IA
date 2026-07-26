@@ -1,6 +1,6 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-06-28.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-07-22.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
@@ -54,6 +54,21 @@ Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/ga
 2. Plusieurs **lecteurs** d'une même base peuvent coexister ; seul un écrivain bloque.
 3. Garder chaque node < 20 min (timeout tâche) → préférer +de slots à +gros batch.
 4. Ne jamais déplacer l'heure d'**AG1 V4 (14:00)** sans décision explicite (run de trading).
+
+## Maintenance DuckDB hors n8n
+
+Les crons système du VPS sont exprimés en **UTC** et s'exécutent le dimanche,
+hors des fenêtres d'écriture concernées :
+
+| Heure UTC | Maintenance | Bases |
+|---|---|---|
+| 07:30 | reconstruction via `defrag_duckdb.py --apply` | `ag1_v4_consensus`, `ag2_v3`, `ag3_v2`, `ag4_spe_v2`, `yf_enrichment_v1` |
+| 11:00 | rétention AG4 V3 (news 60 j, erreurs 30 j, zombies 6 h) + `--rebuild` | `ag4_v3` |
+
+Le reconstructeur refuse une base avec WAL actif, conserve le fichier précédent
+en `.old` et vérifie colonnes, contraintes, index, vues, nombres de lignes et
+permissions avant swap. Ne pas remplacer ces reconstructions offline par un
+`CHECKPOINT` explicite dans un node n8n.
 
 ## Reste à durcir (proposé, non déployé)
 **Retry-hardening** : porter le budget de reconnexion DuckDB des `db_con` (tous les nodes) de ~15 s à ~2-3 min (backoff), pour absorber tout chevauchement transitoire résiduel sans faire échouer le run. Robustesse générale, mais touche de nombreux nodes.

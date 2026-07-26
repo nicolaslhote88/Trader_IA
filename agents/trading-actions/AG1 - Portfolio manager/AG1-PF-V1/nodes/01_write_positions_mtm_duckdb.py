@@ -335,6 +335,49 @@ ALTER_SQL = [
 ]
 
 
+def _apply_fx_eur(con, rows):
+    # FIX 2026-07-13 : PF.07 calcule market_value/last_price/unrealized_pnl en devise NATIVE
+    # (pas de conversion FX) -> mtm_latest/history gonfles pour les titres USD, ce qui gonfle
+    # la courbe de perf du dashboard. On convertit en EUR via la source autoritaire IBKR
+    # (portfolio_positions_ibkr_latest : currency + fx_rate + last_price_eur), avec garde-fou
+    # d'echelle (anti double-conversion). avg_price est deja en EUR. Gardee : ne casse jamais l'ecriture.
+    try:
+        fx = {}
+        try:
+            for r in con.execute(
+                "SELECT UPPER(TRIM(symbol)), UPPER(COALESCE(currency,'')), CAST(fx_rate AS DOUBLE), CAST(last_price_eur AS DOUBLE) "
+                "FROM portfolio_positions_ibkr_latest"
+            ).fetchall():
+                if r[0]:
+                    fx[r[0]] = (r[1], r[2], r[3])
+        except Exception:
+            return
+        for row in rows:
+            sym = str(row.get("symbol") or "").upper().strip()
+            if not sym or sym in ("CASH_EUR", "__META__"):
+                continue
+            ent = fx.get(sym)
+            if not ent:
+                continue
+            cur, rate, lp_ref = ent
+            if not cur or cur == "EUR" or not rate or rate <= 0:
+                continue
+            last = to_float(row.get("last_price"))
+            qty = to_float(row.get("quantity"))
+            if last is None or last <= 0 or qty is None:
+                continue
+            cand = last * rate
+            if lp_ref is not None and lp_ref > 0 and not (abs(cand - lp_ref) < abs(last - lp_ref)):
+                continue
+            row["last_price"] = cand
+            row["market_value"] = qty * cand
+            avgp = to_float(row.get("avg_price"))
+            if avgp is not None:
+                row["unrealized_pnl"] = (cand - avgp) * qty
+    except Exception:
+        return
+
+
 def build_rows(items, run_id, now_iso):
     rows = []
 
@@ -483,6 +526,7 @@ def write_rows_to_db(
     try:
         with db_con(db_path) as con:
             ensure_schema(con)
+            _apply_fx_eur(con, rows)
             con.execute("BEGIN TRANSACTION")
             try:
                 con.execute(

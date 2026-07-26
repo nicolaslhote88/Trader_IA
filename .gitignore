@@ -16,6 +16,8 @@ venv/
 *_ed25519.pub
 *.pem
 known_hosts*
+vps_key_tmp
+sshbridge/
 
 # IDE & OS
 .vscode/

@@ -16,8 +16,8 @@ Ce que fait ce script
 ---------------------
 Pour chaque DB listée dans DBS :
   1. Vérifie qu'il n'y a pas de .wal (sinon, il faut arrêter n8n avant).
-  2. ATTACH la DB en READ_ONLY, recrée toutes les tables chunkées dans un
-     fichier `<nom>.duckdb.new` (memory_limit serré pour éviter l'OOM).
+  2. ATTACH la DB en READ_ONLY, recrée les tables avec leur DDL exact puis
+     recopie les données dans `<nom>.duckdb.new` (memory_limit serré).
   3. Swap atomique :
         <nom>.duckdb        -> <nom>.duckdb.old   (conservé)
         <nom>.duckdb.new    -> <nom>.duckdb       (nouvelle DB propre)
@@ -54,6 +54,7 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
+import stat
 import sys
 import time
 from pathlib import Path
@@ -70,13 +71,23 @@ DEFAULT_DB_DIR = Path("/files/duckdb")
 
 # Liste explicite des DB à traiter (on évite de traiter des fichiers inconnus).
 DBS = [
+    "ag1_fx_v1_chatgpt52.duckdb",
+    "ag1_fx_v1_gemini30_pro.duckdb",
+    "ag1_fx_v1_grok41_reasoning.duckdb",
+    "ag1_v4_consensus.duckdb",
     "ag1_v3_chatgpt52.duckdb",
     "ag1_v3_grok41_reasoning.duckdb",
     "ag1_v3_gemini30_pro.duckdb",
+    "ag2_fx_v1.duckdb",
     "ag2_v3.duckdb",
+    "ag3_fx_v1.duckdb",
     "ag3_v2.duckdb",
+    "ag4_forex_v1.duckdb",
+    "ag4_fx_v1.duckdb",
     "ag4_v3.duckdb",
     "ag4_spe_v2.duckdb",
+    "broker_costs.duckdb",
+    "macro_data.duckdb",
     "yf_enrichment_v1.duckdb",
 ]
 
@@ -92,11 +103,12 @@ def human_mb(bytes_: int) -> str:
 
 def defrag_one(src: Path, tmp_dir: Path, dry_run: bool) -> tuple[int, int, float, int]:
     """
-    Reconstruit src vers src.new via ATTACH + CTAS chunkée.
+    Reconstruit src vers src.new via ATTACH + DDL exact + copie streamée.
     Retourne (taille_src, taille_new, durée_s, nb_tables).
     En dry-run, supprime le .new après mesure.
     """
     dst = src.with_suffix(src.suffix + ".new")
+    src_stat = src.stat()
     # Nettoyage d'un .new orphelin d'un run précédent.
     for p in (dst, Path(str(dst) + ".wal")):
         if p.exists():
@@ -113,7 +125,7 @@ def defrag_one(src: Path, tmp_dir: Path, dry_run: bool) -> tuple[int, int, float
 
         rows = con.execute(
             """
-            SELECT schema_name, table_name FROM duckdb_tables()
+            SELECT schema_name, table_name, sql FROM duckdb_tables()
             WHERE database_name='src'
             ORDER BY schema_name, table_name
             """
@@ -124,58 +136,175 @@ def defrag_one(src: Path, tmp_dir: Path, dry_run: bool) -> tuple[int, int, float
             if sch != "main":
                 con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
 
-        # Récupère les contraintes PK/UNIQUE de la source pour les rejouer
-        # après insertion (CTAS ne préserve PAS les contraintes — régression
-        # identifiée le 2026-04-23, cf infra/maintenance/fix_pk_20260423/).
-        constraints = con.execute(
+        # L'ordre de creation/insertion doit respecter les dependances FK.
+        # Le DDL fourni par duckdb_tables() preserve types, defaults, NOT NULL,
+        # PK, UNIQUE et FOREIGN KEY, contrairement a CTAS.
+        fk_rows = con.execute(
             """
-            SELECT schema_name, table_name, constraint_type, constraint_column_names
+            SELECT schema_name, table_name, referenced_table
             FROM duckdb_constraints()
             WHERE database_name='src'
-              AND constraint_type IN ('PRIMARY KEY', 'UNIQUE')
-              AND table_name NOT LIKE 'backup_%'
-            ORDER BY schema_name, table_name, constraint_type
+              AND constraint_type='FOREIGN KEY'
+            ORDER BY schema_name, table_name, constraint_index
+            """
+        ).fetchall()
+        table_map = {(sch, table): ddl for sch, table, ddl in rows}
+        deps = {key: set() for key in table_map}
+        for sch, table, referenced_table in fk_rows:
+            child = (sch, table)
+            parent = (sch, referenced_table)
+            if parent not in table_map:
+                matches = [key for key in table_map if key[1] == referenced_table]
+                if len(matches) == 1:
+                    parent = matches[0]
+                else:
+                    raise RuntimeError(
+                        f'FK ambiguë/introuvable pour "{sch}"."{table}" '
+                        f'-> "{referenced_table}"'
+                    )
+            if parent != child:
+                deps[child].add(parent)
+
+        ordered_tables = []
+        remaining = set(table_map)
+        while remaining:
+            ready = sorted(key for key in remaining if deps[key].isdisjoint(remaining))
+            if not ready:
+                raise RuntimeError(f"Cycle FK non pris en charge: {sorted(remaining)}")
+            ordered_tables.extend(ready)
+            remaining.difference_update(ready)
+
+        # Les index explicites ne sont ni inclus dans CTAS, ni exposes comme
+        # contraintes. Les capturer separement, sinon le swap degrade les
+        # performances et change silencieusement le schema logique.
+        indexes = con.execute(
+            """
+            SELECT schema_name, index_name, table_name, sql
+            FROM duckdb_indexes()
+            WHERE database_name='src' AND sql IS NOT NULL
+            ORDER BY schema_name, table_name, index_name
             """
         ).fetchall()
 
-        # CTAS chunkée par table avec CHECKPOINT intermédiaire.
-        for sch, t in rows:
-            con.execute(
-                f'CREATE TABLE "{sch}"."{t}" AS '
-                f'SELECT * FROM src."{sch}"."{t}" LIMIT 0'
-            )
+        # Cree chaque table avec son schema exact puis copie en une passe.
+        for sch, t in ordered_tables:
+            ddl = table_map[(sch, t)]
+            if not ddl:
+                raise RuntimeError(f'DDL absent pour "{sch}"."{t}"')
+            con.execute(ddl)
             total = con.execute(
                 f'SELECT COUNT(*) FROM src."{sch}"."{t}"'
             ).fetchone()[0]
             if total == 0:
                 continue
-            for offset in range(0, total, CHUNK_ROWS):
-                con.execute(
-                    f'INSERT INTO "{sch}"."{t}" '
-                    f'SELECT * FROM src."{sch}"."{t}" '
-                    f'LIMIT {CHUNK_ROWS} OFFSET {offset}'
+            # Fix 2026-07-05 : INSERT unique (streame + spill via memory_limit/temp_directory).
+            # L'ancien chunking LIMIT/OFFSET sans ORDER BY etait NON DETERMINISTE avec
+            # preserve_insertion_order=false -> doublons/pertes (PK record_id dupliquee).
+            con.execute(
+                f'INSERT INTO "{sch}"."{t}" SELECT * FROM src."{sch}"."{t}"'
+            )
+            inserted = con.execute(f'SELECT COUNT(*) FROM "{sch}"."{t}"').fetchone()[0]
+            if inserted != total:
+                raise RuntimeError(
+                    f'"{sch}"."{t}" : {inserted} lignes copiees vs {total} attendues'
                 )
             con.execute("CHECKPOINT")
 
-        # Rejoue PRIMARY KEY et UNIQUE après insertion (les données sont propres
-        # si la source l'était ; échoue bruyamment si doublon/null).
-        for sch, t, ctype, cols in constraints:
-            col_list = ", ".join([f'"{c}"' for c in cols])
+        # Rejoue les index secondaires. Les index issus des contraintes ne
+        # figurent pas dans duckdb_indexes(), donc pas de doublon.
+        for sch, index_name, table_name, ddl in indexes:
             try:
-                con.execute(
-                    f'ALTER TABLE "{sch}"."{t}" ADD {ctype} ({col_list})'
-                )
+                con.execute(ddl)
             except Exception as e:
                 raise RuntimeError(
-                    f"Échec restauration contrainte {ctype} sur "
-                    f'"{sch}"."{t}" ({col_list}) : {e}. '
-                    f"Vérifier doublons/nulls dans la source."
+                    f'Echec restauration index "{sch}"."{index_name}" '
+                    f'sur "{table_name}" : {e}'
                 ) from e
+
+        # Recree les VUES (fix 2026-07-05) : le rebuild initial ne copiait que
+        # duckdb_tables() -> les vues (v_latest_*, news_analyzed...) etaient perdues au swap.
+        views = con.execute(
+            """
+            SELECT schema_name, view_name, sql FROM duckdb_views()
+            WHERE database_name='src' AND NOT internal
+            ORDER BY schema_name, view_name
+            """
+        ).fetchall()
+        for sch, v, ddl in views:
+            if not ddl:
+                continue
+            if sch != "main":
+                con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
+            try:
+                con.execute(ddl.replace("CREATE VIEW", "CREATE OR REPLACE VIEW", 1))
+            except Exception as e:
+                raise RuntimeError(f'Echec recreation vue "{sch}"."{v}" : {e}') from e
+
+        # Verification structurelle avant tout swap : colonnes, contraintes,
+        # index et vues doivent etre strictement equivalents.
+        def normalized_catalog(sql, params):
+            values = con.execute(sql, params).fetchall()
+            normalized = [
+                tuple(tuple(v) if isinstance(v, list) else v for v in row)
+                for row in values
+            ]
+            return sorted(normalized, key=repr)
+
+        columns_sql = """
+            SELECT schema_name, table_name, column_index, column_name, data_type,
+                   is_nullable, column_default
+            FROM duckdb_columns()
+            WHERE database_name=?
+            ORDER BY schema_name, table_name, column_index
+        """
+        constraints_sql = """
+            SELECT schema_name, table_name, constraint_type, constraint_text,
+                   constraint_column_names, referenced_table, referenced_column_names
+            FROM duckdb_constraints()
+            WHERE database_name=?
+            ORDER BY schema_name, table_name, constraint_index
+        """
+        indexes_sql = """
+            SELECT schema_name, index_name, table_name, is_unique, sql
+            FROM duckdb_indexes()
+            WHERE database_name=?
+            ORDER BY schema_name, table_name, index_name
+        """
+        views_sql = """
+            SELECT schema_name, view_name
+            FROM duckdb_views()
+            WHERE database_name=? AND NOT internal
+            ORDER BY schema_name, view_name
+        """
+        target_db = con.execute("SELECT current_database()").fetchone()[0]
+        for label, sql in (
+            ("colonnes", columns_sql),
+            ("contraintes", constraints_sql),
+            ("index", indexes_sql),
+            ("vues", views_sql),
+        ):
+            source_catalog = normalized_catalog(sql, ["src"])
+            target_catalog = normalized_catalog(sql, [target_db])
+            if source_catalog != target_catalog:
+                raise RuntimeError(f"Catalogue {label} non equivalent apres reconstruction")
 
         con.execute("DETACH src")
         con.execute("CHECKPOINT")
     finally:
         con.close()
+
+    # Le fichier reconstruit est cree avec l'utilisateur/umask du processus.
+    # Avant un swap live, restaurer le proprietaire et les permissions de la
+    # source afin que les writers n8n conservent exactement leurs acces.
+    if not dry_run:
+        try:
+            os.chown(dst, src_stat.st_uid, src_stat.st_gid)
+            os.chmod(dst, stat.S_IMODE(src_stat.st_mode))
+        except PermissionError as e:
+            raise RuntimeError(
+                f"Impossible de restaurer owner/mode de {src} sur {dst}; "
+                "swap refuse pour eviter une DB non inscriptible."
+            ) from e
 
     sz_src = src.stat().st_size
     sz_dst = dst.stat().st_size
@@ -216,10 +345,10 @@ def swap_atomically(src: Path) -> None:
         os.rename(src_wal, old_wal)
 
 
-def check_no_wal(db_dir: Path) -> list[str]:
+def check_no_wal(db_dir: Path, dbs: list[str] | None = None) -> list[str]:
     """Retourne la liste des DB qui ont un .wal actif (écritures en cours)."""
     busy = []
-    for name in DBS:
+    for name in (DBS if dbs is None else dbs):
         p = db_dir / name
         wal = Path(str(p) + ".wal")
         if wal.exists() and wal.stat().st_size > 0:
@@ -236,6 +365,8 @@ def main() -> int:
                     help=f"Dossier contenant les .duckdb (défaut: {DEFAULT_DB_DIR})")
     ap.add_argument("--tmp-dir", type=Path, default=Path("/tmp/duckdb_defrag"),
                     help="Dossier temp DuckDB (défaut: /tmp/duckdb_defrag)")
+    ap.add_argument("--only", nargs="*", default=None,
+                    help="Ne traiter que ces DB (noms de fichiers de la liste DBS).")
     ap.add_argument("--force", action="store_true",
                     help="Ignore le check .wal (à réserver aux situations désespérées).")
     args = ap.parse_args()
@@ -248,14 +379,20 @@ def main() -> int:
     args.tmp_dir.mkdir(parents=True, exist_ok=True)
 
     # Check présence des DB
-    missing = [n for n in DBS if not (db_dir / n).exists()]
+    dbs = [n for n in DBS if (args.only is None or n in args.only)]
+    if args.only:
+        unknown = [n for n in args.only if n not in DBS]
+        if unknown:
+            print(f"ERREUR: --only inconnus (pas dans DBS): {unknown}", file=sys.stderr)
+            return 2
+    missing = [n for n in dbs if not (db_dir / n).exists()]
     if missing:
         print(f"WARN: {len(missing)} DB manquantes, skipped: {', '.join(missing)}")
 
-    present = [n for n in DBS if (db_dir / n).exists()]
+    present = [n for n in dbs if (db_dir / n).exists()]
 
     # Check .wal actifs (n8n tourne ?)
-    busy = check_no_wal(db_dir)
+    busy = check_no_wal(db_dir, present)
     if busy and not args.force:
         print("ERREUR: des .wal actifs détectés (n8n écrit probablement dedans) :")
         for b in busy:
@@ -269,7 +406,7 @@ def main() -> int:
     print(f"=== Defrag DuckDB [{mode}] ===")
     print(f"DB dir   : {db_dir}")
     print(f"Tmp dir  : {args.tmp_dir}")
-    print(f"DBs      : {len(present)} / {len(DBS)}")
+    print(f"DBs      : {len(present)} / {len(dbs)}")
     print()
     print(f"{'DB':<38} {'src':>10} {'new':>10} {'ratio':>8} {'tables':>7} {'dur':>6}")
     print("-" * 90)

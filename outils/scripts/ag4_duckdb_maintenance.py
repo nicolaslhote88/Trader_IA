@@ -5,22 +5,22 @@ Maintenance de ag4_v3.duckdb (AG4-V3 News Watcher).
 Objectifs (P2 audit 2026-06-17) :
   1. Finaliser les run_log "zombies" (status=RUNNING jamais cloturés par un crash).
   2. Rétention : purger les vieilles lignes news_history / news_errors.
-  3. Stopper le bloat (CHECKPOINT). Reclaim disque réel via --rebuild (EXPORT/IMPORT).
+  3. Reclaim disque réel via le défragmenteur commun avec --rebuild.
 
 SÉCURITÉ :
   - Lecture/écriture EXCLUSIVE : si un run AG4 tient le lock, on RÉESSAIE puis on
     SORT proprement (code 0) sans rien casser -> safe à lancer en cron.
-  - --rebuild remplace le fichier (backup .bak conservé). À lancer hors des 4 runs
-    AG4 (UTC 23:45 / 04:45 / 08:45 / 16:45).
+  - --rebuild délègue à `/files/maintenance/defrag_duckdb.py`, qui conserve
+    l'ancien fichier en `.old` et vérifie tables, contraintes, index et vues.
 
 Usage :
-  python3 ag4_duckdb_maintenance.py                      # retention + checkpoint
+  python3 ag4_duckdb_maintenance.py                      # retention seulement
   python3 ag4_duckdb_maintenance.py --rebuild            # + reclaim disque
   python3 ag4_duckdb_maintenance.py --dry-run            # n'écrit rien
 """
 import argparse
 import os
-import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timezone
@@ -52,7 +52,7 @@ def main():
     ap.add_argument("--retention-news-days", type=int, default=60)
     ap.add_argument("--retention-errors-days", type=int, default=30)
     ap.add_argument("--zombie-hours", type=int, default=6)
-    ap.add_argument("--rebuild", action="store_true", help="reclaim disque via EXPORT/IMPORT (remplace le fichier)")
+    ap.add_argument("--rebuild", action="store_true", help="reclaim disque via defrag_duckdb.py")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -97,7 +97,6 @@ def main():
                     WHERE COALESCE(occurred_at, updated_at, created_at)
                           < now() - INTERVAL '{args.retention_errors_days} days'"""
             )
-            con.execute("CHECKPOINT")
             print(f"apres: news_history={scalar('SELECT count(*) FROM news_history')}  "
                   f"news_errors={scalar('SELECT count(*) FROM news_errors')}")
     finally:
@@ -112,32 +111,26 @@ def main():
 
 
 def rebuild(db):
-    """Reclaim disque : EXPORT DATABASE -> nouveau fichier -> swap (backup .bak)."""
-    base = os.path.dirname(db)
-    expdir = os.path.join(base, "_ag4_export_tmp")
-    newdb = db + ".compact"
-    bak = db + f".bak_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    if os.path.exists(expdir):
-        shutil.rmtree(expdir)
-    print("[rebuild] EXPORT DATABASE ...")
-    con = connect(db, read_only=False)
-    try:
-        con.execute(f"EXPORT DATABASE '{expdir}' (FORMAT PARQUET)")
-    finally:
-        con.close()
-    if os.path.exists(newdb):
-        os.remove(newdb)
-    print("[rebuild] IMPORT vers fichier compact ...")
-    con2 = duckdb.connect(newdb)
-    try:
-        con2.execute(f"IMPORT DATABASE '{expdir}'")
-        con2.execute("CHECKPOINT")
-    finally:
-        con2.close()
-    shutil.move(db, bak)
-    shutil.move(newdb, db)
-    shutil.rmtree(expdir, ignore_errors=True)
-    print(f"[rebuild] OK. Backup conserve: {bak}")
+    """Reclaim via le reconstructeur commun, validé sur les schémas du fleet."""
+    script = "/files/maintenance/defrag_duckdb.py"
+    db_dir = os.path.dirname(db)
+    db_name = os.path.basename(db)
+    tmp_dir = os.path.join(db_dir, ".ag4_defrag_tmp")
+    print(f"[rebuild] délégation à {script}")
+    subprocess.run(
+        [
+            sys.executable,
+            script,
+            "--apply",
+            "--db-dir",
+            db_dir,
+            "--tmp-dir",
+            tmp_dir,
+            "--only",
+            db_name,
+        ],
+        check=True,
+    )
 
 
 if __name__ == "__main__":

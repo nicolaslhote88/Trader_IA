@@ -178,6 +178,16 @@ def _needs_manual_login(status: dict | None, error: str | None = None) -> bool:
     return bool(status and not status.get("connected"))
 
 
+def _has_valid_sso_session(payload: Any) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    sso_expires = payload.get("ssoExpires")
+    try:
+        return float(sso_expires) > 0
+    except Exception:
+        return False
+
+
 def _assisted_login_status() -> dict[str, Any]:
     configured = ASSISTED_LOGIN_ENABLED and IBKR_USERNAME_CONFIGURED and IBKR_PASSWORD_CONFIGURED
     return {
@@ -312,8 +322,24 @@ async def _maintain_ibkr_session(client: CPAPIClient, reason: str) -> dict:
             status = await client.auth_status()
         _remember_auth_status(status)
         if _is_authenticated(status):
+            # FIX 2026-07-13 : la session peut etre authentifiee mais sur le MAUVAIS compte
+            # (fallback PAPER quand le login LIVE exige la 2FA). On alerte l'operateur dans ce cas,
+            # sinon la reconciliation reste bloquee en silence (aucun snapshot RECON pendant des jours).
+            try:
+                align = await _account_alignment_status(client)
+                _session_monitor["last_account_alignment"] = align
+                if align.get("gateway_is_paper") is True or align.get("aligned") is False:
+                    sel = align.get("selected_account")
+                    await _mark_manual_login_required(
+                        "account_not_aligned",
+                        f"gateway_is_paper={align.get('gateway_is_paper')} selected={sel} expected={ACCOUNT_ID_OVERRIDE}",
+                    )
+                    return {"ok": False, "authenticated": True, "aligned": False,
+                            "tickle": tickle_response, "status": status, "alignment": align}
+            except Exception as _al_exc:
+                logger.warning("account alignment check failed: %s", _al_exc)
             return {"ok": True, "authenticated": True, "tickle": tickle_response, "status": status}
-        if AUTO_REAUTH_ENABLED and status.get("connected"):
+        if AUTO_REAUTH_ENABLED and (status.get("connected") or _has_valid_sso_session(tickle_response)):
             reauth = await _initialize_brokerage_session(client, reason)
             return {
                 "ok": bool(reauth.get("ok")),

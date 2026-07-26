@@ -34,6 +34,55 @@ IBKR_EU_MIN_EUR = 1.25
 FX_CONV_BPS = 0.00002
 FX_CONV_MIN_USD = 2.0
 
+# Base dédiée alimentée par le collecteur broker_costs (cf. outils/scripts/broker_costs_collector.py).
+BROKER_COSTS_DB_CANDIDATES = (
+    "/files/duckdb/broker_costs.duckdb",
+    "/local-files/duckdb/broker_costs.duckdb",
+)
+
+
+def read_broker_costs(db_path: str | None = None) -> dict[str, object]:
+    """Lit les coûts broker réels (cash par devise, conversions FX). Best-effort, read-only.
+
+    Renvoie {usd_cash, usd_rate, fx_conv_fees_eur|None, has_real_fx}. Ne lève jamais.
+    """
+    out: dict[str, object] = {"usd_cash": None, "usd_rate": None, "fx_conv_fees_eur": None, "has_real_fx": False}
+    paths = [db_path] if db_path else list(BROKER_COSTS_DB_CANDIDATES)
+    for p in paths:
+        if not p:
+            continue
+        try:
+            import duckdb  # lazy : ne casse jamais le module si absent
+
+            con = duckdb.connect(p, read_only=True)
+        except Exception:
+            continue
+        try:
+            row = con.execute(
+                "SELECT cashbalance, exchangerate FROM cash_snapshots "
+                "WHERE currency='USD' ORDER BY ts_day DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                out["usd_cash"] = safe_float(row[0])
+                out["usd_rate"] = safe_float(row[1]) or None
+            fx = con.execute(
+                "SELECT COUNT(*), COALESCE(SUM(commission),0) FROM broker_trades WHERE sec_type='CASH'"
+            ).fetchone()
+            if fx and int(fx[0]) > 0:
+                # commission FX facturée en devise cotée (USD) → conversion EUR au taux courant.
+                rate = safe_float(out.get("usd_rate")) or 1.0
+                out["fx_conv_fees_eur"] = abs(safe_float(fx[1])) * rate
+                out["has_real_fx"] = True
+            return out
+        except Exception:
+            return out
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+    return out
+
 
 def ibkr_est_fee_eur(currency: str, qty: float, price_loc: float, usd_eur_rate: float = 1.0) -> float:
     """Frais de courtage IBKR estimes (une jambe), en EUR."""
@@ -65,6 +114,48 @@ def _sum_col(df: pd.DataFrame, col: str) -> float:
     return float(safe_float_series(df[col]).sum())
 
 
+def read_cash_balances(db_path: str | None = None) -> list[dict[str, object]]:
+    """Cash IBKR par devise (hors agregat BASE), dernier snapshot quotidien du collecteur.
+
+    Renvoie [{currency, balance, rate_eur, ts_day}] trie EUR d'abord puis par
+    contre-valeur EUR decroissante. Best-effort : liste vide si base absente.
+    """
+    paths = [db_path] if db_path else list(BROKER_COSTS_DB_CANDIDATES)
+    for p in paths:
+        if not p:
+            continue
+        try:
+            import duckdb
+
+            con = duckdb.connect(p, read_only=True)
+        except Exception:
+            continue
+        try:
+            rows = con.execute(
+                """
+                SELECT currency, cashbalance, exchangerate, ts_day
+                FROM cash_snapshots
+                WHERE ts_day = (SELECT max(ts_day) FROM cash_snapshots)
+                  AND UPPER(currency) <> 'BASE'
+                """
+            ).fetchall()
+            out = [
+                {"currency": str(r[0]).upper(), "balance": safe_float(r[1]),
+                 "rate_eur": safe_float(r[2]) or 1.0, "ts_day": r[3]}
+                for r in rows
+            ]
+            out.sort(key=lambda x: (x["currency"] != "EUR", -abs(x["balance"] * x["rate_eur"])))
+            return out
+        except Exception:
+            return []
+        finally:
+            try:
+                con.close()
+            except Exception:
+                pass
+    return []
+
+
 def compute_financial_waterfall(
     *,
     init_cap: float,
@@ -73,9 +164,14 @@ def compute_financial_waterfall(
     df_positions: pd.DataFrame | None,
     df_fill_costs: pd.DataFrame | None = None,
     df_transactions: pd.DataFrame | None = None,
+    df_open_lots_fx: pd.DataFrame | None = None,
     usd_cash: float | None = None,
     usd_eur_rate_now: float | None = None,
     usd_eur_rate_acq: float | None = None,
+    total_val: float | None = None,
+    dividends: float = 0.0,
+    broker_costs_db: str | None = None,
+    use_broker_costs: bool = True,
 ) -> dict[str, object]:
     """Calcule les postes de la cascade. Renvoie {bars: [...], meta: {...}}.
 
@@ -88,6 +184,14 @@ def compute_financial_waterfall(
     realized_partial_gross = safe_float(realized_partial_gross)
 
     pos = df_positions.copy() if isinstance(df_positions, pd.DataFrame) and not df_positions.empty else pd.DataFrame()
+
+    # Coûts broker réels (cash USD, conversions FX) depuis la base collecteur.
+    bc = read_broker_costs(broker_costs_db) if use_broker_costs else {}
+    if usd_cash is None and bc.get("usd_cash") is not None:
+        usd_cash = safe_float(bc.get("usd_cash"))
+    if usd_eur_rate_now is None and bc.get("usd_rate") is not None:
+        usd_eur_rate_now = safe_float(bc.get("usd_rate"))
+    fx_fees_real_eur = bc.get("fx_conv_fees_eur") if bc.get("has_real_fx") else None
 
     # ── Frais reels enregistres (fill_costs) ────────────────────────────────
     real_fees_total = _sum_col(df_fill_costs, "commission_eur")
@@ -151,6 +255,43 @@ def compute_financial_waterfall(
                 fee_usd = max(FX_CONV_BPS * (notio / (rate or 0.876)), FX_CONV_MIN_USD)
                 fx_conv_fees_est += fee_usd * (rate or 0.876)
 
+    # ── Impact change latent VRAI (par les fills, migration FX 22/07) ────────
+    # Depuis la normalisation des fills (price EUR + price_native + fx_rate_eur),
+    # le FX latent reel = somme sur les lots ouverts de
+    #   remaining * price_native * (taux_courant - taux_du_fill).
+    # df_open_lots_fx : DataFrame (symbol, remaining_qty, price_native, fx_rate_eur)
+    # prepare par le loader. None/vide -> fallback latent_fx_eur du tableau positions.
+    fx_latent_true = None
+    if isinstance(df_open_lots_fx, pd.DataFrame) and not df_open_lots_fx.empty:
+        try:
+            r_now = safe_float(usd_eur_rate_now) or 0.876
+            acc = 0.0
+            for rr in df_open_lots_fx.itertuples(index=False):
+                pn = safe_float(getattr(rr, "price_native", None))
+                fxf = safe_float(getattr(rr, "fx_rate_eur", None))
+                rq = safe_float(getattr(rr, "remaining_qty", None))
+                if pn and fxf and rq and abs(fxf - 1.0) > 1e-9:  # lots en devise seulement
+                    acc += rq * pn * (r_now - fxf)
+            fx_latent_true = acc
+        except Exception:
+            fx_latent_true = None
+    fx_latent_used = fx_latent_true if fx_latent_true is not None else latent_fx_eur
+
+    # ── Bouclage NAV : change cash & conversions FX (non traces localement) ──
+    # Identite : NAV = capital + realise_net (frais clos inclus) + latent_prix_IBKR
+    #            (frais d'achat deja dans le PRU IBKR) + FX latent vrai + change_cash.
+    # Le residu de bouclage EST le change cash + frais des conversions EUR<->USD
+    # (cash_ledger ne les trace pas encore) + petits ecarts de taux.
+    latent_total_eur = latent_price_eur + latent_fx_eur
+    realized_net_total = realized_closed_gross + realized_partial_gross
+    realized_net_ibkr = None
+    cash_fx_residual = 0.0
+    if total_val is not None:
+        realized_net_ibkr = (safe_float(total_val) - init_cap) - latent_total_eur
+        cash_fx_residual = (safe_float(total_val) - init_cap) - (
+            realized_net_total + latent_price_eur + fx_latent_used
+        )
+
     # ── Conversion de la liquidite devise -> EUR a la sortie (dernier poste) ──
     # Scenario "je vends tout et je rapatrie en EUR maintenant" : on convertit le
     # cash devise + le produit de la vente des positions non-EUR. Cout = frais de
@@ -176,61 +317,89 @@ def compute_financial_waterfall(
     )
 
     # ── Assemblage des postes ───────────────────────────────────────────────
+    # Depuis la migration FX du 22/07, les fills sont normalises en EUR
+    # (chaque jambe convertie au taux de son jour) et realized_pnl_eur est un
+    # NET de frais economique. Plus de barre frais globale (les frais clos sont
+    # dans le realise, les frais d'achat des ouvertes dans le PRU IBKR du
+    # latent) ; plus de plug opaque : le bouclage NAV est porte par une barre
+    # explicite "change cash & conversions FX".
     bars: list[dict[str, object]] = [
         {"label": "Capital initial", "value": init_cap, "measure": "absolute",
          "kind": "base", "note": "Depot initial du portefeuille."},
-        {"label": "P&L brut realise clos", "value": realized_closed_gross, "measure": "relative",
-         "kind": "reel", "note": "Somme des P&L des lots clos, avant frais."},
-        {"label": "Frais sur realise clos", "value": -fees_realized_real, "measure": "relative",
-         "kind": "reel", "note": "Commissions reelles (fill_costs) attribuees au realise "
-                                  "(= total enregistre - estimation des entrees ouvertes)."},
-        {"label": "P&L brut realise partiel", "value": realized_partial_gross, "measure": "relative",
-         "kind": "reel", "note": "P&L realise sur la fraction vendue de lots encore ouverts, avant frais."},
-        {"label": "Frais de change (trades passes)", "value": -fx_conv_fees_est, "measure": "relative",
-         "kind": "estime", "note": "Estimation barème FX IBKR (~0,2 bps, min 2 $) sur les conversions "
-                                   "liees aux trades USD deja passes. Non enregistre en base."},
-        {"label": "Frais sur realise partiel", "value": 0.0, "measure": "relative",
-         "kind": "reel", "note": "Frais sur les ventes partielles (0 tant qu'aucun lot partiel)."},
-        {"label": "P&L brut latent (prix)", "value": latent_price_eur, "measure": "relative",
-         "kind": "reel", "note": "Performance prix des positions ouvertes (hors effet de change), au taux actuel."},
-        {"label": "Frais simules sur vente latent", "value": -est_latent_exit_fees, "measure": "relative",
-         "kind": "simule", "note": "Cout hypothetique pour vendre les positions actuelles (barème IBKR). Non engage."},
-        {"label": "Resultat intermediaire", "value": 0.0, "measure": "total",
-         "kind": "sous_total", "note": "Sous-total avant effets de change de rapatriement."},
-        {"label": "Impact FX latent si liquide EUR", "value": latent_fx_eur, "measure": "relative",
-         "kind": "reel", "note": "Effet de change deja porte par les positions non-EUR (colonne Impact FX), "
-                                 "cristallise en cas de vente + rapatriement."},
-        {"label": "Conversion devises -> EUR (sortie)", "value": -(exit_fx_conv_fee - fx_cash_impact), "measure": "relative",
-         "kind": "estime", "note": exit_note},
+        {"label": "P&L realise net clos", "value": realized_closed_gross, "measure": "relative",
+         "kind": "reel", "note": "Somme des P&L des lots clos, en EUR economique (chaque jambe au taux de "
+                                 "change de son jour), NET des frais broker des trades clos."},
+        {"label": "P&L realise net sur lot partiel", "value": realized_partial_gross, "measure": "relative",
+         "kind": "reel", "note": "P&L realise sur la fraction vendue de lots encore ouverts, EUR economique, "
+                                 "net des frais de la fraction vendue."},
+        {"label": "Resultat realise (net)", "value": 0.0, "measure": "total",
+         "kind": "sous_total", "note": "Capital + realise net clos + realise net partiel. Les frais des trades "
+                                       "clos sont deja comptes ; ceux des positions ouvertes sont dans le PRU "
+                                       "IBKR de la barre latente."},
+        {"label": "P&L latent (prix, IBKR)", "value": latent_price_eur, "measure": "relative",
+         "kind": "reel", "note": "Performance prix des positions ouvertes au taux de change courant, source "
+                                 "IBKR (unrealized) ; le PRU IBKR inclut les frais d'achat."},
+        {"label": "Resultat hors change", "value": 0.0, "measure": "total",
+         "kind": "sous_total", "note": "Realise + performance prix latente, avant l'effet de change sur les positions."},
+        {"label": "Impact change latent (reel)", "value": fx_latent_used, "measure": "relative",
+         "kind": "reel", "note": "Effet de change VRAI des positions en devise : remaining x prix_natif x "
+                                 "(taux courant - taux du jour d'achat), calcule depuis les fills normalises "
+                                 "(migration 22/07). N'est plus l'artefact de devise d'avant l'audit."},
+        {"label": "Change cash & conversions FX (non trace)", "value": cash_fx_residual, "measure": "relative",
+         "kind": "estime", "note": "Bouclage sur la NAV IBKR : change realise/latent sur le cash en devise et "
+                                   "frais des conversions EUR<->USD, pas encore traces dans cash_ledger "
+                                   "(backlog P2 : import historique IBKR Flex). Contient aussi les petits "
+                                   "ecarts taux BCE vs execution."},
+        {"label": "Valeur nette actuelle (NAV IBKR)", "value": 0.0, "measure": "total",
+         "kind": "sous_total", "note": "Point de controle : correspond EXACTEMENT a la NAV reelle du compte "
+                                       "IBKR (bandeau principal), le bouclage etant porte par la barre "
+                                       "precedente (explicite, plus de plug cache)."},
+        {"label": "Frais simules de sortie (vente + change)", "value": -(est_latent_exit_fees + exit_fx_conv_fee - fx_cash_impact),
+         "measure": "relative", "kind": "simule",
+         "note": "Cout HYPOTHETIQUE total de sortie : vente des positions actuelles (barème IBKR) + frais de "
+                 "change du rapatriement EUR de la liquidite en devise. Non engage. " + exit_note},
         {"label": "Resultat final (sortie totale EUR)", "value": 0.0, "measure": "total",
          "kind": "total", "note": "Ce qu'il resterait en EUR si tu vendais tout et rapatriais hors IBKR maintenant, "
-                                  "net de tous frais (vente + change)."},
+                                  "net des frais hypothetiques de vente + change."},
     ]
 
-    # Somme de controle du sous-total et du total (pour affichage/hover).
+    # Somme de controle des sous-totaux et du total (pour affichage/hover).
     running = init_cap
-    intermediate = None
+    subtotals: dict[str, float] = {}
+    final_val = running
     for b in bars:
         if b["measure"] == "relative":
             running += safe_float(b["value"])
-        elif b["measure"] == "total" and b["kind"] == "sous_total":
-            intermediate = running
-        elif b["measure"] == "total" and b["kind"] == "total":
-            b_final = running
+        elif b["measure"] == "total":
+            subtotals[str(b["label"])] = running
+            if b["kind"] == "total":
+                final_val = running
+    realized_subtotal = subtotals.get("Resultat realise (net)")
+    intermediate = subtotals.get("Resultat hors change")
+    nav_checkpoint = subtotals.get("Valeur nette actuelle (NAV IBKR)")
 
     meta = {
         "real_fees_total": real_fees_total,
-        "est_open_entry_fees": est_open_entry_fees,
-        "fees_realized_real": fees_realized_real,
         "fx_conv_fees_est": fx_conv_fees_est,
+        "cash_fx_residual": cash_fx_residual,
+        "fx_latent_true": fx_latent_true,
+        "fx_latent_used": fx_latent_used,
+        "realized_net_ibkr": realized_net_ibkr,
+        "nav_checkpoint": nav_checkpoint,
+        "nav_real": safe_float(total_val) if total_val is not None else None,
+        "nav_reconciled_ok": (nav_checkpoint is not None and total_val is not None
+                              and abs(safe_float(nav_checkpoint) - safe_float(total_val)) < 0.5),
+        "usd_cash": safe_float(usd_cash) if usd_cash is not None else None,
+        "usd_cash_source": ("reel" if bc.get("usd_cash") is not None else "absent"),
         "est_latent_exit_fees": est_latent_exit_fees,
         "latent_price_eur": latent_price_eur,
         "latent_fx_eur": latent_fx_eur,
         "fx_cash_impact": fx_cash_impact,
         "foreign_pos_value_eur": foreign_pos_value_eur,
         "exit_fx_conv_fee": exit_fx_conv_fee,
-        "intermediate": intermediate if intermediate is not None else running,
-        "final": running,
+        "realized_subtotal": realized_subtotal if realized_subtotal is not None else final_val,
+        "intermediate": intermediate if intermediate is not None else final_val,
+        "final": final_val,
     }
     return {"bars": bars, "meta": meta}
 

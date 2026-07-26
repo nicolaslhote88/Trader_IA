@@ -62,34 +62,39 @@ function extractMainBlock(html) {
   return html;
 }
 
-function normalizeDate(raw) {
-  // B1 (2026-06-17) — anti-corruption des dates (cf docs/audits/20260617_ag4_spe_v2_analysis.md).
-  // 1) on privilégie l'ISO des sources fiables (<time datetime>, meta article:published_time) ;
-  // 2) fallback date FR JJ/MM/AAAA ANCRÉE (\b...\b, année 4 chiffres) pour ne PAS capter une
-  //    année isolée du corps (échéance obligataire 2031, plan 2030, etc.) ;
-  // 3) garde-fou de plausibilité : toute date hors [now-2ans ; now+7j] -> null
-  //    => published_at restera NULL et les consommateurs retombent sur first_seen_at.
-  if (!raw) return null;
-  const s = String(raw).trim();
-  if (!s) return null;
-
-  let d = null;
-  const iso = new Date(s);
-  if (!isNaN(iso.getTime())) {
-    d = iso;
-  } else {
-    const fr = s.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b/);
-    if (fr) {
-      const cand = new Date(Date.UTC(Number(fr[3]), Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));
-      if (!isNaN(cand.getTime())) d = cand;
-    }
-  }
-  if (!d) return null;
-
-  const now = Date.now();
+function clampPlausibleDate(d) {
+  // Garde-fou de plausibilite : hors [now-2ans ; now+7j] -> null
+  // (published_at NULL => les consommateurs retombent sur first_seen_at).
   const t = d.getTime();
+  const now = Date.now();
   if (t < now - 730 * 86400000 || t > now + 7 * 86400000) return null;
   return d.toISOString();
+}
+
+function normalizeDate(raw) {
+  // FIX 2026-07-13 : S16 avait garde l'ancienne regex FR NON ancree testee AVANT
+  // l'ISO, qui mutilait les dates ISO d'article ("2026-07-10T.." -> match 26-07-10 -> 2010-07-26)
+  // et n'avait aucun garde-fou de plausibilite. Alignement sur S07 / 07_parse_article.js.
+  if (!raw) return null;
+  const s = String(raw).trim();
+
+  // 1) ISO d'abord (source fiable <time datetime>/meta article:published_time)
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) {
+    const iso = new Date(s);
+    if (!isNaN(iso.getTime())) return clampPlausibleDate(iso);
+  }
+
+  // 2) date FR JJ/MM/AAAA ANCREE, annee 4 chiffres uniquement (pas de 2 chiffres ambigus)
+  const fr = s.match(/\b(\d{1,2})[./-](\d{1,2})[./-](\d{4})\b/);
+  if (fr) {
+    const d = new Date(Date.UTC(Number(fr[3]), Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));
+    if (!isNaN(d.getTime())) return clampPlausibleDate(d);
+  }
+
+  // 3) dernier recours : ISO libre
+  const iso = new Date(s);
+  if (!isNaN(iso.getTime())) return clampPlausibleDate(iso);
+  return null;
 }
 
 function truncate(str, maxLen) {
@@ -137,4 +142,3 @@ return $input.all().map((item) => {
     },
   };
 });
-

@@ -149,6 +149,93 @@ def position_price_eur(row, rates):
     return position_market_value_eur(row, rates) / qty
 
 
+def position_quantity(row):
+    return parse_float(row.get("position") or row.get("quantity") or row.get("qty"), 0.0)
+
+
+def active_position_rows(positions):
+    rows = []
+    for row in positions:
+        if not isinstance(row, dict):
+            continue
+        symbol = ibkr_internal_symbol(row)
+        qty = position_quantity(row)
+        if symbol and qty > 1e-9:
+            rows.append(row)
+    return rows
+
+
+def open_lot_qty_by_symbol(con):
+    out = {}
+    try:
+        cur = con.execute(
+            """
+            SELECT UPPER(symbol) AS symbol, CAST(SUM(COALESCE(remaining_qty, 0)) AS DOUBLE) AS qty
+            FROM core.position_lots
+            WHERE UPPER(COALESCE(status, '')) = 'OPEN'
+              AND CAST(COALESCE(remaining_qty, 0) AS DOUBLE) > 1e-9
+            GROUP BY UPPER(symbol)
+            """
+        )
+        for symbol, qty in cur.fetchall():
+            sym = norm_symbol(symbol)
+            if sym:
+                out[sym] = parse_float(qty, 0.0)
+    except Exception:
+        return {}
+    return out
+
+
+def filter_positions_against_ledger(con, positions, rates, ledger):
+    """Defend against short-lived IBKR desync: /positions can lag after a full SELL
+    while /account/ledger already removed the stock market value. In that case,
+    closed lots are the tie-breaker and stale rows are not written to DuckDB."""
+    active = active_position_rows(positions)
+    base = ledger.get("BASE") if isinstance(ledger, dict) else {}
+    if not isinstance(base, dict):
+        base = {}
+    ledger_equity = parse_float(base.get("stockmarketvalue"), 0.0)
+    positions_equity = sum(position_market_value_eur(row, rates) for row in active)
+    tolerance = max(1.0, abs(ledger_equity) * 0.0025)
+    diag = {
+        "ledger_equity_eur": money(ledger_equity),
+        "positions_equity_raw_eur": money(positions_equity),
+        "positions_equity_filtered_eur": money(positions_equity),
+        "tolerance_eur": money(tolerance),
+        "removed_stale_closed_symbols": [],
+        "applied": False,
+    }
+    if positions_equity <= ledger_equity + tolerance:
+        return active, diag
+
+    open_qty = open_lot_qty_by_symbol(con)
+    filtered = []
+    removed = []
+    for row in active:
+        symbol = ibkr_internal_symbol(row)
+        if open_qty.get(symbol, 0.0) <= 1e-9:
+            removed.append(
+                {
+                    "symbol": symbol,
+                    "qty": position_quantity(row),
+                    "market_value_eur": money(position_market_value_eur(row, rates)),
+                }
+            )
+            continue
+        filtered.append(row)
+
+    filtered_equity = sum(position_market_value_eur(row, rates) for row in filtered)
+    raw_gap = abs(positions_equity - ledger_equity)
+    filtered_gap = abs(filtered_equity - ledger_equity)
+    if removed and filtered_gap + tolerance < raw_gap:
+        diag["positions_equity_filtered_eur"] = money(filtered_equity)
+        diag["removed_stale_closed_symbols"] = removed
+        diag["applied"] = True
+        return filtered, diag
+
+    return active, diag
+
+
 def fill_price_eur(row, rates):
     ccy = norm_symbol(row.get("currency"))
     if not ccy:
@@ -327,11 +414,9 @@ def latest_db_portfolio(con):
 
 def ibkr_positions_map(positions):
     out = {}
-    for row in positions:
-        if not isinstance(row, dict):
-            continue
+    for row in active_position_rows(positions):
         sym = ibkr_internal_symbol(row)
-        qty = parse_float(row.get("position") or row.get("quantity") or row.get("qty"), 0.0)
+        qty = position_quantity(row)
         if sym and qty > 0:
             out[sym] = out.get(sym, 0.0) + qty
     return out
@@ -577,11 +662,9 @@ def rebuild_position_lots(con):
 
 def position_rows_from_ibkr(positions, rates, total_value_eur, run_id, ts):
     rows = []
-    for row in positions:
-        if not isinstance(row, dict):
-            continue
+    for row in active_position_rows(positions):
         symbol = ibkr_internal_symbol(row)
-        qty = parse_float(row.get("position") or row.get("quantity") or row.get("qty"), 0.0)
+        qty = position_quantity(row)
         if not symbol or qty <= 0:
             continue
         ccy = norm_symbol(row.get("currency"))
@@ -667,7 +750,16 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
             len(missing),
             money(total_value_eur - initial),
             (total_value_eur - initial) / initial if initial else 0.0,
-            json.dumps({"source": "ibkr_pf_reconcile", "account": EXPECTED_ACCOUNT, "base_ledger": base, "rates": rates}, ensure_ascii=False),
+            json.dumps(
+                {
+                    "source": "ibkr_pf_reconcile",
+                    "account": EXPECTED_ACCOUNT,
+                    "base_ledger": base,
+                    "rates": rates,
+                    "position_filter": cfg.get("ibkr_position_filter") or {},
+                },
+                ensure_ascii=False,
+            ),
         ],
     )
 
@@ -696,11 +788,9 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
     )
 
     price_rows = []
-    for row in positions:
-        if not isinstance(row, dict):
-            continue
+    for row in active_position_rows(positions):
         symbol = ibkr_internal_symbol(row)
-        qty = parse_float(row.get("position") or row.get("quantity") or row.get("qty"), 0.0)
+        qty = position_quantity(row)
         px = position_price_eur(row, rates)
         if symbol and qty > 0 and px > 0:
             price_rows.append([ts, symbol, px, px, px, px, px, None, "ibkr_pf_reconcile", ts])
@@ -738,11 +828,9 @@ def upsert_ibkr_positions_latest(con, positions, rates, ts):
         """
     )
     rows = []
-    for row in positions:
-        if not isinstance(row, dict):
-            continue
+    for row in active_position_rows(positions):
         symbol = ibkr_internal_symbol(row)
-        qty = parse_float(row.get("position") or row.get("quantity") or row.get("qty"), 0.0)
+        qty = position_quantity(row)
         if not symbol or qty <= 0:
             continue
         ccy = norm_symbol(row.get("currency"))
@@ -840,17 +928,10 @@ rates = exchange_rates_from_ledger(ledger)
 
 con = duckdb.connect(db_path)
 try:
-    # FIX P&L live 2026-06-22 : refresh IBKR-sourced MTM a CHAQUE run (hors gate
-    # should_write) -> le dashboard dispose toujours d'un P&L latent IBKR frais
-    # (EUR, taux IBKR), independamment de la cadence espacee des snapshots RECON.
-    try:
-        cfg["ibkr_live_mtm_count"] = upsert_ibkr_positions_latest(con, positions, rates, iso_now())
-        cfg["ibkr_live_mtm_written"] = True
-    except Exception as _live_err:
-        cfg["ibkr_live_mtm_written"] = False
-        cfg["ibkr_live_mtm_error"] = str(_live_err)
     missing, unmatched = build_missing_fills(con, fills, rates)
-    write_needed, position_diffs, value_diffs = should_write(con, positions, ledger, missing)
+    filtered_positions, filter_diag = filter_positions_against_ledger(con, positions, rates, ledger)
+    cfg["ibkr_position_filter"] = filter_diag
+    write_needed, position_diffs, value_diffs = should_write(con, filtered_positions, ledger, missing)
     cfg["ibkr_reconcile_missing_fills"] = [row["fill_id"] for row in missing]
     cfg["ibkr_reconcile_unmatched_stock_fills"] = [
         {
@@ -866,10 +947,14 @@ try:
     if write_needed:
         con.execute("BEGIN TRANSACTION")
         try:
-            upsert_instruments_for_positions(con, positions)
+            upsert_instruments_for_positions(con, filtered_positions)
             insert_missing_fills(con, missing)
             lot_count = rebuild_position_lots(con)
-            run_id = insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missing, cfg)
+            filtered_positions, filter_diag = filter_positions_against_ledger(con, positions, rates, ledger)
+            cfg["ibkr_position_filter"] = filter_diag
+            cfg["ibkr_live_mtm_count"] = upsert_ibkr_positions_latest(con, filtered_positions, rates, iso_now())
+            cfg["ibkr_live_mtm_written"] = True
+            run_id = insert_reconciliation_run_and_snapshot(con, filtered_positions, ledger, rates, missing, cfg)
             con.execute("COMMIT")
             cfg["ibkr_reconcile_status"] = "WRITTEN"
             cfg["ibkr_reconcile_written"] = True
@@ -882,6 +967,15 @@ try:
                 pass
             raise
     else:
+        # FIX P&L live 2026-06-22 + 2026-07-03 stale-position guard: refresh the
+        # IBKR-sourced MTM every run, but only after filtering temporary /positions
+        # rows that conflict with ledger NetLiq and closed lots.
+        try:
+            cfg["ibkr_live_mtm_count"] = upsert_ibkr_positions_latest(con, filtered_positions, rates, iso_now())
+            cfg["ibkr_live_mtm_written"] = True
+        except Exception as _live_err:
+            cfg["ibkr_live_mtm_written"] = False
+            cfg["ibkr_live_mtm_error"] = str(_live_err)
         cfg["ibkr_reconcile_status"] = "NO_DIFF"
 finally:
     try:

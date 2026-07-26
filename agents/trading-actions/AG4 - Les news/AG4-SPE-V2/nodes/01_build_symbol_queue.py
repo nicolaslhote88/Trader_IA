@@ -7,7 +7,7 @@ from contextlib import contextmanager
 DB_PATH = "/files/duckdb/ag4_spe_v2.duckdb"
 AG1_DB_PATH = "/files/duckdb/ag1_v4_consensus.duckdb"
 AG2_DB_PATH = "/files/duckdb/ag2_v3.duckdb"
-BATCH_SIZE = 20
+BATCH_SIZE = 30
 STATE_KEY = "ag4_spe_v2_last_symbol_index"
 
 # C1/C3 (2026-06-18) - cf docs/audits/20260617_ag4_spe_v2_analysis.md.

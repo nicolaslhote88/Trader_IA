@@ -24,6 +24,7 @@ def db_con(path=DEFAULT_DB_PATH, retries=8, delay=1):
         yield con
     finally:
         if con is not None:
+            # No per-run CHECKPOINT here: on multi-GB DuckDB files it can exceed n8n task timeouts.
             try:
                 con.close()
             except Exception:
