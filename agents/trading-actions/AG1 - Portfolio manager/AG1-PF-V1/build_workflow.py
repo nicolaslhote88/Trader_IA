@@ -20,7 +20,7 @@ def build() -> dict:
                     "interval": [
                         {
                             "field": "cronExpression",
-                            "expression": "0 0 9-17 * * 1-5",
+                            "expression": "0 15 9-17 * * 1-5",
                         }
                     ]
                 }
@@ -313,13 +313,13 @@ def build() -> dict:
         {
             "parameters": {
                 "content": "AG1 V4 Portfolio MTM: updates latent valuation in /files/duckdb/ag1_v4_consensus.duckdb. No order execution.",
-                "height": 220,
-                "width": 900,
+                "height": 860,
+                "width": 2996,
                 "color": 5,
             },
             "type": "n8n-nodes-base.stickyNote",
             "typeVersion": 1,
-            "position": [-280, -240],
+            "position": [-288, -240],
             "id": "f92de8a2-4f5a-4de6-a123-a7eb60a8f120",
             "name": "Note",
         },

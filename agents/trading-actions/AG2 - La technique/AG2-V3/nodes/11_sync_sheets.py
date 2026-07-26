@@ -4,7 +4,10 @@ Reads signals from the LATEST RUN only and outputs items matching
 the expected legacy column format.
 Runs AFTER Finalize (node 10) — delta sync (batch only).
 """
-import duckdb, gc, json, time
+import duckdb
+import gc
+import json
+import time
 from contextlib import contextmanager
 
 DB_PATH = "/files/duckdb/ag2_v3.duckdb"
@@ -25,11 +28,6 @@ def db_con(path=DB_PATH, retries=5, base_delay=0.3):
         yield con
     finally:
         if con:
-            # CHECKPOINT no-op sur read-only (cf. infra/maintenance/defrag_duckdb.py).
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
             try:
                 con.close()
             except Exception:

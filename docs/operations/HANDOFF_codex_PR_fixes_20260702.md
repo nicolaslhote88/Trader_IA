@@ -94,7 +94,36 @@ docs: audit complet 2026-07-02 + analyse fonctionnelle reecrite + MAJ operations
 - Rafraîchir l'export repo `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-V2-workflow.json` depuis le live (`n8n export:workflow --id=H0cfY1coMx8dvMuXScMc_`) pour que le JSON complet reflète S07/S16/S22 — les fichiers nodes/ ci-dessus sont déjà le miroir canonique.
 - Idem `agents/trading-actions/AG1 - Portfolio manager/AG1-PF-V1/AG1-PF-V1-workflow.json` (cron H+15).
 
+## Commit 5 — session 2026-07-05 (échecs nocturnes AG3 : CHECKPOINT/fragmentation)
+```
+git add infra/maintenance/defrag_duckdb.py
+git add docs/operations/20260705_ag3_checkpoint_defrag_fix.md
+git add AGENTS.md
+git add docs/operations/HANDOFF_codex_PR_fixes_20260702.md
+```
+(NB : `AGENTS.md` et ce HANDOFF sont déjà dans le commit 4 — si les commits 1-4 ne sont pas encore faits, leur version finale du 05/07 part naturellement avec ; sinon, les re-stager ici.)
+
+Message proposé :
+```
+fix(ops): echecs nocturnes AG3 = CHECKPOINT sur base fragmentee ; defrag + retrait checkpoint + cron hebdo
+
+Nuits 03-05/07 : 7 echecs AG3 sur 9 runs alors que run_log = SUCCESS (le metier
+passait). Cause : CHECKPOINT explicite au close du Finalize Run sur base
+fragmentee (ag3_v2 3,9 Go pour 48 Mo utiles, ag2_v3 3,4 Go pour 13 Mo)
+-> timeout 1200 s ou OOM 4,3 Go (runners tues, dmesg + OOMKilled=true).
+Fixes live 2026-07-05 :
+- defrag ag2_v3 (13 Mo) + ag3_v2 (48 Mo), integrite verifiee vs .old
+- CHECKPOINT retire des Finalize AG3 HC/WL (workflows republies)
+- cron defrag hebdo dim 07:30 UTC (--only ag2_v3 ag3_v2)
+defrag_duckdb.py : 2 bugs corriges (chunking LIMIT/OFFSET non deterministe
+-> INSERT unique + verif count ; vues non copiees -> recreation duckdb_views)
++ option --only. Details : docs/operations/20260705_ag3_checkpoint_defrag_fix.md
+```
+
+### Optionnel commit 5
+- Rafraîchir les miroirs `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/AG3-V2-Fundamental-Held-Core.workflow.json` et `…-Watchlist-Nightly.workflow.json` depuis le live (`n8n export:workflow --id=AG3V2HELDCORE20260622 / AG3V2WATCHNIGHT20260622`) pour refléter le retrait du CHECKPOINT dans `Finalize Run`.
+
 ## Vérifications post-commit
-1. `git log --oneline -5` : 4 commits au-dessus de `06ab868`.
+1. `git log --oneline -6` : 5 commits au-dessus de `06ab868` (ou 4+1 selon l'état).
 2. `git status --porcelain | grep -v "^ M"` : plus d'untracked pertinent.
-3. Le diff cumulé ne doit contenir AUCUN fichier purement CRLF : `git diff 06ab868..HEAD --ignore-cr-at-eol --stat` ≈ 13 fichiers.
+3. Le diff cumulé ne doit contenir AUCUN fichier purement CRLF : `git diff 06ab868..HEAD --ignore-cr-at-eol --stat` ≈ 15 fichiers.

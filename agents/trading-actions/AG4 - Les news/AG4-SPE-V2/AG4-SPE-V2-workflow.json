@@ -1,12 +1,8 @@
 [
   {
-    "updatedAt": "2026-07-02 14:51:30",
-    "createdAt": "2026-02-17T07:41:52.089Z",
     "id": "H0cfY1coMx8dvMuXScMc_",
     "name": "AG4_Spé-V2",
-    "description": null,
     "active": 1,
-    "isArchived": false,
     "nodes": [
       {
         "parameters": {
@@ -545,7 +541,7 @@
       },
       {
         "parameters": {
-          "jsCode": "const MAX_TEXT_CHARS = 50000;\nconst MAX_SNIPPET_CHARS = 1200;\n\nfunction htmlEntityDecode(str) {\n  if (!str) return \"\";\n  return String(str)\n    .replace(/&nbsp;/gi, \" \")\n    .replace(/&amp;/gi, \"&\")\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;/gi, \"'\")\n    .replace(/&lt;/gi, \"<\")\n    .replace(/&gt;/gi, \">\");\n}\n\nfunction stripTags(html) {\n  if (!html) return \"\";\n  let s = String(html)\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \")\n    .replace(/<\\/?[^>]+>/g, \" \");\n  s = htmlEntityDecode(s);\n  return s.replace(/\\u00A0/g, \" \").replace(/\\s+/g, \" \").trim();\n}\n\nfunction getMetaContent(html, key, mode) {\n  if (!html || !key) return null;\n  const escaped = key.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n  const re = new RegExp(`<meta[^>]+${mode}\\\\s*=\\\\s*[\"']${escaped}[\"'][^>]*>`, \"i\");\n  const m = html.match(re);\n  if (!m) return null;\n  const content = m[0].match(/content\\s*=\\s*[\"']([^\"']+)[\"']/i);\n  return content ? stripTags(content[1]) : null;\n}\n\nfunction getFirst(html, re) {\n  const m = html && html.match(re);\n  if (!m) return null;\n  return stripTags(m[1]) || null;\n}\n\nfunction extractParagraphs(htmlBlock) {\n  if (!htmlBlock) return \"\";\n  const out = [];\n  const re = /<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;\n  let m;\n  while ((m = re.exec(htmlBlock)) !== null) {\n    const t = stripTags(m[1]);\n    if (t && t.length >= 20) out.push(t);\n  }\n  return out.join(\"\\n\\n\").trim();\n}\n\nfunction extractMainBlock(html) {\n  if (!html) return \"\";\n  const article = html.match(/<article\\b[^>]*>([\\s\\S]*?)<\\/article>/i);\n  if (article?.[1]) return article[1];\n  const main = html.match(/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/i);\n  if (main?.[1]) return main[1];\n  const body = html.match(/<body\\b[^>]*>([\\s\\S]*?)<\\/body>/i);\n  if (body?.[1]) return body[1];\n  return html;\n}\n\nfunction normalizeDate(raw) {\n  if (!raw) return null;\n  const s = String(raw).trim();\n\n  const fr = s.match(/(\\d{1,2})[./-](\\d{1,2})[./-](\\d{2,4})/);\n  if (fr) {\n    let y = Number(fr[3]);\n    if (y < 100) y += 2000;\n    const d = new Date(Date.UTC(y, Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));\n    if (!isNaN(d.getTime())) return d.toISOString();\n  }\n\n  const iso = new Date(s);\n  if (!isNaN(iso.getTime())) return iso.toISOString();\n  return null;\n}\n\nfunction truncate(str, maxLen) {\n  const s = String(str || \"\");\n  if (s.length <= maxLen) return s;\n  return `${s.slice(0, maxLen)}\\n\\n[TRUNCATED ${s.length} -> ${maxLen}]`;\n}\n\nreturn $input.all().map((item) => {\n  const j = { ...(item.json || {}) };\n  const html = j.articleHtml || j.body || j.data || j.html || j.response || \"\";\n\n  const h1 = getFirst(html, /<h1\\b[^>]*>([\\s\\S]*?)<\\/h1>/i);\n  const ogTitle = getMetaContent(html, \"og:title\", \"property\");\n  const docTitle = getFirst(html, /<title\\b[^>]*>([\\s\\S]*?)<\\/title>/i);\n  const title = h1 || ogTitle || j.articleTitleGuess || j.title || docTitle || null;\n\n  const timeDt = (html.match(/<time\\b[^>]*datetime\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/i) || [])[1];\n  const metaPub = getMetaContent(html, \"article:published_time\", \"property\");\n  const metaDate = getMetaContent(html, \"date\", \"name\");\n  const publishedAt = normalizeDate(timeDt || metaPub || metaDate || j.publishedAt || j.publishedAtGuess);\n\n  const metaDesc = getMetaContent(html, \"description\", \"name\");\n  const ogDesc = getMetaContent(html, \"og:description\", \"property\");\n\n  const main = extractMainBlock(html);\n  let text = extractParagraphs(main);\n  if (!text) text = stripTags(main).slice(0, 20000);\n  text = truncate(text, MAX_TEXT_CHARS);\n\n  let snippet = metaDesc || ogDesc || j.snippet || j.snippetGuess || (text ? text.slice(0, 280) : \"\");\n  snippet = truncate(snippet, MAX_SNIPPET_CHARS);\n\n  return {\n    json: {\n      ...j,\n      title,\n      articleTitle: title,\n      publishedAt: publishedAt || null, // F2 (2026-07-02) : ne plus contourner le garde B1 via j.publishedAt corrompu\n      snippet,\n      text,\n      parseMethod: \"html_regex_v3\",\n      parsedAt: new Date().toISOString(),\n      _articlesLoopReset: false,\n    },\n  };\n});\n\n"
+          "jsCode": "const MAX_TEXT_CHARS = 50000;\nconst MAX_SNIPPET_CHARS = 1200;\n\nfunction htmlEntityDecode(str) {\n  if (!str) return \"\";\n  return String(str)\n    .replace(/&nbsp;/gi, \" \")\n    .replace(/&amp;/gi, \"&\")\n    .replace(/&quot;/gi, '\"')\n    .replace(/&#39;/gi, \"'\")\n    .replace(/&lt;/gi, \"<\")\n    .replace(/&gt;/gi, \">\");\n}\n\nfunction stripTags(html) {\n  if (!html) return \"\";\n  let s = String(html)\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, \" \")\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, \" \")\n    .replace(/<!--[\\s\\S]*?-->/g, \" \")\n    .replace(/<\\/?[^>]+>/g, \" \");\n  s = htmlEntityDecode(s);\n  return s.replace(/\\u00A0/g, \" \").replace(/\\s+/g, \" \").trim();\n}\n\nfunction getMetaContent(html, key, mode) {\n  if (!html || !key) return null;\n  const escaped = key.replace(/[.*+?^${}()|[\\]\\\\]/g, \"\\\\$&\");\n  const re = new RegExp(`<meta[^>]+${mode}\\\\s*=\\\\s*[\"']${escaped}[\"'][^>]*>`, \"i\");\n  const m = html.match(re);\n  if (!m) return null;\n  const content = m[0].match(/content\\s*=\\s*[\"']([^\"']+)[\"']/i);\n  return content ? stripTags(content[1]) : null;\n}\n\nfunction getFirst(html, re) {\n  const m = html && html.match(re);\n  if (!m) return null;\n  return stripTags(m[1]) || null;\n}\n\nfunction extractParagraphs(htmlBlock) {\n  if (!htmlBlock) return \"\";\n  const out = [];\n  const re = /<p\\b[^>]*>([\\s\\S]*?)<\\/p>/gi;\n  let m;\n  while ((m = re.exec(htmlBlock)) !== null) {\n    const t = stripTags(m[1]);\n    if (t && t.length >= 20) out.push(t);\n  }\n  return out.join(\"\\n\\n\").trim();\n}\n\nfunction extractMainBlock(html) {\n  if (!html) return \"\";\n  const article = html.match(/<article\\b[^>]*>([\\s\\S]*?)<\\/article>/i);\n  if (article?.[1]) return article[1];\n  const main = html.match(/<main\\b[^>]*>([\\s\\S]*?)<\\/main>/i);\n  if (main?.[1]) return main[1];\n  const body = html.match(/<body\\b[^>]*>([\\s\\S]*?)<\\/body>/i);\n  if (body?.[1]) return body[1];\n  return html;\n}\n\nfunction clampPlausibleDate(d) {\n  // Garde-fou de plausibilite : hors [now-2ans ; now+7j] -> null\n  // (published_at NULL => les consommateurs retombent sur first_seen_at).\n  const t = d.getTime();\n  const now = Date.now();\n  if (t < now - 730 * 86400000 || t > now + 7 * 86400000) return null;\n  return d.toISOString();\n}\n\nfunction normalizeDate(raw) {\n  // FIX 2026-07-13 : S16 avait garde l'ancienne regex FR NON ancree testee AVANT\n  // l'ISO, qui mutilait les dates ISO d'article (\"2026-07-10T..\" -> match 26-07-10 -> 2010-07-26)\n  // et n'avait aucun garde-fou de plausibilite. Alignement sur S07 / 07_parse_article.js.\n  if (!raw) return null;\n  const s = String(raw).trim();\n\n  // 1) ISO d'abord (source fiable <time datetime>/meta article:published_time)\n  if (/^\\d{4}-\\d{2}-\\d{2}/.test(s)) {\n    const iso = new Date(s);\n    if (!isNaN(iso.getTime())) return clampPlausibleDate(iso);\n  }\n\n  // 2) date FR JJ/MM/AAAA ANCREE, annee 4 chiffres uniquement (pas de 2 chiffres ambigus)\n  const fr = s.match(/\\b(\\d{1,2})[./-](\\d{1,2})[./-](\\d{4})\\b/);\n  if (fr) {\n    const d = new Date(Date.UTC(Number(fr[3]), Number(fr[2]) - 1, Number(fr[1]), 0, 0, 0));\n    if (!isNaN(d.getTime())) return clampPlausibleDate(d);\n  }\n\n  // 3) dernier recours : ISO libre\n  const iso = new Date(s);\n  if (!isNaN(iso.getTime())) return clampPlausibleDate(iso);\n  return null;\n}\n\nfunction truncate(str, maxLen) {\n  const s = String(str || \"\");\n  if (s.length <= maxLen) return s;\n  return `${s.slice(0, maxLen)}\\n\\n[TRUNCATED ${s.length} -> ${maxLen}]`;\n}\n\nreturn $input.all().map((item) => {\n  const j = { ...(item.json || {}) };\n  const html = j.articleHtml || j.body || j.data || j.html || j.response || \"\";\n\n  const h1 = getFirst(html, /<h1\\b[^>]*>([\\s\\S]*?)<\\/h1>/i);\n  const ogTitle = getMetaContent(html, \"og:title\", \"property\");\n  const docTitle = getFirst(html, /<title\\b[^>]*>([\\s\\S]*?)<\\/title>/i);\n  const title = h1 || ogTitle || j.articleTitleGuess || j.title || docTitle || null;\n\n  const timeDt = (html.match(/<time\\b[^>]*datetime\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>/i) || [])[1];\n  const metaPub = getMetaContent(html, \"article:published_time\", \"property\");\n  const metaDate = getMetaContent(html, \"date\", \"name\");\n  const publishedAt = normalizeDate(timeDt || metaPub || metaDate || j.publishedAt || j.publishedAtGuess);\n\n  const metaDesc = getMetaContent(html, \"description\", \"name\");\n  const ogDesc = getMetaContent(html, \"og:description\", \"property\");\n\n  const main = extractMainBlock(html);\n  let text = extractParagraphs(main);\n  if (!text) text = stripTags(main).slice(0, 20000);\n  text = truncate(text, MAX_TEXT_CHARS);\n\n  let snippet = metaDesc || ogDesc || j.snippet || j.snippetGuess || (text ? text.slice(0, 280) : \"\");\n  snippet = truncate(snippet, MAX_SNIPPET_CHARS);\n\n  return {\n    json: {\n      ...j,\n      title,\n      articleTitle: title,\n      publishedAt: publishedAt || null, // F2 (2026-07-02) : ne plus contourner le garde B1 via j.publishedAt corrompu\n      snippet,\n      text,\n      parseMethod: \"html_regex_v3\",\n      parsedAt: new Date().toISOString(),\n      _articlesLoopReset: false,\n    },\n  };\n});\n\n"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -1217,36 +1213,19 @@
         ]
       }
     },
-    "settings": {
-      "executionOrder": "v1",
-      "availableInMCP": false
-    },
+    "settings": "{\"executionOrder\":\"v1\",\"availableInMCP\":false,\"saveDataSuccessExecution\":\"none\"}",
     "staticData": null,
-    "meta": null,
-    "pinData": {},
-    "versionId": "16174fb6-af54-433e-bd6b-1bc9d43911a6",
-    "activeVersionId": "16174fb6-af54-433e-bd6b-1bc9d43911a6",
-    "versionCounter": 301,
+    "pinData": "{}",
+    "versionId": "e928e453-0ed6-446b-83a5-ab6acb02d92e",
     "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-02-17T07:41:52.103Z",
-        "createdAt": "2026-02-17T07:41:52.103Z",
-        "role": "workflow:owner",
-        "workflowId": "H0cfY1coMx8dvMuXScMc_",
-        "projectId": "ksaxzZwZY6PsA6jp",
-        "project": {
-          "updatedAt": "2025-08-19T20:06:03.793Z",
-          "createdAt": "2025-08-19T20:05:08.903Z",
-          "id": "ksaxzZwZY6PsA6jp",
-          "name": "Nicolas L'HOTE <nicolas.lhote.88@gmail.com>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "81c13a48-6847-445c-927f-81c1c25a72f4"
-        }
-      }
-    ]
+    "meta": null,
+    "parentFolderId": "WbRitLPfs4YbC66Y",
+    "createdAt": "2026-02-17 07:41:52.089",
+    "updatedAt": "2026-07-24 00:15:57",
+    "isArchived": 0,
+    "versionCounter": 322,
+    "description": null,
+    "activeVersionId": "e928e453-0ed6-446b-83a5-ab6acb02d92e",
+    "authors": "import"
   }
 ]

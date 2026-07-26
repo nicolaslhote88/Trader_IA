@@ -1,4 +1,7 @@
-import json, math, time, gc
+import json
+import math
+import time
+import gc
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -197,6 +200,7 @@ def ensure_schema(con):
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_missing TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_anomalies TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_output_ref TEXT;")
+    con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_model TEXT;")
     con.execute("ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS pass_pm BOOLEAN;")
 
 
@@ -314,6 +318,8 @@ with db_con() as con:
         # ---------------------------
         d1_close = safe_float(d.get("d1_last_close") or d.get("D1_Last_Close_Ind") or get_nested(d, ["d1_indicators", "last_close"]))
         d1_sma200 = safe_float(d.get("d1_sma200") or d.get("D1_SMA200") or get_nested(d, ["d1_indicators", "sma200"]))
+        ai_rr_theo = safe_float(get_nested(d, ["ai_context", "rr_theoretical"]))
+        h1_action = str(d.get("h1_action") or get_nested(d, ["h1_signal", "action"]) or "").upper()
 
         # ---------------------------
         # ANTI-CONTRADICTION GUARD (your requested modification)
@@ -338,23 +344,41 @@ with db_con() as con:
             quality = min(int(quality or 5), 3)
             reasoning = "[AUTO] APPROVE sans stop-loss => invalide. " + (reasoning or "")
 
+        # Enforce the RR rules from the prompt in deterministic code.
+        if h1_action == "SELL":
+            anomalies_list.append("AI_SELL_REJECTED_LONG_ONLY")
+            decision = "REJECT"
+            validated = False
+        elif ai_rr_theo is None:
+            decision = "WATCH" if alignment == "WITH_BIAS" else "REJECT"
+            validated = False
+            anomalies_list.append("RR_THEORETICAL_MISSING")
+        elif ai_rr_theo < 1.2:
+            decision = "REJECT"
+            validated = False
+            anomalies_list.append("RR_BELOW_1_2")
+        elif ai_rr_theo < 1.5:
+            decision = "WATCH"
+            validated = False
+            anomalies_list.append("RR_BELOW_APPROVE_1_5")
+        elif decision == "APPROVE":
+            validated = stop_loss is not None
+
         # Compute pass_pm (simple, deterministic)
         pass_pm = (decision == "APPROVE") or (decision == "WATCH" and (quality or 0) >= 5)
 
-        # Store raw AI output ref (keep short)
+        # Stable local lineage reference. The provider response id is not exposed
+        # by this n8n node, so keep the run/symbol/model/prompt correlation.
         ai_output_ref = d.get("ai_output_ref") or d.get("AI_OutputRef") or ""
         if not ai_output_ref:
-            # fallback: short hash-like reference from raw
-            if isinstance(ai_raw, str) and ai_raw.strip():
-                ai_output_ref = f"ai_raw_len={len(ai_raw)}"
+            ai_output_ref = "|".join([
+                str(run_id), str(symbol), "model=gpt-5-mini",
+                "prompt=" + str(d.get("prompt_version") or "prompt_v3"),
+            ])
 
         # Serialize lists
         ai_missing = json.dumps(missing_fields, ensure_ascii=False)
         ai_anomalies = json.dumps(sorted(set([x for x in anomalies_list if x])), ensure_ascii=False)
-
-        # FIX 2026-06-19: rr_theoretical calcule dans Snapshot Context (ai_context.rr_theoretical)
-        # mais jamais persiste -> AG1 lisait une colonne 100% NULL. On le mappe ici.
-        ai_rr_theo = safe_float(get_nested(d, ["ai_context", "rr_theoretical"]))
 
         # Prepare update payload
         upd = {
@@ -374,6 +398,7 @@ with db_con() as con:
             "ai_missing": ai_missing,
             "ai_anomalies": ai_anomalies,
             "ai_output_ref": ai_output_ref[:500],
+            "ai_model": "gpt-5-mini",
             "pass_pm": bool(pass_pm),
         }
 
@@ -398,6 +423,44 @@ with db_con() as con:
                         f"INSERT INTO technical_signals ({', '.join(cols)}) VALUES ({placeholders})",
                         [signal_id, run_id, symbol] + list(upd.values()) + [datetime.now()]
                     )
+                cache_payload = json.dumps(
+                    {
+                        "decision": decision,
+                        "quality": int(quality or 0),
+                        "bb_status": bb_status,
+                        "rsi_status": rsi_status,
+                        "alignment": alignment,
+                    },
+                    ensure_ascii=False,
+                )
+                cache_ttl = 60 if str(d.get("h1_action") or "").upper() == "SELL" else 240
+                con.execute(
+                    """
+                    INSERT INTO ai_dedup_cache (
+                      symbol, interval_key, sig_hash, sig_json, last_ai_at,
+                      last_ai_run_id, last_ai_reason, last_ai_output_ref,
+                      ttl_minutes, updated_at
+                    ) VALUES (?, 'combined', ?, ?, CURRENT_TIMESTAMP, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT (symbol, interval_key) DO UPDATE SET
+                      sig_hash=excluded.sig_hash,
+                      sig_json=excluded.sig_json,
+                      last_ai_at=excluded.last_ai_at,
+                      last_ai_run_id=excluded.last_ai_run_id,
+                      last_ai_reason=excluded.last_ai_reason,
+                      last_ai_output_ref=excluded.last_ai_output_ref,
+                      ttl_minutes=excluded.ttl_minutes,
+                      updated_at=excluded.updated_at
+                    """,
+                    [
+                        symbol,
+                        str(d.get("sig_hash") or ""),
+                        cache_payload,
+                        run_id,
+                        reasoning[:1000] if reasoning else "",
+                        ai_output_ref[:500],
+                        cache_ttl,
+                    ],
+                )
             except Exception as e:
                 # don't hard fail the whole run; attach error to item
                 upd["db_write_error"] = str(e)[:500]
@@ -420,6 +483,7 @@ with db_con() as con:
             "ai_missing": upd["ai_missing"],
             "ai_anomalies": upd["ai_anomalies"],
             "ai_output_ref": upd["ai_output_ref"],
+            "ai_model": upd["ai_model"],
             "pass_pm": upd["pass_pm"],
             "ai_parse_note": parse_note,
         })

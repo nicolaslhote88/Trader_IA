@@ -10,8 +10,9 @@ import time
 import random
 import math
 import tempfile
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as clock_time, timedelta, timezone
 from typing import Optional, Tuple, Dict, Any, List
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
@@ -19,7 +20,7 @@ import yfinance as yf
 # =========================
 # Config (ENV)
 # =========================
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.1.0"
 
 TZ = os.getenv("TZ", "UTC")
 
@@ -618,6 +619,134 @@ def _normalize_download_df(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+# Regular closes are deliberately conservative: a half-day is accepted later
+# than necessary, never before its actual close. Holidays have no bar to admit.
+MARKET_PROFILES = {
+    "ASX": ("Australia/Sydney", clock_time(16, 0)),
+    "BME": ("Europe/Madrid", clock_time(17, 30)),
+    "EURONEXT AMSTERDAM": ("Europe/Amsterdam", clock_time(17, 30)),
+    "EURONEXT PARIS": ("Europe/Paris", clock_time(17, 30)),
+    "PAR": ("Europe/Paris", clock_time(17, 30)),
+    "HKEX": ("Asia/Hong_Kong", clock_time(16, 0)),
+    "KRX": ("Asia/Seoul", clock_time(15, 30)),
+    "NASDAQ": ("America/New_York", clock_time(16, 0)),
+    "NYSE": ("America/New_York", clock_time(16, 0)),
+    "SGX": ("Asia/Singapore", clock_time(17, 0)),
+    "SIX": ("Europe/Zurich", clock_time(17, 30)),
+    "TOKYO": ("Asia/Tokyo", clock_time(15, 30)),
+    "XETRA": ("Europe/Berlin", clock_time(17, 30)),
+}
+
+
+def _market_profile(exchange: str, symbol: str, asset_class: str):
+    exchange_key = str(exchange or "").strip().upper()
+    symbol_key = str(symbol or "").strip().upper()
+    asset_key = str(asset_class or "").strip().upper()
+    if asset_key == "CRYPTO" or symbol_key.endswith("-USD"):
+        return "UTC", clock_time(0, 0), True
+    if exchange_key in MARKET_PROFILES:
+        tz_name, close_at = MARKET_PROFILES[exchange_key]
+        return tz_name, close_at, False
+    suffix_profiles = {
+        ".AX": "ASX", ".DE": "XETRA", ".HK": "HKEX", ".KS": "KRX",
+        ".MC": "BME", ".PA": "PAR", ".SI": "SGX", ".SW": "SIX",
+        ".T": "TOKYO", ".AS": "EURONEXT AMSTERDAM",
+    }
+    for suffix, profile_key in suffix_profiles.items():
+        if symbol_key.endswith(suffix):
+            tz_name, close_at = MARKET_PROFILES[profile_key]
+            return tz_name, close_at, False
+    # Unsuffixed equities in this service are predominantly US. The explicit
+    # exchange query sent by AG2 remains authoritative.
+    return "America/New_York", clock_time(16, 0), False
+
+
+def _interval_seconds(interval: str) -> Optional[int]:
+    value = str(interval or "").strip().lower()
+    if value.endswith("m") and value[:-1].isdigit():
+        return int(value[:-1]) * 60
+    if value.endswith("h") and value[:-1].isdigit():
+        return int(value[:-1]) * 3600
+    if value == "60m":
+        return 3600
+    if value == "90m":
+        return 5400
+    return None
+
+
+def _bar_is_closed(
+    timestamp,
+    interval: str,
+    exchange: str,
+    symbol: str,
+    asset_class: str,
+    now_utc: datetime,
+) -> bool:
+    ts = pd.Timestamp(timestamp)
+    if ts.tzinfo is None:
+        ts = ts.tz_localize("UTC")
+    else:
+        ts = ts.tz_convert("UTC")
+    value = str(interval or "").strip().lower()
+    grace = timedelta(minutes=10)
+    duration = _interval_seconds(value)
+    if duration is not None:
+        return now_utc >= ts.to_pydatetime() + timedelta(seconds=duration) + grace
+    if value == "1d":
+        tz_name, close_at, close_next_day = _market_profile(exchange, symbol, asset_class)
+        local_ts = ts.to_pydatetime().astimezone(ZoneInfo(tz_name))
+        close_date = local_ts.date() + (timedelta(days=1) if close_next_day else timedelta(0))
+        close_local = datetime.combine(close_date, close_at, ZoneInfo(tz_name))
+        return now_utc >= close_local.astimezone(timezone.utc) + grace
+    # AG2 only requests 1h and 1d. Unknown intervals are fail-closed when the
+    # caller explicitly asks for closed bars.
+    return False
+
+
+def _df_to_validated_bars(
+    df: pd.DataFrame,
+    max_bars: int,
+    interval: str,
+    exchange: str,
+    symbol: str,
+    asset_class: str,
+    closed_only: bool,
+    validated_only: bool,
+    now_utc: datetime,
+):
+    if df is None or df.empty:
+        return [], {"droppedOpen": 0, "droppedInvalid": 0}
+    rows = []
+    dropped_open = 0
+    dropped_invalid = 0
+    for row in df.sort_values("Datetime").itertuples(index=False):
+        values = [_safe_num(row.Open), _safe_num(row.High), _safe_num(row.Low), _safe_num(row.Close)]
+        volume = _safe_num(row.Volume)
+        valid = all(v is not None and v > 0 for v in values)
+        if valid:
+            open_v, high_v, low_v, close_v = values
+            valid = low_v <= min(open_v, close_v) and max(open_v, close_v) <= high_v
+        if valid and volume is not None:
+            valid = volume >= 0
+        if validated_only and not valid:
+            dropped_invalid += 1
+            continue
+        closed = _bar_is_closed(row.Datetime, interval, exchange, symbol, asset_class, now_utc)
+        if closed_only and not closed:
+            dropped_open += 1
+            continue
+        rows.append({
+            "t": row.Datetime.isoformat().replace("+00:00", "Z"),
+            "o": values[0], "h": values[1], "l": values[2], "c": values[3],
+            "v": volume,
+            "closed": bool(closed),
+            "quality": "VALID" if valid else "INVALID",
+        })
+    if max_bars and max_bars > 0:
+        rows = rows[-int(max_bars):]
+    return rows, {"droppedOpen": dropped_open, "droppedInvalid": dropped_invalid}
+
+
 def _download_incremental(symbol: str, interval: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
     """Download data from yfinance with proper error handling."""
     print(f"[FETCH] {symbol} {interval} from {start_dt.isoformat()} to {end_dt.isoformat()}", flush=True)
@@ -1028,6 +1157,10 @@ def history(
     min_bars: int = Query(0),
     allow_stale: bool = Query(True),
     force_refresh: bool = Query(False),
+    exchange: str = Query(""),
+    asset_class: str = Query("EQUITY"),
+    closed_only: bool = Query(False),
+    validated_only: bool = Query(False),
 ):
     _safe_mkdir(DATA_DIR)
     _safe_mkdir(CACHE_DIR)
@@ -1058,8 +1191,13 @@ def history(
             except Exception:
                 dfw = df
 
-        bars = _df_to_bars(dfw, max_bars)
+        now_utc = _utcnow()
+        bars, quality = _df_to_validated_bars(
+            dfw, max_bars, interval, exchange, resolved_symbol, asset_class,
+            closed_only, validated_only, now_utc,
+        )
         last = bars[-1] if bars else None
+        market_tz, market_close, _ = _market_profile(exchange, resolved_symbol, asset_class)
         return {
             "ok": True,
             "stale": bool(stale_flag),
@@ -1074,6 +1212,12 @@ def history(
             "dataAsOf": (last["t"] if last else None),
             "last": last,
             "bars": bars,
+            "closedOnly": bool(closed_only),
+            "validatedOnly": bool(validated_only),
+            "droppedOpen": quality["droppedOpen"],
+            "droppedInvalid": quality["droppedInvalid"],
+            "marketTimezone": market_tz,
+            "regularMarketClose": market_close.isoformat(timespec="minutes"),
         }
 
     # === DECISION: Should we fetch fresh data? ===

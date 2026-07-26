@@ -87,8 +87,6 @@ def db_con(path=DB_PATH, retries=10, delay=0.2):
         yield con
     finally:
         if con is not None:
-            # Pas de CHECKPOINT ici : ce nœud est sur le chemin critique 60 s.
-            # Le checkpoint est centralisé dans Finalize Run, une seule fois.
             try:
                 con.close()
             except Exception:
@@ -122,6 +120,8 @@ SCHEMA_STMTS = [
       symbol_internal VARCHAR,
       symbol_yahoo VARCHAR,
       asset_class VARCHAR DEFAULT 'EQUITY',
+      exchange VARCHAR,
+      currency VARCHAR,
       workflow_date TIMESTAMP NOT NULL,
       h1_date TIMESTAMP,
       h1_source VARCHAR,
@@ -191,6 +191,16 @@ SCHEMA_STMTS = [
       data_quality_flags VARCHAR,
       data_age_h1_hours DOUBLE,
       data_age_d1_hours DOUBLE,
+      h1_closed_only BOOLEAN DEFAULT FALSE,
+      d1_closed_only BOOLEAN DEFAULT FALSE,
+      h1_dropped_open INTEGER DEFAULT 0,
+      d1_dropped_open INTEGER DEFAULT 0,
+      h1_dropped_invalid INTEGER DEFAULT 0,
+      d1_dropped_invalid INTEGER DEFAULT 0,
+      strategy_version VARCHAR,
+      config_version VARCHAR,
+      prompt_version VARCHAR,
+      n8n_execution_id VARCHAR,
       filter_reason VARCHAR,
       pass_ai BOOLEAN DEFAULT FALSE,
       pass_pm BOOLEAN DEFAULT FALSE,
@@ -212,6 +222,7 @@ SCHEMA_STMTS = [
       ai_missing VARCHAR,
       ai_anomalies VARCHAR,
       ai_output_ref VARCHAR,
+      ai_model VARCHAR,
       ai_rr_theoretical DOUBLE,
       row_hash VARCHAR,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -286,6 +297,13 @@ SCHEMA_STMTS = [
       PRIMARY KEY (symbol, segment)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      version VARCHAR PRIMARY KEY,
+      applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      description VARCHAR
+    )
+    """,
 ]
 
 MIGRATE_STMTS = [
@@ -293,6 +311,19 @@ MIGRATE_STMTS = [
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS symbol_internal VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS symbol_yahoo VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS asset_class VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS exchange VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS currency VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS h1_closed_only BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS d1_closed_only BOOLEAN DEFAULT FALSE",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS h1_dropped_open INTEGER DEFAULT 0",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS d1_dropped_open INTEGER DEFAULT 0",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS h1_dropped_invalid INTEGER DEFAULT 0",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS d1_dropped_invalid INTEGER DEFAULT 0",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS strategy_version VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS config_version VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS prompt_version VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS n8n_execution_id VARCHAR",
+    "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS ai_model VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_quality_flags VARCHAR",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_h1_hours DOUBLE",
     "ALTER TABLE technical_signals ADD COLUMN IF NOT EXISTS data_age_d1_hours DOUBLE",
@@ -313,6 +344,28 @@ MIGRATE_STMTS = [
 VIEW_STMTS = [
     "CREATE INDEX IF NOT EXISTS idx_ts_symbol_internal ON technical_signals(symbol_internal)",
     "CREATE INDEX IF NOT EXISTS idx_ts_asset_class ON technical_signals(asset_class)",
+    """
+    CREATE OR REPLACE VIEW v_latest_signals AS
+    SELECT
+      id, run_id, symbol, symbol_internal, symbol_yahoo, asset_class, exchange, currency,
+      workflow_date, h1_date, d1_date, h1_status, d1_status,
+      h1_closed_only, d1_closed_only, h1_dropped_open, d1_dropped_open,
+      h1_dropped_invalid, d1_dropped_invalid,
+      h1_action, h1_score, h1_confidence, d1_action, d1_score, d1_confidence,
+      last_close, d1_rsi14, d1_macd_hist, d1_sma200, d1_bb_width, d1_adx, d1_volatility,
+      data_quality_flags, data_age_h1_hours, data_age_d1_hours,
+      ai_decision, ai_validated, ai_quality, ai_alignment, ai_stop_loss, ai_rr_theoretical,
+      pass_ai, pass_pm, sig_hash, row_hash, strategy_version, config_version,
+      prompt_version, ai_model, n8n_execution_id, created_at, updated_at
+    FROM technical_signals
+    QUALIFY ROW_NUMBER() OVER (
+      PARTITION BY symbol ORDER BY COALESCE(workflow_date, updated_at, created_at) DESC, id DESC
+    ) = 1
+    """,
+    """
+    CREATE OR REPLACE VIEW v_ag1_summary AS
+    SELECT * FROM v_latest_signals WHERE COALESCE(pass_pm, FALSE)
+    """,
 ]
 
 
@@ -594,6 +647,9 @@ config = {
     "strategy_version": str(first_json.get("strategy_version") or "strategy_v3"),
     "config_version": str(first_json.get("config_version") or "config_v3"),
     "prompt_version": str(first_json.get("prompt_version") or "prompt_v3"),
+    "n8n_execution_id": str(first_json.get("n8n_execution_id") or ""),
+    "closed_only": bool(first_json.get("closed_only", True)),
+    "validated_only": bool(first_json.get("validated_only", True)),
     "universe_mode": str(first_json.get("universe_mode") or "ACTIONS_ONLY").upper(),
     "rotation_mode": str(first_json.get("rotation_mode") or "ACTIONS_ONLY").upper(),
     "batch_state_key": str(first_json.get("batch_state_key") or "last_index"),
@@ -604,15 +660,13 @@ with db_con() as con:
     for stmt in SCHEMA_STMTS:
         con.execute(stmt)
     for stmt in MIGRATE_STMTS:
-        try:
-            con.execute(stmt)
-        except Exception:
-            pass
+        con.execute(stmt)
     for stmt in VIEW_STMTS:
-        try:
-            con.execute(stmt)
-        except Exception:
-            pass
+        con.execute(stmt)
+    con.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version, description) VALUES (?, ?)",
+        ["20260726_ag2_v3_1_closed_bars", "Closed bars, OHLCV validation, lineage and workflow reliability"],
+    )
 
     # Réconcilie les runs interrompus avant Finalize Run.
     con.execute(
@@ -685,13 +739,8 @@ with db_con() as con:
     batch = always_batch + rotation_batch
     next_idx = 0 if (rotation_total == 0 or idx + batch_size >= rotation_total) else idx + batch_size
 
-    con.execute(
-        "INSERT OR REPLACE INTO batch_state (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)",
-        [config["batch_state_key"], next_idx],
-    )
-
     now = datetime.now(timezone.utc)
-    ts = now.strftime("%Y%m%d%H%M%S")
+    ts = now.strftime("%Y%m%d%H%M%S%f")
     run_id = f"AG2V3_{ts}_{idx}"
 
     con.execute(
@@ -716,6 +765,8 @@ for i, entry in enumerate(batch):
                 "symbol_internal": symbol_internal,
                 "symbol_yahoo": symbol_yahoo,
                 "asset_class": str(entry.get("asset_class") or "EQUITY").upper(),
+                "exchange": str(entry.get("exchange") or ""),
+                "currency": str(entry.get("currency") or "").upper(),
                 "run_id": run_id,
                 "db_path": DB_PATH,
                 "legacy_migration": legacy_migration_report,
@@ -725,6 +776,9 @@ for i, entry in enumerate(batch):
                 "strategy_version": config["strategy_version"],
                 "config_version": config["config_version"],
                 "prompt_version": config["prompt_version"],
+                "n8n_execution_id": config["n8n_execution_id"],
+                "closed_only": config["closed_only"],
+                "validated_only": config["validated_only"],
                 "universe_mode": config["universe_mode"],
                 "rotation_mode": config["rotation_mode"],
                 "batch_state_key": config["batch_state_key"],
@@ -738,6 +792,8 @@ for i, entry in enumerate(batch):
                     "rotation_size": len(rotation_batch),
                     "always_included": len(always_batch),
                     "rotation_total": rotation_total,
+                    "next_index": next_idx,
+                    "state_key": config["batch_state_key"],
                     **rotation_meta,
                 },
                 "_index": i,
