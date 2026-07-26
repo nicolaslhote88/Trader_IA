@@ -14204,6 +14204,8 @@ elif page == "System Health (Monitoring)":
                 "data_age_d1_hours",
                 "h1_status",
                 "d1_status",
+                "h1_closed_only",
+                "d1_closed_only",
                 "ai_decision",
                 "ai_quality",
             ]
@@ -14307,11 +14309,19 @@ elif page == "System Health (Monitoring)":
     health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, signal_age_h], axis=1).max(axis=1)
     health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, signal_age_h], axis=1).max(axis=1)
     health_df["yf_age_hours"] = pd.to_numeric(health_df["yf_age_days"], errors="coerce") * 24.0
+    closed_contract = _bool_series(health_df, "h1_closed_only", default=False) & _bool_series(
+        health_df, "d1_closed_only", default=False
+    )
+    h1_status_ok = health_df.get("h1_status", pd.Series("", index=health_df.index)).fillna("").astype(str).eq("OK")
+    d1_status_ok = health_df.get("d1_status", pd.Series("", index=health_df.index)).fillna("").astype(str).eq("OK")
 
     health_df["tech_gate_ready"] = (
         tech_present
+        & closed_contract
+        & h1_status_ok
+        & d1_status_ok
         & (health_df["h1_age_hours_effective"] <= 96.0)
-        & (health_df["d1_age_hours_effective"] <= 240.0)
+        & (health_df["d1_age_hours_effective"] <= 96.0)
     )
     health_df["funda_usable"] = funda_present & (health_df["funda_age_days"] <= 7.0)
     quote_ok = _bool_series(health_df, "quote_ok", default=False)
@@ -14452,8 +14462,10 @@ elif page == "System Health (Monitoring)":
             else:
                 if safe_float(row.get("h1_age_hours_effective")) > 96.0:
                     reasons.append("H1 > 96h")
-                if safe_float(row.get("d1_age_hours_effective")) > 240.0:
-                    reasons.append("D1 > 240h")
+                if safe_float(row.get("d1_age_hours_effective")) > 96.0:
+                    reasons.append("D1 > 96h")
+                if not bool(row.get("h1_closed_only")) or not bool(row.get("d1_closed_only")):
+                    reasons.append("bougies AG2 non certifiées clôturées")
         if not bool(row.get("yf_quote_usable")):
             if pd.isna(row.get("last_yf_date")):
                 reasons.append("YF absent")
@@ -14671,7 +14683,7 @@ elif page == "System Health (Monitoring)":
             "Classifiés AG2/AG3 → Technique dans les seuils",
             funnel_masks[3],
             funnel_masks[4],
-            "Analyse technique AG2 absente ou hors seuil AG1 : H1 > 96 h ou D1 > 240 h.",
+            "Analyse technique AG2 absente, non clôturée ou hors seuil AG1 : H1/D1 > 96 h.",
             "Relancer/corriger AG2 Held+Core ou Watchlist ; vérifier locks DuckDB et volumes de batch.",
             "Élevé sur WATCHLIST si la rotation nocturne n'a pas encore couvert tout le lot.",
             False,
@@ -14909,7 +14921,7 @@ elif page == "System Health (Monitoring)":
         delta=f"{entry_ready_pct:.1f}% · IBKR {'OK' if ibkr_session_ok else 'KO'}",
     )
     st.caption(
-        "Seuils alignés sur AG1 V4 : H1 ≤ 96 h, D1 ≤ 240 h, YF ≤ 72 h. "
+        "Seuils alignés sur AG1 V4 : H1 ≤ 96 h, D1 ≤ 96 h, bougies clôturées, YF ≤ 72 h. "
         "Le fondamental AG3 est utilisable jusqu'à 168 h ; au-delà il est neutralisé, sans bloquer une entrée. "
         "Une pré-éligibilité n'est pas une garantie d'exécution : contrat, permissions de place, spread et cash sont revalidés ensuite."
     )
@@ -17450,10 +17462,10 @@ elif page == "Analyse Technique V2":
                         st.caption("Repere: BUY score haut + RSI > 70 = attention surachat ; SELL score bas + RSI < 30 = possible capitulation.")
 
             with st.container(border=True):
-                st.markdown("#### Actionable maintenant")
+                st.markdown("#### Directions techniques D1 brutes")
                 st.caption(
                     f"Source = {'filtree' if len(df_filtered) != len(df_ov) else 'globale'} | Top N={top_n} | "
-                    f"Actionables filtres={counts_filtered['actionable_count']}"
+                    f"Directions BUY/SELL filtrées={counts_filtered['actionable_count']} — ce tableau n'est pas un scope tradable AG1"
                 )
                 top_buy_tab, top_sell_tab, top_div_tab = st.tabs(["Top BUY (D1)", "Top SELL (D1)", "Divergences H1 vs D1"])
 

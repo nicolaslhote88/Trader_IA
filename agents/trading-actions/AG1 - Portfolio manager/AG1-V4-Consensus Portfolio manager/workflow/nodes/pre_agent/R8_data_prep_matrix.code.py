@@ -18,7 +18,7 @@ LOOKBACK_NEWS_DAYS = int(os.getenv("AG1_R8_NEWS_LOOKBACK_DAYS", "30") or "30")
 MAX_MACRO_ROWS = int(os.getenv("AG1_R8_MAX_MACRO_ROWS", "2500") or "2500")
 MAX_SYMBOL_NEWS_ROWS = int(os.getenv("AG1_R8_MAX_SYMBOL_NEWS_ROWS", "6000") or "6000")
 MAX_H1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_H1_AGE_HOURS", "96") or "96")
-MAX_D1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_D1_AGE_HOURS", "240") or "240")
+MAX_D1_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_D1_AGE_HOURS", "96") or "96")
 MAX_YF_AGE_HOURS = float(os.getenv("AG1_ACTIONS_MAX_YF_AGE_HOURS", "72") or "72")
 # Sprint 1 AG3 (2026-06-22) gate STALE_FUNDA : funda pese 0,30-0,34 dans le scoring AG1.
 # Au-dela du seuil, la donnee AG3 est perimee -> NEUTRALISEE (50/50/0). Flag ajoute aux
@@ -155,12 +155,6 @@ def db_con(path, retries=5, delay=0.25):
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
             try:
                 con.close()
             except Exception:
@@ -255,6 +249,10 @@ tech_rows = run_query(
            ts.last_close,
            ts.data_age_h1_hours,
            ts.data_age_d1_hours,
+           COALESCE(ts.h1_closed_only, FALSE) AS h1_closed_only,
+           COALESCE(ts.d1_closed_only, FALSE) AS d1_closed_only,
+           ts.h1_status,
+           ts.d1_status,
            date_diff('hour', CAST(ts.h1_date AS TIMESTAMP), CAST(now() AS TIMESTAMP)) AS h1_age_real,
            date_diff('hour', CAST(ts.d1_date AS TIMESTAMP), CAST(now() AS TIMESTAMP)) AS d1_age_real,
            COALESCE(ts.workflow_date, ts.updated_at, ts.created_at) AS tech_ts
@@ -677,6 +675,10 @@ for sym in sorted(symbols):
     data_flags = []
     if not t:
         data_flags.append("MISSING_TECH")
+    elif not truthy(t.get("h1_closed_only")) or not truthy(t.get("d1_closed_only")):
+        data_flags.append("TECH_BARS_NOT_CLOSED")
+    if t and (str(t.get("h1_status") or "") != "OK" or str(t.get("d1_status") or "") != "OK"):
+        data_flags.append("TECH_STATUS_NOT_OK")
     if h1_age > MAX_H1_AGE_HOURS:
         data_flags.append("STALE_H1")
     if d1_age > MAX_D1_AGE_HOURS:

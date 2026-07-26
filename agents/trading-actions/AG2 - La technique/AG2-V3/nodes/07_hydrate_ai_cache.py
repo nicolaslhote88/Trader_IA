@@ -55,6 +55,7 @@ for it in items:
         "ai_missing": "[]",
         "ai_anomalies": "[]",
         "ai_output_ref": "",
+        "ai_model": "",
         "pass_pm": False,
     }
 
@@ -89,6 +90,7 @@ for it in items:
                     ai_data["ai_quality"] = quality
                     ai_data["ai_reasoning"] = f"[CACHE] Reused AI decision from {last_ai_run_id} (age {age_min:.0f}min)."
                     ai_data["ai_output_ref"] = last_ai_output_ref or ""
+                    ai_data["ai_model"] = "gpt-5-mini"
                     ai_data["ai_bb_status"] = str(sj.get("bb_status", "UNKNOWN") or "UNKNOWN").strip().upper()
                     ai_data["ai_rsi_status"] = str(sj.get("rsi_status", "UNKNOWN") or "UNKNOWN").strip().upper()
                     ai_data["pass_pm"] = decision == "APPROVE" or (decision == "WATCH" and quality >= 5)

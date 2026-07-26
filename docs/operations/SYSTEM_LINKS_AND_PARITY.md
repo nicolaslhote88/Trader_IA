@@ -19,7 +19,8 @@ Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne li
 | **Grades A/B/C** | quantiles dynamiques sur `prob_score_for_grade` | idem (seuils p-quantile recalculés) |
 | **Gates matrice** (data_quality, earnings≤7j, liquidité `liq_risk≥85`, rr_outlier, options) | `Calcul Matrice` | idem |
 | **Funnel tradabilité** (System Health) | implicite (R8 + preflight) | recalcul dans `app.py` (`spread_exploitable`, `tech_gate_ready`, etc.) |
-| **Seuils de fraîcheur** | H1≤96h, D1≤240h, YF≤72h, funda≤168h (R8) | **idem** (funnel + matrice) |
+| **Seuils de fraîcheur** | H1≤96h, D1≤96h, YF≤72h, funda≤168h (R8) | **idem** (funnel + matrice) |
+| **Contrat barres AG2** | H1/D1 `status=OK`, `closed_only=true`, OHLCV validé ; D1 après close place +10 min | **idem** (funnel + matrice) |
 | **`data_age` = max(stocké, âge réel = now − date du dernier bar)** | R8 (`R8 — Data Prep for Matrix`) | **idem** (`h1_age_hours_effective`/`d1_age_hours_effective`) — ne PAS revenir au `data_age` figé |
 
 ## Étapes du pipeline = ce que chaque vue montre (NE PAS confondre)

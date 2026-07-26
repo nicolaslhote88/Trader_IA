@@ -114,6 +114,8 @@ def rsi_wilder(closes, period=14):
     for d in deltas[period:]:
         ag = (ag * (period - 1) + max(0, d)) / period
         al = (al * (period - 1) + max(0, -d)) / period
+    if al == 0 and ag == 0:
+        return 50.0
     if al == 0:
         return 100.0
     return 100.0 - (100.0 / (1.0 + ag / al))
@@ -255,7 +257,38 @@ def find_sr(highs, lows, closes, window=5, lb=50):
     }
 
 
-def volatility_ann(closes, interval):
+def annualization_periods(interval, exchange="", asset_class=""):
+    il = (interval or "").lower()
+    asset = str(asset_class or "").upper()
+    venue = str(exchange or "").upper()
+    if asset == "CRYPTO":
+        return 365.0 * 24.0 if ("h" in il or il in ("60m", "90m")) else 365.0
+    if il in ("1d", "5d"):
+        return 252.0
+    if il == "1wk":
+        return 52.0
+    if il in ("1mo", "3mo"):
+        return 12.0
+    if "h" in il or il in ("60m", "90m"):
+        session_hours = {
+            "ASX": 6.0,
+            "EURONEXT AMSTERDAM": 8.5,
+            "EURONEXT PARIS": 8.5,
+            "HKEX": 5.5,
+            "KRX": 6.5,
+            "NASDAQ": 6.5,
+            "NYSE": 6.5,
+            "PAR": 8.5,
+            "SGX": 7.0,
+            "SIX": 8.5,
+            "TOKYO": 5.5,
+            "XETRA": 8.5,
+        }.get(venue, 6.5)
+        return 252.0 * session_hours
+    return 252.0
+
+
+def volatility_ann(closes, interval, exchange="", asset_class=""):
     if len(closes) < 20:
         return None
     lr = [math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes)) if closes[i - 1] > 0 and closes[i] > 0]
@@ -264,26 +297,27 @@ def volatility_ann(closes, interval):
     m = sum(lr) / len(lr)
     v = sum((r - m) ** 2 for r in lr) / len(lr)
     s = math.sqrt(v)
-    il = (interval or "").lower()
-    if il in ("1d", "5d"):
-        f = math.sqrt(252)
-    elif il in ("1wk",):
-        f = math.sqrt(52)
-    elif il in ("1mo", "3mo"):
-        f = math.sqrt(12)
-    elif "h" in il or il in ("60m", "90m"):
-        f = math.sqrt(252 * 8)
-    else:
-        f = math.sqrt(252)
-    return round(s * f, 4)
+    return round(s * math.sqrt(annualization_periods(interval, exchange, asset_class)), 4)
 
 
-def compute_indicators(bars, interval):
+def compute_indicators(bars, interval, exchange="", asset_class=""):
     opens, highs, lows, closes, volumes, times = [], [], [], [], [], []
+    rejected_open = 0
+    rejected_invalid = 0
     for b in bars or []:
         o, h, l, c = safe_float(b.get("o")), safe_float(b.get("h")), safe_float(b.get("l")), safe_float(b.get("c"))
         vol = safe_float(b.get("v")) or 0.0
-        if o is None or h is None or l is None or c is None:
+        if b.get("closed") is not True:
+            rejected_open += 1
+            continue
+        if (
+            o is None or h is None or l is None or c is None
+            or min(o, h, l, c) <= 0
+            or l > min(o, c)
+            or max(o, c) > h
+            or vol < 0
+        ):
+            rejected_invalid += 1
             continue
         opens.append(o)
         highs.append(h)
@@ -298,12 +332,16 @@ def compute_indicators(bars, interval):
             "bars_count": 0,
             "indicators": {},
             "signal": {"action": "NEUTRAL", "score": 0, "confidence": 0, "rationale": "No data"},
-            "warnings": ["No valid bars"],
+            "warnings": [f"No valid closed bars (open={rejected_open}, invalid={rejected_invalid})"],
             "last_bar_time": None,
         }
 
     min_req = 50 if ("h" in (interval or "").lower() or "m" in (interval or "").lower()) else 200
     warnings = []
+    if rejected_open:
+        warnings.append(f"Rejected open bars: {rejected_open}")
+    if rejected_invalid:
+        warnings.append(f"Rejected invalid OHLCV bars: {rejected_invalid}")
     if n < min_req:
         warnings.append(f"Bars {n} < {min_req}")
 
@@ -313,7 +351,8 @@ def compute_indicators(bars, interval):
     ind["sma200"] = safe_float(sma(closes, 200))
     ind.update(macd_calc(closes))
     ind["rsi14"] = safe_float(rsi_wilder(closes, 14))
-    ind["volatility"] = safe_float(volatility_ann(closes, interval))
+    ind["volatility"] = safe_float(volatility_ann(closes, interval, exchange, asset_class))
+    ind["volatility_annualization_periods"] = annualization_periods(interval, exchange, asset_class)
     atr_v = atr_calc(highs, lows, closes, 14)
     ind["atr"] = safe_float(atr_v)
     ind["atr_pct"] = round(atr_v / closes[-1] * 100, 4) if atr_v and closes[-1] > 0 else None
@@ -335,25 +374,35 @@ def compute_indicators(bars, interval):
     bbl = ind.get("bb_lower")
     bbu = ind.get("bb_upper")
 
+    def cmp_eps(a, b):
+        eps = max(1e-9, abs(b) * 1e-8)
+        if a > b + eps:
+            return 1
+        if a < b - eps:
+            return -1
+        return 0
+
     if cl is not None and s50 is not None:
-        if cl > s50:
+        relation = cmp_eps(cl, s50)
+        if relation > 0:
             score += 1
             reasons.append("Prix > SMA50")
-        else:
+        elif relation < 0:
             score -= 1
             reasons.append("Prix < SMA50")
     if s50 is not None and s200 is not None:
-        if s50 > s200:
+        relation = cmp_eps(s50, s200)
+        if relation > 0:
             score += 1
             reasons.append("SMA50 > SMA200")
-        else:
+        elif relation < 0:
             score -= 1
             reasons.append("SMA50 < SMA200")
     if mh is not None:
-        if mh > 0:
+        if mh > 1e-8:
             score += 1
             reasons.append("MACD Hist > 0")
-        else:
+        elif mh < -1e-8:
             score -= 1
             reasons.append("MACD Hist < 0")
     if rsi is not None:
@@ -430,10 +479,13 @@ def check_freshness(last_bar_time, interval, now=None):
     return True, age_hours, "FRESH"
 
 
-def pre_filter(h1_result, d1_ind):
+def pre_filter(h1_result, d1_result):
     h1_status = (h1_result or {}).get("status")
-    if h1_status in (None, "NO_DATA"):
+    d1_status = (d1_result or {}).get("status")
+    if h1_status != "OK":
         return False, "NO_H1_DATA"
+    if d1_status != "OK":
+        return False, "NO_OR_STALE_D1_DATA"
 
     h1_sig = (h1_result or {}).get("signal", {}) or {}
     h1_ind = (h1_result or {}).get("indicators", {}) or {}
@@ -441,8 +493,9 @@ def pre_filter(h1_result, d1_ind):
     h1_action = (h1_sig.get("action") or "").upper()
     h1_score = h1_sig.get("score", 0) or 0
     rsi = h1_ind.get("rsi14")
-    d1_sma200 = (d1_ind or {}).get("sma200")
-    d1_close = (d1_ind or {}).get("last_close")
+    d1_ind = (d1_result or {}).get("indicators", {}) or {}
+    d1_sma200 = d1_ind.get("sma200")
+    d1_close = d1_ind.get("last_close")
 
     if not h1_action:
         return False, "NO_H1_SIGNAL"
@@ -487,13 +540,19 @@ def check_dedup(symbol_key, sig_hash, h1_action, con):
     ttl_buy = 240
     ttl_sell = 60
     row = con.execute(
-        "SELECT sig_hash, last_ai_at, ttl_minutes FROM ai_dedup_cache WHERE symbol = ? AND interval_key = 'combined'",
+        "SELECT sig_hash, last_ai_at, ttl_minutes, sig_json FROM ai_dedup_cache WHERE symbol = ? AND interval_key = 'combined'",
         [symbol_key],
     ).fetchone()
     if row is None:
         return True, "NO_CACHE"
 
-    old_hash, last_ai_at, ttl = row
+    old_hash, last_ai_at, ttl, sig_json = row
+    try:
+        cached_decision = str(json.loads(sig_json or "{}").get("decision") or "").upper()
+    except Exception:
+        cached_decision = ""
+    if cached_decision == "REJECT":
+        return True, "REJECT_NOT_REUSED"
     ttl = ttl or (ttl_sell if h1_action == "SELL" else ttl_buy)
 
     if old_hash != sig_hash:
@@ -558,23 +617,6 @@ IND_KEYS = [
     "dist_sup_pct",
 ]
 
-# Valeurs DETENUES en portefeuille : on garantit une analyse IA systematique (securite),
-# meme sur signal NEUTRAL. Source = universe_segments (segment HELD, alimente depuis les
-# positions du portefeuille). Cout negligeable (poignee de symboles), TTL regule la frequence.
-_held_set = set()
-try:
-    with db_con() as _hcon:
-        _held_set = {
-            str(r[0]).strip().upper()
-            for r in _hcon.execute(
-                "SELECT UPPER(TRIM(symbol)) FROM universe_segments "
-                "WHERE COALESCE(active, TRUE) AND UPPER(TRIM(segment)) = 'HELD'"
-            ).fetchall()
-            if r and r[0]
-        }
-except Exception:
-    _held_set = set()
-
 for it in items:
     d = it.get("json", {}) or {}
     run_id = str(d.get("run_id", "") or "")
@@ -595,6 +637,19 @@ for it in items:
 
         data_quality_flags = []
 
+        if h1_resp.get("closedOnly") is not True:
+            data_quality_flags.append("H1_CLOSED_ONLY_UNVERIFIED")
+        if d1_resp.get("closedOnly") is not True:
+            data_quality_flags.append("D1_CLOSED_ONLY_UNVERIFIED")
+        if int(h1_resp.get("droppedOpen") or 0) > 0:
+            data_quality_flags.append("H1_OPEN_BAR_DROPPED")
+        if int(d1_resp.get("droppedOpen") or 0) > 0:
+            data_quality_flags.append("D1_OPEN_BAR_DROPPED")
+        if int(h1_resp.get("droppedInvalid") or 0) > 0:
+            data_quality_flags.append("H1_INVALID_BAR_DROPPED")
+        if int(d1_resp.get("droppedInvalid") or 0) > 0:
+            data_quality_flags.append("D1_INVALID_BAR_DROPPED")
+
         # Symbol consistency check against expected Yahoo symbol.
         h1_sym = to_upper_text(h1_resp.get("symbol", ""))
         d1_sym = to_upper_text(d1_resp.get("symbol", ""))
@@ -603,8 +658,10 @@ for it in items:
         if d1_sym and d1_sym != to_upper_text(symbol_yahoo):
             data_quality_flags.append("D1_SYMBOL_MISMATCH")
 
-        h1_result = compute_indicators(h1_resp.get("bars", []), h1_interval)
-        d1_result = compute_indicators(d1_resp.get("bars", []), d1_interval)
+        exchange = base.get("exchange", "")
+        asset_class = base.get("asset_class", "EQUITY")
+        h1_result = compute_indicators(h1_resp.get("bars", []), h1_interval, exchange, asset_class)
+        d1_result = compute_indicators(d1_resp.get("bars", []), d1_interval, exchange, asset_class)
 
         now_utc = datetime.now(timezone.utc)
         h1_fresh, h1_age_h, h1_freshness = check_freshness(h1_result.get("last_bar_time"), h1_interval, now_utc)
@@ -629,15 +686,13 @@ for it in items:
         h1_sig = h1_result.get("signal", {}) or {}
         d1_sig = d1_result.get("signal", {}) or {}
 
-        pass_ai, filter_reason = pre_filter(h1_result, d1_ind)
-        if pass_ai and not h1_fresh:
+        pass_ai, filter_reason = pre_filter(h1_result, d1_result)
+        if pass_ai and (not h1_fresh or not d1_fresh):
             pass_ai = False
-            filter_reason = "STALE_H1_DATA"
-        # Securite valeurs detenues : forcer l'eligibilite IA (bypass du filtre qualite/NEUTRAL)
-        # tant que les donnees sont fraiches. Le dedup/TTL en aval evite les appels redondants.
-        if (not pass_ai) and h1_fresh and (symbol_internal in _held_set):
-            pass_ai = True
-            filter_reason = "HELD_FORCED"
+            filter_reason = "STALE_H1_OR_D1_DATA"
+        if h1_resp.get("closedOnly") is not True or d1_resp.get("closedOnly") is not True:
+            pass_ai = False
+            filter_reason = "CLOSED_BARS_UNVERIFIED"
 
         dedup_key = symbol_internal
         sig_hash = compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind)
@@ -657,6 +712,8 @@ for it in items:
                 "symbol_internal": symbol_internal,
                 "symbol_yahoo": symbol_yahoo,
                 "asset_class": asset_class,
+                "exchange": str(d.get("exchange") or ""),
+                "currency": str(d.get("currency") or "").upper(),
                 "workflow_date": datetime.now(timezone.utc).isoformat(),
                 "h1_date": h1_result.get("last_bar_time"),
                 "h1_source": h1_resp.get("source", "unknown"),
@@ -684,7 +741,27 @@ for it in items:
                 "dedup_reason": dedup_reason,
                 "data_age_h1_hours": h1_age_h,
                 "data_age_d1_hours": d1_age_h,
+                "h1_closed_only": h1_resp.get("closedOnly") is True,
+                "d1_closed_only": d1_resp.get("closedOnly") is True,
+                "h1_dropped_open": int(h1_resp.get("droppedOpen") or 0),
+                "d1_dropped_open": int(d1_resp.get("droppedOpen") or 0),
+                "h1_dropped_invalid": int(h1_resp.get("droppedInvalid") or 0),
+                "d1_dropped_invalid": int(d1_resp.get("droppedInvalid") or 0),
+                "strategy_version": str(d.get("strategy_version") or ""),
+                "config_version": str(d.get("config_version") or ""),
+                "prompt_version": str(d.get("prompt_version") or ""),
+                "n8n_execution_id": str(d.get("n8n_execution_id") or ""),
             }
+
+            row["row_hash"] = fnv1a("|".join([
+                symbol_internal,
+                str(row.get("h1_date") or ""),
+                str(row.get("d1_date") or ""),
+                str(row.get("sig_hash") or ""),
+                row["strategy_version"],
+                row["config_version"],
+                row["prompt_version"],
+            ]))
 
             for k in IND_KEYS:
                 row["h1_" + k] = h1_ind.get(k)

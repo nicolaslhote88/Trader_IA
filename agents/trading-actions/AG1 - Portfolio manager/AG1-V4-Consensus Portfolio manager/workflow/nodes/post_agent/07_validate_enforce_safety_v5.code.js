@@ -143,7 +143,7 @@ const limits = {
   defaultFeeBps: cfgNumber(configRaw, ["default_fee_bps", "fee_bps", "defaultFeeBps"], 10),
   maxSpreadPct: cfgNumber(configRaw, ["max_spread_pct", "maxSpreadPct"], 1.5),
   maxH1AgeHours: cfgNumber(configRaw, ["max_h1_age_hours", "maxH1AgeHours"], 96),
-  maxD1AgeHours: cfgNumber(configRaw, ["max_d1_age_hours", "maxD1AgeHours"], 240),
+  maxD1AgeHours: cfgNumber(configRaw, ["max_d1_age_hours", "maxD1AgeHours"], 96),
   requireLimitBuys: cfgBool(configRaw, ["require_limit_buys", "requireLimitBuys"], true),
   killSwitchActive: cfgBool(configRaw, ["kill_switch_active", "killSwitchActive"], false),
 };
@@ -271,6 +271,10 @@ for (const a of agentDecision.actions || []) {
   if (side === "BUY" && h1Age !== null && h1Age > limits.maxH1AgeHours) { reject(symbol, "STALE_H1", String(h1Age)); continue; }
   if (side === "BUY" && d1Age !== null && d1Age > limits.maxD1AgeHours) { reject(symbol, "STALE_D1", String(d1Age)); continue; }
   if (side === "BUY" && flags.includes("STALE_YF")) { reject(symbol, "STALE_YF"); continue; }
+  if (side === "BUY" && (flags.includes("TECH_BARS_NOT_CLOSED") || flags.includes("TECH_STATUS_NOT_OK"))) {
+    reject(symbol, "TECH_CLOSED_BAR_GATE", flags);
+    continue;
+  }
   if (side === "BUY" && ["UNKNOWN", "STRESS"].includes(liquidityStatus)) { reject(symbol, `LIQUIDITY_${liquidityStatus}`); continue; }
   if (side === "BUY" && contractResolved !== true) { reject(symbol, "IBKR_CONTRACT_UNRESOLVED"); continue; }
   if (side === "BUY" && ["LIQUIDITY_UNKNOWN", "LIQUIDITY_STRESS", "IBKR_CONTRACT_UNRESOLVED", "STALE_QUOTE", "PRICE_DIVERGENCE"].some((code) => flags.includes(code))) {

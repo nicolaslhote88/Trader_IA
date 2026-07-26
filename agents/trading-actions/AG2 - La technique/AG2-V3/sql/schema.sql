@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     symbol_internal     VARCHAR,
     symbol_yahoo        VARCHAR,
     asset_class         VARCHAR DEFAULT 'EQUITY',
+    exchange            VARCHAR,
+    currency            VARCHAR,
     workflow_date       TIMESTAMP NOT NULL,
 
     h1_date             TIMESTAMP,
@@ -101,6 +103,16 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     data_quality_flags  VARCHAR,
     data_age_h1_hours   DOUBLE,
     data_age_d1_hours   DOUBLE,
+    h1_closed_only      BOOLEAN DEFAULT FALSE,
+    d1_closed_only      BOOLEAN DEFAULT FALSE,
+    h1_dropped_open     INTEGER DEFAULT 0,
+    d1_dropped_open     INTEGER DEFAULT 0,
+    h1_dropped_invalid  INTEGER DEFAULT 0,
+    d1_dropped_invalid  INTEGER DEFAULT 0,
+    strategy_version    VARCHAR,
+    config_version      VARCHAR,
+    prompt_version      VARCHAR,
+    n8n_execution_id    VARCHAR,
 
     filter_reason       VARCHAR,
     pass_ai             BOOLEAN DEFAULT FALSE,
@@ -125,6 +137,7 @@ CREATE TABLE IF NOT EXISTS technical_signals (
     ai_missing          VARCHAR,
     ai_anomalies        VARCHAR,
     ai_output_ref       VARCHAR,
+    ai_model            VARCHAR,
     ai_rr_theoretical   DOUBLE,
     row_hash            VARCHAR,
 
@@ -175,44 +188,28 @@ CREATE TABLE IF NOT EXISTS batch_state (
     updated_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version             VARCHAR PRIMARY KEY,
+    applied_at          TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    description         VARCHAR
+);
+
 CREATE OR REPLACE VIEW v_latest_signals AS
-SELECT ts.*
-FROM technical_signals ts
-INNER JOIN (
-    SELECT symbol, MAX(workflow_date) AS max_date
-    FROM technical_signals
-    GROUP BY symbol
-) latest ON ts.symbol = latest.symbol AND ts.workflow_date = latest.max_date;
+SELECT
+    id, run_id, symbol, symbol_internal, symbol_yahoo, asset_class, exchange, currency,
+    workflow_date, h1_date, d1_date, h1_status, d1_status,
+    h1_closed_only, d1_closed_only, h1_dropped_open, d1_dropped_open,
+    h1_dropped_invalid, d1_dropped_invalid,
+    h1_action, h1_score, h1_confidence, d1_action, d1_score, d1_confidence,
+    last_close, d1_rsi14, d1_macd_hist, d1_sma200, d1_bb_width, d1_adx, d1_volatility,
+    data_quality_flags, data_age_h1_hours, data_age_d1_hours,
+    ai_decision, ai_validated, ai_quality, ai_alignment, ai_stop_loss, ai_rr_theoretical,
+    pass_ai, pass_pm, sig_hash, row_hash, strategy_version, config_version,
+    prompt_version, ai_model, n8n_execution_id, created_at, updated_at
+FROM technical_signals
+QUALIFY ROW_NUMBER() OVER (
+    PARTITION BY symbol ORDER BY COALESCE(workflow_date, updated_at, created_at) DESC, id DESC
+) = 1;
 
 CREATE OR REPLACE VIEW v_ag1_summary AS
-SELECT
-    symbol,
-    symbol_internal,
-    symbol_yahoo,
-    asset_class,
-    workflow_date,
-    d1_action,
-    d1_score,
-    d1_confidence,
-    h1_action,
-    h1_score,
-    h1_confidence,
-    ai_decision,
-    ai_validated,
-    ai_quality,
-    ai_alignment,
-    ai_stop_loss,
-    ai_rr_theoretical,
-    pass_pm,
-    last_close,
-    d1_rsi14,
-    d1_macd_hist,
-    d1_sma200,
-    d1_bb_width,
-    d1_adx,
-    d1_volatility,
-    data_quality_flags,
-    data_age_h1_hours,
-    data_age_d1_hours
-FROM v_latest_signals
-WHERE pass_pm = TRUE;
+SELECT * FROM v_latest_signals WHERE COALESCE(pass_pm, FALSE);

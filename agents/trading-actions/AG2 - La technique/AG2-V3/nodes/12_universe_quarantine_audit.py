@@ -8,7 +8,7 @@ AG1_DB_PATH = "/files/duckdb/ag1_v4_consensus.duckdb"
 AG3_DB_PATH = "/files/duckdb/ag3_v2.duckdb"
 YF_DB_PATH = "/files/duckdb/yf_enrichment_v1.duckdb"
 
-RULE_VERSION = "universe_quarantine_v1_20260619"
+RULE_VERSION = "universe_quarantine_v2_closed_bars_20260726"
 LOOKBACK_DAYS = 30
 MIN_TECH_RUNS = 5
 MIN_YF_RUNS = 3
@@ -174,38 +174,30 @@ def ensure_schema(con):
 
 
 def attach_readonly(con, path, alias):
-    try:
-        safe_path = str(path or "").replace("\\", "/").replace("'", "''")
-        con.execute("ATTACH '" + safe_path + "' AS " + alias + " (READ_ONLY)")
-        return True
-    except Exception:
-        return False
+    safe_path = str(path or "").replace("\\", "/").replace("'", "''")
+    con.execute("ATTACH '" + safe_path + "' AS " + alias + " (READ_ONLY)")
+    return True
 
 
 def load_held_symbols(con):
-    rows = []
-    try:
-        rows = con.execute(
-            """
-            SELECT DISTINCT UPPER(TRIM(symbol)) AS symbol
-            FROM ag1.main.portfolio_positions_mtm_latest
-            WHERE symbol IS NOT NULL
-              AND TRIM(symbol) <> ''
-              AND UPPER(TRIM(symbol)) NOT IN ('CASH_EUR', '__META__')
-              AND COALESCE(quantity, 0) <> 0
-            """
-        ).fetchall()
-    except Exception:
-        rows = []
+    rows = con.execute(
+        """
+        SELECT DISTINCT UPPER(TRIM(symbol)) AS symbol
+        FROM ag1.main.portfolio_positions_mtm_latest
+        WHERE symbol IS NOT NULL
+          AND TRIM(symbol) <> ''
+          AND UPPER(TRIM(symbol)) NOT IN ('CASH_EUR', '__META__')
+          AND COALESCE(quantity, 0) <> 0
+        """
+    ).fetchall()
     return {r[0] for r in rows if r and r[0]}
 
 
 def load_yf_metrics(con):
     out = {}
-    try:
-        rows = rows_as_dicts(
-            con,
-            f"""
+    rows = rows_as_dicts(
+        con,
+        f"""
             SELECT
               UPPER(TRIM(symbol)) AS symbol,
               COUNT(*) AS yf_runs,
@@ -217,14 +209,12 @@ def load_yf_metrics(con):
             WHERE symbol IS NOT NULL
               AND fetched_at >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_DAYS} days'
             GROUP BY 1
-            """
-        )
-        for r in rows:
-            sym = text(r.get("symbol")).upper()
-            if sym:
-                out[sym] = r
-    except Exception:
-        out = {}
+        """
+    )
+    for r in rows:
+        sym = text(r.get("symbol")).upper()
+        if sym:
+            out[sym] = r
     return out
 
 
@@ -254,8 +244,7 @@ def refresh_universe_segments(con, held_symbols, yf_attached, ag3_attached):
 
     latest_yf = {}
     if yf_attached:
-        try:
-            for r in rows_as_dicts(
+        for r in rows_as_dicts(
                 con,
                 """
                 SELECT
@@ -265,17 +254,14 @@ def refresh_universe_segments(con, held_symbols, yf_attached, ag3_attached):
                 FROM yf.main.v_latest_symbol_enrichment
                 WHERE symbol IS NOT NULL
                 """,
-            ):
-                sym = text(r.get("symbol")).upper()
-                if sym:
-                    latest_yf[sym] = r
-        except Exception:
-            latest_yf = {}
+        ):
+            sym = text(r.get("symbol")).upper()
+            if sym:
+                latest_yf[sym] = r
 
     latest_ag3 = {}
     if ag3_attached:
-        try:
-            for r in rows_as_dicts(
+        for r in rows_as_dicts(
                 con,
                 """
                 SELECT
@@ -288,12 +274,10 @@ def refresh_universe_segments(con, held_symbols, yf_attached, ag3_attached):
                 FROM ag3.main.v_latest_triage
                 WHERE symbol IS NOT NULL
                 """,
-            ):
-                sym = text(r.get("symbol")).upper()
-                if sym:
-                    latest_ag3[sym] = r
-        except Exception:
-            latest_ag3 = {}
+        ):
+            sym = text(r.get("symbol")).upper()
+            if sym:
+                latest_ag3[sym] = r
 
     manual_rows = rows_as_dicts(
         con,
@@ -440,6 +424,7 @@ now = datetime.utcnow()
 run_id = "AG2_UHQ_" + now.strftime("%Y%m%d%H%M%S")
 
 con = None
+transaction_started = False
 summary = {
     "run_id": run_id,
     "rule_version": RULE_VERSION,
@@ -463,6 +448,8 @@ try:
     summary["yf_attached"] = attach_readonly(con, YF_DB_PATH, "yf")
     summary["ag1_attached"] = attach_readonly(con, AG1_DB_PATH, "ag1")
     summary["ag3_attached"] = attach_readonly(con, AG3_DB_PATH, "ag3")
+    if not (summary["yf_attached"] and summary["ag1_attached"] and summary["ag3_attached"]):
+        raise RuntimeError("UHQ_REQUIRED_DEPENDENCY_UNAVAILABLE")
 
     con.execute(
         """
@@ -496,10 +483,15 @@ try:
         tech AS (
           SELECT
             UPPER(TRIM(symbol)) AS symbol,
-            COUNT(*) AS tech_runs,
+            SUM(CASE WHEN COALESCE(h1_closed_only, FALSE)
+                       AND COALESCE(d1_closed_only, FALSE) THEN 1 ELSE 0 END) AS tech_runs,
             SUM(CASE
-              WHEN COALESCE(data_age_h1_hours, 999999) <= 72
-               AND COALESCE(data_age_d1_hours, 999999) <= 240
+              WHEN COALESCE(h1_closed_only, FALSE)
+               AND COALESCE(d1_closed_only, FALSE)
+               AND COALESCE(h1_status, '') = 'OK'
+               AND COALESCE(d1_status, '') = 'OK'
+               AND date_diff('hour', h1_date, CURRENT_TIMESTAMP) <= 72
+               AND date_diff('hour', d1_date, CURRENT_TIMESTAMP) <= 96
                AND COALESCE(last_close, 0) > 0
               THEN 1 ELSE 0 END) AS both_ok_runs,
             SUM(CASE WHEN COALESCE(pass_ai, FALSE) THEN 1 ELSE 0 END) AS pass_ai_runs,
@@ -533,6 +525,8 @@ try:
     )
     existing = {text(r.get("symbol")).upper(): r for r in existing_rows if text(r.get("symbol"))}
 
+    con.execute("BEGIN TRANSACTION")
+    transaction_started = True
     history_rows = []
     for idx, r in enumerate(universe_rows):
         sym = text(r.get("symbol")).upper()
@@ -682,10 +676,17 @@ try:
             run_id,
         ],
     )
-    con.execute("CHECKPOINT")
+    con.execute("COMMIT")
+    transaction_started = False
 except Exception as exc:
     summary["error"] = str(exc)[:1200]
     if con is not None:
+        if transaction_started:
+            try:
+                con.execute("ROLLBACK")
+            except Exception:
+                pass
+            transaction_started = False
         try:
             con.execute(
                 """
@@ -697,7 +698,7 @@ except Exception as exc:
             )
         except Exception:
             pass
-    return [{"json": {"ok": False, "summary": summary}}]
+    raise RuntimeError("AG2_UHQ_FAILED: " + summary["error"])
 finally:
     if con is not None:
         try:

@@ -1,4 +1,5 @@
 import json
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -14,13 +15,13 @@ workflow = {
                     "interval": [
                         {
                             "field": "cronExpression",
-                            "expression": "35 18 * * 1-5",
+                            "expression": "0 20 * * 1-5",
                         }
                     ]
                 }
             },
             "id": "7f3e9240-6d0d-4c8b-ae72-c59d2a5ab901",
-            "name": "Schedule — Weekdays 18:35 UTC",
+            "name": "Schedule — Weekdays 20:00 Paris",
             "type": "n8n-nodes-base.scheduleTrigger",
             "typeVersion": 1.2,
             "position": [240, 220],
@@ -43,7 +44,7 @@ workflow = {
         },
     ],
     "connections": {
-        "Schedule — Weekdays 18:35 UTC": {
+        "Schedule — Weekdays 20:00 Paris": {
             "main": [[{"node": "Audit + Quarantine", "type": "main", "index": 0}]]
         },
         "Manual Trigger": {
@@ -52,11 +53,22 @@ workflow = {
     },
     "active": True,
     "settings": {"executionOrder": "v1", "timezone": "Europe/Paris"},
-    "versionId": "20260619-universe-health-quarantine-v1",
     "id": "AG2UHQ20260619",
     "meta": {"templateCredsSetupCompleted": True},
     "tags": [],
 }
+
+workflow["versionId"] = str(
+    uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        json.dumps(
+            {"id": workflow["id"], "nodes": workflow["nodes"], "connections": workflow["connections"]},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+)
 
 OUT.write_text(json.dumps(workflow, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(OUT)
