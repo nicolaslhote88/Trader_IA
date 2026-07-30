@@ -25,7 +25,7 @@ function action(symbol, confidence, rationale, overrides = {}) {
     symbol,
     action: "OPEN",
     confidence,
-    targetWeightPct: 5,
+    targetWeightPct: 10,
     rationale,
     nextReviewDays: 3,
     ...overrides,
@@ -100,9 +100,9 @@ async function main() {
         sector: "Technology",
         decision: "Entrer / Renforcer",
         gates: "OK",
-        entry: 180,
-        stop: 171,
-        tp: 202,
+        entry: 200,
+        stop: 190,
+        tp: 225,
         spread_pct: 0.08,
         liquidity: {
           status: "OK",
@@ -117,28 +117,31 @@ async function main() {
   const buyProposals = [
     {
       modelKey: "chatgpt52",
-      modelName: "OpenAI GPT-5.5",
-      modelId: "gpt-5.5-2026-04-23",
+      modelName: "OpenAI GPT-5.6 Sol",
+      modelId: "gpt-5.6-sol",
       extractorStatus: "OK_OBJECT",
       output: { actions: [action("AAPL", 72, "Smoke GPT buy")] },
     },
     {
       modelKey: "grok41_reasoning",
-      modelName: "xAI Grok 4.3",
-      modelId: "grok-4.3",
+      modelName: "DeepSeek V4 Pro",
+      modelId: "deepseek-v4-pro",
       extractorStatus: "OK_OBJECT",
-      output: { actions: [action("AAPL", 68, "Smoke Grok buy")] },
+      output: { actions: [action("AAPL", 68, "Smoke DeepSeek buy")] },
     },
     {
       modelKey: "claude_sonnet46",
-      modelName: "Anthropic Claude Sonnet 4.6",
-      modelId: "claude-sonnet-4-6",
+      modelName: "Anthropic Claude Opus 4.8",
+      modelId: "claude-opus-4-8",
       extractorStatus: "OK_OBJECT",
       output: { actions: [{ symbol: "AAPL", action: "WATCH", confidence: 55, targetWeightPct: null, rationale: "Wait", nextReviewDays: 3 }] },
     },
   ];
 
   const buy = await runPostAgentChain(context, buyProposals);
+  if (buy.safety.decision !== "TRADE") {
+    console.error("buy safety diagnostic", JSON.stringify(buy.safety, null, 2));
+  }
   assertEqual(buy.consensus.decision, "TRADE", "buy consensus decision");
   assertEqual(buy.safety.decision, "TRADE", "buy safety decision");
   assertEqual(Array.isArray(buy.safety.orders) ? buy.safety.orders.length : 0, 1, "buy order count");
@@ -171,22 +174,22 @@ async function main() {
   const sellProposals = [
     {
       modelKey: "chatgpt52",
-      modelName: "OpenAI GPT-5.5",
-      modelId: "gpt-5.5-2026-04-23",
+      modelName: "OpenAI GPT-5.6 Sol",
+      modelId: "gpt-5.6-sol",
       extractorStatus: "OK_OBJECT",
       output: { actions: [action("ELEC.PA", 65, "Reduce held utility", { action: "DECREASE", targetWeightPct: 4, assetClass: "EQUITY", sector: "Utilities" })] },
     },
     {
       modelKey: "claude_sonnet46",
-      modelName: "Anthropic Claude Sonnet 4.6",
-      modelId: "claude-sonnet-4-6",
+      modelName: "Anthropic Claude Opus 4.8",
+      modelId: "claude-opus-4-8",
       extractorStatus: "OK_OBJECT",
       output: { actions: [action("ELEC.PA", 66, "Reduce held utility", { action: "DECREASE", targetWeightPct: 4, assetClass: "EQUITY", sector: "Utilities" })] },
     },
     {
       modelKey: "grok41_reasoning",
-      modelName: "xAI Grok 4.3",
-      modelId: "grok-4.3",
+      modelName: "DeepSeek V4 Pro",
+      modelId: "deepseek-v4-pro",
       extractorStatus: "OK_OBJECT",
       output: { actions: [{ symbol: "ELEC.PA", action: "WATCH", confidence: 55, targetWeightPct: null, rationale: "Wait", nextReviewDays: 3 }] },
     },
