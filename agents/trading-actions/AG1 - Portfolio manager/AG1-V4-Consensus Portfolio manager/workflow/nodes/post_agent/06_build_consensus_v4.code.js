@@ -1,4 +1,4 @@
-// AG1 V4 - Build 2/3 consensus from GPT, Grok and Claude proposals.
+// AG1 V4 - Build 2/3 consensus from GPT, DeepSeek and Claude proposals.
 // Mode: Run Once for All Items.
 
 function isObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
@@ -103,6 +103,8 @@ function inferModelKey(item, index) {
     ""
   ).trim().toLowerCase();
   if (raw.includes("grok") || raw.includes("xai")) return "grok41_reasoning";
+  // Canonical storage key kept for backward compatibility after Grok -> DeepSeek.
+  if (raw.includes("deepseek")) return "grok41_reasoning";
   if (raw.includes("claude") || raw.includes("anthropic") || raw.includes("sonnet")) return "claude_sonnet46";
   if (raw.includes("gpt") || raw.includes("openai") || raw.includes("chatgpt")) return "chatgpt52";
   return ["chatgpt52", "grok41_reasoning", "claude_sonnet46"][index] || `model_${index + 1}`;
@@ -344,7 +346,7 @@ for (let i = 0; i < proposalItems.length; i += 1) {
   const decision = extractDecision(item);
   const actions = safeArray(decision.actions);
   const extractorStatus = String(item.extractorStatus || item.extractor_status || "");
-  const parseOk = ["OK_OBJECT", "OK_JSON"].includes(extractorStatus) && Array.isArray(decision.actions);
+  const parseOk = extractorStatus.startsWith("OK_") && Array.isArray(decision.actions);
   modelProposals.push({
     proposal_id: `PROP_${runId}_${modelKey}`,
     run_id: runId,
@@ -357,7 +359,7 @@ for (let i = 0; i < proposalItems.length; i += 1) {
     decision_json: decision,
     actions_json: actions,
     warnings_json: decision.dataCaveats || item.warnings || [],
-    error: parseOk ? null : "No actions array in model output",
+    error: parseOk ? null : (item.extractorError || item.extractor_error || "No actions array in model output"),
   });
 
   if (!parseOk) {

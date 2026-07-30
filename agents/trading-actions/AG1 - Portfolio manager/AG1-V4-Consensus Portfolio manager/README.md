@@ -1,7 +1,7 @@
 # AG1 V4 Consensus Portfolio Manager
 
 AG1 V4 remplace la concurrence entre trois workflows actions par un workflow
-unique. Le meme brief d'entree est envoye en parallele a GPT, Grok et Claude,
+unique. Le meme brief d'entree est envoye en parallele a GPT, DeepSeek et Claude,
 puis un node de consensus autorise une intention d'ordre seulement si au moins
 deux modeles sur trois votent le meme symbole et le meme intent executable.
 
@@ -35,7 +35,7 @@ deux modeles sur trois votent le meme symbole et le meme intent executable.
 ## Flux
 
 `2B/4B/4C/AG4/R8/Calcul/Merge7/AG1.00`
--> fan-out GPT/Grok/Claude
+-> fan-out GPT 5.6 Sol / DeepSeek V4 Pro / Claude Opus 4.8
 -> extracteurs tagues par modele
 -> `AG1.V4 - Build Consensus`
 -> `7 - Validate & Enforce Safety`

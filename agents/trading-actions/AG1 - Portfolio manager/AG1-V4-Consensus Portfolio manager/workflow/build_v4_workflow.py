@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import copy
 import json
 import os
@@ -17,17 +18,18 @@ MODEL_BRANCHES = {
         "agent": "Agent #1 - Portfolio manager",
         "extractor": "Information Extractor",
         "parser": "AG1.V4 — Structured Output GPT",
-        "model_name": "OpenAI GPT-5.5",
-        "model_id": "gpt-5.5-2026-04-23",
+        "model_node": "OpenAI Chat Model - GPT5.6sol",
+        "model_name": "OpenAI GPT-5.6 Sol",
+        "model_id": "gpt-5.6-sol",
         "merge_input": 1,
     },
     "grok41_reasoning": {
         "agent": "Agent #1 - Portfolio manager1",
         "extractor": "Information Extractor1",
-        "parser": "AG1.V4 — Structured Output Grok",
-        "model_node": "xAI Grok Chat Model",
-        "model_name": "xAI Grok 4.3",
-        "model_id": "grok-4.3",
+        "parser": "AG1.V4 — Structured Output DeepSeek",
+        "model_node": "DeepSeek Chat Model",
+        "model_name": "DeepSeek V4 Pro",
+        "model_id": "deepseek-v4-pro",
         "merge_input": 2,
     },
     "claude_sonnet46": {
@@ -35,8 +37,8 @@ MODEL_BRANCHES = {
         "extractor": "Information Extractor2",
         "parser": "AG1.V4 — Structured Output Claude",
         "model_node": "Anthropic Chat Model",
-        "model_name": "Anthropic Claude Sonnet 4.6",
-        "model_id": "claude-sonnet-4-6",
+        "model_name": "Anthropic Claude Opus 4.8",
+        "model_id": "claude-opus-4-8",
         "merge_input": 3,
     },
 }
@@ -76,6 +78,16 @@ Decider de ne rien faire (NO_TRADE) est valide et frequent : dans ce cas renvoie
 Interdits absolus : prose hors JSON, objet partiel, cle manquante, valeur d'enum hors liste. Le JSON doit etre parsable sans correction.
 """
 
+DEEPSEEK_OUTPUT_CONTRACT_SUFFIX = """
+
+CONTRAT DE SORTIE DEEPSEEK — IMPERATIF
+Retourne EXACTEMENT UN objet JSON unique conforme au schema fourni, sans
+Markdown, sans bloc de code, sans second objet et sans texte avant ou apres.
+Les six cles marketRegime, targetExposurePct, maxNewPositions, actions,
+riskNotes et dataCaveats sont toujours presentes. Si aucune action n'est
+proposee, actions vaut [] et les autres tableaux vides valent [].
+"""
+
 
 def load_json(path: Path) -> Dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -94,6 +106,30 @@ def get_node(workflow: Dict[str, Any], name: str) -> Dict[str, Any]:
 
 def has_node(workflow: Dict[str, Any], name: str) -> bool:
     return any(node.get("name") == name for node in workflow["nodes"])
+
+
+def get_first_node(workflow: Dict[str, Any], names: Iterable[str]) -> Dict[str, Any]:
+    for name in names:
+        if has_node(workflow, name):
+            return get_node(workflow, name)
+    raise KeyError(f"None of the nodes exist: {list(names)}")
+
+
+def rename_node(workflow: Dict[str, Any], old_name: str, new_name: str) -> None:
+    if old_name == new_name or not has_node(workflow, old_name):
+        return
+    if has_node(workflow, new_name):
+        raise ValueError(f"Cannot rename {old_name}: {new_name} already exists")
+    get_node(workflow, old_name)["name"] = new_name
+    connections = workflow.setdefault("connections", {})
+    if old_name in connections:
+        connections[new_name] = connections.pop(old_name)
+    for source_connections in connections.values():
+        for outputs in source_connections.values():
+            for output in outputs:
+                for target in output:
+                    if target.get("node") == old_name:
+                        target["node"] = new_name
 
 
 def remove_nodes(workflow: Dict[str, Any], names: Iterable[str]) -> None:
@@ -145,6 +181,23 @@ def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
         if model_key == "claude_sonnet46":
             options = node["parameters"].setdefault("options", {})
             options["systemMessage"] = (str(options.get("systemMessage", "")).rstrip() + CLAUDE_OUTPUT_CONTRACT_SUFFIX).rstrip()
+        if model_key == "grok41_reasoning":
+            # The LangChain Agent binds the structured parser as a tool. DeepSeek
+            # can occasionally concatenate tool arguments, which fails before
+            # the extractor sees the model text. A Basic LLM Chain keeps the
+            # same prompt/schema without the agent tool-call envelope.
+            options = node["parameters"].pop("options", {})
+            system_message = str(options.get("systemMessage", "")).rstrip()
+            node["parameters"]["messages"] = {
+                "messageValues": [{
+                    "message": (system_message + DEEPSEEK_OUTPUT_CONTRACT_SUFFIX).rstrip(),
+                }]
+            }
+            node["type"] = "@n8n/n8n-nodes-langchain.chainLlm"
+            node["typeVersion"] = 1.5
+            node["retryOnFail"] = True
+            node["maxTries"] = 2
+            node["waitBetweenTries"] = 2000
         if branch.get("use_output_parser") is False:
             node["parameters"].pop("hasOutputParser", None)
         node["onError"] = "continueRegularOutput"
@@ -187,11 +240,11 @@ def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
         "parameters": {
             "model": {
                 "__rl": True,
-                "value": "claude-fable-5",
+                "value": "claude-opus-4-8",
                 "mode": "list",
-                "cachedResultName": "Claude Fable 5",
+                "cachedResultName": "Claude Opus 4.8",
             },
-            "options": {"thinking": True},
+            "options": {"thinking": False},
         },
         "type": "@n8n/n8n-nodes-langchain.lmChatAnthropic",
         "typeVersion": 1.3,
@@ -214,12 +267,40 @@ def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
 
 
 def patch_model_options(workflow: Dict[str, Any]) -> None:
-    openai = get_node(workflow, "OpenAI Chat Model - GPT5.2")
-    openai.setdefault("parameters", {}).pop("responsesApiEnabled", None)
-    openai["parameters"].setdefault("options", {})["reasoningEffort"] = "medium"
+    rename_node(workflow, "OpenAI Chat Model - GPT5.2", "OpenAI Chat Model - GPT5.6sol")
+    openai = get_node(workflow, "OpenAI Chat Model - GPT5.6sol")
+    openai["parameters"] = {
+        "model": {
+            "__rl": True,
+            "value": "gpt-5.6-sol",
+            "mode": "list",
+            "cachedResultName": "gpt-5.6-sol",
+        },
+        "builtInTools": {},
+        "options": {"reasoningEffort": "medium", "timeout": 1500000},
+    }
 
-    grok = get_node(workflow, "xAI Grok Chat Model")
-    grok.setdefault("parameters", {}).setdefault("options", {})["responseFormat"] = "json_object"
+    if has_node(workflow, "xAI Grok Chat Model"):
+        rename_node(workflow, "xAI Grok Chat Model", "DeepSeek Chat Model")
+    deepseek = get_node(workflow, "DeepSeek Chat Model")
+    deepseek_position = deepseek.get("position", [2816, 11216])
+    deepseek.clear()
+    deepseek.update({
+        "parameters": {"model": "deepseek-v4-pro", "options": {}},
+        "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+        "typeVersion": 1,
+        "position": deepseek_position,
+        "id": "d7ebdbd4-83e3-4bf0-94cf-31cd8d8437eb",
+        "name": "DeepSeek Chat Model",
+        "credentials": {
+            "deepSeekApi": {
+                "id": "BlSCC28mzKodkfO5",
+                "name": "DeepSeek account",
+            }
+        },
+    })
+
+    rename_node(workflow, "AG1.V4 — Structured Output Grok", "AG1.V4 — Structured Output DeepSeek")
 
 
 def patch_sticky_notes(workflow: Dict[str, Any]) -> None:
@@ -228,6 +309,8 @@ def patch_sticky_notes(workflow: Dict[str, Any]) -> None:
         content = str(params.get("content") or "").strip().upper()
         if content == "## GEMINI":
             params["content"] = "## CLAUDE"
+        elif content in {"## GROK", "## DEEPSEEK V4"}:
+            params["content"] = "## DEEPSEEK V4 PRO"
 
 
 def add_consensus_nodes(workflow: Dict[str, Any]) -> None:
@@ -264,6 +347,8 @@ def patch_positions(workflow: Dict[str, Any]) -> None:
         "Agent #1 - Portfolio manager2": [2928, 9920],
         "Information Extractor2": [3712, 9952],
         "Agent #1 - Portfolio manager1": [2928, 11168],
+        "DeepSeek Chat Model": [3264, 10912],
+        "AG1.V4 — Structured Output DeepSeek": [3264, 11424],
         "Information Extractor1": [3712, 11200],
         "Agent #1 - Portfolio manager": [2928, 12416],
         "Information Extractor": [3712, 12448],
@@ -315,13 +400,18 @@ def patch_connections(workflow: Dict[str, Any]) -> None:
     set_main_connections(workflow, "9 - Upsert Run Bundle (DuckDB)", [("10 - Post-Run Health (DuckDB)", 0)])
 
 
-def main() -> None:
-    workflow = load_json(TEMPLATE_PATH)
+def build(source_path: Path) -> Dict[str, Any]:
+    workflow = load_json(source_path)
+    if isinstance(workflow, list):
+        if len(workflow) != 1:
+            raise ValueError("Expected exactly one workflow")
+        workflow = workflow[0]
     workflow = copy.deepcopy(workflow)
     workflow["name"] = "AG1 V4 - Consensus Portfolio Manager"
     workflow["id"] = "AG1V4CONSENSUS"
     workflow["active"] = False
     workflow.pop("versionId", None)
+    workflow.pop("activeVersionId", None)
 
     remove_nodes(workflow, [
         "merge",
@@ -334,15 +424,23 @@ def main() -> None:
         "xAI Grok Chat Model1",
         "Google Gemini Chat Model",
     ])
+    patch_model_options(workflow)
     add_input_and_parser_nodes(workflow)
     add_anthropic_model_node(workflow)
     add_consensus_nodes(workflow)
     patch_code_nodes(workflow)
     patch_agent_prompts(workflow)
-    patch_model_options(workflow)
     patch_sticky_notes(workflow)
     patch_positions(workflow)
     patch_connections(workflow)
+    return workflow
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--source", type=Path, default=TEMPLATE_PATH)
+    args = parser.parse_args()
+    workflow = build(args.source)
     write_json(OUTPUT_PATH, workflow)
     print(f"Wrote {OUTPUT_PATH}")
 
