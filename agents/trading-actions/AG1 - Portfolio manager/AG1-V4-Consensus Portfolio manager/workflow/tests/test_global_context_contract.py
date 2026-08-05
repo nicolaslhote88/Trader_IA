@@ -37,6 +37,11 @@ def test_one_shared_context_node_precedes_all_three_models():
     fetch = node_by_name(active, "AG1.GC — Fetch Advisory Pack")
     assert fetch["parameters"]["url"] == "http://global-context-synthesizer:8083/ag1-pack"
     assert "$env" not in json.dumps(fetch, ensure_ascii=False)
+    attach = node_by_name(active, "AG1.GC — Attach Advisory Pack")["parameters"]["jsCode"]
+    assert "AG1_GLOBAL_CONTEXT_LLM_V2" in attach
+    assert "pack.quality?.snapshot_age_hours" in attach
+    assemble = node_by_name(active, "AG1.00 — Assemble Input Packs")["parameters"]["jsCode"]
+    assert "prompt_v4_consensus_global_context_v3" in assemble
     attach_targets = targets(active, "AG1.GC — Attach Advisory Pack")
     assert attach_targets == [{"node": "AG1.V4 — Liquidity Preflight", "type": "main", "index": 0}]
     fanout = targets(active, "AG1.V4 — Liquidity Preflight")
@@ -52,6 +57,7 @@ def test_one_shared_context_node_precedes_all_three_models():
     prompt_texts = [json.dumps(params, ensure_ascii=False) for params in prompts]
     assert all("$json.global_context" in text for text in prompt_texts)
     assert all("AG9_GLOBAL_RISK" in text and "AG4_NEWS_SENTIMENT" in text for text in prompt_texts)
+    assert all("CAVEAT_ONLY" in text and "positioning_score est contrariant" in text for text in prompt_texts)
 
 
 def test_shadow_is_manual_only_and_cannot_reach_broker_or_writer():

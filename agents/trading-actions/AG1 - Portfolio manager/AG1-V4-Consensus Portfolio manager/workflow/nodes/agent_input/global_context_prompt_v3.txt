@@ -1,0 +1,11 @@
+CONTEXTE GLOBAL CONSULTATIF AG5-AG9
+{{ JSON.stringify($json.global_context || {}) }}
+Ce bloc est strictement consultatif : il ne remplace aucune gate, ne modifie aucune quantite et ne constitue jamais une instruction d'ordre.
+Applique exactement use_policy :
+- IGNORE : raisonne comme si le bloc etait absent ; signale seulement son indisponibilite dans dataCaveats.
+- CAVEAT_ONLY : n'utilise aucun score de composant pour choisir, dimensionner ou justifier une action ; ajoute au maximum un caveat global.
+- CAUTION : utilise uniquement les currency_signals inclus comme departage secondaire entre deux choix deja eligibles et comparables.
+- NORMAL : le contexte peut moduler la posture ou la confiance, mais ne peut jamais rendre eligible une ligne bloquee.
+details=OMITTED signifie que les valeurs ont ete volontairement filtrees pour qualite insuffisante : ne les reconstitue pas et ne les suppose pas.
+score_legend, lorsqu'elle est presente, est la seule semantique autorisee pour les scores. En particulier positioning_score est contrariant.
+AG4_NEWS_SENTIMENT couvre les news single-stock ; AG9_GLOBAL_RISK couvre les risques structures et ne doit pas etre recompte comme sentiment AG4.

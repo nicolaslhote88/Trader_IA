@@ -15,6 +15,8 @@ import duckdb
 
 
 FRESHNESS_RANK = {"fresh": 0, "aging": 1, "stale": 2, "missing": 3}
+LLM_SCHEMA_VERSION = "AG1_GLOBAL_CONTEXT_LLM_V2"
+LLM_METHOD_VERSION = "GLOBAL_CONTEXT_LLM_COMPACTION_V2"
 
 
 def utcnow() -> datetime:
@@ -77,6 +79,10 @@ def load_config() -> dict:
     path = Path(__file__).resolve().parent / "config" / "context.json"
     config = json.loads(path.read_text(encoding="utf-8"))
     config["ag1_pack"]["max_chars"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_MAX_CHARS", config["ag1_pack"]["max_chars"]))
+    config["ag1_pack"]["llm_max_chars"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_LLM_MAX_CHARS", config["ag1_pack"]["llm_max_chars"]))
+    config["ag1_pack"]["llm_min_detail_confidence"] = float(os.environ.get("AG1_GLOBAL_CONTEXT_LLM_MIN_DETAIL_CONFIDENCE", config["ag1_pack"]["llm_min_detail_confidence"]))
+    config["ag1_pack"]["llm_min_global_confidence"] = float(os.environ.get("AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_CONFIDENCE", config["ag1_pack"]["llm_min_global_confidence"]))
+    config["ag1_pack"]["llm_min_global_coverage"] = float(os.environ.get("AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_COVERAGE", config["ag1_pack"]["llm_min_global_coverage"]))
     config["ag1_pack"]["top_events_max"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_TOP_EVENTS_MAX", config["ag1_pack"]["top_events_max"]))
     config["ag1_pack"]["top_sectors_max"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_TOP_SECTORS_MAX", config["ag1_pack"]["top_sectors_max"]))
     config["ag1_pack"]["top_assets_max"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_TOP_ASSETS_MAX", config["ag1_pack"]["top_assets_max"]))
@@ -172,6 +178,118 @@ def _pack_regime(status: str, by_currency: dict, fields: tuple[str, ...], **extr
         for currency, row in sorted(by_currency.items())
     }
     return {"status": status, "by_currency": compact, **extra}
+
+
+_CURRENCY_SUFFIXES = (
+    (".KQ", "KRW"), (".KS", "KRW"), (".PA", "EUR"), (".AS", "EUR"),
+    (".BR", "EUR"), (".DE", "EUR"), (".MI", "EUR"), (".MC", "EUR"),
+    (".LS", "EUR"), (".VI", "EUR"), (".IR", "EUR"), (".HE", "EUR"),
+    (".SW", "CHF"), (".ST", "SEK"), (".OL", "NOK"), (".CO", "DKK"),
+    (".HK", "HKD"), (".AX", "AUD"), (".TO", "CAD"), (".SI", "SGD"),
+    (".NZ", "NZD"), (".L", "GBP"), (".T", "JPY"),
+)
+
+_LLM_COMPONENTS = {
+    "macro": (
+        "macro_regime",
+        ("macro_score", "confidence", "freshness_status"),
+    ),
+    "fx_valuation": (
+        "fx_relative_valuation",
+        ("valuation_score", "carry_score", "real_carry_score", "confidence", "freshness_status"),
+    ),
+    "positioning": (
+        "positioning_regime",
+        ("positioning_score", "crowded_flag", "crowded_direction", "is_proxy", "report_date", "confidence", "freshness_status"),
+    ),
+    "rates_liquidity": (
+        "rates_liquidity_regime",
+        ("policy_regime", "curve_regime", "real_rate", "slope_10y2y", "duration_pressure", "confidence", "freshness_status"),
+    ),
+}
+
+
+def _round_numbers(value: Any, digits: int = 3) -> Any:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, float):
+        return round(value, digits)
+    if isinstance(value, list):
+        return [_round_numbers(row, digits) for row in value]
+    if isinstance(value, dict):
+        return {key: _round_numbers(row, digits) for key, row in value.items()}
+    return value
+
+
+def _infer_currency(row: dict) -> Optional[str]:
+    explicit = str(row.get("currency") or row.get("Currency") or row.get("quote_currency") or "").strip().upper()
+    if explicit and explicit not in {"UNKNOWN", "N/A", "NONE"}:
+        return explicit
+    symbol = str(
+        row.get("symbol_yahoo") or row.get("symbol") or row.get("Symbol")
+        or row.get("symbol_internal") or ""
+    ).strip().upper()
+    if not symbol:
+        return None
+    if symbol.endswith("-USD"):
+        return "USD"
+    for suffix, currency in _CURRENCY_SUFFIXES:
+        if symbol.endswith(suffix):
+            return currency
+    return "USD"
+
+
+def _relevant_currencies(portfolio: list[dict], opportunities: list[dict], available: set[str]) -> list[str]:
+    inferred = {
+        currency
+        for row in [*portfolio, *opportunities]
+        if isinstance(row, dict)
+        for currency in [_infer_currency(row)]
+        if currency and currency in available
+    }
+    return sorted(inferred)
+
+
+def _detail_usable(row: dict, min_confidence: float) -> bool:
+    freshness = str(row.get("freshness_status") or "missing").lower()
+    confidence = float(row.get("confidence") or 0.0)
+    return freshness in {"fresh", "aging"} and confidence >= min_confidence
+
+
+def _llm_use_policy(pack: dict, config: dict) -> str:
+    status = str(pack.get("status") or "UNKNOWN").upper()
+    freshness = str(pack.get("freshness_status") or "missing").lower()
+    confidence = float(pack.get("confidence") or 0.0)
+    coverage = float(pack.get("coverage_ratio") or 0.0)
+    if status in {"GLOBAL_CONTEXT_UNAVAILABLE", "GLOBAL_CONTEXT_STALE", "GLOBAL_CONTEXT_DISABLED"}:
+        return "IGNORE"
+    if (
+        freshness in {"stale", "missing"}
+        or confidence < float(config["llm_min_global_confidence"])
+        or coverage < float(config["llm_min_global_coverage"])
+    ):
+        return "CAVEAT_ONLY"
+    if status != "OK" or freshness == "aging":
+        return "CAUTION"
+    return "NORMAL"
+
+
+def _limit_llm_pack(pack: dict, max_chars: int) -> dict:
+    if len(canonical_json(pack)) <= max_chars:
+        return pack
+    compact = json.loads(canonical_json(pack))
+    compact.setdefault("source_warnings", []).append("AG1_LLM_CONTEXT_TRUNCATED")
+    compact["critical_events"] = compact.get("critical_events", [])[:2]
+    compact["known_asset_overlays"] = compact.get("known_asset_overlays", [])[:4]
+    if len(canonical_json(compact)) > max_chars:
+        compact.pop("score_legend", None)
+        compact.pop("currency_signals", None)
+        for key in ("critical_events", "known_asset_overlays", "sector_overlays", "country_overlays"):
+            if not compact.get(key):
+                compact.pop(key, None)
+    if len(canonical_json(compact)) > max_chars:
+        raise ValueError("AG1_GLOBAL_CONTEXT_LLM_MAX_CHARS_TOO_SMALL")
+    return compact
 
 
 def _limit_pack(pack: dict, max_chars: int) -> dict:
@@ -299,38 +417,46 @@ def advisory_pack_for_run(
     *,
     now: Optional[datetime] = None,
 ) -> dict:
-    """Filtre les overlays canoniques pour le portefeuille/candidats sans rescoring."""
+    """Produit le contexte LLM V2; le snapshot canonique V1 complet reste en DuckDB."""
 
     now = now or utcnow()
     config = load_config()
     if not base_pack:
         pack = {
-            "schema_version": "AG1_GLOBAL_CONTEXT_PACK_V1", "snapshot_id": None,
-            "method_version": "GLOBAL_CONTEXT_SYNTHESIS_V1",
-            "as_of": None, "freshness_status": "missing", "coverage_ratio": None,
-            "confidence": None, "status": "GLOBAL_CONTEXT_UNAVAILABLE", "advisory_only": True,
-            "macro_regime": {}, "rates_liquidity_regime": {}, "positioning_regime": {},
-            "fx_relative_valuation": {"scope": "FX_RELATIVE_VALUATION_ONLY"},
-            "geopolitical_risk_regime": {}, "portfolio_exposure_review": [],
-            "opportunity_exposure_review": [], "sector_overlays": [], "country_overlays": [],
-            "critical_events": [], "source_warnings": ["GLOBAL_CONTEXT_UNAVAILABLE"],
+            "schema_version": LLM_SCHEMA_VERSION,
+            "method_version": LLM_METHOD_VERSION,
+            "snapshot_id": None,
+            "as_of": None,
+            "status": "GLOBAL_CONTEXT_UNAVAILABLE",
+            "use_policy": "IGNORE",
+            "advisory_only": True,
+            "quality": {
+                "source_freshness": "missing", "coverage_ratio": None,
+                "confidence": None, "snapshot_age_hours": None,
+            },
+            "relevant_currencies": [],
+            "component_summary": {},
+            "exposure_summary": {
+                "portfolio": {"total": len(portfolio), "known": 0, "unknown": len(portfolio)},
+                "opportunities": {"total": len(opportunities), "known": 0, "unknown": len(opportunities)},
+                "limitation": "GLOBAL_CONTEXT_UNAVAILABLE",
+            },
+            "source_warnings": ["GLOBAL_CONTEXT_UNAVAILABLE"],
         }
         pack["payload_hash"] = payload_hash(pack)
         return pack
 
-    pack = json.loads(canonical_json(base_pack))
-    pack["advisory_only"] = True
-    as_of = parse_time(pack.get("as_of"))
+    source_pack = json.loads(canonical_json(base_pack))
+    as_of = parse_time(source_pack.get("as_of"))
     age_hours = (now - as_of).total_seconds() / 3600.0 if as_of else None
     max_age = float(config["snapshot_max_age_hours"])
-    pack["context_age_hours"] = age_hours
     if age_hours is None or age_hours > max_age:
-        pack["status"] = "GLOBAL_CONTEXT_STALE"
-        pack["freshness_status"] = "stale" if age_hours is not None else "missing"
-        warnings = list(pack.get("source_warnings") or [])
+        source_pack["status"] = "GLOBAL_CONTEXT_STALE"
+        source_pack["freshness_status"] = "stale" if age_hours is not None else "missing"
+        warnings = list(source_pack.get("source_warnings") or [])
         if "GLOBAL_CONTEXT_STALE" not in warnings:
             warnings.append("GLOBAL_CONTEXT_STALE")
-        pack["source_warnings"] = warnings
+        source_pack["source_warnings"] = warnings
 
     def decode(value: Any) -> Any:
         return json_value(value)
@@ -353,10 +479,110 @@ def advisory_pack_for_run(
             matches.append({"type": "country", "entity": country, "risk_score": countries[country.upper()].get("risk_score"), "confidence": countries[country.upper()].get("confidence"), "contributors": decode(countries[country.upper()].get("contributors_json"))})
         return {"symbol": symbol, "sector": sector or None, "country": country or None, "currency": currency or None, "overlays": matches, "exposure_known": bool(matches), "limitation": None if matches else "NO_RELIABLE_EXPOSURE_MAPPING"}
 
+    portfolio_reviews = [review(row) for row in portfolio if isinstance(row, dict)]
+    opportunity_reviews = [review(row) for row in opportunities if isinstance(row, dict)]
+    known_reviews = [row for row in [*portfolio_reviews, *opportunity_reviews] if row["exposure_known"]]
+    review_total = len(portfolio_reviews) + len(opportunity_reviews)
+    mapping_limitation = (
+        None if review_total == len(known_reviews)
+        else "PARTIAL_EXPOSURE_MAPPING" if known_reviews
+        else "NO_RELIABLE_EXPOSURE_MAPPING"
+    )
+
+    available_currencies = {
+        str(currency).upper()
+        for _, (source_key, _) in _LLM_COMPONENTS.items()
+        for currency in (source_pack.get(source_key, {}).get("by_currency") or {})
+    }
+    relevant_currencies = _relevant_currencies(portfolio, opportunities, available_currencies)
     limits = config["ag1_pack"]
-    pack["portfolio_exposure_review"] = [review(row) for row in portfolio if isinstance(row, dict)][: limits["top_assets_max"]]
-    pack["opportunity_exposure_review"] = [review(row) for row in opportunities if isinstance(row, dict)][: limits["top_assets_max"]]
-    pack.pop("payload_hash", None)
-    pack = _limit_pack(pack, max(1024, limits["max_chars"] - 100))
+    use_policy = _llm_use_policy(source_pack, limits)
+    min_detail_confidence = float(limits["llm_min_detail_confidence"])
+    component_summary = {}
+    currency_signals: dict[str, dict] = {}
+
+    for component, (source_key, fields) in _LLM_COMPONENTS.items():
+        regime = source_pack.get(source_key) or {}
+        all_rows = regime.get("by_currency") or {}
+        relevant_rows = {
+            currency: all_rows[currency]
+            for currency in relevant_currencies
+            if isinstance(all_rows.get(currency), dict)
+        }
+        usable_rows = {
+            currency: row
+            for currency, row in relevant_rows.items()
+            if _detail_usable(row, min_detail_confidence)
+        }
+        confidences = [float(row.get("confidence") or 0.0) for row in relevant_rows.values()]
+        component_summary[component] = {
+            "status": regime.get("status") or "MISSING",
+            "relevant_rows": len(relevant_rows),
+            "usable_rows": len(usable_rows),
+            "freshness": _worst([str(row.get("freshness_status") or "missing") for row in relevant_rows.values()]),
+            "confidence": round(sum(confidences) / len(confidences), 3) if confidences else None,
+            "details": "INCLUDED" if use_policy in {"NORMAL", "CAUTION"} and usable_rows else "OMITTED",
+        }
+        if use_policy in {"NORMAL", "CAUTION"}:
+            for currency, row in usable_rows.items():
+                currency_signals.setdefault(currency, {})[component] = _round_numbers({
+                    key: row.get(key) for key in fields if row.get(key) is not None
+                })
+
+    geopolitical = source_pack.get("geopolitical_risk_regime") or {}
+    component_summary["geopolitical_risk"] = {
+        "status": geopolitical.get("status") or "MISSING",
+        "confidence": _round_numbers(geopolitical.get("confidence")),
+        "regime": geopolitical.get("global_risk_regime") or "unknown",
+    }
+
+    pack = {
+        "schema_version": LLM_SCHEMA_VERSION,
+        "method_version": LLM_METHOD_VERSION,
+        "snapshot_id": source_pack.get("snapshot_id"),
+        "as_of": source_pack.get("as_of"),
+        "status": source_pack.get("status") or "UNKNOWN",
+        "use_policy": use_policy,
+        "advisory_only": True,
+        "quality": {
+            "source_freshness": source_pack.get("freshness_status") or "missing",
+            "coverage_ratio": _round_numbers(source_pack.get("coverage_ratio")),
+            "confidence": _round_numbers(source_pack.get("confidence")),
+            "snapshot_age_hours": _round_numbers(age_hours),
+        },
+        "relevant_currencies": relevant_currencies,
+        "component_summary": component_summary,
+        "exposure_summary": {
+            "portfolio": {
+                "total": len(portfolio_reviews),
+                "known": sum(1 for row in portfolio_reviews if row["exposure_known"]),
+                "unknown": sum(1 for row in portfolio_reviews if not row["exposure_known"]),
+            },
+            "opportunities": {
+                "total": len(opportunity_reviews),
+                "known": sum(1 for row in opportunity_reviews if row["exposure_known"]),
+                "unknown": sum(1 for row in opportunity_reviews if not row["exposure_known"]),
+            },
+            "limitation": mapping_limitation,
+        },
+        "source_warnings": list(dict.fromkeys(source_pack.get("source_warnings") or [])),
+    }
+    if currency_signals:
+        pack["currency_signals"] = currency_signals
+        pack["score_legend"] = {
+            "macro_score": "positive=supportive, negative=adverse",
+            "valuation_score": "positive=relatively_attractive, negative=relatively_expensive",
+            "positioning_score": "contrarian: positive=crowded_short, negative=crowded_long",
+            "duration_pressure": "higher=more_pressure_on_long_duration_assets",
+        }
+    if known_reviews:
+        pack["known_asset_overlays"] = known_reviews[: limits["top_assets_max"]]
+    for key in ("critical_events", "sector_overlays", "country_overlays"):
+        values = source_pack.get(key) or []
+        if values:
+            pack[key] = _round_numbers(values)
+
+    pack = _round_numbers(pack)
+    pack = _limit_llm_pack(pack, max(1024, int(limits["llm_max_chars"]) - 100))
     pack["payload_hash"] = payload_hash(pack)
     return pack

@@ -177,6 +177,14 @@ def patch_code_nodes(workflow: Dict[str, Any]) -> None:
 
 def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
     source = load_json(ROOT / "nodes/agent_input/agent_1_portfolio_manager.node.json")
+    prompt = str(source["parameters"]["text"])
+    start = prompt.index("CONTEXTE GLOBAL CONSULTATIF AG5-AG9")
+    end = prompt.index("\n\nOPPORTUNITES ELIGIBLES", start)
+    source["parameters"]["text"] = (
+        prompt[:start]
+        + read_code(ROOT / "nodes/agent_input/global_context_prompt_v3.txt").rstrip()
+        + prompt[end:]
+    )
     for model_key, branch in MODEL_BRANCHES.items():
         node = get_node(workflow, branch["agent"])
         node["parameters"] = copy.deepcopy(source["parameters"])

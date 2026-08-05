@@ -70,8 +70,18 @@ def without_ag9(pack: dict) -> dict:
 
 def baseline_pack() -> dict:
     pack = {
-        "schema_version": "AG1_GLOBAL_CONTEXT_PACK_V1", "snapshot_id": None,
-        "status": "GLOBAL_CONTEXT_DISABLED", "advisory_only": True,
+        "schema_version": "AG1_GLOBAL_CONTEXT_LLM_V2",
+        "method_version": "GLOBAL_CONTEXT_LLM_COMPACTION_V2",
+        "snapshot_id": None,
+        "status": "GLOBAL_CONTEXT_DISABLED",
+        "use_policy": "IGNORE",
+        "advisory_only": True,
+        "quality": {
+            "freshness_status": "missing",
+            "coverage_ratio": 0.0,
+            "confidence": 0.0,
+            "snapshot_age_hours": None,
+        },
         "source_warnings": ["GLOBAL_CONTEXT_DISABLED"],
     }
     pack["payload_hash"] = digest(pack)
@@ -80,14 +90,21 @@ def baseline_pack() -> dict:
 
 def describe_variant(name: str, pack: dict) -> dict:
     text = canonical(pack)
+    exposure = pack.get("exposure_summary") or {}
+    portfolio = exposure.get("portfolio") or {}
+    opportunities = exposure.get("opportunities") or {}
     return {
         "variant": name,
+        "schema_version": pack.get("schema_version"),
+        "use_policy": pack.get("use_policy"),
         "payload_hash": pack.get("payload_hash") or digest(pack),
         "characters": len(text),
         "estimated_tokens": round(len(text) / 4.0),
         "critical_events": len(pack.get("critical_events") or []),
-        "portfolio_reviews": len(pack.get("portfolio_exposure_review") or []),
-        "opportunity_reviews": len(pack.get("opportunity_exposure_review") or []),
+        "currency_signals": len(pack.get("currency_signals") or []),
+        "known_asset_overlays": len(pack.get("known_asset_overlays") or []),
+        "portfolio_reviews": portfolio.get("total", len(pack.get("portfolio_exposure_review") or [])),
+        "opportunity_reviews": opportunities.get("total", len(pack.get("opportunity_exposure_review") or [])),
     }
 
 

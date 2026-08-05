@@ -70,7 +70,8 @@ Sans credential, seule la découverte sûre est autorisée :
 | `GLOBAL_CONTEXT_ZERO_AVAILABLE_COMPONENTS` | vues AG5–AG9 | restaurer producteurs, ne pas publier de vide |
 | `GLOBAL_CONTEXT_STALE` | `component_ages_json` | relancer composants; AG1 continue avec warning |
 | lock DuckDB | PID/containers écrivains | attendre/retry; jamais tuer AG1 arbitrairement |
-| pack > budget | `AG1_GLOBAL_CONTEXT_MAX_CHARS` | corriger mapping/limites; ne pas augmenter sans replay |
+| pack V1 > budget | `AG1_GLOBAL_CONTEXT_MAX_CHARS` | corriger mapping/limites; ne pas augmenter sans replay |
+| payload LLM V2 > budget | `AG1_GLOBAL_CONTEXT_LLM_MAX_CHARS` | filtrer davantage; ne pas augmenter sans replay |
 
 ## Tests
 

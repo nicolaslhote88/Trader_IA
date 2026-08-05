@@ -6,5 +6,15 @@
   "snapshot_max_age_hours": 12,
   "component_weights": {"AG5": 0.25, "AG6": 0.10, "AG7": 0.20, "AG8": 0.20, "AG9": 0.25},
   "max_age_hours": {"AG5": 36, "AG6": 36, "AG7": 240, "AG8": 36, "AG9": 8},
-  "ag1_pack": {"max_chars": 12000, "top_events_max": 5, "top_sectors_max": 8, "top_assets_max": 12, "top_countries_max": 8}
+  "ag1_pack": {
+    "max_chars": 12000,
+    "llm_max_chars": 4000,
+    "llm_min_detail_confidence": 0.5,
+    "llm_min_global_confidence": 0.5,
+    "llm_min_global_coverage": 0.6,
+    "top_events_max": 5,
+    "top_sectors_max": 8,
+    "top_assets_max": 12,
+    "top_countries_max": 8
+  }
 }

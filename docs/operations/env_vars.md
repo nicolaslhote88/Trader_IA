@@ -216,7 +216,11 @@ Exemple sans secret : `infra/vps_hostinger_config/global-context.env.example`.
 | `GLOBAL_CONTEXT_ADVISORY_ONLY` | `true` | Contrat consultatif; ne pas mettre à false. |
 | `GLOBAL_CONTEXT_FAIL_OPEN` | `true` | Fallback historique; ne pas mettre à false. |
 | `GLOBAL_CONTEXT_MAX_AGE_HOURS` | `12` | Seuil global optionnel; sinon seuils par composant. |
-| `AG1_GLOBAL_CONTEXT_MAX_CHARS` | `12000` | Budget compact avant fan-out. |
+| `AG1_GLOBAL_CONTEXT_MAX_CHARS` | `12000` | Budget du snapshot V1 complet persisté. |
+| `AG1_GLOBAL_CONTEXT_LLM_MAX_CHARS` | `4000` | Budget maximal du payload V2 transmis à chaque LLM. |
+| `AG1_GLOBAL_CONTEXT_LLM_MIN_DETAIL_CONFIDENCE` | `0.5` | Confiance minimale d'une ligne devise détaillée. |
+| `AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_CONFIDENCE` | `0.5` | En dessous, politique LLM `CAVEAT_ONLY`. |
+| `AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_COVERAGE` | `0.6` | En dessous, politique LLM `CAVEAT_ONLY`. |
 | `AG1_GLOBAL_CONTEXT_TOP_EVENTS_MAX` | `5` | Événements AG9 maximum. |
 | `AG1_GLOBAL_CONTEXT_TOP_SECTORS_MAX` | `8` | Overlays secteurs maximum. |
 | `AG1_GLOBAL_CONTEXT_TOP_ASSETS_MAX` | `12` | Expositions portefeuille/candidats maximum. |

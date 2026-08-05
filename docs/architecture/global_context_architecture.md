@@ -73,6 +73,15 @@ attaché à l'item, puis le nœud de preflight distribue le même item aux trois
 branches. Le pack est `advisory_only=true`; aucune règle déterministe de quantité,
 de gate ou de consensus ne le lit.
 
+Le snapshot complet `AG1_GLOBAL_CONTEXT_PACK_V1` reste persisté dans
+`global_context_v1.duckdb` pour l'audit et le dashboard. L'endpoint
+`POST /ag1-pack` le compacte à la lecture en `AG1_GLOBAL_CONTEXT_LLM_V2` : il
+ne transmet aux LLM que les devises réellement présentes dans le portefeuille
+ou les opportunités, résume les expositions inconnues et omet les détails dont
+la fraîcheur ou la confiance est insuffisante. La politique `use_policy` est
+explicite : `IGNORE`, `CAVEAT_ONLY`, `CAUTION` ou `NORMAL`. Un contexte global
+dégradé ne peut donc plus être interprété comme un signal détaillé valide.
+
 En indisponibilité, l'attache fournit `GLOBAL_CONTEXT_UNAVAILABLE` ou
 `GLOBAL_CONTEXT_DISABLED`. L'ancien chemin décisionnel reste donc utilisable.
 Le workflow shadow retire en plus preflight, safety, broker et writer : il se
@@ -86,7 +95,8 @@ termine juste après consensus dans `Shadow Capture (NO BROKER)`.
 - `AG8_RATES_V2`
 - `AG9_GLOBAL_RISK_V1` / `AG9_EVENT_RISK_V1`
 - `GLOBAL_CONTEXT_V1` / `GLOBAL_CONTEXT_SYNTHESIS_V1`
-- `AG1_GLOBAL_CONTEXT_PACK_V1`
+- `AG1_GLOBAL_CONTEXT_PACK_V1` (snapshot complet persisté)
+- `AG1_GLOBAL_CONTEXT_LLM_V2` / `GLOBAL_CONTEXT_LLM_COMPACTION_V2` (payload LLM)
 
 Les identifiants de snapshot, millésimes, âges, versions de méthode et hashes
 SHA-256 sont persistés pour chaque run AG1 enrichi.

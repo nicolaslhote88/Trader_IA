@@ -3,7 +3,9 @@
 
 const items = $input.all().map((item) => item.json || {});
 const base = items.find((row) => row.opportunity_pack && row.portfolio_pack) || {};
-let pack = items.find((row) => row.schema_version === "AG1_GLOBAL_CONTEXT_PACK_V1") || null;
+let pack = items.find((row) => row.schema_version === "AG1_GLOBAL_CONTEXT_LLM_V2")
+  || items.find((row) => row.schema_version === "AG1_GLOBAL_CONTEXT_PACK_V1")
+  || null;
 
 function stable(value) {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
@@ -69,25 +71,17 @@ function sha256(text) {
 
 if (!pack) {
   pack = {
-    schema_version: "AG1_GLOBAL_CONTEXT_PACK_V1",
-    method_version: "GLOBAL_CONTEXT_SYNTHESIS_V1",
+    schema_version: "AG1_GLOBAL_CONTEXT_LLM_V2",
+    method_version: "GLOBAL_CONTEXT_LLM_COMPACTION_V2",
     snapshot_id: null,
     as_of: null,
-    freshness_status: "missing",
-    coverage_ratio: null,
-    confidence: null,
     status: "GLOBAL_CONTEXT_UNAVAILABLE",
+    use_policy: "IGNORE",
     advisory_only: true,
-    macro_regime: {},
-    rates_liquidity_regime: {},
-    positioning_regime: {},
-    fx_relative_valuation: { scope: "FX_RELATIVE_VALUATION_ONLY" },
-    geopolitical_risk_regime: {},
-    portfolio_exposure_review: [],
-    opportunity_exposure_review: [],
-    sector_overlays: [],
-    country_overlays: [],
-    critical_events: [],
+    quality: { source_freshness: "missing", coverage_ratio: null, confidence: null, snapshot_age_hours: null },
+    relevant_currencies: [],
+    component_summary: {},
+    exposure_summary: { portfolio: { total: 0, known: 0, unknown: 0 }, opportunities: { total: 0, known: 0, unknown: 0 }, limitation: "GLOBAL_CONTEXT_UNAVAILABLE" },
     source_warnings: ["GLOBAL_CONTEXT_UNAVAILABLE"],
   };
   pack.payload_hash = sha256(stable(pack));
@@ -95,12 +89,28 @@ if (!pack) {
 
 pack = JSON.parse(JSON.stringify(pack));
 pack.advisory_only = true;
+if (!pack.use_policy) {
+  const status = String(pack.status || "UNKNOWN").toUpperCase();
+  const freshness = String(pack.freshness_status || "missing").toLowerCase();
+  const confidence = Number(pack.confidence || 0);
+  const coverage = Number(pack.coverage_ratio || 0);
+  if (["GLOBAL_CONTEXT_UNAVAILABLE", "GLOBAL_CONTEXT_STALE", "GLOBAL_CONTEXT_DISABLED"].includes(status)) {
+    pack.use_policy = "IGNORE";
+  } else if (["stale", "missing"].includes(freshness) || confidence < 0.5 || coverage < 0.6) {
+    pack.use_policy = "CAVEAT_ONLY";
+  } else if (status !== "OK" || freshness === "aging") {
+    pack.use_policy = "CAUTION";
+  } else {
+    pack.use_policy = "NORMAL";
+  }
+}
 const run = { ...(base.run || {}) };
 run.global_context_snapshot_id = pack.snapshot_id || null;
 run.global_context_payload_hash = pack.payload_hash || sha256(stable({ ...pack, payload_hash: undefined }));
 run.global_context_schema_version = pack.schema_version || null;
 run.global_context_method_version = pack.method_version || null;
-run.global_context_age = Number.isFinite(Number(pack.context_age_hours)) ? Number(pack.context_age_hours) : null;
+const contextAge = pack.quality?.snapshot_age_hours ?? pack.context_age_hours;
+run.global_context_age = Number.isFinite(Number(contextAge)) ? Number(contextAge) : null;
 run.global_context_status = pack.status || pack.freshness_status || "UNKNOWN";
 run.global_context_pack = pack;
 
