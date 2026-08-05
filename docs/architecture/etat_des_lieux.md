@@ -1,6 +1,6 @@
 # État des lieux fonctionnel — Trader_IA
 
-**Dernière analyse exhaustive : 2026-07-02** (remplace celle du 2026-03-02, MAJ partielle 2026-05-04).
+**Dernière analyse exhaustive du socle live : 2026-07-02. Addendum AG5–AG9 vérifié le 2026-08-05.**
 **Méthode :** repo + docs + **vérification live sur le VPS le 2026-07-02** (broker `/health`, SQLite n8n, DuckDB en lecture seule). Les chiffres de ce document sont ceux relevés ce jour-là.
 **Document compagnon :** [`../audits/20260702_audit_complet_projet.md`](../audits/20260702_audit_complet_projet.md) (constats, priorités F1-F10).
 **Pour les issues historiques :** [`historique_issues.md`](historique_issues.md). **Point d'entrée opérationnel du projet :** `AGENTS.md` (racine).
@@ -16,6 +16,15 @@ Le cœur décisionnel est **AG1 V4 Consensus** : trois LLM (GPT-5.5, Grok 4.3, C
 Les piliers d'analyse sont alimentés par des workflows autonomes : **AG2-V3** (technique, yfinance, split Held+Core / Watchlist), **AG3-V2** (fondamental, yfinance pur sans LLM, split Held+Core / Watchlist), **AG4-V3** (news macro), **AG4_Spé** (news par valeur, 3 sources : Boursorama, IBKR portfolio, Finnhub global).
 
 **Le Forex est entièrement gelé** (workflows FX inactifs, `fx_orders_enabled=false`, bases conservées). L'ancien ensemble AG1-V3 (3 DuckDB parallèles) est décommissionné au profit du ledger unique V4.
+
+**Addendum contexte global 2026-08-05.** AG5–AG8 historiques étaient toujours
+inactifs et leurs données périmées. Une réhabilitation commune et AG9 World
+Monitor sont désormais implémentés dans le repo, avec writers uniques,
+snapshots atomiques, dashboard commun et pack AG1 consultatif. Rien n'est activé
+sur le chemin de trading : `WORLD_MONITOR_ENABLED=false` et
+`GLOBAL_CONTEXT_ENABLED=false` restent les défauts. La publication AG1 enrichie
+est interdite avant plusieurs cycles réels et un shadow LLM sans broker. Voir
+`global_context_architecture.md` et le rapport du 2026-08-05.
 
 État au 2026-07-02 : NAV **9 921,80 €** (−0,78 % depuis le départ à 10 000 €), 7 positions (6 Euronext + NVDA), 13 fills au ledger. Principal point dur : **l'exécution des ordres US n'aboutit quasi jamais** (absence de market data US → prompt IBKR → approbation Telegram expirée) — voir F1 de l'audit.
 
@@ -154,6 +163,8 @@ Règles : un seul écrivain par base ; écart ≥ durée_max + marge entre écri
 | `ag4_spe_v2.duckdb` | 587 Mo | News par valeur (3 sources) | AG4_Spé ×3 (≤1.4.3) |
 | `yf_enrichment_v1.duckdb` | 38 Mo | Enrichissement quotidien | YF-ENRICH |
 | `macro_data.duckdb` | 40 Mo | FRED/COT/taux | macro-data-api |
+| `worldmonitor_v1.duckdb` | non créée au dernier audit live | AG9, réponses brutes, événements et risques | worldmonitor-adapter (≤1.4.3) |
+| `global_context_v1.duckdb` | non créée au dernier audit live | snapshot canonique AG5–AG9 et pack AG1 | global-context-synthesizer (≤1.4.3) |
 | `ag*_fx_*.duckdb`, `ag4_forex_v1` | ~1,2 Go cumulés | Forex gelé | — (figées) |
 
 Pièges transverses : vue `SELECT *` cassée par tout `ALTER TABLE ADD COLUMN` (recréer la vue) ; base souvent lockée par le dashboard → retry sur lock ; sandbox Python n8n (imports whitelistés, un par ligne, `hashlib` interdit) ; éditeurs qui tronquent les gros fichiers (>~160 lignes) → patcher via shell.

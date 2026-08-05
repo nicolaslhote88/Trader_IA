@@ -5,10 +5,10 @@ Le système combine des Portfolio Managers LLM, des analystes spécialisés, un
 Risk Manager déterministe, un broker FastAPI branché sur IBKR Client Portal et
 un dashboard Streamlit.
 
-**État opérationnel au 2026-07-03.** Le système Actions/ETF fonctionne en
+**État opérationnel vérifié au 2026-08-05.** Le système Actions/ETF fonctionne en
 **LIVE réel** sur le compte IBKR `U25651155` (`IBKR_DRY_RUN=false`,
 `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`). Le Portfolio Manager actif est
-**AG1 V4 consensus** : GPT-5.5, Grok 4.3 et Claude Fable 5 votent, puis le
+**AG1 V4 consensus** : GPT-5.6 Sol, DeepSeek V4 Pro et Claude Opus 4.8 votent, puis le
 workflow applique une règle de consensus 2/3 avant toute exécution. Gemini a été
 retiré. Le Forex est entièrement désactivé (`fx_orders_enabled=false`, workflows
 FX inactifs) ; les bases FX sont conservées mais figées.
@@ -48,6 +48,13 @@ Workflows d'approbation :
   Approuver/Rejeter.
 
 Forex : workflows FX inactifs. Ne pas les réactiver sans décision explicite.
+
+Le nouveau contexte commun AG5–AG9 est implémenté mais désactivé par défaut :
+AG5 macro, AG6 valorisation relative FX, AG7 positionnement, AG8 régime taux/
+liquidité, AG9 risques structurés World Monitor et synthèse atomique. Il est
+strictement consultatif pour AG1. Architecture et statut :
+`docs/architecture/global_context_architecture.md` et
+`docs/audits/20260805_ag5_ag9_postimplementation_report.md`.
 
 ## 3. Exécution IBKR et approbation
 
@@ -90,6 +97,8 @@ Détails : `docs/operations/order_approval_deploy_notes.md`.
 - **yfinance-api** : quotes et données Yahoo Finance.
 - **yf-enrichment** : enrichissement quotidien.
 - **macro-data-api** : données macro et marché complémentaires.
+- **worldmonitor-adapter** : découverte/normalisation AG9, sans code World Monitor copié.
+- **global-context-synthesizer** : snapshot atomique et pack consultatif AG1.
 - **Streamlit dashboard** : dashboard V4-only.
 - **Traefik** : reverse proxy TLS.
 
@@ -154,6 +163,8 @@ déployée doit aussi être commitée dans ce dépôt.
 | Audit brief LLM AG1 V4 | `docs/audits/20260615_ag1_v4_prompt_audit.md` |
 | Audit AG4 V3 | `docs/audits/20260617_ag4_v3_news_watcher_audit.md` |
 | Plans AG4 SPE | `docs/audits/20260617_ag4_spe_v2_analysis.md`, `docs/audits/20260617_ag4_spe_v2_remediation_plan.md` |
+| Contexte global AG5–AG9 | `docs/architecture/global_context_architecture.md` |
+| Runbook AG5–AG9 | `docs/operations/ag5_ag9_runbook.md` |
 
 ## 7. Conventions de sécurité
 

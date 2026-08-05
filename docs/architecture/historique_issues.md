@@ -104,5 +104,15 @@ Ces points sont issus des rapports `docs/audits/20260423_audit_valorisation/repo
 
 ## Notes de mÃ©thode
 
+### 🟡 16. Contexte global AG5–AG9 — implémenté, qualification live incomplète
+
+**Constat 2026-08-05** : AG5–AG8 étaient inactifs, périmés et comportaient des
+formules concurrentes; aucune base AG9/contexte global n'existait.
+**Correction repo** : rôles séparés, writers uniques, données manquantes
+explicites, AG9 faiblement couplé, synthèse atomique, pack AG1 consultatif,
+dashboard commun, tests et rollback. **Reste ouvert** : appels World Monitor
+authentifiés, cycles VPS, replay LLM shadow et publication éventuelle d'AG1.
+Référence : `docs/audits/20260805_ag5_ag9_postimplementation_report.md`.
+
 - Les issues rÃ©solues restent visibles ici pour garder la traÃ§abilitÃ© â€” ne pas les supprimer, seulement changer leur statut en âœ… et citer la PR / le commit / la version.
 - Pour ajouter une nouvelle issue : crÃ©er une section `### âŒ N. Titre` avec **Constat** + **Impact** + **Correction envisagÃ©e**.

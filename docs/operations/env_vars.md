@@ -195,3 +195,34 @@ doivent etre presentes dans `allowed-env` pour etre visibles dans les workflows.
 Pour AG1 V4, ajouter au minimum `AG1_V4_DUCKDB_PATH`,
 `AG1_V4_DUCKDB_WRITER_PATH`, `AG1_V4_LEDGER_SCHEMA_PATH`,
 `AG1_V4_ACTIONS_IBKR_ENABLED_MODELS` et `AG1_V4_INITIAL_CAPITAL_EUR`.
+
+## Contexte global AG5–AG9
+
+Exemple sans secret : `infra/vps_hostinger_config/global-context.env.example`.
+
+| Variable | Défaut | Rôle |
+|---|---|---|
+| `WORLD_MONITOR_ENABLED` | `false` | Active les appels distants AG9. |
+| `WORLD_MONITOR_MODE` | `mcp` | `mcp`, `api` ou endpoint self-hosted compatible. |
+| `WORLD_MONITOR_BASE_URL` | `https://worldmonitor.app/mcp` | Endpoint externe. |
+| `WORLD_MONITOR_API_KEY` | vide | Secret hors repo; header `X-WorldMonitor-Key`. |
+| `WORLD_MONITOR_TIMEOUT_SECONDS` | `30` | Timeout d'un appel. |
+| `WORLD_MONITOR_MAX_RETRIES` | `2` | Retries transport bornés. |
+| `MACRO_DUCKDB_PATH` | `/files/duckdb/macro_data.duckdb` | Base writer AG5–AG8. |
+| `WORLD_MONITOR_DUCKDB_PATH` | `/files/duckdb/worldmonitor_v1.duckdb` | Base writer AG9. |
+| `GLOBAL_CONTEXT_DUCKDB_PATH` | `/files/duckdb/global_context_v1.duckdb` | Base writer synthèse. |
+| `GLOBAL_CONTEXT_ENABLED` | `false` | Autorise AG1 à lire le snapshot. |
+| `GLOBAL_CONTEXT_ADVISORY_ONLY` | `true` | Contrat consultatif; ne pas mettre à false. |
+| `GLOBAL_CONTEXT_FAIL_OPEN` | `true` | Fallback historique; ne pas mettre à false. |
+| `GLOBAL_CONTEXT_MAX_AGE_HOURS` | `12` | Seuil global optionnel; sinon seuils par composant. |
+| `AG1_GLOBAL_CONTEXT_MAX_CHARS` | `12000` | Budget compact avant fan-out. |
+| `AG1_GLOBAL_CONTEXT_TOP_EVENTS_MAX` | `5` | Événements AG9 maximum. |
+| `AG1_GLOBAL_CONTEXT_TOP_SECTORS_MAX` | `8` | Overlays secteurs maximum. |
+| `AG1_GLOBAL_CONTEXT_TOP_ASSETS_MAX` | `12` | Expositions portefeuille/candidats maximum. |
+| `AG9_DEFAULT_EVENT_HALF_LIFE_HOURS` | `72` | Repli decay; types configurés prioritaires. |
+| `AG9_SOURCE_DIVERSITY_MIN` | `2` | Sources distinctes pour facteur 1. |
+| `AG9_MIN_CONFIDENCE` | `0.35` | Éligibilité à l'agrégation. |
+| `AG9_CRITICAL_SCORE_THRESHOLD` | `0.65` | Seuil événement critique. |
+
+Les trois variables `*_ADVISORY_ONLY`/`*_FAIL_OPEN` sont documentaires pour le
+déploiement; le code impose actuellement ces deux invariants à `true`.

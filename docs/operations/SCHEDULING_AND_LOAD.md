@@ -4,6 +4,13 @@
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
+**Candidats AG5–AG9 non actifs au 2026-08-05 :** AG5 07:20, AG6 07:40,
+AG7 08:00, AG8 08:20, AG9 09:35/12:35/15:35 et synthèse
+10:05/13:05/16:05 Paris, L–V. Ils écrivent trois bases dédiées et ne déplacent
+aucun cron live. Validation détaillée et marges :
+[`ag5_ag9_scheduling.md`](ag5_ag9_scheduling.md). Ne les ajouter au tableau des
+actifs qu'après observation VPS.
+
 ## Contexte technique
 
 - **n8n applique les crons en fuseau `Europe/Paris`** (`GENERIC_TIMEZONE`). Les `run_log.started_at` DuckDB sont en **UTC** → toujours convertir (Paris = UTC+2 en été).
