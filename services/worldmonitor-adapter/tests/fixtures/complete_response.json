@@ -1,0 +1,1 @@
+{"events":[{"title":"Strait disruption","summary":"Traffic temporarily constrained","countries":["US"],"sectors":["Energy"],"commodities":["Oil"],"chokepoints":["Strait of Hormuz"],"severity":"high","confidence":0.8,"sources":["source-a","source-b"],"event_time":"2026-08-05T10:00:00Z","url":"https://example.test/event?id=1&utm_source=x"}]}

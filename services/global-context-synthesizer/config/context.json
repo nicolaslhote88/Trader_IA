@@ -1,0 +1,9 @@
+{
+  "config_version": "GLOBAL_CONTEXT_CONFIG_V1",
+  "schema_version": "GLOBAL_CONTEXT_V1",
+  "method_version": "GLOBAL_CONTEXT_SYNTHESIS_V1",
+  "snapshot_max_age_hours": 12,
+  "component_weights": {"AG5": 0.25, "AG6": 0.10, "AG7": 0.20, "AG8": 0.20, "AG9": 0.25},
+  "max_age_hours": {"AG5": 36, "AG6": 36, "AG7": 240, "AG8": 36, "AG9": 8},
+  "ag1_pack": {"max_chars": 12000, "top_events_max": 5, "top_sectors_max": 8, "top_assets_max": 12, "top_countries_max": 8}
+}
