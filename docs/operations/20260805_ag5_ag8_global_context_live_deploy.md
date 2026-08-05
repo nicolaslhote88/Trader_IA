@@ -86,6 +86,13 @@ Le premier run naturel AG1 enrichi est prévu le 2026-08-06 à 14:00 Paris. Apr�
 ce run, contrôler les champs `global_context_*` dans `core.runs`, le statut des
 trois propositions, la durée, le coût et l'absence de régression d'exécution.
 
+## Hotfix éditeur n8n
+
+Après un test manuel du shadow, les expressions d'URL basées sur `$env` ont été
+remplacées par les URLs Docker internes explicites dans AG1, AG5–AG8 et la
+synthèse. Détail, versions et rollback :
+`docs/operations/20260805_ag1_shadow_env_access_hotfix.md`.
+
 ## Rollback
 
 1. restaurer `/docker/root/docker-compose.yml` depuis

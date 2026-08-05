@@ -37,7 +37,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.MACRO_DATA_API_URL || 'http://macro-data-api:8081') + '/components/ag7/refresh?refresh_source=true' }}",
+        "url": "http://macro-data-api:8081/components/ag7/refresh?refresh_source=true",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "{}",

@@ -242,7 +242,7 @@ def add_global_context_nodes(workflow: Dict[str, Any]) -> None:
         {
             "parameters": {
                 "method": "POST",
-                "url": "={{ ($env.GLOBAL_CONTEXT_SYNTHESIZER_URL || 'http://global-context-synthesizer:8083') + '/ag1-pack' }}",
+                "url": "http://global-context-synthesizer:8083/ag1-pack",
                 "sendBody": True,
                 "specifyBody": "json",
                 "jsonBody": "={{ { portfolio: $json.portfolio_pack?.positions || [], opportunities: $json.opportunity_pack?.rows || [] } }}",

@@ -34,3 +34,12 @@ def test_forex_execution_is_not_reintroduced_by_global_context_workflows():
     assert "fx_orders_enabled" not in text
     assert "place_order" not in text
     assert "send_orders" not in text
+
+
+def test_deployed_workflows_do_not_depend_on_n8n_env_expression_access():
+    for workflow in _workflows():
+        if workflow["id"] == "AG9GLOBALRISK20260805":
+            continue
+        http_nodes = [node for node in workflow["nodes"] if node["type"] == "n8n-nodes-base.httpRequest"]
+        assert len(http_nodes) == 1
+        assert "$env" not in http_nodes[0]["parameters"]["url"]

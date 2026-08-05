@@ -34,6 +34,9 @@ def test_critical_consensus_risk_and_broker_sources_are_unchanged():
 
 def test_one_shared_context_node_precedes_all_three_models():
     active = workflow("AG1_workflow_v4_consensus.json")
+    fetch = node_by_name(active, "AG1.GC — Fetch Advisory Pack")
+    assert fetch["parameters"]["url"] == "http://global-context-synthesizer:8083/ag1-pack"
+    assert "$env" not in json.dumps(fetch, ensure_ascii=False)
     attach_targets = targets(active, "AG1.GC — Attach Advisory Pack")
     assert attach_targets == [{"node": "AG1.V4 — Liquidity Preflight", "type": "main", "index": 0}]
     fanout = targets(active, "AG1.V4 — Liquidity Preflight")
@@ -53,6 +56,9 @@ def test_one_shared_context_node_precedes_all_three_models():
 
 def test_shadow_is_manual_only_and_cannot_reach_broker_or_writer():
     shadow = workflow("AG1_workflow_v4_global_context_shadow.json")
+    fetch = node_by_name(shadow, "AG1.GC — Fetch Advisory Pack")
+    assert fetch["parameters"]["url"] == "http://global-context-synthesizer:8083/ag1-pack"
+    assert "$env" not in json.dumps(fetch, ensure_ascii=False)
     assert shadow["active"] is False
     assert not any(node["type"] == "n8n-nodes-base.scheduleTrigger" for node in shadow["nodes"])
     names = {node["name"] for node in shadow["nodes"]}

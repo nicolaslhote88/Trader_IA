@@ -37,7 +37,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ ($env.GLOBAL_CONTEXT_SYNTHESIZER_URL || 'http://global-context-synthesizer:8083') + '/synthesize' }}",
+        "url": "http://global-context-synthesizer:8083/synthesize",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "{}",
