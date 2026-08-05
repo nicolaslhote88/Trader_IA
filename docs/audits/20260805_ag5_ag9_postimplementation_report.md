@@ -1,5 +1,10 @@
 # Rapport post-implémentation AG5–AG9 — 2026-08-05
 
+> **Addendum live :** ce rapport fige l'état de qualification shadow. La
+> promotion AG5–AG8/synthèse/AG1 consultatif a ensuite été autorisée et réalisée,
+> tandis qu'AG9 a été mis en sommeil. Voir
+> [`../operations/20260805_ag5_ag8_global_context_live_deploy.md`](../operations/20260805_ag5_ag8_global_context_live_deploy.md).
+
 ## 1. Résumé exécutif
 
 Le code complet du contexte global a été construit : réhabilitation AG5–AG8,

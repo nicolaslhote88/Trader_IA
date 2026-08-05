@@ -49,12 +49,13 @@ Workflows d'approbation :
 
 Forex : workflows FX inactifs. Ne pas les réactiver sans décision explicite.
 
-Le nouveau contexte commun AG5–AG9 est implémenté mais désactivé par défaut :
-AG5 macro, AG6 valorisation relative FX, AG7 positionnement, AG8 régime taux/
-liquidité, AG9 risques structurés World Monitor et synthèse atomique. Il est
-strictement consultatif pour AG1. Architecture et statut :
+Le contexte commun est live depuis le 2026-08-05 pour AG5 macro, AG6
+valorisation relative FX, AG7 positionnement et AG8 régime taux/liquidité. Sa
+synthèse atomique est strictement consultative pour AG1. AG9 World Monitor reste
+en sommeil et est exclu des poids (`GLOBAL_CONTEXT_ENABLED_COMPONENTS=AG5,AG6,AG7,AG8`).
+Architecture et statut :
 `docs/architecture/global_context_architecture.md` et
-`docs/audits/20260805_ag5_ag9_postimplementation_report.md`.
+`docs/operations/20260805_ag5_ag8_global_context_live_deploy.md`.
 
 ## 3. Exécution IBKR et approbation
 

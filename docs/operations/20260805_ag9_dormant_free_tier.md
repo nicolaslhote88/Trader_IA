@@ -20,6 +20,8 @@ façon fiable et automatisée dans Trader_IA.
 - Politique de redémarrage : `restart=no`.
 - Workflow n8n `AG9GLOBALRISK20260805` : conservé non publié et inactif.
 - Valeur par défaut `WORLD_MONITOR_ENABLED=false` : inchangée.
+- Production hors AG9 : `GLOBAL_CONTEXT_ENABLED_COMPONENTS=AG5,AG6,AG7,AG8` ; AG9
+  apparaît `DISABLED`/`AG9_DORMANT` et ne dégrade ni couverture ni fraîcheur.
 - Base shadow World Monitor et code conservés pour une reprise future.
 - Aucun impact sur AG5–AG8, le synthétiseur, AG1 V4 live, le broker ou les ordres.
 

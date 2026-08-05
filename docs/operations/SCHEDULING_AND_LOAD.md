@@ -4,12 +4,13 @@
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
-**Candidats AG5–AG9 non actifs au 2026-08-05 :** AG5 07:20, AG6 07:40,
-AG7 08:00, AG8 08:20, AG9 09:35/12:35/15:35 et synthèse
-10:05/13:05/16:05 Paris, L–V. Ils écrivent trois bases dédiées et ne déplacent
-aucun cron live. Validation détaillée et marges :
-[`ag5_ag9_scheduling.md`](ag5_ag9_scheduling.md). Ne les ajouter au tableau des
-actifs qu'après observation VPS.
+**Contexte global live depuis le 2026-08-05 :** AG5 07:20, AG6 07:40,
+AG7 08:00, AG8 08:20 et synthèse 10:05/13:05/16:05 Paris, L–V. AG9 reste
+inactif/en sommeil et son cron 09:35/12:35/15:35 n'est pas enregistré. Les
+producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
+`global_context_v1.duckdb`. Détail :
+[`ag5_ag9_scheduling.md`](ag5_ag9_scheduling.md) et
+[`20260805_ag5_ag8_global_context_live_deploy.md`](20260805_ag5_ag8_global_context_live_deploy.md).
 
 ## Contexte technique
 

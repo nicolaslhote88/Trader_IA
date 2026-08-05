@@ -1,5 +1,10 @@
 # Déploiement progressif AG5–AG9
 
+> Statut au 2026-08-05 : cette procédure décrit la qualification initiale.
+> Nicolas a ensuite autorisé la promotion hors AG9. L'état live et le rollback
+> exact sont consignés dans
+> [`20260805_ag5_ag8_global_context_live_deploy.md`](20260805_ag5_ag8_global_context_live_deploy.md).
+
 ## Préconditions
 
 1. Branche dédiée propre pour les fichiers du chantier; ne pas inclure les

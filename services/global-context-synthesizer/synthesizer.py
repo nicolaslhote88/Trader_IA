@@ -80,6 +80,16 @@ def load_config() -> dict:
     config["ag1_pack"]["top_events_max"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_TOP_EVENTS_MAX", config["ag1_pack"]["top_events_max"]))
     config["ag1_pack"]["top_sectors_max"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_TOP_SECTORS_MAX", config["ag1_pack"]["top_sectors_max"]))
     config["ag1_pack"]["top_assets_max"] = int(os.environ.get("AG1_GLOBAL_CONTEXT_TOP_ASSETS_MAX", config["ag1_pack"]["top_assets_max"]))
+    enabled_raw = os.environ.get("GLOBAL_CONTEXT_ENABLED_COMPONENTS")
+    if enabled_raw is not None:
+        requested = [value.strip().upper() for value in enabled_raw.split(",") if value.strip()]
+        allowed = set(config["component_weights"])
+        invalid = sorted(set(requested) - allowed)
+        if invalid:
+            raise ValueError(f"GLOBAL_CONTEXT_UNKNOWN_COMPONENTS:{','.join(invalid)}")
+        if not requested:
+            raise ValueError("GLOBAL_CONTEXT_ZERO_ENABLED_COMPONENTS")
+        config["enabled_components"] = list(dict.fromkeys(requested))
     global_max = os.environ.get("GLOBAL_CONTEXT_MAX_AGE_HOURS")
     if global_max:
         config["max_age_hours"] = {key: float(global_max) for key in config["max_age_hours"]}
@@ -111,7 +121,17 @@ def _component_status(name: str, rows: list[dict], config: dict, now: datetime) 
     stale_by_age = age is None or age > max_age
     if stale_by_age:
         freshness = "stale" if age is not None else "missing"
-    coverage_values = [float(row.get("coverage_ratio") or 0.0) for row in rows]
+    # AG7's canonical row contract predates the shared coverage_ratio column.
+    # Its producer already reports complete row coverage as 1.0; preserve that
+    # explicit contract until the next additive schema version.
+    coverage_values = [
+        float(
+            row.get("coverage_ratio")
+            if row.get("coverage_ratio") is not None
+            else (1.0 if name == "AG7" else 0.0)
+        )
+        for row in rows
+    ]
     confidence_values = [float(row.get("confidence") or 0.0) for row in rows]
     warnings = []
     if len(snapshot_ids) != 1:
@@ -126,6 +146,16 @@ def _component_status(name: str, rows: list[dict], config: dict, now: datetime) 
         "confidence": sum(confidence_values) / len(confidence_values), "freshness_status": freshness,
         "schema_version": rows[0].get("schema_version"), "method_version": rows[0].get("method_version"),
         "row_count": len(rows), "warnings": warnings,
+    }
+
+
+def _disabled_component_status(name: str) -> dict:
+    warning = "AG9_DORMANT" if name == "AG9" else f"{name}_DISABLED"
+    return {
+        "component": name, "component_snapshot_id": None, "component_as_of": None,
+        "age_hours": None, "status": "DISABLED", "coverage_ratio": 0.0,
+        "confidence": 0.0, "freshness_status": "disabled", "schema_version": None,
+        "method_version": None, "row_count": 0, "warnings": [warning],
     }
 
 
@@ -176,16 +206,22 @@ def synthesize(macro_path: str, world_path: str, *, now: Optional[datetime] = No
     ag9_snapshot_rows = query_rows(world_path, "SELECT * FROM main.v_latest_ag9_global_risk")
     ag9 = ag9_snapshot_rows
     components = {"AG5": ag5, "AG6": ag6, "AG7": ag7, "AG8": ag8, "AG9": ag9}
-    statuses = [_component_status(name, rows, config, now) for name, rows in components.items()]
-    if not any(row["row_count"] > 0 for row in statuses):
+    enabled_components = set(config["enabled_components"])
+    statuses = [
+        _component_status(name, rows, config, now) if name in enabled_components else _disabled_component_status(name)
+        for name, rows in components.items()
+    ]
+    enabled_statuses = [row for row in statuses if row["component"] in enabled_components]
+    if not any(row["row_count"] > 0 for row in enabled_statuses):
         raise RuntimeError("GLOBAL_CONTEXT_ZERO_AVAILABLE_COMPONENTS")
 
     snapshot_id = f"GC_{now.strftime('%Y%m%dT%H%M%SZ')}_{uuid.uuid4().hex[:8]}"
-    ag9_payload = json_value(ag9[0].get("payload_json")) if ag9 else {}
-    ag9_events = query_rows(world_path, "SELECT * FROM main.v_latest_events") if ag9 else []
-    ag9_countries = query_rows(world_path, "SELECT * FROM main.v_latest_country_risk") if ag9 else []
-    ag9_sectors = query_rows(world_path, "SELECT * FROM main.v_latest_sector_impacts") if ag9 else []
-    ag9_assets = query_rows(world_path, "SELECT * FROM core.asset_impacts WHERE snapshot_id=?", [ag9_payload.get("snapshot_id")]) if ag9 else []
+    ag9_enabled = "AG9" in enabled_components
+    ag9_payload = json_value(ag9[0].get("payload_json")) if ag9_enabled and ag9 else {}
+    ag9_events = query_rows(world_path, "SELECT * FROM main.v_latest_events") if ag9_enabled and ag9 else []
+    ag9_countries = query_rows(world_path, "SELECT * FROM main.v_latest_country_risk") if ag9_enabled and ag9 else []
+    ag9_sectors = query_rows(world_path, "SELECT * FROM main.v_latest_sector_impacts") if ag9_enabled and ag9 else []
+    ag9_assets = query_rows(world_path, "SELECT * FROM core.asset_impacts WHERE snapshot_id=?", [ag9_payload.get("snapshot_id")]) if ag9_enabled and ag9 else []
 
     macro_by = {str(row.get("entity_id")): _compact_component(row, ("macro_score", "subscores_json", "coverage_ratio", "confidence", "freshness_status", "missing_inputs_json", "stale_inputs_json")) for row in ag5}
     valuation_by = {str(row.get("currency")): _compact_component(row, ("valuation_score", "carry_score", "real_carry_score", "ppp_gap", "reer_gap", "terms_of_trade_score", "spot_reference", "coverage_ratio", "confidence", "freshness_status", "missing_inputs_json", "stale_inputs_json", "proxy_inputs_json", "input_status_json")) for row in ag6}
@@ -215,11 +251,12 @@ def synthesize(macro_path: str, world_path: str, *, now: Optional[datetime] = No
     sector_context = [{"sector": row.get("sector"), "risk_score": row.get("impact_score"), "confidence": row.get("confidence"), "freshness_status": "fresh", "contributors": json_value(row.get("contributors_json")), "payload": json_value(row.get("payload_json"))} for row in ag9_sectors]
     asset_context = [{"asset_id": row.get("asset_id"), "risk_score": row.get("impact_score"), "confidence": row.get("confidence"), "freshness_status": "fresh", "exposure_known": bool(row.get("exposure_known")), "contributors": json_value(row.get("contributors_json")), "limitations": json_value(row.get("limitations_json")), "payload": json_value(row.get("payload_json"))} for row in ag9_assets]
 
-    available_weight = sum(config["component_weights"][row["component"]] for row in statuses if row["row_count"] > 0)
-    coverage = sum(config["component_weights"][row["component"]] * float(row["coverage_ratio"] or 0.0) for row in statuses)
-    confidence = sum(config["component_weights"][row["component"]] * float(row["confidence"] or 0.0) for row in statuses) / available_weight if available_weight else 0.0
-    overall_freshness = _worst([row["freshness_status"] for row in statuses if row["row_count"] > 0])
-    overall_status = "OK" if all(row["status"] == "OK" for row in statuses) else "DEGRADED"
+    enabled_weight = sum(config["component_weights"][name] for name in enabled_components)
+    available_weight = sum(config["component_weights"][row["component"]] for row in enabled_statuses if row["row_count"] > 0)
+    coverage = sum(config["component_weights"][row["component"]] * float(row["coverage_ratio"] or 0.0) for row in enabled_statuses) / enabled_weight
+    confidence = sum(config["component_weights"][row["component"]] * float(row["confidence"] or 0.0) for row in enabled_statuses) / available_weight if available_weight else 0.0
+    overall_freshness = _worst([row["freshness_status"] for row in enabled_statuses if row["row_count"] > 0])
+    overall_status = "OK" if all(row["status"] == "OK" for row in enabled_statuses) else "DEGRADED"
     pack = {
         "schema_version": "AG1_GLOBAL_CONTEXT_PACK_V1", "snapshot_id": snapshot_id,
         "method_version": config["method_version"],

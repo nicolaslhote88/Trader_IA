@@ -1,5 +1,9 @@
 # Runbook AG5–AG9 et contexte global
 
+État live depuis le 2026-08-05 : AG5–AG8, synthèse et intégration AG1 sont
+actifs avec `GLOBAL_CONTEXT_ENABLED_COMPONENTS=AG5,AG6,AG7,AG8`. AG9 reste
+dormant ; l'absence de service World Monitor est donc attendue.
+
 ## Santé rapide (lecture seule)
 
 ```bash

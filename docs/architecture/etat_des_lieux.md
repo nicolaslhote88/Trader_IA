@@ -17,14 +17,13 @@ Les piliers d'analyse sont alimentés par des workflows autonomes : **AG2-V3** (
 
 **Le Forex est entièrement gelé** (workflows FX inactifs, `fx_orders_enabled=false`, bases conservées). L'ancien ensemble AG1-V3 (3 DuckDB parallèles) est décommissionné au profit du ledger unique V4.
 
-**Addendum contexte global 2026-08-05.** AG5–AG8 historiques étaient toujours
-inactifs et leurs données périmées. Une réhabilitation commune et AG9 World
-Monitor sont désormais implémentés dans le repo, avec writers uniques,
-snapshots atomiques, dashboard commun et pack AG1 consultatif. Rien n'est activé
-sur le chemin de trading : `WORLD_MONITOR_ENABLED=false` et
-`GLOBAL_CONTEXT_ENABLED=false` restent les défauts. La publication AG1 enrichie
-est interdite avant plusieurs cycles réels et un shadow LLM sans broker. Voir
-`global_context_architecture.md` et le rapport du 2026-08-05.
+**Addendum contexte global 2026-08-05.** AG5–AG8 réhabilités, synthèse atomique,
+dashboard commun et pack AG1 strictement consultatif sont déployés live.
+Production : `GLOBAL_CONTEXT_ENABLED_COMPONENTS=AG5,AG6,AG7,AG8`. AG9 World
+Monitor reste en sommeil et ne participe ni aux poids ni à la fraîcheur. Les
+hashes consensus/safety/broker sont inchangés. Voir
+`global_context_architecture.md` et
+`../operations/20260805_ag5_ag8_global_context_live_deploy.md`.
 
 État au 2026-07-02 : NAV **9 921,80 €** (−0,78 % depuis le départ à 10 000 €), 7 positions (6 Euronext + NVDA), 13 fills au ledger. Principal point dur : **l'exécution des ordres US n'aboutit quasi jamais** (absence de market data US → prompt IBKR → approbation Telegram expirée) — voir F1 de l'audit.
 
@@ -125,8 +124,11 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
 - Le dashboard montre l'étape **décision matrice**, PAS le preflight IBKR (étape exécution, verdict au moment de l'ordre).
 - ⚠️ La version live `/opt/trading-dashboard/app/app.py` (20 729 l.) a **divergé** du repo `services/dashboard/app.py` (20 454 l.) ; la live est la référence, le repo est à resynchroniser (audit F8).
 
-### 3.8 Forex — gelé
-Workflows AG1-FX/AG2-FX/AG3-FX/AG4-FX/AG5-AG8 tous inactifs (`active=0`), `IBKR_FX_ORDERS_ENABLED=false`. Bases `ag*_fx_v1.duckdb` et `ag4_forex_v1.duckdb` conservées figées (dernières écritures mai-juin 2026). Réactivation = décision explicite de Nicolas uniquement.
+### 3.8 Forex — trading gelé
+Les workflows de trading AG1-FX/AG2-FX/AG3-FX/AG4-FX restent inactifs et
+`IBKR_FX_ORDERS_ENABLED=false`. AG5–AG8 ont été réactivés comme producteurs
+analytiques communs sans nœud broker ni ordre Forex. Les bases `ag*_fx_v1.duckdb`
+et `ag4_forex_v1.duckdb` restent figées.
 
 ---
 
@@ -142,6 +144,8 @@ Résumé des crons actifs (heure Paris) après déconfliction anti-contention du
 | 06:45 / 10:45 / 18:45 (L-V) | AG4-V3 macro | ag4_v3 |
 | 08:05 / 11:05 / 14:05 / 17:05 (L-V) | AG4_Spé-V2 Boursorama | ag4_spe |
 | 09:00 / 13:00 / 15:00 (L-V) | AG2 Held+Core | ag2_v3 |
+| 07:20 / 07:40 / 08:00 / 08:20 (L-V) | AG5 / AG6 / AG7 / AG8 | macro_data |
+| 10:05 / 13:05 / 16:05 (L-V) | Global Context Synthesizer | global_context_v1 |
 | 10:00 / 13:00 / 16:00 (L-V) | AG4_Spé Finnhub + IBKR news | ag4_spe |
 | 9h-17h horaire (L-V) | AG1-PF MTM | ag1_v4 |
 | **14:00 + 16:30 (L-V)** | **AG1 V4 Consensus** | ag1_v4 |
@@ -163,8 +167,8 @@ Règles : un seul écrivain par base ; écart ≥ durée_max + marge entre écri
 | `ag4_spe_v2.duckdb` | 587 Mo | News par valeur (3 sources) | AG4_Spé ×3 (≤1.4.3) |
 | `yf_enrichment_v1.duckdb` | 38 Mo | Enrichissement quotidien | YF-ENRICH |
 | `macro_data.duckdb` | 40 Mo | FRED/COT/taux | macro-data-api |
-| `worldmonitor_v1.duckdb` | non créée au dernier audit live | AG9, réponses brutes, événements et risques | worldmonitor-adapter (≤1.4.3) |
-| `global_context_v1.duckdb` | non créée au dernier audit live | snapshot canonique AG5–AG9 et pack AG1 | global-context-synthesizer (≤1.4.3) |
+| `worldmonitor_v1.duckdb` | AG9 en sommeil, aucune base live requise | AG9 futur | — |
+| `global_context_v1.duckdb` | créée le 2026-08-05 | snapshot canonique AG5–AG8 et pack AG1 | global-context-synthesizer (1.4.3) |
 | `ag*_fx_*.duckdb`, `ag4_forex_v1` | ~1,2 Go cumulés | Forex gelé | — (figées) |
 
 Pièges transverses : vue `SELECT *` cassée par tout `ALTER TABLE ADD COLUMN` (recréer la vue) ; base souvent lockée par le dashboard → retry sur lock ; sandbox Python n8n (imports whitelistés, un par ligne, `hashlib` interdit) ; éditeurs qui tronquent les gros fichiers (>~160 lignes) → patcher via shell.

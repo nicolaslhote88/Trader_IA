@@ -1,5 +1,10 @@
 # Handoff draft PR — AG5 à AG9
 
+> Mise à jour 2026-08-05 : AG5–AG8, synthèse, dashboard et AG1 consultatif sont
+> déployés live ; AG9 est dormant. Les anciennes « actions restantes avant
+> publication » ci-dessous décrivent le garde-fou shadow initial. État courant :
+> [`20260805_ag5_ag8_global_context_live_deploy.md`](20260805_ag5_ag8_global_context_live_deploy.md).
+
 ## Branche et portée
 
 Branche : `codex/ag5-ag9-global-context-20260805`.

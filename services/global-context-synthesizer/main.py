@@ -50,7 +50,7 @@ async def run_synthesis():
             "run_id": run_id, "started_at": started, "finished_at": datetime.now(timezone.utc),
             "status": bundle["snapshot"]["status"],
             "components_available": sum(row["row_count"] > 0 for row in bundle["component_status"]),
-            "components_missing": sum(row["row_count"] == 0 for row in bundle["component_status"]),
+            "components_missing": sum(row["status"] == "MISSING" for row in bundle["component_status"]),
             "rows_written": rows_written,
         }
         db.publish(bundle)

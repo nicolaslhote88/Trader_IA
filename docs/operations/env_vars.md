@@ -212,6 +212,7 @@ Exemple sans secret : `infra/vps_hostinger_config/global-context.env.example`.
 | `WORLD_MONITOR_DUCKDB_PATH` | `/files/duckdb/worldmonitor_v1.duckdb` | Base writer AG9. |
 | `GLOBAL_CONTEXT_DUCKDB_PATH` | `/files/duckdb/global_context_v1.duckdb` | Base writer synthèse. |
 | `GLOBAL_CONTEXT_ENABLED` | `false` | Autorise AG1 à lire le snapshot. |
+| `GLOBAL_CONTEXT_ENABLED_COMPONENTS` | `AG5,AG6,AG7,AG8,AG9` | Composants inclus dans couverture/fraîcheur. Mettre `AG5,AG6,AG7,AG8` quand AG9 est en sommeil. |
 | `GLOBAL_CONTEXT_ADVISORY_ONLY` | `true` | Contrat consultatif; ne pas mettre à false. |
 | `GLOBAL_CONTEXT_FAIL_OPEN` | `true` | Fallback historique; ne pas mettre à false. |
 | `GLOBAL_CONTEXT_MAX_AGE_HOURS` | `12` | Seuil global optionnel; sinon seuils par composant. |

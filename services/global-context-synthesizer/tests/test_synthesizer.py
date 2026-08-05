@@ -59,6 +59,22 @@ def test_atomic_publication_and_canonical_views(tmp_path):
         assert con.execute("SELECT COUNT(*) FROM main.v_component_health").fetchone()[0] == 5
 
 
+def test_dormant_ag9_is_excluded_from_freshness_and_coverage(tmp_path, monkeypatch):
+    macro_path = tmp_path / "macro_data_test.duckdb"
+    seed_macro(macro_path)
+    monkeypatch.setenv("GLOBAL_CONTEXT_ENABLED_COMPONENTS", "AG5")
+    bundle = synthesize(str(macro_path), str(tmp_path / "missing-world.duckdb"), now=NOW)
+    statuses = {row["component"]: row for row in bundle["component_status"]}
+    pack = bundle["snapshot"]["ag1_pack"]
+    assert statuses["AG9"]["status"] == "DISABLED"
+    assert statuses["AG9"]["freshness_status"] == "disabled"
+    assert "AG9_DORMANT" in pack["source_warnings"]
+    assert "AG9_UNAVAILABLE" not in pack["source_warnings"]
+    assert pack["freshness_status"] == "aging"
+    assert pack["coverage_ratio"] == 0.5
+    assert pack["confidence"] == 0.4
+
+
 def test_run_specific_advisory_mapping_does_not_invent_exposure():
     base = {
         "schema_version": "AG1_GLOBAL_CONTEXT_PACK_V1", "method_version": "GLOBAL_CONTEXT_SYNTHESIS_V1",
