@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Tuple
 ROOT = Path(__file__).resolve().parent
 TEMPLATE_PATH = ROOT / "AG1_workflow_template_v4.json"
 OUTPUT_PATH = ROOT / "AG1_workflow_v4_consensus.json"
+SHADOW_OUTPUT_PATH = ROOT / "AG1_workflow_v4_global_context_shadow.json"
 
 
 MODEL_BRANCHES = {
@@ -53,6 +54,7 @@ CODE_MAP = {
     "R8 — Data Prep for Matrix (Fusion Filter)": ("pythonCode", ROOT / "nodes/pre_agent/R8_data_prep_matrix.code.py"),
     "Calcul Matrice & Briefing": ("pythonCode", ROOT / "nodes/pre_agent/calcul_matrice_briefing.code.py"),
     "AG1.00 — Assemble Input Packs": ("jsCode", ROOT / "nodes/agent_input/ag1_00_assemble_input_packs.code.js"),
+    "AG1.GC — Attach Advisory Pack": ("jsCode", ROOT / "nodes/agent_input/ag1_gc_attach_advisory_pack.code.js"),
     "AG1.V4 — Liquidity Preflight": ("jsCode", ROOT / "nodes/pre_agent/ag1_v4_liquidity_preflight.code.js"),
     "AG1.V4 — Build Consensus": ("jsCode", ROOT / "nodes/post_agent/06_build_consensus_v4.code.js"),
     "7 - Validate & Enforce Safety": ("jsCode", ROOT / "nodes/post_agent/07_validate_enforce_safety_v5.code.js"),
@@ -235,6 +237,49 @@ def add_input_and_parser_nodes(workflow: Dict[str, Any]) -> None:
             node.setdefault("parameters", {})["inputSchema"] = schema
 
 
+def add_global_context_nodes(workflow: Dict[str, Any]) -> None:
+    nodes = [
+        {
+            "parameters": {
+                "method": "POST",
+                "url": "={{ ($env.GLOBAL_CONTEXT_SYNTHESIZER_URL || 'http://global-context-synthesizer:8083') + '/ag1-pack' }}",
+                "sendBody": True,
+                "specifyBody": "json",
+                "jsonBody": "={{ { portfolio: $json.portfolio_pack?.positions || [], opportunities: $json.opportunity_pack?.rows || [] } }}",
+                "options": {"timeout": 30000},
+            },
+            "type": "n8n-nodes-base.httpRequest",
+            "typeVersion": 4,
+            "position": [2336, 11440],
+            "id": "ag1-gc-fetch-advisory-pack",
+            "name": "AG1.GC — Fetch Advisory Pack",
+            "retryOnFail": True,
+            "maxTries": 2,
+            "waitBetweenTries": 1000,
+            "onError": "continueRegularOutput",
+        },
+        {
+            "parameters": {"mode": "append", "numberInputs": 2},
+            "type": "n8n-nodes-base.merge",
+            "typeVersion": 3.2,
+            "position": [2560, 11584],
+            "id": "ag1-gc-merge-advisory-pack",
+            "name": "AG1.GC — Merge Advisory Pack",
+        },
+        {
+            "parameters": {"jsCode": read_code(ROOT / "nodes/agent_input/ag1_gc_attach_advisory_pack.code.js")},
+            "type": "n8n-nodes-base.code",
+            "typeVersion": 2,
+            "position": [2752, 11584],
+            "id": "ag1-gc-attach-advisory-pack",
+            "name": "AG1.GC — Attach Advisory Pack",
+        },
+    ]
+    for payload in nodes:
+        if not has_node(workflow, payload["name"]):
+            workflow["nodes"].append(payload)
+
+
 def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
     node_payload = {
         "parameters": {
@@ -341,7 +386,10 @@ def patch_positions(workflow: Dict[str, Any]) -> None:
         return
     positions = {
         "AG1.00 — Assemble Input Packs": [2240, 11584],
-        "AG1.V4 — Liquidity Preflight": [2496, 11584],
+        "AG1.GC — Fetch Advisory Pack": [2464, 11440],
+        "AG1.GC — Merge Advisory Pack": [2656, 11584],
+        "AG1.GC — Attach Advisory Pack": [2848, 11584],
+        "AG1.V4 — Liquidity Preflight": [3040, 11584],
         "Anthropic Chat Model": [3264, 9664],
         "AG1.V4 — Structured Output Claude": [3264, 10176],
         "Agent #1 - Portfolio manager2": [2928, 9920],
@@ -379,7 +427,14 @@ def patch_connections(workflow: Dict[str, Any]) -> None:
             (MODEL_BRANCHES["claude_sonnet46"]["agent"], 0),
         ],
     )
-    set_main_connections(workflow, "AG1.00 — Assemble Input Packs", [("AG1.V4 — Liquidity Preflight", 0)])
+    set_main_connections(
+        workflow,
+        "AG1.00 — Assemble Input Packs",
+        [("AG1.GC — Merge Advisory Pack", 0), ("AG1.GC — Fetch Advisory Pack", 0)],
+    )
+    set_main_connections(workflow, "AG1.GC — Fetch Advisory Pack", [("AG1.GC — Merge Advisory Pack", 1)])
+    set_main_connections(workflow, "AG1.GC — Merge Advisory Pack", [("AG1.GC — Attach Advisory Pack", 0)])
+    set_main_connections(workflow, "AG1.GC — Attach Advisory Pack", [("AG1.V4 — Liquidity Preflight", 0)])
     for branch in MODEL_BRANCHES.values():
         set_main_connections(workflow, branch["agent"], [(branch["extractor"], 0)])
         set_main_connections(workflow, branch["extractor"], [("AG1.V4 — Merge Model Proposals", branch["merge_input"])])
@@ -426,6 +481,7 @@ def build(source_path: Path) -> Dict[str, Any]:
     ])
     patch_model_options(workflow)
     add_input_and_parser_nodes(workflow)
+    add_global_context_nodes(workflow)
     add_anthropic_model_node(workflow)
     add_consensus_nodes(workflow)
     patch_code_nodes(workflow)
@@ -436,6 +492,45 @@ def build(source_path: Path) -> Dict[str, Any]:
     return workflow
 
 
+def make_shadow(active_candidate: Dict[str, Any]) -> Dict[str, Any]:
+    workflow = copy.deepcopy(active_candidate)
+    workflow["id"] = "AG1V4GLOBALCONTEXTSHADOW20260805"
+    workflow["name"] = "AG1 V4 — Global Context Shadow (NO BROKER)"
+    workflow["active"] = False
+    schedule_names = [node.get("name") for node in workflow["nodes"] if node.get("type") == "n8n-nodes-base.scheduleTrigger"]
+    remove_nodes(workflow, schedule_names + [
+        "AG1.V4 — Liquidity Preflight",
+        "7 - Validate & Enforce Safety",
+        "07b - IBKR Send Orders",
+        "8 - Build DuckDB Bundle",
+        "9 - Upsert Run Bundle (DuckDB)",
+        "10 - Post-Run Health (DuckDB)",
+    ])
+    workflow["nodes"].append({
+        "parameters": {"jsCode": read_code(ROOT / "nodes/agent_input/ag1_gc_shadow_capture.code.js")},
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [4560, 11584],
+        "id": "ag1-gc-shadow-capture",
+        "name": "AG1.GC — Shadow Capture (NO BROKER)",
+    })
+    set_main_connections(
+        workflow,
+        "AG1.GC — Attach Advisory Pack",
+        [
+            ("AG1.V4 — Merge Model Proposals", 0),
+            (MODEL_BRANCHES["chatgpt52"]["agent"], 0),
+            (MODEL_BRANCHES["grok41_reasoning"]["agent"], 0),
+            (MODEL_BRANCHES["claude_sonnet46"]["agent"], 0),
+        ],
+    )
+    set_main_connections(workflow, "AG1.V4 — Build Consensus", [("AG1.GC — Shadow Capture (NO BROKER)", 0)])
+    forbidden = [node.get("name") for node in workflow["nodes"] if "IBKR Send Orders" in str(node.get("name")) or "DuckDB" in str(node.get("name"))]
+    if forbidden:
+        raise ValueError(f"Shadow contains forbidden nodes: {forbidden}")
+    return workflow
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, default=TEMPLATE_PATH)
@@ -443,6 +538,9 @@ def main() -> None:
     workflow = build(args.source)
     write_json(OUTPUT_PATH, workflow)
     print(f"Wrote {OUTPUT_PATH}")
+    shadow = make_shadow(workflow)
+    write_json(SHADOW_OUTPUT_PATH, shadow)
+    print(f"Wrote {SHADOW_OUTPUT_PATH}")
 
 
 if __name__ == "__main__":

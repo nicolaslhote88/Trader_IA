@@ -209,13 +209,8 @@ def _db_con(db_path: str, retries: int = 6, base_delay: float = 0.2):
     try:
         yield con
     finally:
-        # CHECKPOINT avant close pour libérer les pages orphelines laissées
-        # par les INSERT ... ON CONFLICT DO UPDATE. Sans ça, les fichiers
-        # .duckdb fragmentent de plusieurs GB en quelques semaines.
-        try:
-            con.execute("CHECKPOINT")
-        except Exception:
-            pass
+        # Aucun CHECKPOINT explicite dans un run n8n : la compaction est une
+        # maintenance offline dédiée afin d'éviter timeout et pic mémoire.
         try:
             con.close()
         except Exception:
@@ -237,6 +232,13 @@ def _require_run(bundle: Mapping[str, Any]) -> Dict[str, Any]:
     run["prompt_version"] = _clean_text(run.get("prompt_version") or run.get("promptVersion"), 128) or None
     run["model"] = _clean_text(run.get("model"), 128) or None
     run["n8n_execution_id"] = _clean_text(run.get("n8n_execution_id") or run.get("n8nExecutionId"), 128) or None
+    run["global_context_snapshot_id"] = _clean_text(run.get("global_context_snapshot_id"), 160) or None
+    run["global_context_payload_hash"] = _clean_text(run.get("global_context_payload_hash"), 128) or None
+    run["global_context_schema_version"] = _clean_text(run.get("global_context_schema_version"), 128) or None
+    run["global_context_method_version"] = _clean_text(run.get("global_context_method_version"), 128) or None
+    run["global_context_age"] = _to_float(run.get("global_context_age"), None)
+    run["global_context_status"] = _clean_text(run.get("global_context_status"), 128) or None
+    run["global_context_pack_json"] = run.get("global_context_pack_json")
     run["decision_summary"] = _clean_text(run.get("decision_summary") or run.get("decisionSummary"), 512) or None
     run["data_ok_for_trading"] = _to_bool(run.get("data_ok_for_trading"), default=True)
     run["price_coverage_pct"] = _to_float(run.get("price_coverage_pct"), None)
@@ -254,10 +256,13 @@ def _upsert_run(con: duckdb.DuckDBPyConnection, run: Mapping[str, Any]) -> int:
         """
         INSERT INTO core.runs (
           run_id, ts_start, ts_end, tz, strategy_version, config_version, prompt_version, model,
-          n8n_execution_id, decision_summary, data_ok_for_trading, price_coverage_pct, news_count,
+          n8n_execution_id, global_context_snapshot_id, global_context_payload_hash,
+          global_context_schema_version, global_context_method_version, global_context_age,
+          global_context_status, global_context_pack_json,
+          decision_summary, data_ok_for_trading, price_coverage_pct, news_count,
           ai_cost_eur, expected_fees_eur, warnings_json, agent_output_json, risk_gate_json
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (run_id) DO UPDATE SET
           ts_start = excluded.ts_start,
           ts_end = excluded.ts_end,
@@ -267,6 +272,13 @@ def _upsert_run(con: duckdb.DuckDBPyConnection, run: Mapping[str, Any]) -> int:
           prompt_version = excluded.prompt_version,
           model = excluded.model,
           n8n_execution_id = excluded.n8n_execution_id,
+          global_context_snapshot_id = excluded.global_context_snapshot_id,
+          global_context_payload_hash = excluded.global_context_payload_hash,
+          global_context_schema_version = excluded.global_context_schema_version,
+          global_context_method_version = excluded.global_context_method_version,
+          global_context_age = excluded.global_context_age,
+          global_context_status = excluded.global_context_status,
+          global_context_pack_json = excluded.global_context_pack_json,
           decision_summary = excluded.decision_summary,
           data_ok_for_trading = excluded.data_ok_for_trading,
           price_coverage_pct = excluded.price_coverage_pct,
@@ -287,6 +299,13 @@ def _upsert_run(con: duckdb.DuckDBPyConnection, run: Mapping[str, Any]) -> int:
             run["prompt_version"],
             run["model"],
             run["n8n_execution_id"],
+            run["global_context_snapshot_id"],
+            run["global_context_payload_hash"],
+            run["global_context_schema_version"],
+            run["global_context_method_version"],
+            run["global_context_age"],
+            run["global_context_status"],
+            _json_text(run.get("global_context_pack_json")),
             run["decision_summary"],
             run["data_ok_for_trading"],
             run["price_coverage_pct"],

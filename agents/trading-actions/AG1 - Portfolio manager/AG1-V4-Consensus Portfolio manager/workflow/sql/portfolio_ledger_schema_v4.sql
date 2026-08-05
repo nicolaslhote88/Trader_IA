@@ -11,6 +11,13 @@ CREATE TABLE IF NOT EXISTS core.runs (
   prompt_version VARCHAR,
   model VARCHAR,
   n8n_execution_id VARCHAR,
+  global_context_snapshot_id VARCHAR,
+  global_context_payload_hash VARCHAR,
+  global_context_schema_version VARCHAR,
+  global_context_method_version VARCHAR,
+  global_context_age DOUBLE,
+  global_context_status VARCHAR,
+  global_context_pack_json JSON,
   decision_summary VARCHAR,
   data_ok_for_trading BOOLEAN,
   price_coverage_pct DOUBLE,
@@ -22,6 +29,13 @@ CREATE TABLE IF NOT EXISTS core.runs (
   risk_gate_json JSON,
   created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_snapshot_id VARCHAR;
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_payload_hash VARCHAR;
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_schema_version VARCHAR;
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_method_version VARCHAR;
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_age DOUBLE;
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_status VARCHAR;
+ALTER TABLE core.runs ADD COLUMN IF NOT EXISTS global_context_pack_json JSON;
 CREATE TABLE IF NOT EXISTS core.instruments (
   symbol VARCHAR PRIMARY KEY,
   name VARCHAR,
