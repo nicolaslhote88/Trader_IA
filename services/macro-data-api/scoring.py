@@ -1,538 +1,492 @@
-"""
-Calcul des scores des 3 piliers pour le framework Global Macro.
+"""Méthodes canoniques AG5–AG8.
 
-Pilier 1 – Macro/Flows : growth, inflation, CB policy, current account
-Pilier 2 – Valorisation : carry (rate differential), PPP deviation
-Pilier 3 – Positionnement : COT z-score (inversé → hated = bullish)
+Les fonctions de ce module sont pures : aucune lecture réseau et aucune écriture
+DuckDB. Une valeur absente reste ``None`` et n'est jamais convertie en signal
+neutre. Les scores sont bornés dans [-1, 1].
 """
 
-import logging
-import math
+from __future__ import annotations
+
 import json
-from datetime import date
-from typing import Optional
+import math
+from datetime import datetime, timezone
+from typing import Any, Mapping, Optional
 
-logger = logging.getLogger("scoring")
-
-# Cible CB pour l'inflation (2%)
-CB_INFLATION_TARGET = 2.0
-
-# Taux "neutre" estimé pour la politique monétaire (approx NAIRU-based)
-NEUTRAL_POLICY_RATE = {
-    "USD": 2.5,
-    "EUR": 2.0,
-    "JPY": 0.0,
-    "GBP": 2.5,
-    "CHF": 1.0,
-    "CAD": 2.5,
-    "AUD": 3.0,
-    "NZD": 3.0,
-    "MXN": 6.0,
-    "SEK": 2.0,
-    "NOK": 2.5,
-    "KRW": 2.5,
+METHOD_VERSIONS = {
+    "freshness": "EFFECTIVE_AGE_V1",
+    "composite": "AVAILABLE_WEIGHT_RENORM_V1",
+    "ag5": "AG5_MACRO_V2",
+    "ag6": "AG6_FX_VALUATION_V2",
+    "ag7": "AG7_POSITIONING_V2",
+    "ag8": "AG8_RATES_V2",
 }
 
-CORE_G8 = ["USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD"]
-EXTENDED_SCORING_CURRENCIES = ["MXN", "SEK", "NOK"]
-MACRO_ONLY_CURRENCIES = ["KRW"]
-SCORING_CURRENCIES = CORE_G8 + EXTENDED_SCORING_CURRENCIES
 
-# Backward-compatible alias used by existing tests and comments.
-G10 = CORE_G8
-
-CONFIDENCE_RANK = {"missing": 0, "low": 1, "medium": 2, "high": 3}
-RANK_CONFIDENCE = {v: k for k, v in CONFIDENCE_RANK.items()}
-
-USD_SYNTHETIC_COT_WEIGHTS = {
-    "EUR": 0.30,
-    "JPY": 0.18,
-    "GBP": 0.12,
-    "CAD": 0.10,
-    "AUD": 0.08,
-    "CHF": 0.08,
-    "NZD": 0.04,
-    "MXN": 0.10,
-}
-
-LOW_CONFIDENCE_POSITIONING_SOURCES = {"RATE_CARRY_PROXY"}
-
-
-def clamp(v: float, lo: float = -1.0, hi: float = 1.0) -> float:
-    return max(lo, min(hi, v))
-
-
-def _has_number(value) -> bool:
+def finite_or_none(value: Any) -> Optional[float]:
     try:
-        return value is not None and math.isfinite(float(value))
+        number = float(value)
     except (TypeError, ValueError):
-        return False
+        return None
+    return number if math.isfinite(number) else None
 
 
-def _confidence_floor(*values: str) -> str:
-    ranks = [CONFIDENCE_RANK.get(str(v or "missing").lower(), 0) for v in values]
-    return RANK_CONFIDENCE.get(min(ranks) if ranks else 0, "missing")
+def clamp(value: float, lo: float = -1.0, hi: float = 1.0) -> float:
+    return max(lo, min(hi, float(value)))
 
 
-def _is_complete_enough(confidence: str) -> bool:
-    return CONFIDENCE_RANK.get(str(confidence or "missing").lower(), 0) >= CONFIDENCE_RANK["medium"]
+def _parse_time(value: Any) -> Optional[datetime]:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
-def _positioning_score_from_z(z_score: float) -> float:
-    # Contrarian convention: hated/short positioning is bullish, crowded long is bearish.
-    return clamp(-float(z_score) / 2.0)
+def effective_age_hours(
+    observation_time: Any,
+    recorded_age_hours: Any = None,
+    *,
+    now: Optional[datetime] = None,
+) -> Optional[float]:
+    """Âge effectif = max(âge enregistré, maintenant - observation réelle)."""
+
+    recorded = finite_or_none(recorded_age_hours)
+    observed = _parse_time(observation_time)
+    actual = None
+    if observed is not None:
+        current = now or datetime.now(timezone.utc)
+        if current.tzinfo is None:
+            current = current.replace(tzinfo=timezone.utc)
+        actual = max(0.0, (current.astimezone(timezone.utc) - observed).total_seconds() / 3600.0)
+    candidates = [x for x in (recorded, actual) if x is not None]
+    return max(candidates) if candidates else None
 
 
-def _enrich_positioning_with_proxies(
-    cot_by_ccy: dict[str, dict],
-    carry_scores: dict[str, float],
-    policy_rates_by_ccy: dict[str, float],
-) -> dict[str, dict]:
-    """
-    Fill useful-but-labelled positioning gaps.
+def freshness_status(age_hours: Any, *, fresh_hours: float, stale_hours: float) -> str:
+    age = finite_or_none(age_hours)
+    if age is None:
+        return "missing"
+    if age <= fresh_hours:
+        return "fresh"
+    if age <= stale_hours:
+        return "aging"
+    return "stale"
 
-    1. USD has no direct COT currency contract. It is inferred as the inverse
-       of a liquid COT basket.
-    2. SEK/NOK can keep the cube usable through a low-confidence carry proxy
-       until a real option-RR/CME-OI feed is wired.
-    """
-    enriched = dict(cot_by_ccy)
 
-    if "USD" not in enriched:
-        weighted_z = 0.0
-        used_weight = 0.0
-        contributors = []
-        for currency, weight in USD_SYNTHETIC_COT_WEIGHTS.items():
-            row = enriched.get(currency)
-            z = row.get("net_z_score") if row else None
-            if _has_number(z):
-                weighted_z += float(z) * weight
-                used_weight += weight
-                contributors.append(currency)
-        if used_weight > 0:
-            usd_z = -(weighted_z / used_weight)
-            enriched["USD"] = {
-                "currency": "USD",
-                "net_z_score": round(usd_z, 3),
-                "positioning_score": round(_positioning_score_from_z(usd_z), 3),
-                "crowded_flag": abs(usd_z) >= 1.5,
-                "crowded_direction": "long" if usd_z >= 1.5 else "short" if usd_z <= -1.5 else "neutral",
-                "source": "CFTC_COT_SYNTHETIC_USD_BASKET",
-                "confidence": "medium",
-                "proxy_contributors": contributors,
-            }
+def bounded_weighted_composite(
+    components: Mapping[str, Any],
+    weights: Mapping[str, float],
+    *,
+    confidences: Optional[Mapping[str, Any]] = None,
+    stale: Optional[set[str]] = None,
+    alignment_threshold: float = 0.20,
+) -> dict[str, Any]:
+    """Composite borné et renormalisé sur les seules composantes valides."""
 
-    for currency in ("SEK", "NOK"):
-        if currency in enriched:
+    stale = stale or set()
+    configured_total = sum(max(0.0, float(weights.get(name, 0.0))) for name in weights)
+    available: list[tuple[str, float, float]] = []
+    missing: list[str] = []
+    for name, configured_weight in weights.items():
+        value = finite_or_none(components.get(name))
+        weight = max(0.0, float(configured_weight))
+        if value is None or name in stale or weight <= 0:
+            missing.append(name)
             continue
-        carry = carry_scores.get(currency)
-        policy = policy_rates_by_ccy.get(currency)
-        if _has_number(carry) and _has_number(policy):
-            # High positive carry tends to attract crowded longs; this is not a
-            # true positioning feed, so keep it low-confidence and size-aware.
-            positioning_score = clamp(-float(carry) * 0.50)
-            z_score = -2.0 * positioning_score
-            enriched[currency] = {
-                "currency": currency,
-                "net_z_score": round(z_score, 3),
-                "positioning_score": round(positioning_score, 3),
-                "crowded_flag": abs(z_score) >= 1.5,
-                "crowded_direction": "long" if z_score >= 1.5 else "short" if z_score <= -1.5 else "neutral",
-                "source": "RATE_CARRY_PROXY",
-                "confidence": "low",
-            }
+        available.append((name, clamp(value), weight))
 
-    return enriched
-
-
-def score_gdp_growth(growth_qoq: Optional[float], momentum: Optional[float]) -> float:
-    """
-    Score de croissance PIB.
-    QoQ > 3% → très bon, > 1.5% → bon, 0-1.5% → neutre, < 0 → mauvais.
-    Momentum = variation de la croissance (accélération/décélération).
-    """
-    if growth_qoq is None:
-        return 0.0
-    base_score = 0.0
-    if growth_qoq > 3.0:
-        base_score = 1.0
-    elif growth_qoq > 1.5:
-        base_score = 0.5
-    elif growth_qoq > 0:
-        base_score = 0.1
-    elif growth_qoq > -1.0:
-        base_score = -0.3
-    else:
-        base_score = -0.8
-    # Bonus/malus momentum
-    mom_bonus = clamp((momentum or 0.0) * 0.15, -0.3, 0.3)
-    return clamp(base_score + mom_bonus)
-
-
-def score_inflation(cpi_yoy: Optional[float], policy_rate: Optional[float]) -> float:
-    """
-    Score inflation vis-à-vis de la cible CB (2%).
-    L'inflation contrôlée (proche cible) = hawkish → positif pour la devise.
-    Inflation hors de contrôle (>> 2%) = risque = négatif.
-    Déflation = négatif.
-    """
-    if cpi_yoy is None:
-        return 0.0
-    deviation = cpi_yoy - CB_INFLATION_TARGET
-    # CB hawkish efficacement : inflation proche de 2% ET taux élevé
-    if abs(deviation) < 0.5:
-        return 0.3  # maîtrisée, neutre-positif
-    if deviation > 4.0:
-        return -0.8  # hyperinflation, très négatif
-    if deviation > 2.0:
-        return -0.4  # inflation élevée
-    if deviation > 0.5:
-        return -0.1  # légèrement au-dessus cible
-    if deviation < -1.5:
-        return -0.6  # déflation (like Japon)
-    return -0.2  # légèrement en dessous cible
-
-
-def score_cb_policy(policy_rate: Optional[float], currency: str, cpi_yoy: Optional[float]) -> float:
-    """
-    Score de politique monétaire.
-    Taux directeur au-dessus du neutre = hawkish = attractif pour les capitaux.
-    Taux proche de zéro ou négatif = dovish = répulsif.
-    Différentiel vs. taux neutre estimé.
-    """
-    if policy_rate is None:
-        return 0.0
-    neutral = NEUTRAL_POLICY_RATE.get(currency, 2.0)
-    diff = policy_rate - neutral
-    # Score basé sur l'écart au taux neutre
-    if diff > 2.0:
-        return 0.8  # très au-dessus du neutre → très attractif
-    if diff > 1.0:
-        return 0.5
-    if diff > 0.0:
-        return 0.2
-    if diff > -1.0:
-        return -0.2
-    if diff > -2.0:
-        return -0.6
-    return -1.0  # taux très bas ou négatifs
-
-
-def score_current_account(balance_bn_usd: Optional[float]) -> float:
-    """
-    Score de la balance du compte courant.
-    Excédent → flux entrant de capitaux → bullish devise.
-    Déficit → flux sortant → bearish.
-    Note : score plus dur pour les très gros déficits (>50 Mds USD/T).
-    """
-    if balance_bn_usd is None:
-        return 0.0
-    if balance_bn_usd > 50:
-        return 1.0   # gros excédent (Japon, Allemagne)
-    if balance_bn_usd > 20:
-        return 0.6
-    if balance_bn_usd > 0:
-        return 0.2
-    if balance_bn_usd > -30:
-        return -0.3
-    if balance_bn_usd > -100:
-        return -0.6
-    return -1.0  # énorme déficit (US, UK)
-
-
-def compute_macro_score(indicators: list[dict], policy_rates: list[dict]) -> dict[str, dict]:
-    """
-    Score Pilier 1 (Macro/Flows) par devise.
-    Pondérations : growth 0.30, CB policy 0.30, current_account 0.25, inflation 0.15
-    """
-    # Indexer les indicateurs par devise + type
-    ind_by_ccy: dict[str, dict[str, float]] = {}
-    for row in indicators:
-        ccy = row.get("currency", "")
-        ind = row.get("indicator", "")
-        val = row.get("value")
-        if ccy and ind and val is not None:
-            if ccy not in ind_by_ccy:
-                ind_by_ccy[ccy] = {}
-            ind_by_ccy[ccy][ind] = float(val)
-
-    # Taux directeurs
-    rates_by_ccy = {r["currency"]: r.get("rate_pct") for r in policy_rates}
-
-    result = {}
-    for ccy in SCORING_CURRENCIES:
-        inds = ind_by_ccy.get(ccy, {})
-        policy = rates_by_ccy.get(ccy)
-
-        gdp_qoq = inds.get("gdp_growth_qoq")
-        gdp_mom = inds.get("gdp_momentum", 0.0)
-        cpi = inds.get("cpi_yoy")
-        ca = inds.get("current_account_bn_usd")
-
-        s_growth = score_gdp_growth(gdp_qoq, gdp_mom)
-        s_inflation = score_inflation(cpi, policy)
-        s_policy = score_cb_policy(policy, ccy, cpi)
-        s_ca = score_current_account(ca)
-
-        macro_score = clamp(
-            s_growth * 0.30 + s_policy * 0.30 + s_ca * 0.25 + s_inflation * 0.15
-        )
-
-        result[ccy] = {
-            "macro_growth_score": round(s_growth, 3),
-            "macro_inflation_score": round(s_inflation, 3),
-            "macro_policy_score": round(s_policy, 3),
-            "macro_ca_score": round(s_ca, 3),
-            "macro_score": round(macro_score, 3),
-        }
-    return result
-
-
-def compute_carry_score(policy_rates: list[dict]) -> dict[str, float]:
-    """
-    Score carry par devise = taux directeur normalisé vs. moyenne G10.
-    Devise avec taux élevé = positif (attire les capitaux carry trade).
-    """
-    all_rates = {
-        r["currency"]: r.get("rate_pct", 0.0) or 0.0
-        for r in policy_rates
-        if r.get("currency") in SCORING_CURRENCIES
+    used_total = sum(row[2] for row in available)
+    coverage = used_total / configured_total if configured_total > 0 else 0.0
+    normalized = {
+        name: weight / used_total
+        for name, _, weight in available
+    } if used_total > 0 else {}
+    contributions = {
+        name: value * normalized[name]
+        for name, value, _ in available
     }
-    baseline_rates = {ccy: all_rates[ccy] for ccy in CORE_G8 if ccy in all_rates}
-    if not baseline_rates:
-        return {}
-    avg = sum(baseline_rates.values()) / len(baseline_rates)
-    std = max(math.sqrt(sum((v - avg) ** 2 for v in baseline_rates.values()) / len(baseline_rates)), 0.5)
-    return {ccy: clamp((rate - avg) / std / 2) for ccy, rate in all_rates.items()}
+    score = clamp(sum(contributions.values())) if contributions else None
 
-
-def compute_ppp_deviation(cpi_data: list[dict]) -> dict[str, float]:
-    """
-    Approximation PPP simplifiée : écart d'inflation cumulé vs. USD sur 5 ans.
-    Si l'inflation d'un pays est systématiquement plus haute que celle des US,
-    sa devise devrait se déprécier (PPP → surévaluée si elle ne l'a pas fait).
-    Retourne l'écart de surévaluation relatif : positif = sous-évalué, négatif = surévalué.
-    """
-    cpi_by_ccy: dict[str, list] = {}
-    for row in cpi_data:
-        ccy = row.get("currency", "")
-        if ccy in SCORING_CURRENCIES and row.get("value") is not None:
-            if ccy not in cpi_by_ccy:
-                cpi_by_ccy[ccy] = []
-            cpi_by_ccy[ccy].append(float(row["value"]))
-    if "USD" not in cpi_by_ccy:
-        return {}
-    usd_avg = sum(cpi_by_ccy["USD"]) / len(cpi_by_ccy["USD"]) if cpi_by_ccy["USD"] else 0.0
-    result = {}
-    for ccy, vals in cpi_by_ccy.items():
-        if ccy == "USD":
-            continue
-        if not vals:
-            continue
-        avg = sum(vals) / len(vals)
-        # Si inflation plus haute que USD → devise devrait se déprécier → si ça n'a pas eu lieu elle est surévaluée
-        # ppp_deviation positif = sous-évalué (inflation plus basse que USD → devrait s'apprécier)
-        ppp_dev = clamp((usd_avg - avg) / max(usd_avg, 0.01))
-        result[ccy] = round(ppp_dev, 3)
-    return result
-
-
-def compute_valuation_scores(policy_rates: list[dict], cpi_history: list[dict]) -> dict[str, dict]:
-    """
-    Score Pilier 2 (Valorisation) par devise.
-    Pondérations : carry 0.50, PPP 0.30, placeholder REER 0.20 (carry par défaut)
-    """
-    carry = compute_carry_score(policy_rates)
-    ppp = compute_ppp_deviation(cpi_history)
-
-    result = {}
-    for ccy in SCORING_CURRENCIES:
-        c = carry.get(ccy, 0.0)
-        p = ppp.get(ccy, 0.0)
-        # Sans REER, on double la pondération du carry
-        valuation = clamp(c * 0.60 + p * 0.40)
-        result[ccy] = {
-            "carry_score": round(c, 3),
-            "ppp_deviation": round(p, 3),
-            "valuation_score": round(valuation, 3),
-        }
-    return result
-
-
-def compute_input_confidence(
-    currency: str,
-    indicators_by_ccy: dict[str, dict[str, float]],
-    policy_rates_by_ccy: dict[str, float],
-    carry_scores: dict[str, float],
-    ppp_scores: dict[str, float],
-    cot_by_ccy: dict[str, dict],
-    yield_by_ccy: dict[str, dict],
-) -> dict:
-    """Return completeness metadata without changing the legacy score formulas."""
-    inds = indicators_by_ccy.get(currency, {})
-    has_policy = _has_number(policy_rates_by_ccy.get(currency))
-    has_cpi = _has_number(inds.get("cpi_yoy"))
-    has_gdp = _has_number(inds.get("gdp_growth_qoq"))
-    has_ca = _has_number(inds.get("current_account_bn_usd"))
-    has_unemployment = _has_number(inds.get("unemployment_pct"))
-
-    macro_inputs = [has_policy, has_cpi, has_gdp]
-    if has_ca or has_unemployment:
-        macro_conf = "high" if all(macro_inputs) else "medium"
-    elif all(macro_inputs):
-        macro_conf = "medium"
-    else:
-        macro_conf = "low" if any(macro_inputs) else "missing"
-
-    has_carry = _has_number(carry_scores.get(currency))
-    has_ppp = currency == "USD" or _has_number(ppp_scores.get(currency))
-    if has_carry and has_ppp:
-        valuation_conf = "high"
-    elif has_carry:
-        valuation_conf = "medium"
-    else:
-        valuation_conf = "missing"
-
-    cot = cot_by_ccy.get(currency, {})
-    positioning_source = str(cot.get("source") or "").upper()
-    if cot:
-        positioning_conf = str(cot.get("confidence") or "high").lower()
-    else:
-        positioning_conf = "missing"
-
-    curve = yield_by_ccy.get(currency, {})
-    has_y2 = _has_number(curve.get("yield_2y_pct") or curve.get("yield_2y"))
-    has_y10 = _has_number(curve.get("yield_10y_pct") or curve.get("yield_10y"))
-    curve_source = str(curve.get("source") or "").lower()
-    if has_y2 and has_y10:
-        rates_conf = "medium" if "proxy" in curve_source or "manual" in curve_source else "high"
-    else:
-        rates_conf = "missing"
-
-    floor = _confidence_floor(macro_conf, valuation_conf, positioning_conf, rates_conf)
-    missing = []
-    if not _is_complete_enough(macro_conf):
-        missing.append("macro")
-    if not _is_complete_enough(valuation_conf):
-        missing.append("valuation")
-    if not _is_complete_enough(positioning_conf):
-        missing.append("positioning")
-    if not _is_complete_enough(rates_conf):
-        missing.append("yield_curve")
-
-    proxy_usable = (
-        floor == "low"
-        and positioning_conf == "low"
-        and positioning_source in LOW_CONFIDENCE_POSITIONING_SOURCES
-        and _is_complete_enough(macro_conf)
-        and _is_complete_enough(valuation_conf)
-        and _is_complete_enough(rates_conf)
+    input_confidences = []
+    for name, _, _ in available:
+        conf = finite_or_none((confidences or {}).get(name, 1.0))
+        input_confidences.append(clamp(conf if conf is not None else 0.0, 0.0, 1.0))
+    mean_confidence = (
+        sum(input_confidences) / len(input_confidences)
+        if input_confidences else 0.0
     )
-    if proxy_usable:
-        missing = [m for m in missing if m != "positioning"]
-        missing.append("positioning_low_confidence")
+    # Une couverture partielle ne peut pas conserver une confiance complète.
+    confidence = clamp(mean_confidence * coverage, 0.0, 1.0)
 
-    is_complete = _is_complete_enough(floor)
-
+    signs = [1 if value > 0 else -1 for _, value, _ in available if abs(value) >= alignment_threshold]
+    all_aligned = bool(
+        score is not None
+        and coverage == 1.0
+        and len(signs) == len(weights)
+        and len(set(signs)) == 1
+        and not stale
+    )
     return {
-        "macro_confidence": macro_conf,
-        "valuation_confidence": valuation_conf,
-        "positioning_confidence": positioning_conf,
-        "rates_confidence": rates_conf,
-        "confidence_floor": floor,
-        "data_completeness": "complete" if is_complete else "proxy_complete" if proxy_usable else "data_incomplete",
-        "score_status": "scored" if is_complete else "scored_proxy" if proxy_usable else "data_incomplete",
-        "missing_inputs": missing,
+        "score": score,
+        "coverage_ratio": round(coverage, 6),
+        "confidence": round(confidence, 6),
+        "configured_weights": {k: float(v) for k, v in weights.items()},
+        "normalized_weights": normalized,
+        "contributions": contributions,
+        "missing_components": missing,
+        "stale_components": sorted(stale),
+        "all_aligned": all_aligned,
+        "method_version": METHOD_VERSIONS["composite"],
     }
 
 
-def compute_all_pillar_scores(db) -> list[dict]:
-    """
-    Calcule les scores des 3 piliers pour toutes les devises G10.
-    Retourne la liste des scores prêts à être insérés dans DuckDB.
-    """
-    today = date.today().isoformat()
+def score_growth(growth_pct: Any, momentum_pct: Any = None) -> Optional[float]:
+    growth = finite_or_none(growth_pct)
+    momentum = finite_or_none(momentum_pct)
+    if growth is None:
+        return None
+    level = math.tanh(growth / 3.0)
+    if momentum is None:
+        return clamp(level)
+    return clamp(0.70 * level + 0.30 * math.tanh(momentum / 2.0))
 
-    # Données depuis DB
-    indicators = db.get_indicators()
-    policy_rates = db.get_latest_policy_rates()
-    cot_latest = db.get_latest_cot()
-    cpi_history = db.get_indicators(indicator="cpi_yoy")
-    yield_curves = db.get_latest_yield_curve()
 
-    ind_by_ccy: dict[str, dict[str, float]] = {}
-    for row in indicators:
-        ccy = row.get("currency", "")
-        ind = row.get("indicator", "")
-        val = row.get("value")
-        if ccy and ind and val is not None:
-            ind_by_ccy.setdefault(ccy, {})[ind] = float(val)
-    policy_by_ccy = {r["currency"]: r.get("rate_pct") for r in policy_rates}
+def score_inflation_response(
+    inflation_pct: Any,
+    policy_rate_pct: Any,
+    *,
+    target_pct: float = 2.0,
+) -> Optional[float]:
+    """Évalue l'écart à la cible conjointement à la réponse monétaire."""
 
-    # Calcul des 3 piliers
-    macro_scores = compute_macro_score(indicators, policy_rates)
-    valuation_scores = compute_valuation_scores(policy_rates, cpi_history)
-    carry_scores = compute_carry_score(policy_rates)
-    ppp_scores = compute_ppp_deviation(cpi_history)
+    inflation = finite_or_none(inflation_pct)
+    policy = finite_or_none(policy_rate_pct)
+    if inflation is None:
+        return None
+    gap = inflation - float(target_pct)
+    stability = -math.tanh(abs(gap) / 3.0)
+    if policy is None:
+        return clamp(stability)
+    real_policy = policy - inflation
+    response = math.tanh(real_policy / 3.0)
+    return clamp(0.60 * stability + 0.40 * response)
 
-    # COT positioning scores
-    cot_by_ccy = {r["currency"]: r for r in cot_latest}
-    yield_by_ccy = {r["currency"]: r for r in yield_curves}
-    cot_by_ccy = _enrich_positioning_with_proxies(cot_by_ccy, carry_scores, policy_by_ccy)
 
-    results = []
-    for ccy in SCORING_CURRENCIES:
-        m = macro_scores.get(ccy, {})
-        v = valuation_scores.get(ccy, {})
-        c = cot_by_ccy.get(ccy, {})
+def score_policy_stance(
+    policy_rate_pct: Any,
+    neutral_rate_pct: Any,
+    *,
+    uncertainty_pct: Any = 1.0,
+) -> Optional[float]:
+    policy = finite_or_none(policy_rate_pct)
+    neutral = finite_or_none(neutral_rate_pct)
+    uncertainty = finite_or_none(uncertainty_pct)
+    if policy is None or neutral is None:
+        return None
+    scale = max(0.5, uncertainty or 1.0)
+    return clamp(math.tanh((policy - neutral) / (2.0 * scale)))
 
-        macro_s = m.get("macro_score", 0.0)
-        valuation_s = v.get("valuation_score", 0.0)
-        positioning_s = c.get("positioning_score", 0.0)
-        cot_z = c.get("net_z_score", 0.0)
-        crowded = c.get("crowded_flag", False)
-        completeness = compute_input_confidence(
-            ccy,
-            ind_by_ccy,
-            policy_by_ccy,
-            carry_scores,
-            ppp_scores,
-            cot_by_ccy,
-            yield_by_ccy,
-        )
-        can_score = completeness["score_status"] in ("scored", "scored_proxy") or ccy in CORE_G8
 
-        # Composite (pondération égale des 3 piliers)
-        composite = clamp((macro_s + valuation_s + positioning_s) / 3.0)
+def score_current_account_pct_gdp(value: Any) -> Optional[float]:
+    ratio = finite_or_none(value)
+    return None if ratio is None else clamp(math.tanh(ratio / 5.0))
 
-        # Alignement : les 3 piliers doivent pointer dans la même direction
-        # avec un seuil minimum de 0.20 pour éviter le bruit
-        THRESHOLD = 0.20
-        all_aligned = can_score and (
-            abs(macro_s) >= THRESHOLD and
-            abs(valuation_s) >= THRESHOLD and
-            abs(positioning_s) >= THRESHOLD and
-            (macro_s > 0) == (valuation_s > 0) == (positioning_s > 0)
-        )
 
-        results.append({
-            "as_of": today,
-            "currency": ccy,
-            **m,
-            **v,
-            "cot_z_score": round(cot_z, 3) if cot_z else None,
-            "positioning_score": round(positioning_s, 3),
-            "crowded_flag": crowded,
-            "composite_score": round(composite, 3) if can_score else None,
-            "all_pillars_aligned": all_aligned,
-            "data_completeness": completeness["data_completeness"],
-            "score_status": "scored_legacy" if completeness["score_status"] == "data_incomplete" and ccy in CORE_G8 else completeness["score_status"],
-            "confidence_floor": completeness["confidence_floor"],
-            "macro_confidence": completeness["macro_confidence"],
-            "valuation_confidence": completeness["valuation_confidence"],
-            "positioning_confidence": completeness["positioning_confidence"],
-            "rates_confidence": completeness["rates_confidence"],
-            "missing_inputs": json.dumps(completeness["missing_inputs"]),
-        })
+def score_fiscal_balance_pct_gdp(value: Any) -> Optional[float]:
+    balance = finite_or_none(value)
+    return None if balance is None else clamp(math.tanh(balance / 5.0))
 
-    return results
+
+def score_labor_momentum(unemployment_change_pp: Any) -> Optional[float]:
+    change = finite_or_none(unemployment_change_pp)
+    return None if change is None else clamp(-math.tanh(change / 1.5))
+
+
+def compute_ag5_macro(
+    entity_id: str,
+    metrics: Mapping[str, Any],
+    *,
+    neutral_rate: Optional[Mapping[str, Any]] = None,
+    weights: Optional[Mapping[str, float]] = None,
+) -> dict[str, Any]:
+    """Construit le contrat AG5 sans préjugé normatif sur une devise."""
+
+    def value(name: str) -> Any:
+        row = metrics.get(name)
+        return row.get("value") if isinstance(row, Mapping) else row
+
+    neutral_rate = neutral_rate or {}
+    growth = score_growth(value("growth"), value("growth_momentum"))
+    inflation = score_inflation_response(value("inflation"), value("policy_rate"))
+    policy = score_policy_stance(
+        value("policy_rate"),
+        neutral_rate.get("rate_pct"),
+        uncertainty_pct=neutral_rate.get("uncertainty_pct", 1.0),
+    )
+    real_rate_value = None
+    if finite_or_none(value("policy_rate")) is not None and finite_or_none(value("inflation")) is not None:
+        real_rate_value = float(value("policy_rate")) - float(value("inflation"))
+    real_rate = None if real_rate_value is None else clamp(math.tanh(real_rate_value / 3.0))
+    current_account = score_current_account_pct_gdp(value("current_account_pct_gdp"))
+    fiscal = score_fiscal_balance_pct_gdp(value("fiscal_balance_pct_gdp"))
+    labor = score_labor_momentum(value("unemployment_change_pp"))
+
+    subscores = {
+        "growth": growth,
+        "inflation": inflation,
+        "monetary_policy": policy,
+        "real_rate": real_rate,
+        "current_account": current_account,
+        "fiscal": fiscal,
+        "labor": labor,
+    }
+    configured_weights = weights or {
+        "growth": 0.24,
+        "inflation": 0.16,
+        "monetary_policy": 0.18,
+        "real_rate": 0.12,
+        "current_account": 0.16,
+        "fiscal": 0.07,
+        "labor": 0.07,
+    }
+    stale = {
+        name for name, row in metrics.items()
+        if isinstance(row, Mapping) and row.get("freshness_status") == "stale"
+    }
+    confidences = {
+        name: (row.get("confidence", 0.0) if isinstance(row, Mapping) else 0.0)
+        for name, row in metrics.items()
+    }
+    # Les noms des métriques brutes diffèrent parfois des noms de sous-score.
+    component_confidence = {
+        "growth": confidences.get("growth", 0.0),
+        "inflation": min(confidences.get("inflation", 0.0), confidences.get("policy_rate", 1.0)),
+        "monetary_policy": min(confidences.get("policy_rate", 0.0), finite_or_none(neutral_rate.get("confidence")) or 0.0),
+        "real_rate": min(confidences.get("policy_rate", 0.0), confidences.get("inflation", 0.0)),
+        "current_account": confidences.get("current_account_pct_gdp", 0.0),
+        "fiscal": confidences.get("fiscal_balance_pct_gdp", 0.0),
+        "labor": confidences.get("unemployment_change_pp", 0.0),
+    }
+    stale_subscores = set()
+    if "growth" in stale or "growth_momentum" in stale:
+        stale_subscores.add("growth")
+    if "inflation" in stale or "policy_rate" in stale:
+        stale_subscores.update({"inflation", "real_rate"})
+    if "policy_rate" in stale:
+        stale_subscores.add("monetary_policy")
+    if "current_account_pct_gdp" in stale:
+        stale_subscores.add("current_account")
+    if "fiscal_balance_pct_gdp" in stale:
+        stale_subscores.add("fiscal")
+    if "unemployment_change_pp" in stale:
+        stale_subscores.add("labor")
+    composite = bounded_weighted_composite(
+        subscores,
+        configured_weights,
+        confidences=component_confidence,
+        stale=stale_subscores,
+    )
+    return {
+        "component": "AG5_MACRO",
+        "schema_version": "AG5_MACRO_V2",
+        "entity_type": "currency",
+        "entity_id": str(entity_id).upper(),
+        "macro_score": composite["score"],
+        "subscores": subscores,
+        "coverage_ratio": composite["coverage_ratio"],
+        "confidence": composite["confidence"],
+        "missing_inputs": composite["missing_components"],
+        "stale_inputs": composite["stale_components"],
+        "weights": composite["normalized_weights"],
+        "contributions": composite["contributions"],
+        "neutral_rate_method": dict(neutral_rate),
+        "real_rate_pct": real_rate_value,
+        "method_version": METHOD_VERSIONS["ag5"],
+    }
+
+
+def compute_fx_valuation(
+    currency: str,
+    *,
+    nominal_carry_pct: Any,
+    real_carry_pct: Any,
+    spot_reference: Any,
+    ppp_fair_value: Any = None,
+    reer_gap_pct: Any = None,
+    terms_of_trade_score: Any = None,
+    input_confidence: Optional[Mapping[str, Any]] = None,
+    stale_inputs: Optional[set[str]] = None,
+) -> dict[str, Any]:
+    """Valorisation relative FX ; PPP n'existe que si spot et juste valeur existent."""
+
+    nominal = finite_or_none(nominal_carry_pct)
+    real = finite_or_none(real_carry_pct)
+    spot = finite_or_none(spot_reference)
+    ppp = finite_or_none(ppp_fair_value)
+    reer = finite_or_none(reer_gap_pct)
+    terms = finite_or_none(terms_of_trade_score)
+    carry_score = None if nominal is None else clamp(math.tanh(nominal / 4.0))
+    real_carry_score = None if real is None else clamp(math.tanh(real / 4.0))
+    ppp_gap = None
+    if spot is not None and spot > 0 and ppp is not None and ppp > 0:
+        ppp_gap = clamp((ppp - spot) / spot)
+    reer_score = None if reer is None else clamp(reer / 25.0)
+    terms_score = None if terms is None else clamp(terms)
+    components = {
+        "carry": carry_score,
+        "real_carry": real_carry_score,
+        "ppp": ppp_gap,
+        "reer": reer_score,
+        "terms_of_trade": terms_score,
+    }
+    weights = {"carry": 0.15, "real_carry": 0.15, "ppp": 0.30, "reer": 0.30, "terms_of_trade": 0.10}
+    composite = bounded_weighted_composite(
+        components,
+        weights,
+        confidences=input_confidence or {},
+        stale=stale_inputs or set(),
+    )
+    proxy_inputs = []
+    missing_inputs = list(composite["missing_components"])
+    return {
+        "component": "AG6_FX_VALUATION",
+        "schema_version": "AG6_FX_VALUATION_V2",
+        "currency": str(currency).upper(),
+        "carry_score": carry_score,
+        "real_carry_score": real_carry_score,
+        "ppp_gap": ppp_gap,
+        "reer_gap": reer,
+        "terms_of_trade_score": terms_score,
+        "valuation_score": composite["score"],
+        "spot_reference": spot,
+        "ppp_fair_value": ppp,
+        "missing_inputs": missing_inputs,
+        "stale_inputs": composite["stale_components"],
+        "proxy_inputs": proxy_inputs,
+        "coverage_ratio": composite["coverage_ratio"],
+        "confidence": composite["confidence"],
+        "weights": composite["normalized_weights"],
+        "contributions": composite["contributions"],
+        "method_version": METHOD_VERSIONS["ag6"],
+    }
+
+
+def cot_positioning_score(z_score: Any) -> Optional[float]:
+    z = finite_or_none(z_score)
+    return None if z is None else clamp(-z / 2.0)
+
+
+def synthetic_usd_positioning(
+    rows_by_currency: Mapping[str, Mapping[str, Any]],
+    weights: Mapping[str, float],
+) -> Optional[dict[str, Any]]:
+    weighted = 0.0
+    used = 0.0
+    contributors = []
+    for currency, configured_weight in weights.items():
+        row = rows_by_currency.get(currency) or {}
+        z = finite_or_none(row.get("z_score", row.get("net_z_score")))
+        if z is None:
+            continue
+        weight = max(0.0, float(configured_weight))
+        weighted += z * weight
+        used += weight
+        contributors.append(currency)
+    if used <= 0:
+        return None
+    usd_z = -(weighted / used)
+    return {
+        "entity_id": "USD",
+        "z_score": round(usd_z, 6),
+        "positioning_score": cot_positioning_score(usd_z),
+        "is_proxy": True,
+        "source": "CFTC_SYNTHETIC_USD_BASKET",
+        "contributors": contributors,
+        "weights": {k: float(v) / used for k, v in weights.items() if k in contributors},
+        "confidence": min(0.60, used),
+    }
+
+
+def rates_regime(
+    *,
+    yield_2y: Any,
+    yield_10y: Any,
+    slope_change: Any,
+    policy_rate: Any = None,
+    neutral_rate: Any = None,
+    yield_2y_change: Any = None,
+    yield_10y_change: Any = None,
+) -> dict[str, Any]:
+    y2 = finite_or_none(yield_2y)
+    y10 = finite_or_none(yield_10y)
+    change = finite_or_none(slope_change)
+    slope = None if y2 is None or y10 is None else y10 - y2
+    y2_change = finite_or_none(yield_2y_change)
+    y10_change = finite_or_none(yield_10y_change)
+    if slope is None:
+        curve = "unknown"
+    elif change is not None and change >= 0.10:
+        if y2_change is None or y10_change is None:
+            curve = "unknown"
+        else:
+            curve = "bull_steepening" if (y2_change + y10_change) / 2.0 < 0 else "bear_steepening"
+    elif change is not None and change <= -0.10:
+        curve = "flattening"
+    elif slope < 0:
+        curve = "inverted"
+    else:
+        curve = "normal"
+
+    policy = finite_or_none(policy_rate)
+    neutral = finite_or_none(neutral_rate)
+    if policy is None or neutral is None:
+        policy_regime = "unknown"
+    elif policy - neutral > 1.0:
+        policy_regime = "restrictive"
+    elif policy - neutral > 0:
+        policy_regime = "tightening"
+    elif policy - neutral < -1.0:
+        policy_regime = "accommodative"
+    else:
+        policy_regime = "easing"
+
+    duration_pressure = None
+    if y10 is not None and neutral is not None:
+        duration_pressure = clamp(math.tanh((y10 - neutral) / 3.0))
+    return {
+        "policy_regime": policy_regime,
+        "curve_regime": curve,
+        "yield_2y": y2,
+        "yield_10y": y10,
+        "slope_10y2y": slope,
+        "slope_change": change,
+        "yield_2y_change": y2_change,
+        "yield_10y_change": y10_change,
+        "duration_pressure": duration_pressure,
+        "method_version": METHOD_VERSIONS["ag8"],
+    }
+
+
+# Compatibilité de lecture pour les anciens imports. Ces wrappers ne doivent
+# plus être utilisés comme source de vérité par les workflows AG5–AG8.
+def score_gdp_growth(growth_qoq: Any, momentum: Any) -> Optional[float]:
+    return score_growth(growth_qoq, momentum)
+
+
+def score_inflation(cpi_yoy: Any, policy_rate: Any) -> Optional[float]:
+    return score_inflation_response(cpi_yoy, policy_rate)
+
+
+def score_current_account(balance_pct_gdp: Any) -> Optional[float]:
+    return score_current_account_pct_gdp(balance_pct_gdp)
+
+
+def _json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))

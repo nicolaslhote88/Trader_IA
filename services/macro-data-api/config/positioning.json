@@ -1,0 +1,16 @@
+{
+  "config_version": "AG7_POSITIONING_CONFIG_V1",
+  "crowded_z_threshold": 1.5,
+  "fresh_hours": 240,
+  "stale_hours": 408,
+  "usd_synthetic_weights": {
+    "EUR": 0.30,
+    "JPY": 0.18,
+    "GBP": 0.12,
+    "CAD": 0.10,
+    "AUD": 0.08,
+    "CHF": 0.08,
+    "NZD": 0.04,
+    "MXN": 0.10
+  }
+}

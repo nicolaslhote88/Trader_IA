@@ -1,28 +1,17 @@
-# AG5-FX-Macro — Pilier 1 : Analyse Macro/Flows
+# AG5 à AG8 — wrappers n8n historiques
 
-## Objectif
-Calcule le score macro/flows pour chaque devise G10, basé sur :
-- Croissance PIB (QoQ, momentum)
-- Politique monétaire (taux directeur vs. neutre)
-- Inflation (CPI YoY vs. cible 2%)
-- Balance du compte courant (excédent = positif)
+Les identifiants n8n historiques sont conservés pour permettre une mise à jour
+in-place, mais les formules et écritures DuckDB ont été supprimées de ces
+workflows. Les workflows générés appellent désormais les endpoints canoniques de
+`services/macro-data-api/`, seul writer de `macro_data.duckdb`.
 
-## Sources de données
-- FRED API (PIB, CPI, CA, taux directeurs)
-- Orchestré via `macro-data-api` service
+La documentation commune et les miroirs des workflows sont dans
+`agents/common/global-context/`. Le Forex et tous ses Portfolio Managers restent
+désactivés; AG5, AG7 et AG8 sont des composants communs, AG6 reste explicitement
+une valorisation relative des devises.
 
-## Schedule n8n
-- 1x/jour à 06:00 UTC (après publication données éco matinales)
+Régénération :
 
-## Output
-- `pillars.currency_scores` dans `macro_data.duckdb` :
-  - `macro_growth_score`, `macro_inflation_score`, `macro_policy_score`, `macro_ca_score`
-  - `macro_score` composite ∈ [-1, +1]
-
-## Thèse de trading (Philippine Oato)
-USD doit scorer très négatif (déficit ~6% PIB, taux en baisse)
-JPY, EUR doivent scorer positif (excédents courants, repositionnement)
-
-## Variables d'environnement
-- `MACRO_DATA_API_URL` (défaut: http://macro-data-api:8081)
-- `MACRO_DUCKDB_PATH` (défaut: /files/duckdb/macro_data.duckdb)
+```powershell
+python agents/trading-forex/build_three_pillars_workflows.py
+```
