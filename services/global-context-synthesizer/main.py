@@ -26,13 +26,13 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Global Context Synthesizer", version="1.1.0", lifespan=lifespan)
+app = FastAPI(title="Global Context Synthesizer", version="1.2.0", lifespan=lifespan)
 
 
 @app.get("/health")
 async def health():
     latest = db.latest()
-    return {"status": "OK", "service": "global-context-synthesizer", "version": "1.1.0", "latest_snapshot_id": (latest or {}).get("snapshot_id"), "latest_status": (latest or {}).get("status")}
+    return {"status": "OK", "service": "global-context-synthesizer", "version": "1.2.0", "latest_snapshot_id": (latest or {}).get("snapshot_id"), "latest_status": (latest or {}).get("status")}
 
 
 @app.post("/synthesize")

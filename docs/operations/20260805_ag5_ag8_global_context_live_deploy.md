@@ -3,6 +3,10 @@
 Date : 2026-08-05
 Décision : déployer toutes les modifications du chantier contexte global sauf AG9.
 
+> Suivi 2026-08-06 : les causes de la qualité initialement dégradée ont été
+> corrigées et déployées. Voir
+> `docs/operations/20260806_ag5_ag8_data_quality_remediation.md`.
+
 ## Portée effectivement activée
 
 - `AG5 — Macro & Flows V2` ;

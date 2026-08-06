@@ -16,7 +16,8 @@ import duckdb
 
 FRESHNESS_RANK = {"fresh": 0, "aging": 1, "stale": 2, "missing": 3}
 LLM_SCHEMA_VERSION = "AG1_GLOBAL_CONTEXT_LLM_V2"
-LLM_METHOD_VERSION = "GLOBAL_CONTEXT_LLM_COMPACTION_V2"
+LLM_METHOD_VERSION = "GLOBAL_CONTEXT_LLM_COMPACTION_V3"
+EXPECTED_COMPONENT_ENTITIES = {"AG5": 12, "AG6": 12, "AG7": 12, "AG8": 12}
 
 
 def utcnow() -> datetime:
@@ -114,6 +115,22 @@ def _worst(values: list[str]) -> str:
     return max(values, key=lambda value: FRESHNESS_RANK.get(value, 3)) if values else "missing"
 
 
+def _aggregate_freshness(values: list[str]) -> str:
+    """Agrège sans laisser une seule ligne absente invalider tout le composant."""
+    normalized = [str(value or "missing").lower() for value in values]
+    if not normalized:
+        return "missing"
+    fresh_ratio = sum(value == "fresh" for value in normalized) / len(normalized)
+    usable_ratio = sum(value in {"fresh", "aging"} for value in normalized) / len(normalized)
+    if fresh_ratio >= 0.75:
+        return "fresh"
+    if usable_ratio >= 0.60:
+        return "aging"
+    if any(value != "missing" for value in normalized):
+        return "stale"
+    return "missing"
+
+
 def _component_status(name: str, rows: list[dict], config: dict, now: datetime) -> dict:
     if not rows:
         return {"component": name, "component_snapshot_id": None, "component_as_of": None, "age_hours": None, "status": "MISSING", "coverage_ratio": 0.0, "confidence": 0.0, "freshness_status": "missing", "schema_version": None, "method_version": None, "row_count": 0, "warnings": [f"{name}_UNAVAILABLE"]}
@@ -122,14 +139,12 @@ def _component_status(name: str, rows: list[dict], config: dict, now: datetime) 
     as_of_values = [value for value in as_of_values if value]
     component_as_of = max(as_of_values) if as_of_values else None
     age = ((now - component_as_of).total_seconds() / 3600.0) if component_as_of else None
-    freshness = _worst([str(row.get("freshness_status") or "missing") for row in rows])
+    row_freshness = [str(row.get("freshness_status") or "missing") for row in rows]
+    freshness = _aggregate_freshness(row_freshness)
     max_age = float(config["max_age_hours"][name])
     stale_by_age = age is None or age > max_age
     if stale_by_age:
         freshness = "stale" if age is not None else "missing"
-    # AG7's canonical row contract predates the shared coverage_ratio column.
-    # Its producer already reports complete row coverage as 1.0; preserve that
-    # explicit contract until the next additive schema version.
     coverage_values = [
         float(
             row.get("coverage_ratio")
@@ -139,17 +154,29 @@ def _component_status(name: str, rows: list[dict], config: dict, now: datetime) 
         for row in rows
     ]
     confidence_values = [float(row.get("confidence") or 0.0) for row in rows]
+    coverage = sum(coverage_values) / len(coverage_values)
+    if name == "AG7":
+        coverage *= min(1.0, len({str(row.get("entity_id") or "") for row in rows}) / EXPECTED_COMPONENT_ENTITIES["AG7"])
+    confidence = sum(confidence_values) / len(confidence_values)
+    usable_ratio = sum(value in {"fresh", "aging"} for value in row_freshness) / len(row_freshness)
+    floors = config.get("component_quality", {}).get(name, {"coverage": 0.0, "confidence": 0.0, "usable_rows": 0.0})
     warnings = []
     if len(snapshot_ids) != 1:
         warnings.append(f"{name}_MIXED_SNAPSHOTS")
     if stale_by_age:
         warnings.append(f"{name}_STALE")
-    status = "OK" if not warnings and freshness in {"fresh", "aging"} else "DEGRADED"
+    if coverage < float(floors.get("coverage", 0.0)):
+        warnings.append(f"{name}_LOW_COVERAGE")
+    if confidence < float(floors.get("confidence", 0.0)):
+        warnings.append(f"{name}_LOW_CONFIDENCE")
+    if usable_ratio < float(floors.get("usable_rows", 0.0)):
+        warnings.append(f"{name}_LOW_USABLE_FRESHNESS")
+    status = "OK" if not warnings else "DEGRADED"
     return {
         "component": name, "component_snapshot_id": snapshot_ids[0] if len(snapshot_ids) == 1 else snapshot_ids,
         "component_as_of": component_as_of.isoformat() if component_as_of else None, "age_hours": age,
-        "status": status, "coverage_ratio": sum(coverage_values) / len(coverage_values),
-        "confidence": sum(confidence_values) / len(confidence_values), "freshness_status": freshness,
+        "status": status, "coverage_ratio": coverage,
+        "confidence": confidence, "freshness_status": freshness,
         "schema_version": rows[0].get("schema_version"), "method_version": rows[0].get("method_version"),
         "row_count": len(rows), "warnings": warnings,
     }
@@ -373,7 +400,7 @@ def synthesize(macro_path: str, world_path: str, *, now: Optional[datetime] = No
     available_weight = sum(config["component_weights"][row["component"]] for row in enabled_statuses if row["row_count"] > 0)
     coverage = sum(config["component_weights"][row["component"]] * float(row["coverage_ratio"] or 0.0) for row in enabled_statuses) / enabled_weight
     confidence = sum(config["component_weights"][row["component"]] * float(row["confidence"] or 0.0) for row in enabled_statuses) / available_weight if available_weight else 0.0
-    overall_freshness = _worst([row["freshness_status"] for row in enabled_statuses if row["row_count"] > 0])
+    overall_freshness = _aggregate_freshness([row["freshness_status"] for row in enabled_statuses if row["row_count"] > 0])
     overall_status = "OK" if all(row["status"] == "OK" for row in enabled_statuses) else "DEGRADED"
     pack = {
         "schema_version": "AG1_GLOBAL_CONTEXT_PACK_V1", "snapshot_id": snapshot_id,
@@ -479,15 +506,15 @@ def advisory_pack_for_run(
             matches.append({"type": "country", "entity": country, "risk_score": countries[country.upper()].get("risk_score"), "confidence": countries[country.upper()].get("confidence"), "contributors": decode(countries[country.upper()].get("contributors_json"))})
         return {"symbol": symbol, "sector": sector or None, "country": country or None, "currency": currency or None, "overlays": matches, "exposure_known": bool(matches), "limitation": None if matches else "NO_RELIABLE_EXPOSURE_MAPPING"}
 
-    portfolio_reviews = [review(row) for row in portfolio if isinstance(row, dict)]
-    opportunity_reviews = [review(row) for row in opportunities if isinstance(row, dict)]
+    ag9_dormant = str((source_pack.get("geopolitical_risk_regime") or {}).get("status") or "").upper() == "DISABLED"
+    portfolio_reviews = [review(row) for row in portfolio if isinstance(row, dict)] if not ag9_dormant else []
+    opportunity_reviews = [review(row) for row in opportunities if isinstance(row, dict)] if not ag9_dormant else []
     known_reviews = [row for row in [*portfolio_reviews, *opportunity_reviews] if row["exposure_known"]]
     review_total = len(portfolio_reviews) + len(opportunity_reviews)
-    mapping_limitation = (
+    mapping_limitation = ("AG9_DORMANT_EXPOSURE_MAPPING_NOT_EVALUATED" if ag9_dormant else
         None if review_total == len(known_reviews)
         else "PARTIAL_EXPOSURE_MAPPING" if known_reviews
-        else "NO_RELIABLE_EXPOSURE_MAPPING"
-    )
+        else "NO_RELIABLE_EXPOSURE_MAPPING")
 
     available_currencies = {
         str(currency).upper()
@@ -554,14 +581,16 @@ def advisory_pack_for_run(
         "component_summary": component_summary,
         "exposure_summary": {
             "portfolio": {
-                "total": len(portfolio_reviews),
+                "total": len(portfolio) if ag9_dormant else len(portfolio_reviews),
                 "known": sum(1 for row in portfolio_reviews if row["exposure_known"]),
                 "unknown": sum(1 for row in portfolio_reviews if not row["exposure_known"]),
+                "not_evaluated": len(portfolio) if ag9_dormant else 0,
             },
             "opportunities": {
-                "total": len(opportunity_reviews),
+                "total": len(opportunities) if ag9_dormant else len(opportunity_reviews),
                 "known": sum(1 for row in opportunity_reviews if row["exposure_known"]),
                 "unknown": sum(1 for row in opportunity_reviews if not row["exposure_known"]),
+                "not_evaluated": len(opportunities) if ag9_dormant else 0,
             },
             "limitation": mapping_limitation,
         },

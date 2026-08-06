@@ -40,7 +40,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Macro Data API", version="2.0.0", lifespan=lifespan)
+app = FastAPI(title="Macro Data API", version="2.1.0", lifespan=lifespan)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -50,7 +50,7 @@ async def health():
     return {
         "status": "ok",
         "service": "macro-data-api",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "as_of": datetime.now(timezone.utc).isoformat(),
         "writer": "macro-data-api",
     }
@@ -96,16 +96,17 @@ async def _refresh_macro_sources() -> dict:
     policy_rates: dict = {}
     gdp: dict = {}
     cpi_data: dict = {}
-    ca_absolute: dict = {}
     unemployment: dict = {}
     enriched: dict = {}
     world_bank_rows: list[dict] = []
+    financial_conditions: Optional[dict] = None
+    fred.reset_warnings()
     try:
         policy_rates = await fred.get_policy_rates()
         gdp = await fred.get_gdp_growth()
         cpi_data = await fred.get_cpi()
-        ca_absolute = await fred.get_current_account()
         unemployment = await fred.get_unemployment()
+        financial_conditions = await fred.get_financial_conditions()
         yields_10y = await fred.get_g10_yields_10y()
         yields_2y = await fred.get_g10_yields_2y()
         banxico_10y, banxico_2y = await rates.get_banxico_yields()
@@ -114,16 +115,21 @@ async def _refresh_macro_sources() -> dict:
         db.upsert_policy_rates(policy_rates)
         db.upsert_gdp_data(gdp)
         db.upsert_cpi_data(cpi_data)
-        # Conservée pour audit, mais explicitement exclue du score AG5.
-        db.upsert_current_account_data(ca_absolute)
         db.upsert_unemployment_data(unemployment)
+        if financial_conditions:
+            db.upsert_country_indicator(
+                financial_conditions["currency"], financial_conditions["indicator"],
+                financial_conditions["value"], financial_conditions["as_of"],
+                financial_conditions["unit"], financial_conditions["source"],
+            )
         curves = rates.build_yield_curve(policy_rates, yields_10y, yields_2y)
         history = db.get_latest_yield_curve()
         enriched = rates.compute_steepening_signal(curves, history)
         db.upsert_yield_curve(enriched)
     except Exception as exc:
         logger.exception("FRED/rates refresh failed")
-        source_errors.append({"source": "FRED_OR_BANXICO", "error_code": type(exc).__name__, "detail": str(exc)[:500]})
+        source_errors.append({"source": "FRED_OR_BANXICO", "error_code": type(exc).__name__, "detail": str(exc)[:500], "severity": "error"})
+    source_errors.extend(fred.last_warnings)
 
     try:
         world_bank_rows = await world_bank.get_comparable_indicators()
@@ -131,22 +137,24 @@ async def _refresh_macro_sources() -> dict:
             db.upsert_country_indicator(
                 row["currency"], row["indicator"], row["value"], row["as_of"], row["unit"], row["source"]
             )
+        source_errors.extend(world_bank.last_warnings)
     except Exception as exc:
         logger.exception("World Bank refresh failed")
-        source_errors.append({"source": "WORLD_BANK", "error_code": type(exc).__name__, "detail": str(exc)[:500]})
+        source_errors.append({"source": "WORLD_BANK", "error_code": type(exc).__name__, "detail": str(exc)[:500], "severity": "error"})
 
-    rows_written = sum((len(policy_rates), len(gdp), len(cpi_data), len(ca_absolute), len(unemployment), len(enriched), len(world_bank_rows)))
+    rows_written = sum((len(policy_rates), len(gdp), len(cpi_data), len(unemployment), len(enriched), len(world_bank_rows), 1 if financial_conditions else 0))
     if rows_written == 0:
         raise HTTPException(status_code=502, detail={"error_code": "MACRO_REFRESH_ZERO_ROWS", "source_errors": source_errors})
     return {
         "run_id": run_id,
-        "status": "DEGRADED" if source_errors else "OK",
+        "status": "DEGRADED" if any(row.get("severity") == "error" for row in source_errors) else "OK",
         "policy_rates_updated": len(policy_rates),
         "gdp_updated": len(gdp),
         "cpi_updated": len(cpi_data),
-        "current_account_absolute_audit_rows": len(ca_absolute),
+        "current_account_absolute_audit_rows": 0,
         "unemployment_updated": len(unemployment),
         "yield_curves_updated": len(enriched),
+        "financial_conditions_updated": 1 if financial_conditions else 0,
         "world_bank_comparable_rows": len(world_bank_rows),
         "source_errors": source_errors,
     }
@@ -228,6 +236,13 @@ COMPONENT_WRITERS = {
     "ag8": db.upsert_ag8_rates_liquidity,
 }
 
+COMPONENT_QUALITY_FLOORS = {
+    "ag5": {"coverage": 0.55, "confidence": 0.35, "usable_rows": 0.60},
+    "ag6": {"coverage": 0.55, "confidence": 0.40, "usable_rows": 0.60},
+    "ag7": {"coverage": 0.75, "confidence": 0.50, "usable_rows": 0.60},
+    "ag8": {"coverage": 0.65, "confidence": 0.40, "usable_rows": 0.60},
+}
+
 
 def _write_component(component: str, rows: list[dict], started_at: datetime, warnings: Optional[list[dict]] = None) -> dict:
     run_id = f"{component.upper()}_{uuid.uuid4().hex[:12]}"
@@ -237,19 +252,31 @@ def _write_component(component: str, rows: list[dict], started_at: datetime, war
             raise RuntimeError(f"{component.upper()}_ZERO_ROWS")
         COMPONENT_WRITERS[component](rows)
         coverage = sum(float(row.get("coverage_ratio", 1.0)) for row in rows) / len(rows)
+        confidence = sum(float(row.get("confidence") or 0.0) for row in rows) / len(rows)
+        usable_ratio = sum(row.get("freshness_status") in {"fresh", "aging"} for row in rows) / len(rows)
         finished_at = datetime.now(timezone.utc)
-        status = "DEGRADED" if warnings or coverage <= 0 or any(row.get("freshness_status") in {"stale", "missing"} for row in rows) else "OK"
+        floors = COMPONENT_QUALITY_FLOORS[component]
+        blocking_warning = any(row.get("severity") == "error" for row in warnings)
+        quality_ok = (
+            coverage >= floors["coverage"] and confidence >= floors["confidence"]
+            and usable_ratio >= floors["usable_rows"] and not blocking_warning
+        )
+        status = "OK" if quality_ok else "DEGRADED"
         snapshot_ids = sorted({row["component_snapshot_id"] for row in rows})
         db.log_component_run({
             "run_id": run_id, "component": component.upper(), "started_at": started_at,
             "finished_at": finished_at, "status": status, "rows_read": len(rows),
             "rows_written": len(rows), "coverage_ratio": coverage,
-            "payload": {"warnings": warnings, "component_snapshot_ids": snapshot_ids},
+            "payload": {"warnings": warnings, "component_snapshot_ids": snapshot_ids, "quality": {
+                "coverage_ratio": coverage, "confidence": confidence, "usable_row_ratio": usable_ratio,
+                "floors": floors,
+            }},
         })
         return {
             "run_id": run_id, "status": status, "component": component.upper(),
             "component_snapshot_id": snapshot_ids[0] if len(snapshot_ids) == 1 else snapshot_ids,
             "rows_written": len(rows), "coverage_ratio": round(coverage, 6),
+            "confidence": round(confidence, 6), "usable_row_ratio": round(usable_ratio, 6),
             "warnings": warnings, "rows": rows,
         }
     except Exception as exc:

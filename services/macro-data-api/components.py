@@ -78,6 +78,19 @@ def worst_freshness(statuses: Iterable[str]) -> str:
     return max(valid, key=lambda value: FRESHNESS_RANK.get(value, 3)) if valid else "missing"
 
 
+def aggregate_freshness(statuses: Iterable[str]) -> str:
+    valid = [str(status or "missing") for status in statuses]
+    if not valid:
+        return "missing"
+    fresh_ratio = sum(status == "fresh" for status in valid) / len(valid)
+    usable_ratio = sum(status in {"fresh", "aging"} for status in valid) / len(valid)
+    if fresh_ratio >= 0.75:
+        return "fresh"
+    if usable_ratio >= 0.60:
+        return "aging"
+    return "stale" if any(status != "missing" for status in valid) else "missing"
+
+
 def _metric(
     row: Optional[dict],
     *,
@@ -141,6 +154,44 @@ def _previous_indicator(rows: list[dict], currency: str, indicator: str) -> Opti
     return matches[1] if len(matches) > 1 else None
 
 
+def _latest_candidate(latest: dict[tuple[str, str], dict], currency: str, indicators: tuple[str, ...]) -> Optional[dict]:
+    candidates = [latest.get((currency, indicator)) for indicator in indicators]
+    candidates = [row for row in candidates if row]
+    return max(candidates, key=lambda row: str(row.get("as_of") or "")) if candidates else None
+
+
+def _freshest_candidate(
+    latest: dict[tuple[str, str], dict], currency: str, indicators: tuple[str, ...], *, now: datetime,
+    direct_fresh_hours: float, direct_stale_hours: float,
+) -> Optional[dict]:
+    candidates = [latest.get((currency, indicator)) for indicator in indicators]
+    candidates = [row for row in candidates if row]
+    if not candidates:
+        return None
+
+    def rank(row: dict) -> tuple[int, float]:
+        annual = "WORLD_BANK" in str(row.get("source") or "").upper()
+        fresh_hours = 24 * 400 if annual else direct_fresh_hours
+        stale_hours = 24 * 550 if annual else direct_stale_hours
+        status = freshness_status(effective_age_hours(row.get("as_of"), now=now), fresh_hours=fresh_hours, stale_hours=stale_hours)
+        observed = parse_time(row.get("as_of"))
+        return FRESHNESS_RANK[status], -(observed.timestamp() if observed else 0.0)
+
+    return min(candidates, key=rank)
+
+
+def _source_confidence(row: Optional[dict], *, direct: float = 0.90, annual: float = 0.70) -> float:
+    if not row:
+        return 0.0
+    source = str(row.get("source") or "").upper()
+    confidence = annual if "WORLD_BANK" in source else direct
+    if "COUNTRY_PROXY" in source:
+        confidence = min(confidence, 0.50)
+    if "POLICY_CURVE_PROXY" in source:
+        confidence = min(confidence, 0.45)
+    return confidence
+
+
 def build_ag5_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]:
     now = now or utcnow()
     component_id = snapshot_id("AG5", now)
@@ -150,28 +201,54 @@ def build_ag5_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]
     neutral_rates = db.get_neutral_rates()
     output = []
     for currency in CURRENCIES:
+        growth_row = _freshest_candidate(
+            latest, currency, ("gdp_growth_qoq", "gdp_growth_annual"), now=now,
+            direct_fresh_hours=24 * 120, direct_stale_hours=24 * 190,
+        )
+        growth_indicator = str((growth_row or {}).get("indicator") or "")
+        growth_momentum_name = "gdp_momentum_annual" if growth_indicator == "gdp_growth_annual" else "gdp_momentum"
+        inflation_row = _freshest_candidate(
+            latest, currency, ("cpi_yoy", "cpi_yoy_annual"), now=now,
+            direct_fresh_hours=24 * 45, direct_stale_hours=24 * 75,
+        )
+        unemployment = _latest_candidate(latest, currency, ("unemployment_pct",))
+        direct_unemployment_change = latest.get((currency, "unemployment_change_pp_annual"))
         metric_rows = {
-            "growth": latest.get((currency, "gdp_growth_qoq")),
-            "growth_momentum": latest.get((currency, "gdp_momentum")),
-            "inflation": latest.get((currency, "cpi_yoy")),
+            "growth": growth_row,
+            "growth_momentum": latest.get((currency, growth_momentum_name)),
+            "inflation": inflation_row,
             "policy_rate": policies.get(currency),
             "current_account_pct_gdp": latest.get((currency, "current_account_pct_gdp")),
             "fiscal_balance_pct_gdp": latest.get((currency, "fiscal_balance_pct_gdp")),
         }
-        unemployment = latest.get((currency, "unemployment_pct"))
         previous_unemployment = _previous_indicator(indicator_rows, currency, "unemployment_pct")
-        unemployment_change = None
-        if unemployment and previous_unemployment:
+        unemployment_change = finite_or_none((direct_unemployment_change or {}).get("value"))
+        unemployment_source = direct_unemployment_change or unemployment
+        if unemployment_change is None and unemployment and previous_unemployment:
             current_value = finite_or_none(unemployment.get("value"))
             previous_value = finite_or_none(previous_unemployment.get("value"))
             if current_value is not None and previous_value is not None:
                 unemployment_change = current_value - previous_value
-        metric_rows["unemployment_change_pp"] = unemployment
+        metric_rows["unemployment_change_pp"] = unemployment_source
 
         metrics = {}
         for name, source_row in metric_rows.items():
             fresh_hours, stale_hours = AG5_THRESHOLDS[name]
+            is_annual = "WORLD_BANK" in str((source_row or {}).get("source") or "").upper()
+            if is_annual and name in {"growth", "growth_momentum", "inflation", "unemployment_change_pp"}:
+                fresh_hours, stale_hours = 24 * 400, 24 * 550
+            elif is_annual and name in {"current_account_pct_gdp", "fiscal_balance_pct_gdp"}:
+                fresh_hours, stale_hours = 24 * 550, 24 * 730
             value = unemployment_change if name == "unemployment_change_pp" else None
+            if name == "policy_rate":
+                value = (source_row or {}).get("rate_pct")
+            metric_status = "direct_observation"
+            if is_annual and name in {"growth", "growth_momentum", "inflation", "unemployment_change_pp"}:
+                metric_status = "proxy_observation"
+            elif is_annual:
+                metric_status = "structural_annual_observation"
+            elif name == "unemployment_change_pp" and value is not None:
+                metric_status = "calculated_value"
             metrics[name] = _metric(
                 source_row,
                 name=name,
@@ -179,18 +256,21 @@ def build_ag5_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]
                 fresh_hours=fresh_hours,
                 stale_hours=stale_hours,
                 value=value,
-                status="calculated_value" if name == "unemployment_change_pp" and value is not None else "direct_observation",
+                status=metric_status,
+                confidence=_source_confidence(source_row),
             )
             if name == "unemployment_change_pp" and value is not None:
-                metrics[name]["previous_observation_time"] = iso(previous_unemployment.get("as_of"))
-                metrics[name]["previous_value"] = finite_or_none(previous_unemployment.get("value"))
+                metrics[name]["previous_observation_time"] = iso((previous_unemployment or {}).get("as_of"))
+                metrics[name]["previous_value"] = finite_or_none((previous_unemployment or {}).get("value"))
 
         computed = compute_ag5_macro(currency, metrics, neutral_rate=neutral_rates.get(currency))
         observations = [parse_time(row.get("observation_time")) for row in metrics.values() if row.get("value") is not None]
         ingestions = [parse_time(row.get("ingestion_time")) for row in metrics.values() if row.get("ingestion_time")]
         proxy_inputs = []
+        proxy_inputs.extend(name for name, row in metrics.items() if row.get("status") == "proxy_observation")
+        excluded_inputs = []
         if latest.get((currency, "current_account_bn_usd")) and not metric_rows["current_account_pct_gdp"]:
-            proxy_inputs.append("current_account_bn_usd_excluded_not_comparable")
+            excluded_inputs.append("current_account_bn_usd_excluded_not_comparable")
         output.append({
             **computed,
             "component_snapshot_id": component_id,
@@ -199,9 +279,9 @@ def build_ag5_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]
             "publication_time": None,
             "ingestion_time": max(ingestions).isoformat() if ingestions else now.isoformat(),
             "calculation_time": now.isoformat(),
-            "freshness_status": worst_freshness(row["freshness_status"] for row in metrics.values() if row.get("value") is not None),
+            "freshness_status": aggregate_freshness(row["freshness_status"] for row in metrics.values() if row.get("value") is not None),
             "proxy_inputs": proxy_inputs,
-            "lineage": {"metrics": metrics, "neutral_rate": neutral_rates.get(currency), "excluded_inputs": proxy_inputs},
+            "lineage": {"metrics": metrics, "neutral_rate": neutral_rates.get(currency), "proxy_inputs": proxy_inputs, "excluded_inputs": excluded_inputs},
             "source": "MACRO_DATA_API",
         })
     return output
@@ -219,10 +299,14 @@ def build_ag6_rows(
     latest = _latest_by_indicator(indicators)
     policy_rows = {str(row["currency"]): row for row in db.get_latest_policy_rates()}
     policy_values = {currency: finite_or_none(row.get("rate_pct")) for currency, row in policy_rows.items()}
-    inflation_values = {
-        currency: finite_or_none((latest.get((currency, "cpi_yoy")) or {}).get("value"))
+    inflation_rows = {
+        currency: _freshest_candidate(
+            latest, currency, ("cpi_yoy", "cpi_yoy_annual"), now=now,
+            direct_fresh_hours=24 * 45, direct_stale_hours=24 * 75,
+        )
         for currency in CURRENCIES
     }
+    inflation_values = {currency: finite_or_none((row or {}).get("value")) for currency, row in inflation_rows.items()}
     nominal_population = [value for value in policy_values.values() if value is not None]
     real_values = {
         currency: policy_values.get(currency) - inflation_values[currency]
@@ -234,13 +318,22 @@ def build_ag6_rows(
     real_anchor = median(real_population) if real_population else None
     output = []
     for currency in CURRENCIES:
-        policy = _metric(policy_rows.get(currency), name="policy_rate", now=now, fresh_hours=24 * 45, stale_hours=24 * 120, value=policy_values.get(currency))
-        inflation = _metric(latest.get((currency, "cpi_yoy")), name="inflation", now=now, fresh_hours=24 * 45, stale_hours=24 * 75)
+        policy = _metric(policy_rows.get(currency), name="policy_rate", now=now, fresh_hours=24 * 45, stale_hours=24 * 120, value=policy_values.get(currency), confidence=_source_confidence(policy_rows.get(currency)))
+        inflation_row = inflation_rows[currency]
+        inflation_is_annual = "WORLD_BANK" in str((inflation_row or {}).get("source") or "").upper()
+        inflation = _metric(
+            inflation_row, name="inflation", now=now,
+            fresh_hours=24 * (400 if inflation_is_annual else 45), stale_hours=24 * (550 if inflation_is_annual else 75),
+            confidence=_source_confidence(inflation_row), status="proxy_observation" if inflation_is_annual else "direct_observation",
+        )
         spot_raw = spots.get(currency)
         spot = _metric(spot_raw, name="spot_reference", now=now, fresh_hours=24, stale_hours=72, value=(spot_raw or {}).get("value"), status=(spot_raw or {}).get("status", "direct_observation"), confidence=float((spot_raw or {}).get("confidence", 0.0)))
-        ppp = _metric(latest.get((currency, "ppp_fair_value_usd")), name="ppp_fair_value", now=now, fresh_hours=24 * 400, stale_hours=24 * 550)
-        reer = _metric(latest.get((currency, "reer_gap_pct")), name="reer_gap", now=now, fresh_hours=24 * 60, stale_hours=24 * 100)
-        terms = _metric(latest.get((currency, "terms_of_trade_score")), name="terms_of_trade", now=now, fresh_hours=24 * 120, stale_hours=24 * 190)
+        ppp_row = latest.get((currency, "ppp_fair_value_usd"))
+        reer_row = latest.get((currency, "reer_gap_pct"))
+        terms_row = latest.get((currency, "terms_of_trade_score"))
+        ppp = _metric(ppp_row, name="ppp_fair_value", now=now, fresh_hours=24 * 400, stale_hours=24 * 550, confidence=_source_confidence(ppp_row), status="structural_annual_observation")
+        reer = _metric(reer_row, name="reer_gap", now=now, fresh_hours=24 * 400, stale_hours=24 * 550, confidence=_source_confidence(reer_row, annual=0.60), status="recent_history_derived")
+        terms = _metric(terms_row, name="terms_of_trade", now=now, fresh_hours=24 * 500, stale_hours=24 * 730, confidence=_source_confidence(terms_row, annual=0.55), status="recent_history_derived")
         nominal_carry = None if policy["value"] is None or nominal_anchor is None else policy["value"] - nominal_anchor
         real_carry = None if currency not in real_values or real_anchor is None else real_values[currency] - real_anchor
         statuses = {
@@ -290,7 +383,7 @@ def build_ag6_rows(
             "publication_time": None,
             "ingestion_time": max(ingestions).isoformat() if ingestions else now.isoformat(),
             "calculation_time": now.isoformat(),
-            "freshness_status": worst_freshness(row["freshness_status"] for row in lineage_metrics.values() if row.get("value") is not None),
+            "freshness_status": aggregate_freshness(row["freshness_status"] for row in lineage_metrics.values() if row.get("value") is not None),
             "input_status": statuses,
             "lineage": {"metrics": lineage_metrics, "nominal_anchor": nominal_anchor, "real_anchor": real_anchor, "anchor_method": "cross_sectional_median_available_currencies"},
             "source": "MACRO_DATA_API+YFINANCE_API",
@@ -429,15 +522,40 @@ def build_ag8_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]
     policies = {str(row["currency"]): row for row in db.get_latest_policy_rates()}
     neutral_rates = db.get_neutral_rates()
     latest_indicators = _latest_by_indicator(db.get_indicators())
+    liquidity_row = latest_indicators.get(("USD", "global_financial_conditions_score"))
     if not curves:
         raise ValueError("AG8_RATES_ZERO_ROWS")
     output = []
     for currency, curve_row in sorted(curves.items()):
         history = db.get_yield_curve_history(currency, limit=120)
         changes = _nearest_curve_change(history, curve_row)
-        curve_metric = _metric(curve_row, name="yield_curve", now=now, fresh_hours=72, stale_hours=168, value=curve_row.get("yield_10y_pct"))
-        policy_metric = _metric(policies.get(currency), name="policy_rate", now=now, fresh_hours=24 * 45, stale_hours=24 * 120, value=(policies.get(currency) or {}).get("rate_pct"))
-        inflation_metric = _metric(latest_indicators.get((currency, "cpi_yoy")), name="inflation", now=now, fresh_hours=24 * 45, stale_hours=24 * 75)
+        curve_source = str(curve_row.get("source") or "").lower()
+        curve_is_proxy = "policy_curve_proxy" in curve_source
+        curve_is_monthly = currency != "USD" and not curve_is_proxy
+        curve_metric = _metric(
+            curve_row, name="yield_curve", now=now,
+            fresh_hours=24 * (45 if curve_is_proxy else 75 if curve_is_monthly else 3),
+            stale_hours=24 * (120 if curve_is_proxy or curve_is_monthly else 7),
+            value=curve_row.get("yield_10y_pct"),
+            confidence=0.45 if curve_is_proxy else 0.75 if curve_is_monthly else 0.90,
+            status="proxy_curve" if curve_is_proxy else "monthly_observation" if curve_is_monthly else "direct_observation",
+        )
+        policy_metric = _metric(policies.get(currency), name="policy_rate", now=now, fresh_hours=24 * 45, stale_hours=24 * 120, value=(policies.get(currency) or {}).get("rate_pct"), confidence=_source_confidence(policies.get(currency)))
+        inflation_row = _freshest_candidate(
+            latest_indicators, currency, ("cpi_yoy", "cpi_yoy_annual"), now=now,
+            direct_fresh_hours=24 * 45, direct_stale_hours=24 * 75,
+        )
+        inflation_is_annual = "WORLD_BANK" in str((inflation_row or {}).get("source") or "").upper()
+        inflation_metric = _metric(
+            inflation_row, name="inflation", now=now,
+            fresh_hours=24 * (400 if inflation_is_annual else 45), stale_hours=24 * (550 if inflation_is_annual else 75),
+            confidence=_source_confidence(inflation_row), status="proxy_observation" if inflation_is_annual else "direct_observation",
+        )
+        liquidity_metric = _metric(
+            liquidity_row, name="global_financial_conditions", now=now,
+            fresh_hours=24 * 14, stale_hours=24 * 35, confidence=0.75,
+            status="global_liquidity_proxy",
+        )
         neutral = neutral_rates.get(currency) or {}
         regime = rates_regime(
             yield_2y=curve_row.get("yield_2y_pct"), yield_10y=curve_row.get("yield_10y_pct"),
@@ -451,7 +569,7 @@ def build_ag8_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]
             "slope_change": 0.20 if changes["slope_change"] is not None else 0.0,
             "policy": 0.15 if policy_metric["value"] is not None else 0.0,
             "real_rate": 0.15 if real_rate is not None else 0.0,
-            "liquidity": 0.0,
+            "liquidity": 0.10 if liquidity_metric["value"] is not None else 0.0,
         }
         coverage = sum(available_weights.values())
         confidence_inputs = [curve_metric["confidence"]]
@@ -459,20 +577,28 @@ def build_ag8_rows(db: MacroDB, *, now: Optional[datetime] = None) -> list[dict]
             confidence_inputs.append(policy_metric["confidence"])
         if real_rate is not None:
             confidence_inputs.append(min(policy_metric["confidence"], inflation_metric["confidence"]))
+        if liquidity_metric["value"] is not None:
+            confidence_inputs.append(liquidity_metric["confidence"])
         confidence = (sum(confidence_inputs) / len(confidence_inputs)) * coverage if confidence_inputs else 0.0
-        freshness = worst_freshness([curve_metric["freshness_status"], policy_metric["freshness_status"], inflation_metric["freshness_status"]])
+        used_metrics = [curve_metric, policy_metric, inflation_metric, liquidity_metric]
+        freshness = aggregate_freshness(metric["freshness_status"] for metric in used_metrics if metric.get("value") is not None)
         missing = [name for name, weight in available_weights.items() if weight == 0.0]
-        stale = [name for name, metric in {"yield_curve": curve_metric, "policy_rate": policy_metric, "inflation": inflation_metric}.items() if metric["freshness_status"] == "stale"]
+        stale = [name for name, metric in {"yield_curve": curve_metric, "policy_rate": policy_metric, "inflation": inflation_metric, "liquidity": liquidity_metric}.items() if metric.get("value") is not None and metric["freshness_status"] == "stale"]
+        proxy_inputs = ["neutral_rate_estimate", "global_financial_conditions_proxy"]
+        if curve_is_proxy:
+            proxy_inputs.append("policy_curve_proxy")
+        if inflation_is_annual:
+            proxy_inputs.append("annual_inflation_proxy")
         output.append({
             "component": "AG8_RATES_LIQUIDITY", "schema_version": "AG8_RATES_V2", "method_version": "AG8_RATES_V2",
             "component_snapshot_id": component_id, "currency": currency,
             "observation_time": curve_metric["observation_time"], "publication_time": None,
             "ingestion_time": curve_metric["ingestion_time"] or now.isoformat(), "calculation_time": now.isoformat(),
-            **regime, "real_rate": real_rate, "liquidity_score": None,
+            **regime, "real_rate": real_rate, "liquidity_score": liquidity_metric["value"],
             "overlays": _ag8_overlays(regime, real_rate), "coverage_ratio": round(coverage, 6),
             "confidence": round(clamp(confidence, 0.0, 1.0), 6), "freshness_status": freshness,
-            "missing_inputs": missing, "stale_inputs": stale, "proxy_inputs": ["neutral_rate_estimate"],
-            "lineage": {"yield_curve": curve_metric, "policy_rate": policy_metric, "inflation": inflation_metric, "neutral_rate": neutral, "change_baseline_as_of": changes["baseline_as_of"], "coverage_weights": {"yield_2y": 0.20, "yield_10y": 0.20, "slope_change": 0.20, "policy": 0.15, "real_rate": 0.15, "liquidity": 0.10}},
+            "missing_inputs": missing, "stale_inputs": stale, "proxy_inputs": proxy_inputs,
+            "lineage": {"yield_curve": curve_metric, "policy_rate": policy_metric, "inflation": inflation_metric, "liquidity": liquidity_metric, "neutral_rate": neutral, "change_baseline_as_of": changes["baseline_as_of"], "coverage_weights": {"yield_2y": 0.20, "yield_10y": 0.20, "slope_change": 0.20, "policy": 0.15, "real_rate": 0.15, "liquidity": 0.10}},
             "source": "MACRO_DATA_API",
         })
     return output

@@ -43,3 +43,17 @@ def test_deployed_workflows_do_not_depend_on_n8n_env_expression_access():
         http_nodes = [node for node in workflow["nodes"] if node["type"] == "n8n-nodes-base.httpRequest"]
         assert len(http_nodes) == 1
         assert "$env" not in http_nodes[0]["parameters"]["url"]
+
+
+def test_ag5_to_ag8_turn_degraded_quality_into_visible_n8n_failures():
+    component_ids = {
+        "AG5FXMacroPillarsV1", "AG6FXValuationPillarsV1",
+        "AG7FXPositioningPillarsV1", "AG8FXRatesPillarsV1",
+    }
+    for workflow in _workflows():
+        code = next(node for node in workflow["nodes"] if node["type"] == "n8n-nodes-base.code")["parameters"]["jsCode"]
+        if workflow["id"] in component_ids:
+            assert "GLOBAL_CONTEXT_COMPONENT_DEGRADED" in code
+            assert "if (true && status !== 'OK')" in code
+        else:
+            assert "GLOBAL_CONTEXT_COMPONENT_DEGRADED" not in code

@@ -59,7 +59,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const r = $json || {};\nconst status = String(r.status || '').toUpperCase();\nconst rows = Number(r.rows_written || 0);\nconst hasSnapshot = Boolean(r.snapshot && r.snapshot.snapshot_id);\nif (!['OK', 'DEGRADED'].includes(status)) throw new Error(`GLOBAL_CONTEXT_RUN_BAD_STATUS:${status || 'MISSING'}`);\nif (!hasSnapshot && rows <= 0) throw new Error('GLOBAL_CONTEXT_ZERO_ROWS_OR_SNAPSHOT');\nreturn [{json: {status, run_id: r.run_id || null, component_snapshot_id: r.component_snapshot_id || null, snapshot_id: hasSnapshot ? r.snapshot.snapshot_id : null, rows_written: rows, coverage_ratio: r.coverage_ratio ?? r.snapshot?.coverage_ratio ?? null}}];\n"
+        "jsCode": "const r = $json || {};\nconst status = String(r.status || '').toUpperCase();\nconst rows = Number(r.rows_written || 0);\nconst hasSnapshot = Boolean(r.snapshot && r.snapshot.snapshot_id);\nif (!['OK', 'DEGRADED'].includes(status)) throw new Error(`GLOBAL_CONTEXT_RUN_BAD_STATUS:${status || 'MISSING'}`);\nif (!hasSnapshot && rows <= 0) throw new Error('GLOBAL_CONTEXT_ZERO_ROWS_OR_SNAPSHOT');\nif (true && status !== 'OK') throw new Error(`GLOBAL_CONTEXT_COMPONENT_DEGRADED:${r.component || 'UNKNOWN'}:coverage=${r.coverage_ratio ?? 'NA'}:confidence=${r.confidence ?? 'NA'}`);\nreturn [{json: {status, run_id: r.run_id || null, component_snapshot_id: r.component_snapshot_id || null, snapshot_id: hasSnapshot ? r.snapshot.snapshot_id : null, rows_written: rows, coverage_ratio: r.coverage_ratio ?? r.snapshot?.coverage_ratio ?? null, confidence: r.confidence ?? r.snapshot?.confidence ?? null, usable_row_ratio: r.usable_row_ratio ?? null}}];\n"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,

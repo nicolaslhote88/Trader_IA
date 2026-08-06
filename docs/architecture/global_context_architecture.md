@@ -2,9 +2,9 @@
 
 ## Statut
 
-Architecture implémentée le 2026-08-05. Elle est conçue pour un déploiement
-progressif et reste désactivée par défaut (`WORLD_MONITOR_ENABLED=false`,
-`GLOBAL_CONTEXT_ENABLED=false`). Elle ne possède aucun transport d'ordre.
+Architecture implémentée le 2026-08-05 et remédiée côté qualité des données le
+2026-08-06. En production, AG5–AG8 et le contexte consultatif sont actifs ; AG9
+reste dormant. L'ensemble ne possède aucun transport d'ordre.
 
 ## Flux et responsabilités
 
@@ -89,14 +89,14 @@ termine juste après consensus dans `Shadow Capture (NO BROKER)`.
 
 ## Versions de contrats
 
-- `AG5_MACRO_V2`
-- `AG6_FX_VALUATION_V2`
+- `AG5_MACRO_V2` / méthode `AG5_MACRO_V3`
+- `AG6_FX_VALUATION_V2` / méthode `AG6_FX_VALUATION_V3`
 - `AG7_POSITIONING_V2`
-- `AG8_RATES_V2`
+- `AG8_RATES_V2` / méthode `AG8_RATES_V3`
 - `AG9_GLOBAL_RISK_V1` / `AG9_EVENT_RISK_V1`
-- `GLOBAL_CONTEXT_V1` / `GLOBAL_CONTEXT_SYNTHESIS_V1`
+- `GLOBAL_CONTEXT_V1` / `GLOBAL_CONTEXT_SYNTHESIS_V2`
 - `AG1_GLOBAL_CONTEXT_PACK_V1` (snapshot complet persisté)
-- `AG1_GLOBAL_CONTEXT_LLM_V2` / `GLOBAL_CONTEXT_LLM_COMPACTION_V2` (payload LLM)
+- `AG1_GLOBAL_CONTEXT_LLM_V2` / `GLOBAL_CONTEXT_LLM_COMPACTION_V3` (payload LLM)
 
 Les identifiants de snapshot, millésimes, âges, versions de méthode et hashes
 SHA-256 sont persistés pour chaque run AG1 enrichi.

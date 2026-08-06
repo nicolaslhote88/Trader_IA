@@ -55,6 +55,8 @@ def test_component_builders_expose_lineage_and_missingness():
     eur5 = next(row for row in ag5 if row["entity_id"] == "EUR")
     assert eur5["macro_score"] is not None
     assert eur5["lineage"]["metrics"]["current_account_pct_gdp"]["unit"] == "pct_gdp"
+    assert eur5["lineage"]["metrics"]["policy_rate"]["value"] == 2.5
+    assert eur5["subscores"]["monetary_policy"] is not None
 
     spots = {"EUR": {"value": 1.15, "observation_time": "2026-08-05T11:00:00Z", "ingestion_time": "2026-08-05T11:01:00Z", "source": "YF", "status": "direct_observation", "confidence": 0.95}}
     ag6 = build_ag6_rows(db, spots, now=NOW)

@@ -24,14 +24,21 @@ WORKFLOWS = [
 
 
 def workflow(spec: dict) -> dict:
+    strict_component = spec["kind"] == "component"
+    strict_line = "" if not strict_component else "if (true && status !== 'OK') throw new Error(`GLOBAL_CONTEXT_COMPONENT_DEGRADED:${r.component || 'UNKNOWN'}:coverage=${r.coverage_ratio ?? 'NA'}:confidence=${r.confidence ?? 'NA'}`);\n"
+    result_line = (
+        "return [{json: {status, run_id: r.run_id || null, component_snapshot_id: r.component_snapshot_id || null, snapshot_id: hasSnapshot ? r.snapshot.snapshot_id : null, rows_written: rows, coverage_ratio: r.coverage_ratio ?? r.snapshot?.coverage_ratio ?? null, confidence: r.confidence ?? r.snapshot?.confidence ?? null, usable_row_ratio: r.usable_row_ratio ?? null}}];"
+        if strict_component else
+        "return [{json: {status, run_id: r.run_id || null, component_snapshot_id: r.component_snapshot_id || null, snapshot_id: hasSnapshot ? r.snapshot.snapshot_id : null, rows_written: rows, coverage_ratio: r.coverage_ratio ?? r.snapshot?.coverage_ratio ?? null}}];"
+    )
     validate_code = """const r = $json || {};
 const status = String(r.status || '').toUpperCase();
 const rows = Number(r.rows_written || 0);
 const hasSnapshot = Boolean(r.snapshot && r.snapshot.snapshot_id);
 if (!['OK', 'DEGRADED'].includes(status)) throw new Error(`GLOBAL_CONTEXT_RUN_BAD_STATUS:${status || 'MISSING'}`);
 if (!hasSnapshot && rows <= 0) throw new Error('GLOBAL_CONTEXT_ZERO_ROWS_OR_SNAPSHOT');
-return [{json: {status, run_id: r.run_id || null, component_snapshot_id: r.component_snapshot_id || null, snapshot_id: hasSnapshot ? r.snapshot.snapshot_id : null, rows_written: rows, coverage_ratio: r.coverage_ratio ?? r.snapshot?.coverage_ratio ?? null}}];
-"""
+__STRICT_LINE____RESULT_LINE__
+""".replace("__STRICT_LINE__", strict_line).replace("__RESULT_LINE__", result_line)
     nodes = [
         {"parameters": {"rule": {"interval": [{"field": "cronExpression", "expression": spec["cron"]}]}}, "type": "n8n-nodes-base.scheduleTrigger", "typeVersion": 1.3, "position": [-520, -100], "id": "schedule", "name": "Schedule Trigger"},
         {"parameters": {}, "type": "n8n-nodes-base.manualTrigger", "typeVersion": 1, "position": [-520, 100], "id": "manual", "name": "Manual Trigger"},

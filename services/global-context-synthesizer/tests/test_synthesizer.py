@@ -97,13 +97,13 @@ def test_run_specific_advisory_mapping_does_not_invent_exposure():
         now=NOW,
     )
     assert pack["schema_version"] == "AG1_GLOBAL_CONTEXT_LLM_V2"
-    assert pack["method_version"] == "GLOBAL_CONTEXT_LLM_COMPACTION_V2"
+    assert pack["method_version"] == "GLOBAL_CONTEXT_LLM_COMPACTION_V3"
     assert pack["use_policy"] == "NORMAL"
     assert pack["relevant_currencies"] == ["EUR"]
     assert pack["currency_signals"]["EUR"]["macro"]["macro_score"] == 0.25
     assert pack["score_legend"]["positioning_score"].startswith("contrarian:")
-    assert pack["exposure_summary"]["portfolio"] == {"total": 2, "known": 1, "unknown": 1}
-    assert pack["exposure_summary"]["opportunities"] == {"total": 1, "known": 0, "unknown": 1}
+    assert pack["exposure_summary"]["portfolio"] == {"total": 2, "known": 1, "unknown": 1, "not_evaluated": 0}
+    assert pack["exposure_summary"]["opportunities"] == {"total": 1, "known": 0, "unknown": 1, "not_evaluated": 0}
     assert pack["exposure_summary"]["limitation"] == "PARTIAL_EXPOSURE_MAPPING"
     assert len(pack["known_asset_overlays"]) == 1
     assert "portfolio_exposure_review" not in pack
@@ -149,9 +149,10 @@ def test_degraded_llm_pack_is_caveat_only_small_and_has_no_repeated_unknown_rows
     text = canonical_json(pack)
     assert pack["use_policy"] == "CAVEAT_ONLY"
     assert "currency_signals" not in pack
-    assert pack["exposure_summary"]["portfolio"] == {"total": 9, "known": 0, "unknown": 9}
-    assert pack["exposure_summary"]["opportunities"] == {"total": 12, "known": 0, "unknown": 12}
-    assert text.count("NO_RELIABLE_EXPOSURE_MAPPING") == 1
+    assert pack["exposure_summary"]["portfolio"] == {"total": 9, "known": 0, "unknown": 0, "not_evaluated": 9}
+    assert pack["exposure_summary"]["limitation"] == "AG9_DORMANT_EXPOSURE_MAPPING_NOT_EVALUATED"
+    assert pack["exposure_summary"]["opportunities"] == {"total": 12, "known": 0, "unknown": 0, "not_evaluated": 12}
+    assert "NO_RELIABLE_EXPOSURE_MAPPING" not in text
     assert len(text) < 4000
     assert "0.123456789" not in text
 

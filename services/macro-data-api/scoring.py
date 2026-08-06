@@ -15,10 +15,10 @@ from typing import Any, Mapping, Optional
 METHOD_VERSIONS = {
     "freshness": "EFFECTIVE_AGE_V1",
     "composite": "AVAILABLE_WEIGHT_RENORM_V1",
-    "ag5": "AG5_MACRO_V2",
-    "ag6": "AG6_FX_VALUATION_V2",
+    "ag5": "AG5_MACRO_V3",
+    "ag6": "AG6_FX_VALUATION_V3",
     "ag7": "AG7_POSITIONING_V2",
-    "ag8": "AG8_RATES_V2",
+    "ag8": "AG8_RATES_V3",
 }
 
 
