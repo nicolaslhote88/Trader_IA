@@ -1,0 +1,30 @@
+{
+  "config_version": "AG9_EVENT_DECAY_V1",
+  "default_half_life_hours": 72,
+  "event_half_life_hours": {
+    "market_disruption": 12,
+    "airspace": 36,
+    "cyber": 48,
+    "natural_disaster": 120,
+    "sanctions": 1080,
+    "conflict": 336,
+    "country_risk": 1440,
+    "military": 168,
+    "chokepoints": 96,
+    "maritime": 48,
+    "energy": 72,
+    "supply_chain": 120,
+    "infrastructure": 96,
+    "tariffs": 720,
+    "convergence": 72,
+    "temporal_anomalies": 48,
+    "focal_points": 72,
+    "news": 24,
+    "macro_country": 720,
+    "markets": 12
+  },
+  "source_diversity_min": 2,
+  "minimum_confidence": 0.35,
+  "critical_score_threshold": 0.65,
+  "regime_thresholds": {"low": 0.15, "normal": 0.30, "elevated": 0.50, "high": 0.70, "critical": 1.0}
+}

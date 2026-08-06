@@ -1,11 +1,11 @@
 [
   {
-    "updatedAt": "2026-06-18T13:34:12.000Z",
+    "updatedAt": "2026-06-24T16:03:44.757Z",
     "createdAt": "2026-06-18T08:58:41.305Z",
     "id": "AG4SPEFINNHUBV1",
     "name": "AG4_Spé-Finnhub-V1 — Global News",
     "description": null,
-    "active": false,
+    "active": true,
     "isArchived": false,
     "nodes": [
       {
@@ -88,53 +88,6 @@
       },
       {
         "parameters": {
-          "modelId": {
-            "__rl": true,
-            "mode": "list",
-            "value": "gpt-5-mini",
-            "cachedResultName": "GPT-5-MINI"
-          },
-          "responses": {
-            "values": [
-              {
-                "role": "system",
-                "content": "Tu es un analyste buy-side specialise news single-stock. N'utilise QUE les informations fournies, n'invente rien. Si la correspondance entreprise est ambigue ou absente, retourne isRelevant=false. Rubric impactScore: -10 catastrophique, -7 a -4 negatif, -3 a -1 legerement negatif, 0 neutre/bruit, +1 a +3 legerement positif, +4 a +7 positif, +8 a +10 exceptionnel. Reponds uniquement en JSON valide selon le schema impose."
-              },
-              {
-                "content": "=TARGET:\n- symbol: {{ $json.symbol }}\n- name: {{ $json.company_name }}\n- isin: {{ $json.isin }}\n\nNEWS:\n{{ $json.llmInput }}\n\nRegles:\n- Si la news ne concerne pas explicitement TARGET -> isRelevant=false, impactScore=0, sentiment=Neutral, category=Noise.\n- Si ambigu / doute -> isRelevant=false."
-              }
-            ]
-          },
-          "builtInTools": {},
-          "options": {
-            "textFormat": {
-              "textOptions": {
-                "type": "json_schema",
-                "name": "specific_stock_news_v2",
-                "schema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"isRelevant\": { \"type\": \"boolean\" },\n    \"relevanceReason\": { \"type\": \"string\" },\n    \"impactScore\": { \"type\": \"integer\", \"minimum\": -10, \"maximum\": 10 },\n    \"sentiment\": { \"type\": \"string\", \"enum\": [\"Bullish\", \"Bearish\", \"Neutral\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"Earnings\", \"M&A\", \"Contract/Product\", \"Management\", \"Analyst Rating\", \"Macro/Sector\", \"Legal/Reg\", \"Noise\"] },\n    \"summary\": { \"type\": \"string\" },\n    \"confidence\": { \"type\": \"integer\", \"minimum\": 0, \"maximum\": 100 },\n    \"horizon\": { \"type\": \"string\", \"enum\": [\"Intraday\", \"Days\", \"Weeks\", \"Months\"] },\n    \"urgency\": { \"type\": \"string\", \"enum\": [\"Low\", \"Medium\", \"High\"] },\n    \"suggestedSignal\": { \"type\": \"string\", \"enum\": [\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"] },\n    \"keyDrivers\": { \"type\": \"array\", \"items\": { \"type\": \"string\" }, \"minItems\": 2, \"maxItems\": 5 },\n    \"needsFollowUp\": { \"type\": \"boolean\" }\n  },\n  \"required\": [\"isRelevant\", \"relevanceReason\", \"impactScore\", \"sentiment\", \"category\", \"summary\", \"confidence\", \"horizon\", \"urgency\", \"suggestedSignal\", \"keyDrivers\", \"needsFollowUp\"]\n}",
-                "strict": true
-              }
-            }
-          }
-        },
-        "type": "@n8n/n8n-nodes-langchain.openAi",
-        "typeVersion": 2.1,
-        "position": [
-          940,
-          -80
-        ],
-        "id": "ibkr-s19",
-        "name": "S19 - Analyze with OpenAI",
-        "credentials": {
-          "openAiApi": {
-            "id": "rILpYjTayqc4jXXZ",
-            "name": "OpenAi account"
-          }
-        },
-        "onError": "continueRegularOutput"
-      },
-      {
-        "parameters": {
           "mode": "combine",
           "combineBy": "combineByPosition",
           "options": {}
@@ -150,7 +103,7 @@
       },
       {
         "parameters": {
-          "jsCode": "function safeParse(value) {\n  try {\n    if (typeof value === \"object\" && value !== null) return value;\n    return JSON.parse(value);\n  } catch {\n    return {};\n  }\n}\n\nfunction clampScore(v, lo, hi, dflt) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return dflt;\n  return Math.max(lo, Math.min(hi, Math.round(n)));\n}\n\nfunction cleanSentiment(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Bullish\", \"Bearish\", \"Neutral\"].includes(s)) return s;\n  return \"Neutral\";\n}\n\nfunction cleanHorizon(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Intraday\", \"Days\", \"Weeks\", \"Months\"].includes(s)) return s;\n  return \"Days\";\n}\n\nfunction cleanUrgency(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Low\", \"Medium\", \"High\"].includes(s)) return s;\n  return \"Low\";\n}\n\nfunction cleanSignal(v) {\n  const s = String(v || \"\").trim();\n  if ([\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"].includes(s)) return s;\n  return \"WATCH\";\n}\n\nfunction cleanDrivers(v) {\n  if (!Array.isArray(v)) return \"\";\n  const arr = v\n    .map((x) => String(x || \"\").trim())\n    .filter(Boolean)\n    .slice(0, 5);\n  return arr.join(\" | \");\n}\n\nfunction toBool(v, d = false) {\n  if (typeof v === \"boolean\") return v;\n  if (v == null) return d;\n  const s = String(v).trim().toLowerCase();\n  if ([\"1\", \"true\", \"yes\", \"y\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\"].includes(s)) return false;\n  return d;\n}\n\nconst _process = ($j0) => {\n  const j = $j0 || {};\nconst raw = j.output?.[0]?.content?.[0]?.text || j.content || \"{}\";\nconst ai = safeParse(raw);\nconst nowIso = new Date().toISOString();\n\nconst isRelevant = typeof ai.isRelevant === \"boolean\" ? ai.isRelevant : true;\nconst impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;\nconst sentiment = isRelevant ? cleanSentiment(ai.sentiment) : \"Neutral\";\nconst category = isRelevant ? String(ai.category || \"Noise\").trim() : \"Noise\";\nconst suggestedSignal = isRelevant ? cleanSignal(ai.suggestedSignal) : \"WATCH\";\nconst urgency = isRelevant ? cleanUrgency(ai.urgency) : \"Low\";\nconst confidence = clampScore(ai.confidence, 0, 100, isRelevant ? 50 : 0);\nconst horizon = cleanHorizon(ai.horizon);\nconst keyDrivers = cleanDrivers(ai.keyDrivers);\nconst needsFollowUp = toBool(ai.needsFollowUp, false);\n\n  return {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || null,\n      snippet: j.snippet || \"\",\n      text: j.text || \"\",\n      summary: String(ai.summary || \"\").trim(),\n      category,\n      impactScore,\n      sentiment,\n      confidence,\n      horizon,\n      urgency,\n      suggestedSignal,\n      keyDrivers,\n      needsFollowUp,\n      isRelevant,\n      relevanceReason: String(ai.relevanceReason || \"\").trim(),\n      action: \"analyze\",\n      reason: j._reason || \"new_item\",\n      status: \"ANALYZED\",\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n      provider: j.provider || null,\n      newsArticleId: j.newsArticleId || null,\n      ibkrSentiment: (j.ibkrSentiment === undefined ? null : j.ibkrSentiment),\n    },\n  };\n};\nreturn $input.all().map((it) => _process(it.json));\n"
+          "jsCode": "function safeParse(value) {\n  try {\n    if (typeof value === \"object\" && value !== null) return value;\n    return JSON.parse(value);\n  } catch {\n    return {};\n  }\n}\n\nfunction clampScore(v, lo, hi, dflt) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return dflt;\n  return Math.max(lo, Math.min(hi, Math.round(n)));\n}\n\nfunction cleanSentiment(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Bullish\", \"Bearish\", \"Neutral\"].includes(s)) return s;\n  return \"Neutral\";\n}\n\nfunction cleanHorizon(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Intraday\", \"Days\", \"Weeks\", \"Months\"].includes(s)) return s;\n  return \"Days\";\n}\n\nfunction cleanUrgency(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Low\", \"Medium\", \"High\"].includes(s)) return s;\n  return \"Low\";\n}\n\nfunction cleanSignal(v) {\n  const s = String(v || \"\").trim();\n  if ([\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"].includes(s)) return s;\n  return \"WATCH\";\n}\n\nfunction cleanDrivers(v) {\n  if (!Array.isArray(v)) return \"\";\n  const arr = v\n    .map((x) => String(x || \"\").trim())\n    .filter(Boolean)\n    .slice(0, 5);\n  return arr.join(\" | \");\n}\n\nfunction toBool(v, d = false) {\n  if (typeof v === \"boolean\") return v;\n  if (v == null) return d;\n  const s = String(v).trim().toLowerCase();\n  if ([\"1\", \"true\", \"yes\", \"y\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\"].includes(s)) return false;\n  return d;\n}\n\nconst _process = ($j0) => {\n  const j = $j0 || {};\n// Basic LLM Chain + Structured Output Parser returns { output: <parsed object> }.\n// Keep the legacy OpenAI response envelope as a rollback-compatible fallback.\nconst raw = (j.output && !Array.isArray(j.output))\n  ? j.output\n  : (j.output?.[0]?.content?.[0]?.text || j.content || j.text || \"{}\");\nconst ai = safeParse(raw);\nconst nowIso = new Date().toISOString();\n\nconst isRelevant = typeof ai.isRelevant === \"boolean\" ? ai.isRelevant : true;\nconst impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;\nconst sentiment = isRelevant ? cleanSentiment(ai.sentiment) : \"Neutral\";\nconst category = isRelevant ? String(ai.category || \"Noise\").trim() : \"Noise\";\nconst suggestedSignal = isRelevant ? cleanSignal(ai.suggestedSignal) : \"WATCH\";\nconst urgency = isRelevant ? cleanUrgency(ai.urgency) : \"Low\";\nconst confidence = clampScore(ai.confidence, 0, 100, isRelevant ? 50 : 0);\nconst horizon = cleanHorizon(ai.horizon);\nconst keyDrivers = cleanDrivers(ai.keyDrivers);\nconst needsFollowUp = toBool(ai.needsFollowUp, false);\n\n  return {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || null,\n      snippet: j.snippet || \"\",\n      text: j.text || \"\",\n      summary: String(ai.summary || \"\").trim(),\n      category,\n      impactScore,\n      sentiment,\n      confidence,\n      horizon,\n      urgency,\n      suggestedSignal,\n      keyDrivers,\n      needsFollowUp,\n      isRelevant,\n      relevanceReason: String(ai.relevanceReason || \"\").trim(),\n      action: \"analyze\",\n      reason: j._reason || \"new_item\",\n      status: \"ANALYZED\",\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n      provider: j.provider || null,\n      newsArticleId: j.newsArticleId || null,\n      ibkrSentiment: (j.ibkrSentiment === undefined ? null : j.ibkrSentiment),\n    },\n  };\n};\nreturn $input.all().map((it) => _process(it.json));\n"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
@@ -174,6 +127,63 @@
           1660,
           0
         ]
+      },
+      {
+        "parameters": {
+          "promptType": "define",
+          "text": "=TARGET:\n- symbol: {{ $json.symbol }}\n- name: {{ $json.company_name }}\n- isin: {{ $json.isin }}\n\nNEWS:\n{{ $json.llmInput }}\n\nRegles:\n- Si la news ne concerne pas explicitement TARGET -> isRelevant=false, impactScore=0, sentiment=Neutral, category=Noise.\n- Si ambigu / doute -> isRelevant=false.",
+          "hasOutputParser": true,
+          "messages": {
+            "messageValues": [
+              {
+                "message": "Tu es un analyste buy-side specialise news single-stock. N'utilise QUE les informations fournies, n'invente rien. Si la correspondance entreprise est ambigue ou absente, retourne isRelevant=false. Rubric impactScore: -10 catastrophique, -7 a -4 negatif, -3 a -1 legerement negatif, 0 neutre/bruit, +1 a +3 legerement positif, +4 a +7 positif, +8 a +10 exceptionnel. Reponds uniquement en JSON valide selon le schema impose."
+              }
+            ]
+          }
+        },
+        "type": "@n8n/n8n-nodes-langchain.chainLlm",
+        "typeVersion": 1.5,
+        "position": [
+          940,
+          -80
+        ],
+        "id": "ibkr-s19",
+        "name": "S19 - Analyze with DeepSeek",
+        "onError": "continueRegularOutput"
+      },
+      {
+        "parameters": {
+          "model": "deepseek-v4-pro",
+          "options": {}
+        },
+        "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+        "typeVersion": 1,
+        "position": [
+          828,
+          144
+        ],
+        "id": "4d2f3579-114d-4861-956c-64bc6cd134ac",
+        "name": "S19A - DeepSeek Chat Model",
+        "credentials": {
+          "deepSeekApi": {
+            "id": "BlSCC28mzKodkfO5",
+            "name": "DeepSeek account"
+          }
+        }
+      },
+      {
+        "parameters": {
+          "schemaType": "manual",
+          "inputSchema": "{\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"isRelevant\": { \"type\": \"boolean\" },\n    \"relevanceReason\": { \"type\": \"string\" },\n    \"impactScore\": { \"type\": \"integer\", \"minimum\": -10, \"maximum\": 10 },\n    \"sentiment\": { \"type\": \"string\", \"enum\": [\"Bullish\", \"Bearish\", \"Neutral\"] },\n    \"category\": { \"type\": \"string\", \"enum\": [\"Earnings\", \"M&A\", \"Contract/Product\", \"Management\", \"Analyst Rating\", \"Macro/Sector\", \"Legal/Reg\", \"Noise\"] },\n    \"summary\": { \"type\": \"string\" },\n    \"confidence\": { \"type\": \"integer\", \"minimum\": 0, \"maximum\": 100 },\n    \"horizon\": { \"type\": \"string\", \"enum\": [\"Intraday\", \"Days\", \"Weeks\", \"Months\"] },\n    \"urgency\": { \"type\": \"string\", \"enum\": [\"Low\", \"Medium\", \"High\"] },\n    \"suggestedSignal\": { \"type\": \"string\", \"enum\": [\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"] },\n    \"keyDrivers\": { \"type\": \"array\", \"items\": { \"type\": \"string\" }, \"minItems\": 2, \"maxItems\": 5 },\n    \"needsFollowUp\": { \"type\": \"boolean\" }\n  },\n  \"required\": [\"isRelevant\", \"relevanceReason\", \"impactScore\", \"sentiment\", \"category\", \"summary\", \"confidence\", \"horizon\", \"urgency\", \"suggestedSignal\", \"keyDrivers\", \"needsFollowUp\"]\n}"
+        },
+        "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+        "typeVersion": 1.3,
+        "position": [
+          1052,
+          144
+        ],
+        "id": "b7cf0c18-cc5b-51e2-a374-8c1fd2227346",
+        "name": "S19B - Structured Output DeepSeek"
       }
     ],
     "connections": {
@@ -214,7 +224,7 @@
         "main": [
           [
             {
-              "node": "S19 - Analyze with OpenAI",
+              "node": "S19 - Analyze with DeepSeek",
               "type": "main",
               "index": 0
             },
@@ -225,17 +235,6 @@
             }
           ],
           []
-        ]
-      },
-      "S19 - Analyze with OpenAI": {
-        "main": [
-          [
-            {
-              "node": "S19M - Merge AI + Context",
-              "type": "main",
-              "index": 1
-            }
-          ]
         ]
       },
       "S19M - Merge AI + Context": {
@@ -259,6 +258,39 @@
             }
           ]
         ]
+      },
+      "S19 - Analyze with DeepSeek": {
+        "main": [
+          [
+            {
+              "node": "S19M - Merge AI + Context",
+              "type": "main",
+              "index": 1
+            }
+          ]
+        ]
+      },
+      "S19A - DeepSeek Chat Model": {
+        "ai_languageModel": [
+          [
+            {
+              "node": "S19 - Analyze with DeepSeek",
+              "type": "ai_languageModel",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "S19B - Structured Output DeepSeek": {
+        "ai_outputParser": [
+          [
+            {
+              "node": "S19 - Analyze with DeepSeek",
+              "type": "ai_outputParser",
+              "index": 0
+            }
+          ]
+        ]
       }
     },
     "settings": {
@@ -267,19 +299,24 @@
     "staticData": {
       "node:Schedule IBKR News": {
         "recurrenceRules": []
+      },
+      "node:Schedule Finnhub News": {
+        "recurrenceRules": []
       }
     },
     "meta": null,
     "pinData": {},
-    "versionCounter": 22,
+    "versionId": "c7a7f80f-d8ce-539d-b4fb-fbe6cd0b860b",
+    "activeVersionId": null,
+    "versionCounter": 72,
     "triggerCount": 1,
     "tags": [],
     "shared": [
       {
-        "updatedAt": "2026-06-18T09:11:33.057Z",
-        "createdAt": "2026-06-18T09:11:33.057Z",
+        "updatedAt": "2026-06-24T15:00:11.371Z",
+        "createdAt": "2026-06-24T15:00:11.371Z",
         "role": "workflow:owner",
-        "workflowId": "hSqxVSb8YAO9Nc6A",
+        "workflowId": "AG4SPEFINNHUBV1",
         "projectId": "ksaxzZwZY6PsA6jp",
         "project": {
           "updatedAt": "2025-08-19T20:06:03.793Z",

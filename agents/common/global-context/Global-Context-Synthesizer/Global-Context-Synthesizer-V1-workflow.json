@@ -1,0 +1,113 @@
+{
+  "id": "GLOBALCONTEXTSYNTH20260805",
+  "name": "Global Context — AG5-AG9 Synthesizer",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "5 10,13,16 * * 1-5"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -520,
+        -100
+      ],
+      "id": "schedule",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -520,
+        100
+      ],
+      "id": "manual",
+      "name": "Manual Trigger"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://global-context-synthesizer:8083/synthesize",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "{}",
+        "options": {
+          "timeout": 1200000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        -220,
+        0
+      ],
+      "id": "invoke-service",
+      "name": "Invoke Canonical Service",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $json || {};\nconst status = String(r.status || '').toUpperCase();\nconst rows = Number(r.rows_written || 0);\nconst hasSnapshot = Boolean(r.snapshot && r.snapshot.snapshot_id);\nif (!['OK', 'DEGRADED'].includes(status)) throw new Error(`GLOBAL_CONTEXT_RUN_BAD_STATUS:${status || 'MISSING'}`);\nif (!hasSnapshot && rows <= 0) throw new Error('GLOBAL_CONTEXT_ZERO_ROWS_OR_SNAPSHOT');\nreturn [{json: {status, run_id: r.run_id || null, component_snapshot_id: r.component_snapshot_id || null, snapshot_id: hasSnapshot ? r.snapshot.snapshot_id : null, rows_written: rows, coverage_ratio: r.coverage_ratio ?? r.snapshot?.coverage_ratio ?? null}}];\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        60,
+        0
+      ],
+      "id": "validate-contract",
+      "name": "Validate Non-Empty Contract"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Invoke Canonical Service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Invoke Canonical Service",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Invoke Canonical Service": {
+      "main": [
+        [
+          {
+            "node": "Validate Non-Empty Contract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "timezone": "Europe/Paris",
+    "executionTimeout": 1200
+  }
+}

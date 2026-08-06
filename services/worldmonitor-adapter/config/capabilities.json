@@ -1,0 +1,24 @@
+{
+  "config_version": "WORLD_MONITOR_CAPABILITIES_V1",
+  "capabilities": [
+    {"capability": "conflicts", "domain": "conflict", "candidates": ["get_conflict_events", "list_conflict_events"]},
+    {"capability": "country_risk", "domain": "country_risk", "candidates": ["get_country_risk", "get_resilience_ranking"]},
+    {"capability": "sanctions", "domain": "sanctions", "candidates": ["get_sanctions_data", "get_sanctions"]},
+    {"capability": "military", "domain": "military", "candidates": ["get_military_posture", "get_military_activity"]},
+    {"capability": "convergence", "domain": "convergence", "candidates": ["get_signal_convergence", "get_convergence_signals"]},
+    {"capability": "temporal_anomalies", "domain": "temporal_anomalies", "candidates": ["get_temporal_anomalies"]},
+    {"capability": "focal_points", "domain": "focal_points", "candidates": ["get_focal_points"]},
+    {"capability": "news_intelligence", "domain": "news", "candidates": ["get_news_intelligence"]},
+    {"capability": "cyber", "domain": "cyber", "candidates": ["get_cyber_threats"]},
+    {"capability": "chokepoints", "domain": "chokepoints", "candidates": ["get_chokepoint_status"]},
+    {"capability": "maritime", "domain": "maritime", "candidates": ["get_maritime_activity"]},
+    {"capability": "airspace", "domain": "airspace", "candidates": ["get_airspace", "get_aviation_status"]},
+    {"capability": "energy", "domain": "energy", "candidates": ["get_energy_intelligence"]},
+    {"capability": "supply_chain", "domain": "supply_chain", "candidates": ["get_supply_chain_data", "get_supply_chain_risk", "get_supply_chain_intelligence"]},
+    {"capability": "natural_disasters", "domain": "natural_disaster", "candidates": ["get_natural_disasters"]},
+    {"capability": "infrastructure", "domain": "infrastructure", "candidates": ["get_infrastructure_status", "get_infrastructure_risk"]},
+    {"capability": "tariffs", "domain": "tariffs", "candidates": ["get_tariff_trends"]},
+    {"capability": "macro_country", "domain": "macro_country", "candidates": ["get_country_macro", "get_economic_data"]},
+    {"capability": "markets", "domain": "markets", "candidates": ["get_market_data"]}
+  ]
+}

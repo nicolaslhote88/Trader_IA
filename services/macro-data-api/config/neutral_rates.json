@@ -1,0 +1,18 @@
+{
+  "config_version": "NEUTRAL_RATE_ESTIMATES_V1_20260805",
+  "description": "Estimations configurables de taux directeurs neutres, héritées de la calibration historique. Ce ne sont pas des observations de marché.",
+  "currencies": {
+    "USD": {"rate_pct": 2.5, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.35},
+    "EUR": {"rate_pct": 2.0, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.35},
+    "JPY": {"rate_pct": 0.0, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.30},
+    "GBP": {"rate_pct": 2.5, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.35},
+    "CHF": {"rate_pct": 1.0, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.30},
+    "CAD": {"rate_pct": 2.5, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.35},
+    "AUD": {"rate_pct": 3.0, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.35},
+    "NZD": {"rate_pct": 3.0, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.35},
+    "MXN": {"rate_pct": 6.0, "uncertainty_pct": 1.5, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.25},
+    "SEK": {"rate_pct": 2.0, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.30},
+    "NOK": {"rate_pct": 2.5, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.30},
+    "KRW": {"rate_pct": 2.5, "uncertainty_pct": 1.0, "source": "INTERNAL_ESTIMATE", "method": "legacy_long_run_nominal_policy_rate_estimate", "as_of": "2026-08-05", "confidence": 0.25}
+  }
+}

@@ -1,6 +1,19 @@
 # Macro Data API
 
-Service central du framework Forex 3 Piliers. Il alimente les tables `macro.*`, `cot.*`, `rates.*` et `pillars.*` dans `macro_data.duckdb`.
+Service central des données macro. Il conserve le framework Forex historique et
+est désormais le writer unique des composants consultatifs AG5–AG8 dans
+`macro_data.duckdb`.
+
+Statut live vérifié le 2026-08-06 : API `2.1.0`, AG5/AG6/AG7/AG8 actifs,
+contrats `AG5_MACRO_V3`, `AG6_FX_VALUATION_V3`, `AG7_POSITIONING_V2` et
+`AG8_RATES_V3`. Les données absentes restent `null`, les proxies/fréquences sont
+tracés et les workflows n8n n'écrivent pas directement en base.
+
+Endpoints opérationnels : `/components/health`, `/components/{component}` et
+les quatre refresh/compute `/components/ag5/refresh`, `/ag6/compute`,
+`/ag7/refresh`, `/ag8/compute`. Architecture et qualité :
+`docs/architecture/global_context_architecture.md` et
+`docs/operations/20260806_ag5_ag8_data_quality_remediation.md`.
 
 ## Devises supportees
 

@@ -127,6 +127,7 @@ class RatesClient:
             y2 = yields_2y.get(currency, {}).get("yield_2y_pct")
             policy = policy_rates.get(currency, {}).get("rate_pct")
             source = yields_10y.get(currency, {}).get("source") or "FRED"
+            observation_as_of = yields_10y.get(currency, {}).get("as_of")
 
             # Operational override for non-FRED curves such as Banxico 2Y/10Y.
             # Example: MXN_YIELD_10Y_PCT=9.55 MXN_YIELD_2Y_PCT=9.85.
@@ -152,6 +153,7 @@ class RatesClient:
                 # degradee au lieu de supprimer totalement la devise.
                 y10 = round(policy + POLICY_RATE_TO_10Y_SPREAD, 3)
                 source = "policy_curve_proxy" if source == "FRED" else f"{source}+policy_curve_proxy"
+                observation_as_of = policy_rates.get(currency, {}).get("as_of")
 
             if y10 is None or y2 is None:
                 continue
@@ -161,7 +163,7 @@ class RatesClient:
                 "yield_2y": y2,
                 "yield_10y": y10,
                 "slope_10y2y": slope,
-                "as_of": yields_10y.get(currency, {}).get("as_of") or date.today().isoformat(),
+                "as_of": observation_as_of or policy_rates.get(currency, {}).get("as_of") or date.today().isoformat(),
                 "source": source,
             }
         return result

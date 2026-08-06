@@ -5,6 +5,8 @@ Toutes les séries macroéconomiques clés pour le framework 3 piliers.
 
 import os
 import logging
+import math
+import asyncio
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -64,15 +66,9 @@ FRED_SERIES = {
     "unemployment": {
         "MXN": "LRHUTTTTMXM156S",
     },
-    # Balance du compte courant (Milliards USD, trimestriel)
-    "current_account": {
-        "USD": "BOPCRNT",     # US Current Account Balance
-        "EUR": "BPCA01EZQ02S", # Euro Area CA Balance
-        "JPY": "JPNB6BLTT02STSAQ", # Japan CA Balance
-        "GBP": "BPCA01GBQ02S",    # UK CA Balance
-        "CAD": "BPCA01CAQ02S",    # Canada CA Balance
-        "AUD": "BPCA01AUQ02S",    # Australia CA Balance
-    },
+    # La balance courante comparable (% du PIB) vient de la Banque mondiale.
+    # Les anciens IDs FRED absolus étaient hétérogènes et plusieurs sont retirés.
+    "current_account": {},
     # Yields souverains (US Treasury via FRED)
     "yield_2y": {"USD": "DGS2"},
     "yield_5y": {"USD": "DGS5"},
@@ -90,8 +86,37 @@ FRED_SERIES = {
     "yield_10y_sek": {"SEK": "IRLTLT01SEM156N"},
     "yield_10y_nok": {"NOK": "IRLTLT01NOM156N"},
     "yield_10y_krw": {"KRW": "IRLTLT01KRM156N"},
-    "yield_2y_eur": {"EUR": "IRLTST01EZM156N"},
+    # Conditions financières hebdomadaires, proxy global de liquidité.
+    "financial_conditions": {"GLOBAL": "NFCI"},
 }
+
+GDP_TRANSFORMS = {
+    "USD": "annualized_rate",
+    "EUR": "level_qoq_annualized", "JPY": "level_qoq_annualized",
+    "GBP": "level_qoq_annualized", "CAD": "level_qoq_annualized",
+    "AUD": "level_qoq_annualized",
+    "CHF": "qoq_rate_annualized", "NZD": "qoq_rate_annualized",
+    "MXN": "qoq_rate_annualized", "SEK": "qoq_rate_annualized",
+    "NOK": "qoq_rate_annualized",
+}
+
+
+def _annualize_qoq_pct(value: float) -> float:
+    return ((1.0 + value / 100.0) ** 4 - 1.0) * 100.0
+
+
+def _gdp_rates(observations: list[dict], transform: str) -> tuple[float, float] | None:
+    """Retourne (croissance courante, précédente), toutes deux annualisées."""
+    if transform == "annualized_rate" and len(observations) >= 2:
+        return float(observations[0]["value"]), float(observations[1]["value"])
+    if transform == "qoq_rate_annualized" and len(observations) >= 2:
+        return _annualize_qoq_pct(float(observations[0]["value"])), _annualize_qoq_pct(float(observations[1]["value"]))
+    if transform == "level_qoq_annualized" and len(observations) >= 3:
+        latest, previous, prior = (float(observations[i]["value"]) for i in range(3))
+        if previous <= 0 or prior <= 0:
+            return None
+        return ((latest / previous) ** 4 - 1.0) * 100.0, ((previous / prior) ** 4 - 1.0) * 100.0
+    return None
 
 # Official static fallback used only when FRED exposes no usable observations.
 # Keep these dated and auditable; environment variables can override them in
@@ -131,6 +156,18 @@ class FREDClient:
         self.api_key = api_key or os.environ.get("FRED_API_KEY", "")
         if not self.api_key:
             logger.warning("FRED_API_KEY not set — FRED requests will fail")
+        self.max_retries = max(1, int(os.environ.get("FRED_MAX_RETRIES", "3")))
+        self.last_warnings: list[dict] = []
+
+    def reset_warnings(self) -> None:
+        self.last_warnings = []
+
+    def _warn(self, series_id: str, exc: Exception, severity: str = "warning") -> None:
+        detail = str(exc).replace(self.api_key, "***")[:500]
+        self.last_warnings.append({
+            "source": f"FRED:{series_id}", "error_code": type(exc).__name__,
+            "detail": detail, "severity": severity,
+        })
 
     async def get_series(
         self,
@@ -157,12 +194,21 @@ class FREDClient:
             params["observation_end"] = observation_end
 
         async with httpx.AsyncClient(timeout=15.0) as client:
-            r = await client.get(f"{FRED_BASE}/series/observations", params=params)
-            try:
-                r.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                detail = exc.response.text[:300].replace(self.api_key, "***")
-                raise RuntimeError(f"FRED series {series_id} failed with HTTP {exc.response.status_code}: {detail}") from None
+            for attempt in range(self.max_retries):
+                try:
+                    r = await client.get(f"{FRED_BASE}/series/observations", params=params)
+                    if (r.status_code == 429 or r.status_code >= 500) and attempt + 1 < self.max_retries:
+                        await asyncio.sleep(0.4 * (attempt + 1))
+                        continue
+                    r.raise_for_status()
+                    break
+                except httpx.RequestError as exc:
+                    if attempt + 1 >= self.max_retries:
+                        raise RuntimeError(f"FRED series {series_id} network failure: {type(exc).__name__}") from None
+                    await asyncio.sleep(0.4 * (attempt + 1))
+                except httpx.HTTPStatusError as exc:
+                    detail = exc.response.text[:300].replace(self.api_key, "***")
+                    raise RuntimeError(f"FRED series {series_id} failed with HTTP {exc.response.status_code}: {detail}") from None
             data = r.json()
             obs = data.get("observations", [])
             result = []
@@ -180,6 +226,7 @@ class FREDClient:
             obs = await self.get_series(series_id, limit=5)
         except RuntimeError as exc:
             logger.warning("%s", exc)
+            self._warn(series_id, exc)
             return None
         return obs[0] if obs else None
 
@@ -219,14 +266,18 @@ class FREDClient:
                 obs = await self.get_series(series_id, limit=8)
             except RuntimeError as exc:
                 logger.warning("%s", exc)
+                self._warn(series_id, exc)
                 continue
-            if len(obs) >= 2:
-                latest = obs[0]["value"]
-                prev = obs[1]["value"]
+            rates = _gdp_rates(obs, GDP_TRANSFORMS[currency])
+            if rates:
+                latest, prev = rates
+                if not all(math.isfinite(value) and abs(value) <= 50.0 for value in rates):
+                    self._warn(series_id, ValueError(f"implausible_gdp_rates={rates}"))
+                    continue
                 results[currency] = {
-                    "latest_qoq": latest,
-                    "prev_qoq": prev,
-                    "momentum": latest - prev,
+                    "latest_qoq": round(latest, 6),
+                    "prev_qoq": round(prev, 6),
+                    "momentum": round(latest - prev, 6),
                     "as_of": obs[0]["date"],
                     "series_id": series_id,
                     "source": "FRED",
@@ -241,6 +292,7 @@ class FREDClient:
                 obs = await self.get_series(series_id, limit=14)
             except RuntimeError as exc:
                 logger.warning("%s", exc)
+                self._warn(series_id, exc)
                 continue
             year_idx = _year_ago_index(obs)
             if year_idx is not None:
@@ -264,6 +316,7 @@ class FREDClient:
                 obs = await self.get_series(series_id, limit=8)
             except RuntimeError as exc:
                 logger.warning("%s", exc)
+                self._warn(series_id, exc)
                 continue
             if obs:
                 latest = obs[0]["value"]
@@ -284,6 +337,7 @@ class FREDClient:
                 obs = await self.get_series(series_id, limit=5)
             except RuntimeError as exc:
                 logger.warning("%s", exc)
+                self._warn(series_id, exc)
                 continue
             if obs:
                 results[currency] = {
@@ -334,7 +388,6 @@ class FREDClient:
         """Yields 2Y souverains (proxy carry court terme)."""
         mapping = {
             "USD": ("yield_2y", "USD"),
-            "EUR": ("yield_2y_eur", "EUR"),
         }
         results = {}
         for currency, (key, ccy) in mapping.items():
@@ -344,6 +397,19 @@ class FREDClient:
                 if latest:
                     results[currency] = {"yield_2y_pct": latest["value"], "as_of": latest["date"], "source": "FRED"}
         return results
+
+    async def get_financial_conditions(self) -> Optional[dict]:
+        """NFCI hebdomadaire : négatif = conditions plus accommodantes."""
+        series_id = FRED_SERIES["financial_conditions"]["GLOBAL"]
+        latest = await self.get_latest(series_id)
+        if not latest:
+            return None
+        raw = float(latest["value"])
+        return {
+            "currency": "USD", "indicator": "global_financial_conditions_score",
+            "value": math.tanh(-raw), "raw_value": raw, "as_of": latest["date"],
+            "unit": "score_-1_1", "source": f"FRED:{series_id}:GLOBAL_PROXY",
+        }
 
     async def get_historical_cpi(self, currency: str, years: int = 5) -> list[dict]:
         """CPI historique pour calcul PPP."""

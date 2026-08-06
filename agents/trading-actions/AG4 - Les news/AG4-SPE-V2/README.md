@@ -13,7 +13,7 @@ Ce workflow remplace la logique Google Sheets `news_raw_Symbol` par une base dur
 5. Extraction + normalisation des URLs article.
 6. Dedupe via DuckDB (`news_id = sha1(symbol|canonical_url)`).
 7. Fetch article HTML + parsing titre/date/snippet/texte.
-8. Filtre age news + analyse IA (JSON schema strict).
+8. Filtre age news + analyse IA `deepseek-v4-pro` (JSON schema strict).
 9. Upsert dans `news_history`, erreurs dans `news_errors`, stats de run dans `run_log`.
 
 Le schema IA inclut:
@@ -24,6 +24,22 @@ Le schema IA inclut:
 - `suggestedSignal` (`BUY|SELL|NEUTRAL|WATCH`)
 - `keyDrivers` (2..5)
 - `needsFollowUp` (boolean)
+
+La branche IA utilise le credential n8n `DeepSeek account` et une chaîne
+LangChain avec parseur structuré. `S20 - Parse LLM Output` accepte la sortie
+DeepSeek `{output: <objet>}` et conserve la compatibilité avec l'ancienne
+enveloppe OpenAI pour faciliter un rollback.
+
+Les workflows associés `AG4_Spé-Finnhub-V1 — Global News` et
+`AG4_Spé-IBKR-V1 — Portfolio News` utilisent la même chaîne, le même modèle
+`deepseek-v4-pro`, le même prompt et le même schéma. Leurs artefacts sont
+générés respectivement par `build_finnhub_workflow.py` et
+`build_ibkr_workflow.py`.
+
+Statut live vérifié : les trois workflows Boursorama, Finnhub et IBKR Portfolio
+News utilisent `deepseek-v4-pro`; leurs connexions, crons, collecteurs, schémas
+DuckDB et contrats de sortie sont inchangés par rapport aux variantes OpenAI
+précédentes. Les builders et tests de contrat sont les sources reproductibles.
 
 ## Tables DuckDB
 - `universe_symbols`
@@ -51,6 +67,8 @@ Colonnes minimales attendues:
 
 ## Fichiers
 - `AG4-SPE-V2/build_workflow.py` : genere le workflow n8n final
+- `AG4-SPE-V2/build_finnhub_workflow.py` : genere le workflow Finnhub
+- `AG4-SPE-V2/build_ibkr_workflow.py` : genere le workflow IBKR Portfolio News
 - `AG4-SPE-V2/nodes/*.js` : logique parsing/routage/LLM
 - `AG4-SPE-V2/nodes/*.py` : logique DuckDB / dedupe / run lifecycle
 - `AG4-SPE-V2/AG4-SPE-V2-workflow.json` : workflow a importer dans n8n

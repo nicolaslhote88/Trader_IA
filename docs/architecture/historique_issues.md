@@ -104,5 +104,25 @@ Ces points sont issus des rapports `docs/audits/20260423_audit_valorisation/repo
 
 ## Notes de mÃ©thode
 
+### ✅ 16. Contexte global AG5–AG9 — AG5–AG8 qualifiés live, AG9 dormant
+
+**Constat 2026-08-05** : AG5–AG8 étaient inactifs, périmés et comportaient des
+formules concurrentes; aucune base AG9/contexte global n'existait.
+**Correction 2026-08-05/06** : rôles séparés, writers uniques, données
+manquantes explicites, synthèse atomique, pack AG1 consultatif, dashboard,
+publication et remédiation qualité live. AG9 reste volontairement dormant faute
+d'accès gratuit pertinent et ne participe à aucun poids. Références :
+`docs/audits/20260805_ag5_ag9_postimplementation_report.md` et
+`docs/operations/20260806_ag5_ag8_data_quality_remediation.md`.
+
+### ✅ 17. Rotation AG2 figée malgré des exécutions n8n vertes
+
+**Constat 2026-08-06** : `batch_info` était supprimé avant `Finalize Run`; les
+curseurs Held+Core et Watchlist restaient à 36/280 et les mêmes lots étaient
+rejoués. **Correction** : propagation du contexte, avance transactionnelle
+vérifiée, erreur explicite `AG2_CURSOR_GUARD_FAILED`, replay 27/27 et 5/5 puis
+run manuel post-correction Held+Core `20812` avec curseur `0→18`. Référence :
+`docs/operations/20260806_ag2_batch_rotation_cursor_fix.md`.
+
 - Les issues rÃ©solues restent visibles ici pour garder la traÃ§abilitÃ© â€” ne pas les supprimer, seulement changer leur statut en âœ… et citer la PR / le commit / la version.
 - Pour ajouter une nouvelle issue : crÃ©er une section `### âŒ N. Titre` avec **Constat** + **Impact** + **Correction envisagÃ©e**.

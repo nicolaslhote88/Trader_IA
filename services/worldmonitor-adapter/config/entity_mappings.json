@@ -1,0 +1,47 @@
+{
+  "config_version": "AG9_ENTITY_MAPPINGS_V1",
+  "mapping_policy": {
+    "asset_resolution": ["run_symbol_exact", "run_sector_exact", "run_country_exact"],
+    "unknown_asset": ["NO_RELIABLE_EXPOSURE_MAPPING"],
+    "unknown_country": ["NO_RELIABLE_COUNTRY_MAPPING"]
+  },
+  "country_to_currency": {
+    "US": ["USD"], "USA": ["USD"], "UNITED STATES": ["USD"],
+    "GB": ["GBP"], "GBR": ["GBP"], "UNITED KINGDOM": ["GBP"],
+    "JP": ["JPY"], "JPN": ["JPY"], "JAPAN": ["JPY"],
+    "CH": ["CHF"], "CHE": ["CHF"], "SWITZERLAND": ["CHF"],
+    "CA": ["CAD"], "CAN": ["CAD"], "CANADA": ["CAD"],
+    "AU": ["AUD"], "AUS": ["AUD"], "AUSTRALIA": ["AUD"],
+    "NZ": ["NZD"], "NZL": ["NZD"], "NEW ZEALAND": ["NZD"],
+    "MX": ["MXN"], "MEX": ["MXN"], "MEXICO": ["MXN"],
+    "SE": ["SEK"], "SWE": ["SEK"], "SWEDEN": ["SEK"],
+    "NO": ["NOK"], "NOR": ["NOK"], "NORWAY": ["NOK"],
+    "KR": ["KRW"], "KOR": ["KRW"], "SOUTH KOREA": ["KRW"],
+    "FR": ["EUR"], "FRA": ["EUR"], "FRANCE": ["EUR"],
+    "DE": ["EUR"], "DEU": ["EUR"], "GERMANY": ["EUR"],
+    "IT": ["EUR"], "ITA": ["EUR"], "ITALY": ["EUR"],
+    "ES": ["EUR"], "ESP": ["EUR"], "SPAIN": ["EUR"],
+    "EU": ["EUR"], "EUROPEAN UNION": ["EUR"], "EUROZONE": ["EUR"]
+  },
+  "country_to_sectors": {
+    "UNKNOWN": []
+  },
+  "commodity_to_sectors": {
+    "OIL": ["Energy", "Industrials", "Transportation"],
+    "NATURAL GAS": ["Energy", "Utilities", "Chemicals"],
+    "GAS": ["Energy", "Utilities", "Chemicals"],
+    "GOLD": ["Materials", "Mining"],
+    "COPPER": ["Materials", "Industrials"],
+    "WHEAT": ["Consumer Staples", "Agriculture"]
+  },
+  "chokepoint_to_commodities": {
+    "STRAIT OF HORMUZ": ["Oil", "Natural Gas"],
+    "SUEZ CANAL": ["Oil", "Natural Gas"],
+    "BAB EL-MANDEB": ["Oil"],
+    "PANAMA CANAL": ["Agriculture", "LNG"],
+    "MALACCA STRAIT": ["Oil", "Natural Gas"]
+  },
+  "cyber_to_sectors": {
+    "DEFAULT": ["Technology", "Financials", "Communication Services", "Utilities"]
+  }
+}

@@ -1,8 +1,16 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-07-22.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-08-06.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
+
+**Contexte global live depuis le 2026-08-05 :** AG5 07:20, AG6 07:40,
+AG7 08:00, AG8 08:20 et synthèse 10:05/13:05/16:05 Paris, L–V. AG9 reste
+inactif/en sommeil et son cron 09:35/12:35/15:35 n'est pas enregistré. Les
+producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
+`global_context_v1.duckdb`. Détail :
+[`ag5_ag9_scheduling.md`](ag5_ag9_scheduling.md) et
+[`20260805_ag5_ag8_global_context_live_deploy.md`](20260805_ag5_ag8_global_context_live_deploy.md).
 
 ## Contexte technique
 
@@ -29,8 +37,18 @@ Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/ga
 | AG4_Spé-IBKR Portfolio News | `0 0 10,13,16 * * 1-5` | L-V | ~9 min | 13 | ag4_spe |
 | AG4_Spé Health Alert | `0 30 16 * * 1-5` | L-V | <1 min | 2 | ag4_spe |
 | YF-ENRICH Daily Refresh | `15 6 * * *` | 7j/7 | ~14 min | 14 | yf_enrichment |
+| AG5 Macro & Flows V2 | `20 7 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
+| AG6 FX Relative Valuation V2 | `40 7 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
+| AG7 Positioning V2 | `0 8 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
+| AG8 Rates & Liquidity V2 | `20 8 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
+| Global Context AG5–AG9 Synthesizer | `5 10,13,16 * * 1-5` | L-V | <1 min | — | global_context_v1 ; AG9 exclu en production |
 
 *(Durées = moyenne/max des exécutions `success` sur 8 jours, via `execution_entity`. AG1 V4 : la durée capturée est courte ; le gros du temps LLM est dans des sous-nœuds. AG4-V3 dure ~89 min mais ne tient `ag2_v3` qu'au démarrage.)*
+
+**Correction AG2 du 2026-08-06.** `batch_info` est maintenant conservé jusqu'à
+`Finalize Run`; un lot complet `SUCCESS` ou `PARTIAL` avance et relit son
+curseur dans la transaction. Toute incohérence devient
+`AG2_CURSOR_GUARD_FAILED`. Le run manuel Held+Core `20812` a vérifié `0 → 18`.
 
 ## Stratégie de déconfliction (déployée 2026-06-28)
 

@@ -1,0 +1,1 @@
+{"events":[{"title":"Port closure","country":"GB","severity":0.7,"confidence":0.6,"source":"wire-a","event_time":"2026-08-05T09:00:00Z","url":"https://example.test/port"},{"headline":"Port closure","countries":["GBR"],"severity":0.8,"confidence":0.7,"source":"wire-b","publishedAt":"2026-08-05T09:10:00Z","url":"https://example.test/port/"}]}

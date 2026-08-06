@@ -114,6 +114,8 @@ services:
       # Macro Data API (3 piliers)
       - MACRO_DATA_API_URL=http://macro-data-api:8081
       - MACRO_DUCKDB_PATH=/files/duckdb/macro_data.duckdb
+      - WORLD_MONITOR_ADAPTER_URL=http://worldmonitor-adapter:8082
+      - GLOBAL_CONTEXT_SYNTHESIZER_URL=http://global-context-synthesizer:8083
       # AG1-FX-V2 (portfolio manager 3 piliers)
       - AG1_FX_V2_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_chatgpt52.duckdb
       - AG1_FX_V2_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_grok41_reasoning.duckdb
@@ -196,6 +198,8 @@ services:
       - AG1_FX_LLM_PAIR_DRIVERS_MAX=${AG1_FX_LLM_PAIR_DRIVERS_MAX:-1}
       - MACRO_DATA_API_URL=http://macro-data-api:8081
       - MACRO_DUCKDB_PATH=/files/duckdb/macro_data.duckdb
+      - WORLD_MONITOR_ADAPTER_URL=http://worldmonitor-adapter:8082
+      - GLOBAL_CONTEXT_SYNTHESIZER_URL=http://global-context-synthesizer:8083
       - AG1_FX_V2_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_chatgpt52.duckdb
       - AG1_FX_V2_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_grok41_reasoning.duckdb
       - AG1_FX_V2_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_gemini30_pro.duckdb
@@ -240,6 +244,8 @@ services:
       - AG4_FX_V1_DUCKDB_PATH=/files/duckdb/ag4_fx_v1.duckdb
       - YF_ENRICH_DUCKDB_PATH=/files/duckdb/yf_enrichment_v1.duckdb
       - MACRO_DUCKDB_PATH=/files/duckdb/macro_data.duckdb
+      - WORLD_MONITOR_DUCKDB_PATH=/files/duckdb/worldmonitor_v1.duckdb
+      - GLOBAL_CONTEXT_DUCKDB_PATH=/files/duckdb/global_context_v1.duckdb
       - AG1_FX_V2_CHATGPT52_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_chatgpt52.duckdb
       - AG1_FX_V2_GROK41_REASONING_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_grok41_reasoning.duckdb
       - AG1_FX_V2_GEMINI30_PRO_DUCKDB_PATH=/files/duckdb/ag1_fx_v2_gemini30_pro.duckdb
@@ -283,6 +289,8 @@ services:
       - FRED_API_KEY=${FRED_API_KEY:-}
       - MACRO_DUCKDB_PATH=/files/duckdb/macro_data.duckdb
       - IBKR_BROKER_URL=http://ibkr-broker:8080
+      - YFINANCE_API_URL=http://yfinance-api:8080
+      - WORLD_BANK_API_URL=${WORLD_BANK_API_URL:-https://api.worldbank.org/v2}
     volumes:
       - /local-files:/files:rw
     networks:
@@ -291,6 +299,77 @@ services:
       - ibkr-broker
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/health', timeout=5).read()"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 15s
+
+  # AG9 — adaptateur analytique World Monitor. Aucun accès broker.
+  worldmonitor-adapter:
+    build:
+      context: ../../services/worldmonitor-adapter
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8082"
+    environment:
+      - WORLD_MONITOR_ENABLED=${WORLD_MONITOR_ENABLED:-false}
+      - WORLD_MONITOR_MODE=${WORLD_MONITOR_MODE:-mcp}
+      - WORLD_MONITOR_BASE_URL=${WORLD_MONITOR_BASE_URL:-https://worldmonitor.app/mcp}
+      - WORLD_MONITOR_API_KEY=${WORLD_MONITOR_API_KEY:-}
+      - WORLD_MONITOR_TIMEOUT_SECONDS=${WORLD_MONITOR_TIMEOUT_SECONDS:-30}
+      - WORLD_MONITOR_MAX_RETRIES=${WORLD_MONITOR_MAX_RETRIES:-2}
+      - AG9_DEFAULT_EVENT_HALF_LIFE_HOURS=${AG9_DEFAULT_EVENT_HALF_LIFE_HOURS:-72}
+      - AG9_SOURCE_DIVERSITY_MIN=${AG9_SOURCE_DIVERSITY_MIN:-2}
+      - AG9_MIN_CONFIDENCE=${AG9_MIN_CONFIDENCE:-0.35}
+      - AG9_CRITICAL_SCORE_THRESHOLD=${AG9_CRITICAL_SCORE_THRESHOLD:-0.65}
+      - WORLD_MONITOR_DUCKDB_PATH=/files/duckdb/worldmonitor_v1.duckdb
+      - AG4_SPE_DUCKDB_PATH=/files/duckdb/ag4_spe_v2.duckdb
+    volumes:
+      - /local-files:/files:rw
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8082/health', timeout=5).read()"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 15s
+
+  # Snapshot atomique AG5-AG9. Lectures read-only des bases sources.
+  global-context-synthesizer:
+    build:
+      context: ../../services/global-context-synthesizer
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    expose:
+      - "8083"
+    environment:
+      - MACRO_DUCKDB_PATH=/files/duckdb/macro_data.duckdb
+      - WORLD_MONITOR_DUCKDB_PATH=/files/duckdb/worldmonitor_v1.duckdb
+      - GLOBAL_CONTEXT_DUCKDB_PATH=/files/duckdb/global_context_v1.duckdb
+      - GLOBAL_CONTEXT_ENABLED=${GLOBAL_CONTEXT_ENABLED:-false}
+      - GLOBAL_CONTEXT_ENABLED_COMPONENTS=${GLOBAL_CONTEXT_ENABLED_COMPONENTS:-AG5,AG6,AG7,AG8,AG9}
+      - GLOBAL_CONTEXT_ADVISORY_ONLY=true
+      - GLOBAL_CONTEXT_FAIL_OPEN=true
+      - GLOBAL_CONTEXT_MAX_AGE_HOURS=${GLOBAL_CONTEXT_MAX_AGE_HOURS:-}
+      - AG1_GLOBAL_CONTEXT_MAX_CHARS=${AG1_GLOBAL_CONTEXT_MAX_CHARS:-12000}
+      - AG1_GLOBAL_CONTEXT_LLM_MAX_CHARS=${AG1_GLOBAL_CONTEXT_LLM_MAX_CHARS:-4000}
+      - AG1_GLOBAL_CONTEXT_LLM_MIN_DETAIL_CONFIDENCE=${AG1_GLOBAL_CONTEXT_LLM_MIN_DETAIL_CONFIDENCE:-0.4}
+      - AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_CONFIDENCE=${AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_CONFIDENCE:-0.5}
+      - AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_COVERAGE=${AG1_GLOBAL_CONTEXT_LLM_MIN_GLOBAL_COVERAGE:-0.6}
+      - AG1_GLOBAL_CONTEXT_TOP_EVENTS_MAX=${AG1_GLOBAL_CONTEXT_TOP_EVENTS_MAX:-5}
+      - AG1_GLOBAL_CONTEXT_TOP_SECTORS_MAX=${AG1_GLOBAL_CONTEXT_TOP_SECTORS_MAX:-8}
+      - AG1_GLOBAL_CONTEXT_TOP_ASSETS_MAX=${AG1_GLOBAL_CONTEXT_TOP_ASSETS_MAX:-12}
+    volumes:
+      - /local-files:/files:rw
+    networks:
+      - web
+    depends_on:
+      - macro-data-api
+      - worldmonitor-adapter
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8083/health', timeout=5).read()"]
       interval: 60s
       timeout: 15s
       retries: 3

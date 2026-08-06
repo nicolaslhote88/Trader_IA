@@ -140,6 +140,8 @@ AG4_FOREX_DUCKDB_PATH = _resolve_duckdb_path("AG4_FOREX_DUCKDB_PATH", "ag4_forex
 AG2_FX_V1_DUCKDB_PATH = _resolve_duckdb_path("AG2_FX_V1_DUCKDB_PATH", "ag2_fx_v1.duckdb")
 AG4_FX_V1_DUCKDB_PATH = _resolve_duckdb_path("AG4_FX_V1_DUCKDB_PATH", "ag4_fx_v1.duckdb")
 MACRO_DUCKDB_PATH = _resolve_duckdb_path("MACRO_DUCKDB_PATH", "macro_data.duckdb")
+WORLD_MONITOR_DUCKDB_PATH = _resolve_duckdb_path("WORLD_MONITOR_DUCKDB_PATH", "worldmonitor_v1.duckdb")
+GLOBAL_CONTEXT_DUCKDB_PATH = _resolve_duckdb_path("GLOBAL_CONTEXT_DUCKDB_PATH", "global_context_v1.duckdb")
 AG1_FX_V1_CHATGPT52_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_CHATGPT52_DUCKDB_PATH", "ag1_fx_v1_chatgpt52.duckdb")
 AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GROK41_REASONING_DUCKDB_PATH", "ag1_fx_v1_grok41_reasoning.duckdb")
 AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH = _resolve_ag1_variant_duckdb_path("AG1_FX_V1_GEMINI30_PRO_DUCKDB_PATH", "ag1_fx_v1_gemini30_pro.duckdb")
@@ -9538,6 +9540,7 @@ st.sidebar.title("TradingSim AI")
 NAV_GROUPS = {
     "Commun": [
         "System Health (Monitoring)",
+        "Contexte global",
         "Vue consolidee Multi-Agents",
         "Macro & News (AG4)",
     ],
@@ -15305,6 +15308,20 @@ elif page == "System Health (Monitoring)":
 # ============================================================
 # PAGE 3: VUE CONSOLIDEE MULTI-AGENTS
 # ============================================================
+
+elif page == "Contexte global":
+    try:
+        from global_context_tab import render_global_context_tab
+        render_global_context_tab(
+            st,
+            global_path=GLOBAL_CONTEXT_DUCKDB_PATH,
+            world_path=WORLD_MONITOR_DUCKDB_PATH,
+            macro_path=MACRO_DUCKDB_PATH,
+        )
+    except ImportError as exc:
+        st.error(f"Module Contexte global non disponible: {exc}")
+    except Exception as exc:
+        st.error(f"Erreur Contexte global: {exc}")
 
 elif page == "Vue consolidee Multi-Agents":
     st.title("Vue consolidee AG2 + AG3 + AG4")

@@ -18,6 +18,9 @@ if (typeof extracted === 'string') {
 
 // Fallbacks
 if (!extracted && raw?.text) extracted = raw.text;
+// Basic LLM Chain + Structured Output Parser returns { output: <parsed object> }.
+// Unwrap it before preserving the complete raw response for audit/debug.
+if (!extracted && raw?.output && !Array.isArray(raw.output)) extracted = raw.output;
 if (!extracted) extracted = raw;
 
 return [{

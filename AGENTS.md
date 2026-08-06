@@ -12,17 +12,35 @@ technique : signaler les incertitudes.
 Ce fichier est le point d'entrée durable du projet (la mémoire interne peut ne pas être à jour). Pour reprendre
 à moindre coût : (1) lire ce fichier en entier ; (2) pour l'état live réel, se connecter au VPS (§ VPS/infra) et
 lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détail par sujet dans `docs/`.
-État vérifié sur le VPS au **2026-07-02** (audit complet : `docs/audits/20260702_audit_complet_projet.md` ; analyse fonctionnelle réécrite : `docs/architecture/etat_des_lieux.md`). Branche repo : `codex/live-trading-sync-20260629`.
-⚠️ **Session 2026-07-02 déployée live, à committer** (détail/rollback : `docs/operations/20260702_fixes_deploy_notes.md`, brief : `docs/operations/HANDOFF_codex_PR_fixes_20260702.md`) : (F1) broker **auto-confirme le prompt IBKR « without market data »** si écart limit↔réf yfinance ≤ bande 5 % (env `IBKR_AUTO_CONFIRM_NO_MARKET_DATA_PROMPT=true` — débloque l'exécution US, qui expirait en approbation) ; (F5) approbations : tap tardif EXPIRED/NOT_FOUND → **200 idempotent** ; (F2) AG4_Spé-V2 : fix parseur dates (`parseListingDate` mutilait les dates ISO → 2029/2030) + clamp écriture + **réparation 235 lignes** (`news_history_date_repair_20260702`) ; (F3) `N8N_RUNNERS_TASK_TIMEOUT=1200` côté task-runners (défaut 60 s → AG2UHQ échouait) ; (F4) cron MTM décalé à H+15 (locks ag1_v4).
-⚠️ **Session 2026-07-05 déployée live, à committer** (détail/rollback : `docs/operations/20260705_ag3_checkpoint_defrag_fix.md`) : **échecs AG3 nocturnes 03-05/07 résolus** — cause = `CHECKPOINT` explicite au close du node `Finalize Run` sur base fragmentée (ag3_v2 3,9 Go pour 48 Mo utiles !) → timeout 1200 s / OOM 4,3 Go (runners tués). Fix : (a) **défrag** ag2_v3 3,4 Go→13 Mo + ag3_v2 3,9 Go→48 Mo (`.old` conservés 48 h) ; (b) **CHECKPOINT retiré** des Finalize AG3 HC/WL ; (c) **cron défrag hebdo dim. 07:30 UTC** (`/files/maintenance/defrag_duckdb.py --only ag2/ag3`) ; (d) script défrag corrigé (chunking LIMIT/OFFSET non déterministe remplacé + **recréation des VUES**).
-⚠️ Travaux récents **déployés sur le VPS mais à committer** : (1) `docs/operations/HANDOFF_codex_PR_ag4_spe_v3_20260618.md` ; (2) **AG2→AG1 hybride** (2026-06-19) `docs/operations/20260619_ag2_hybrid_deploy_notes.md` ; (3) **AG3 split + STALE_FUNDA** (2026-06-22) `docs/operations/20260622_ag3_split_stale_funda_deploy_notes.md` ; (4) **Expansion univers +100 + classification** (2026-06-24) `docs/operations/20260624_universe_expansion_100_global_deploy_notes.md` + `outils/scripts/{seed_universe_100_global,classify_universe_100_segments,pin_core_manual_18}.py`.
-⚠️ **Session 2026-06-26→28 déployée live, à committer** : (5) **gate liquidité AG1 V4** (preflight warm-up bid/ask IBKR + `SPREAD_UNQUOTED`, safety node) + alignement dashboard ; (6) **AG2 `07_hydrate_ai_cache`** (ne reporte plus un REJECT de cache périmé → SKIP si frais ET non-REJECT) ; (7) **AG3 Held+Core** lit désormais `CORE_MANUAL` (orphelin corrigé) ; (8) **R8 `data_age`** = `max(stocké, âge réel now−bar)` + idem dashboard ; (9) **déconfliction crons anti-contention DuckDB** (cf. `docs/operations/SCHEDULING_AND_LOAD.md`). Détail des fixes : mémoire interne `14_LIQUIDITY_GATE_FIX` / `15_PIPELINE_FRESHNESS_AUDIT` / `16_DUCKDB_CONCURRENCY`.
-⚠️ Le working tree a ~230 fichiers en **bruit CRLF** : ne stager QUE les fichiers réellement modifiés (liste dans `docs/operations/HANDOFF_codex_PR_fixes_20260702.md`).
+État vérifié sur le VPS au **2026-08-06**. Analyse fonctionnelle courante :
+`docs/architecture/etat_des_lieux.md`; index : `docs/README.md`. Branche repo :
+`codex/ag5-ag9-global-context-20260805`.
 
-## État du projet — VÉRIFIÉ sur le VPS le 2026-07-02
+⚠️ **AG5–AG8 + contexte global validés live** : producteurs et synthèse actifs,
+pack AG1 `AG1_GLOBAL_CONTEXT_LLM_V2` strictement consultatif, qualité live
+`OK/CAUTION` (couverture `0,908`, confiance `0,685`). AG9 reste en sommeil
+(`active=0`, conteneur arrêté, aucun poids) et le Forex reste inactif. Voir
+`docs/operations/20260806_ag5_ag8_data_quality_remediation.md`.
+
+⚠️ **Rotation AG2 corrigée live** : `batch_info` est conservé jusqu'à
+`Finalize Run`; les lots complets SUCCESS/PARTIAL avancent et vérifient le
+curseur, toute anomalie lève `AG2_CURSOR_GUARD_FAILED`. Replay 27/27 et 5/5 ;
+run manuel post-correction Held+Core `20812` réussi, curseur `0→18`. Voir
+`docs/operations/20260806_ag2_batch_rotation_cursor_fix.md`.
+
+ℹ️ **Modèles live synchronisés** : AG1 V4 = `gpt-5.6-sol` /
+`deepseek-v4-pro` / `claude-opus-4-8`; AG2 et les trois AG4_Spé utilisent
+`deepseek-v4-pro` avec parseur structuré. Les migrations et rollback sont dans
+les notes `docs/operations/20260730_*`.
+
+Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés dans
+leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
+`git diff --check` et stager des chemins explicites.
+
+## État du projet — VÉRIFIÉ sur le VPS le 2026-08-06
 - **Actions/ETF : AG1 V4 consensus** est le Portfolio Manager **actif** (consensus 2/3).
-  3 modèles : **GPT-5.5** (`gpt-5.5-2026-04-23`), **Grok 4.3** (`grok-4.3`), **Claude Fable 5** (`claude-fable-5`).
-  `model_keys` persistés : `chatgpt52`, `grok41_reasoning`, **`claude_sonnet46`** (clé historique conservée pour le 3e modèle Claude). Workflow n8n `AG1V4CONSENSUS`.
+  3 modèles : **GPT-5.6 Sol** (`gpt-5.6-sol`), **DeepSeek V4 Pro** (`deepseek-v4-pro`), **Claude Opus 4.8** (`claude-opus-4-8`).
+  `model_keys` persistés : `chatgpt52`, **`grok41_reasoning`** (clé historique conservée après Grok→DeepSeek), **`claude_sonnet46`** (clé historique Claude). Les champs `model_name`/`model_id` portent les modèles réels. Workflow n8n `AG1V4CONSENSUS`.
   Base `ag1_v4_consensus.duckdb` (ledger v4 : `core.runs/orders/consensus_*/model_proposals/fills/*_mtm_*`). Dashboard Streamlit V4-only (8501).
   **⏰ AG1 V4 tourne 2×/jour (2026-06-29) : 14:00 (Euronext) + 16:30 Paris (US ouvert depuis 15:30 + Euronext jusqu'à 17:30).** Raison : à 14:00 le marché US est FERMÉ → IBKR renvoie les cotations US en "C"/figées (champ 6509 = `D`/closed) → gate liquidité bloque mécaniquement TOUTES les actions US (normal : on ne peut pas acheter quand le NYSE est fermé). Le créneau 16:30 (fenêtre sans contention DuckDB) les rend tradables. Voir `docs/operations/SCHEDULING_AND_LOAD.md`.
 - Autres workflows actifs : `AG1-PF-V1` (MTM horaire V4, **cron H+15 depuis 2026-07-02**), `AG2-V3` (split Held+Core / Watchlist), **AG3 split** (Held+Core / Watchlist, voir ci-dessous), `AG4-V3`, `AG4_Spé-V2`,
@@ -46,16 +64,19 @@ lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détai
   `reduced` = Actions via Grok grok-4.3 ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
 - **⚠️ IBKR mode RÉEL (live).** Compte **`U25651155`**, `dry_run=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`. Ordres réels.
 - **Forex : entièrement désactivé** (workflows FX `active=0`, `fx_orders_enabled=false`).
-- **Login IBKR : assisté quotidiennement à 07:00 Europe/Paris.** Timer systemd `ibkr-daily-auth.timer` → IBeam saisit les credentials et déclenche IB Key ; Nicolas valide sur téléphone dans la fenêtre **07:00–07:30** (tentatives max 07:00/07:10/07:20). Ancien `ibkr-auth-watchdog.timer` désactivé. Login navigateur manuel conservé en fallback. `auto_reauth_enabled=true`. Détails : `docs/operations/20260624_ibkr_daily_assisted_auth.md`.
+- **Login IBKR : navigateur manuel + 2FA.** Le `/health` du 2026-08-06 indique
+  `assisted_login.enabled=false` et `auto_reauth_enabled=true` : le broker
+  maintient/réinitialise la session en journée, mais ne possède pas de flux de
+  credentials assisté actif. Fallback : tunnel navigateur vers le Gateway.
 
-## 📰 Pipeline NEWS single-stock (AG4_Spé V2/V3 → AG1 V4) — MAJ 2026-07-02
+## 📰 Pipeline NEWS single-stock (AG4_Spé V2/V3 → AG1 V4) — MAJ 2026-08-06
 Base **`ag4_spe_v2.duckdb`** (`news_history` + vue **`news_analyzed`** = summary∧is_relevant). Détails : `docs/audits/20260617_ag4_spe_v2_analysis.md`, `…_remediation_plan.md`, `docs/specs/ag4_spe_v3_ibkr_news.md`, `docs/specs/ag1_v4_d2_news_digest.md`.
 - **AG4_Spé-V2** (Boursorama, cron 08/11/14/17h05 Paris L-V) : B1 dates corrigées (`07_parse_article.js`), A1 anti-zombies (`02_start_run.py`), C1/C3 univers actions/ETF (FX exclus, ~385) + rotation priorisée portefeuille + retry S04/S14 (`01_build_symbol_queue.py`). Historique nettoyé (19,5k→3,3k).
   **⚠️ MAJ 2026-07-02 (F2)** : régression dates trouvée et corrigée — `parseListingDate` (node `S07`) **mutilait les dates déjà ISO** (« 2026-06-29 » matchée `26/06/29` → 2029-06-26) et `S16` contournait le garde B1 (`publishedAt || j.publishedAt`). Fix live S07 (ISO-first + regex ancrée + clamp) / S16 (bypass supprimé) / S22 (clamp écriture) + **235 lignes réparées** (backup `news_history_date_repair_20260702`). Miroir repo : `nodes/04_normalize_articles.js`, `07_parse_article.js`, `12_write_news_duckdb.py`.
-- **AG4_Spé-IBKR-V1** (cron 10/13/16h Paris L-V) : news IBKR **portfolio** (positions détenues) via broker `GET /news/portfolio` → même chaîne LLM que V2 → `news_history` (`source='ibkr'`, `provider`, `news_article_id`, `ibkr_sentiment`). L'endpoint IBKR **par-contrat** (`/iserver/news?conid=`) n'est PAS servi (503) → held-only.
+- **AG4_Spé-IBKR-V1** (cron 10/13/16h Paris L-V ; DeepSeek depuis 2026-07-30) : news IBKR **portfolio** (positions détenues) via broker `GET /news/portfolio` → DeepSeek `deepseek-v4-pro` + parseur structuré → `news_history` (`source='ibkr'`, `provider`, `news_article_id`, `ibkr_sentiment`). L'endpoint IBKR **par-contrat** (`/iserver/news?conid=`) n'est PAS servi (503) → held-only. Migration/rollback : `docs/operations/20260730_ag4_spe_ibkr_deepseek_v4_pro.md`.
 - **D2 (dans AG1 V4)** : node **`20K — News Digest (Pack+Held)`** (Calcul Matrice → 20K → Merge7[1]) enrichit `opportunity_pack` : `rows[].news[]` (≤3, 14j) + `held_news` + `news_legend`. Le PM lit `opportunity_pack` (PAS `opportunity_brief`). Budget ~+1,4k tokens.
 - **AG4_Spé — Health Alert** (cron 16h30 Paris L-V) : alerte Telegram si pipeline stale / zombies / dates KO.
-- **AG4_Spé-Finnhub-V1 (news univers global, live 2026-06-24).** Boursorama (FR) insuffisant pour l'extension +100 ; IBKR per-contrat écarté (503). **Solution = Finnhub** (`company-news`, clé gratuite 60/min) : ~95/100 couverts via mapping `symbole local → ticker ADR/OTC US` (NESN.SW→NSRGY, 0700.HK→TCEHY, 005930.KS→SSNLF…). (1) **Collecteur** persistant `/opt/trader-ia/finnhub/` (script + venv duckdb **1.4.3** + `run_collector.sh` lit `FINNHUB_TOKEN` de `/docker/yfinance/.env`), **crontab `0 9,12,15 * * 1-5`** → table `news_finnhub_staging` (segments CORE_MANUAL,CORE_AUTO — **HELD exclu** car couvert par IBKR-portfolio ; **cap 12 art./symbole** `--max-per-symbol`, 2j). (2) **Workflow n8n `AG4_Spé-Finnhub-V1`** (`id=AG4SPEFINNHUBV1`, active=1, 10/13/16h Paris L-V) : Load staging → IF → OpenAI gpt-5-mini → Merge → Parse → Write `news_history` (`source='finnhub'`) → vue `news_analyzed` → AG1. Source repo : `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-FINNHUB-V1-workflow.json`. ⚠️ **Tout write ag4_spe_v2 doit être en duckdb ≤1.4.3** (lecteur n8n) — venv `/opt/trader-ia/finnhub/venv`, JAMAIS le 1.4.4. ⚠️ Volume par méga-cap élevé (NVDA ~222 art./3j) → coût LLM à surveiller. 5 non couverts : ABB, 6861.T, CBA.AX, MQG.AX, O39.SI. Déploiement/rollback : `docs/operations/20260624_ag4_spe_finnhub_v1_deploy_notes.md`. Scripts probe : `finnhub_news_probe.py`, `finnhub_gap_adr_probe.py`.
+- **AG4_Spé-Finnhub-V1 (news univers global, live 2026-06-24 ; DeepSeek depuis 2026-07-30).** Boursorama (FR) insuffisant pour l'extension +100 ; IBKR per-contrat écarté (503). **Solution = Finnhub** (`company-news`, clé gratuite 60/min) : ~95/100 couverts via mapping `symbole local → ticker ADR/OTC US` (NESN.SW→NSRGY, 0700.HK→TCEHY, 005930.KS→SSNLF…). (1) **Collecteur** persistant `/opt/trader-ia/finnhub/` (script + venv duckdb **1.4.3** + `run_collector.sh` lit `FINNHUB_TOKEN` de `/docker/yfinance/.env`), **crontab `0 9,12,15 * * 1-5`** → table `news_finnhub_staging` (segments CORE_MANUAL,CORE_AUTO — **HELD exclu** car couvert par IBKR-portfolio ; **cap 12 art./symbole** `--max-per-symbol`, 2j). (2) **Workflow n8n `AG4_Spé-Finnhub-V1`** (`id=AG4SPEFINNHUBV1`, active=1, 10/13/16h Paris L-V) : Load staging → IF → DeepSeek `deepseek-v4-pro` + parseur structuré → Merge → Parse → Write `news_history` (`source='finnhub'`) → vue `news_analyzed` → AG1. Source repo : `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/AG4-SPE-FINNHUB-V1-workflow.json`. ⚠️ **Tout write ag4_spe_v2 doit être en duckdb ≤1.4.3** (lecteur n8n) — venv `/opt/trader-ia/finnhub/venv`, JAMAIS le 1.4.4. ⚠️ Volume par méga-cap élevé (NVDA ~222 art./3j) → coût LLM à surveiller. 5 non couverts : ABB, 6861.T, CBA.AX, MQG.AX, O39.SI. Déploiement initial : `docs/operations/20260624_ag4_spe_finnhub_v1_deploy_notes.md` ; migration DeepSeek : `docs/operations/20260730_ag4_spe_finnhub_deepseek_v4_pro.md`. Scripts probe : `finnhub_news_probe.py`, `finnhub_gap_adr_probe.py`.
 
 ## 🆕 Approbation des ordres hors-bande (LIVE)
 Ordre dont le prix limite s'écarte trop → parqué → Nicolas valide via Telegram (bot **@CYROLAS_BOT**, `chat_id -4887456379`).
@@ -80,7 +101,7 @@ Code : `services/ibkr-broker/approval.py` + endpoints/guard `app.py`. Workflows 
 - **DuckDB** (vérité métier) : hôte `/local-files/duckdb/` (= `/files/duckdb/` côté containers). Lecture via container `yf-enrichment` (duckdb 1.4.4) ou `root-n8n-1` (1.4.3).
 - **Telegram** : 1 credential n8n (label « Jarvis », bot **@CYROLAS_BOT**, id cred `pVqYKOVuJrq3njUz`). Ne pas ajouter de 2ᵉ Telegram Trigger (boutons URL + Webhook).
 
-## 🧰 Pièges dev (vérifiés 2026-07-02)
+## 🧰 Pièges dev (vérifiés 2026-08-06)
 - **Sandbox Python n8n (task-runner)** : imports autorisés = `duckdb, json, time, datetime, math, numpy, pandas`. **`hashlib` INTERDIT** ; imports combinés rejetés → **un import par ligne**, jamais hashlib (sinon « Security violations »).
 - **Outils d'édition tronquent les gros fichiers** (>~160 lignes OU >~10 Ko : `app.py`, `01_build_symbol_queue.py`, `AGENTS.md`…). Éditer/écrire ces fichiers via **patch python/heredoc shell**, jamais l'éditeur direct ; vérifier `py_compile`/taille après.
 - **Vue DuckDB `SELECT *`** cassée par tout `ALTER TABLE ADD COLUMN` → la **recréer** (`CREATE OR REPLACE VIEW`) après migration.
@@ -92,12 +113,17 @@ Code : `services/ibkr-broker/approval.py` + endpoints/guard `app.py`. Workflows 
 - ~~Writer DuckDB ne mappe pas 3 champs~~ : **corrigé en pratique** (vérifié 2026-07-02 : `strategy_version`/`prompt_version`/`n8n_execution_id` renseignés sur les runs récents ; 15 anciens runs restent NULL, non backfillés).
 - **Session IBKR peut sauter la nuit** (`CPAPI HTTP 401`). Relogin requis (`ssh -L 5000:localhost:5000 vps` + `https://localhost:5000` + 2FA).
 - **Store des approbations = en mémoire** (perdu au restart broker). Audit DuckDB = évolution future. (Atténué 2026-07-02 : tap post-restart → `NOT_FOUND` 200 idempotent.)
-- **Chaîne price-guard/approbation LIMIT-only** : un SELL MARKET est rejeté silencieusement (cf mémoire `11_MARKET_ORDER_REJECT_BUG`).
+- ~~SELL MARKET rejeté silencieusement~~ : **corrigé** via
+  `IBKR_AUTO_CONFIRM_MARKET_SELL=true` pour les seuls prompts admissibles ; BUY
+  MARKET et prompts marge/short/restricted restent rejetés.
 - Couverture scraping AG4_Spé : certains symboles rendent 0 article par run (502/503 transitoires Boursorama atténués par retry). Surveiller via Health Alert.
-- ~~Dérive de durée AG2-V3 Held+Core~~ : **expliquée et traitée le 2026-07-05** (CHECKPOINT sur base fragmentée ; défrag faite + cron hebdo). Les CHECKPOINT restent présents dans les nodes AG2 — si la dérive revient malgré la défrag hebdo, les retirer comme pour AG3.
+- ~~Dérive de durée AG2-V3 Held+Core~~ : **traitée** par défragmentation,
+  maintenance hebdomadaire et retrait des `CHECKPOINT` des nœuds AG2.
 
 ### Docs de référence
-- **🧾 Audit complet + analyse fonctionnelle (2026-07-02)** : `docs/audits/20260702_audit_complet_projet.md` (findings F1-F10, état live vérifié) · `docs/architecture/etat_des_lieux.md` (réécrit intégralement, ère V4) · fixes du jour `docs/operations/20260702_fixes_deploy_notes.md` · brief commit `docs/operations/HANDOFF_codex_PR_fixes_20260702.md`.
+- **🧾 État courant** : `docs/README.md` ·
+  `docs/architecture/etat_des_lieux.md`. Audit historique complet :
+  `docs/audits/20260702_audit_complet_projet.md`.
 - **🔗 Liens entre systèmes & parité dashboard↔AG1 — SOURCE DE VÉRITÉ** : `docs/operations/SYSTEM_LINKS_AND_PARITY.md`. **Consulter AVANT toute modif du scoring/des gates/des seuils de fraîcheur d'AG1.** Le dashboard `app.py` (matrice « Vue consolidée » + funnel « System Health ») **réimplémente** les formules de `Calcul Matrice`/`R8` (mêmes poids prob 0.36/0.34/0.20/0.10, même `enter_core`, mêmes gates, même `data_age=max(stocké,réel)`). Toute modif d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement. Distinction clé : le dashboard montre l'**étape décision matrice** (données yfinance/AG2/3/4), PAS le **preflight liquidité IBKR** (étape exécution, verdict IBKR au moment de l'ordre). ℹ️ Repo resynchronisé sur le live le 2026-07-02 (`services/dashboard/app.py` = `/opt/trading-dashboard/app/app.py`).
 - **⏱️ Ordonnancement & charge système (crons + durées) — SOURCE DE VÉRITÉ** : `docs/operations/SCHEDULING_AND_LOAD.md` (+ frise Gantt 24h `docs/operations/system_load_gantt.html`). **Consulter AVANT toute modif de cron** : tous les crons actifs, durées moyennes observées, base DuckDB par workflow, et la stratégie de déconfliction anti-contention (déployée 2026-06-28, complétée 2026-07-02 : MTM à H+15). ⚠️ Les horaires de cron cités ailleurs dans ce fichier peuvent être **antérieurs** aux déconflictages — se fier à ce doc.
 - **AG2→AG1 hybride (2026-06-19)** : audit `docs/audits/20260619_ag2_v3_analyse_pertinence_efficience.md` · déploiement/rollback `docs/operations/20260619_ag2_hybrid_deploy_notes.md` · handoff commit `docs/operations/HANDOFF_codex_PR_ag2_hybrid_20260619.md`

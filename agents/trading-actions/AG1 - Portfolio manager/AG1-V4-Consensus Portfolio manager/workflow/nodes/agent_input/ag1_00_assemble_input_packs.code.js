@@ -137,14 +137,14 @@ const inputSnapshot = {
 config = {
   strategyVersion: run.strategyVersion || "strategy_v4_consensus",
   configVersion: run.configVersion || "ag1_v4_consensus_v1",
-  promptVersion: "prompt_v4_consensus_compact_v1",
+  promptVersion: "prompt_v4_consensus_global_context_v3",
   ...config,
 };
 run = {
   ...run,
   strategyVersion: run.strategyVersion || config.strategyVersion,
   configVersion: run.configVersion || config.configVersion,
-  promptVersion: "prompt_v4_consensus_compact_v1",
+  promptVersion: "prompt_v4_consensus_global_context_v3",
   model: "ag1_v4_consensus",
   universe_scope: universeScope,
   inputSnapshot,

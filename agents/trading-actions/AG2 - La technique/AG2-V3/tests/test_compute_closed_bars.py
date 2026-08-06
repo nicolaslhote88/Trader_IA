@@ -1,4 +1,5 @@
 import sys
+import textwrap
 import types
 import unittest
 from pathlib import Path
@@ -55,6 +56,46 @@ class ComputeClosedBarsTests(unittest.TestCase):
         self.assertEqual(252.0 * 8.5, periods("1h", "Euronext Paris", "EQUITY"))
         self.assertEqual(365.0 * 24.0, periods("1h", "", "CRYPTO"))
         self.assertEqual(365.0, periods("1d", "", "CRYPTO"))
+
+    def test_node_runtime_uses_current_item_context(self):
+        class FakeConnection:
+            def execute(self, *_args, **_kwargs):
+                return self
+
+            def close(self):
+                return None
+
+        sys.modules["duckdb"].connect = lambda *_args, **_kwargs: FakeConnection()
+        source_path = Path(__file__).resolve().parents[1] / "nodes" / "04_compute.py"
+        source = source_path.read_text(encoding="utf-8")
+        wrapped = "def node_main(_items):\n" + textwrap.indent(source, "    ")
+        namespace = {}
+        exec(compile(wrapped, str(source_path), "exec"), namespace)
+
+        payload = {
+            "run_id": "test_run",
+            "symbol": "AIR.PA",
+            "symbol_internal": "AIR.PA",
+            "symbol_yahoo": "AIR.PA",
+            "asset_class": "EQUITY",
+            "exchange": "Euronext Paris",
+            "currency": "EUR",
+            "batch_info": {
+                "start": 40,
+                "size": 1,
+                "state_key": "last_index_actions_watchlist",
+                "next_index": 80,
+            },
+            "h1_response": {"bars": [], "interval": "1h", "closedOnly": True},
+            "d1_response": {"bars": [], "interval": "1d", "closedOnly": True},
+        }
+        result = namespace["node_main"]([{"json": payload}])
+
+        self.assertEqual(1, len(result))
+        self.assertEqual("ok", result[0]["json"]["_status"])
+        self.assertEqual("EQUITY", result[0]["json"]["asset_class"])
+        self.assertEqual("Euronext Paris", result[0]["json"]["exchange"])
+        self.assertEqual(payload["batch_info"], result[0]["json"]["batch_info"])
 
 
 if __name__ == "__main__":

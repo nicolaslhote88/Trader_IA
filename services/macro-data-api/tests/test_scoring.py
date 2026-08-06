@@ -1,193 +1,91 @@
-"""Tests unitaires pour le module de scoring des 3 piliers."""
+"""Tests des contrats canoniques AG5-AG8."""
 
-import sys
+from __future__ import annotations
+
 import os
+import sys
+from datetime import datetime, timezone
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from scoring import (
-    score_gdp_growth,
-    score_inflation,
-    score_cb_policy,
-    score_current_account,
-    compute_macro_score,
-    compute_carry_score,
-    compute_all_pillar_scores,
-    clamp,
+    bounded_weighted_composite,
+    compute_ag5_macro,
+    compute_fx_valuation,
+    cot_positioning_score,
+    effective_age_hours,
+    rates_regime,
+    score_current_account_pct_gdp,
+    synthetic_usd_positioning,
 )
 
 
-def test_clamp():
-    assert clamp(2.0) == 1.0
-    assert clamp(-2.0) == -1.0
-    assert clamp(0.5) == 0.5
+NOW = datetime(2026, 8, 5, 12, tzinfo=timezone.utc)
 
 
-def test_score_gdp_growth():
-    assert score_gdp_growth(4.0, 0.5) > 0.8   # forte croissance
-    assert score_gdp_growth(-2.0, -0.3) < -0.7  # récession
-    assert score_gdp_growth(1.0, 0.0) > 0       # croissance modérée
-    assert score_gdp_growth(None, None) == 0.0
+def metric(value, confidence=0.9, freshness="fresh"):
+    return {"value": value, "confidence": confidence, "freshness_status": freshness}
 
 
-def test_score_inflation():
-    assert score_inflation(2.0, 4.5) > 0       # parfaitement à la cible
-    assert score_inflation(8.0, 5.0) < -0.5    # inflation élevée
-    assert score_inflation(-0.5, 0.0) < 0      # déflation légère
-    assert score_inflation(None, None) == 0.0
+def test_missing_never_becomes_neutral_zero():
+    result = bounded_weighted_composite({"a": None, "b": 0.8}, {"a": 0.5, "b": 0.5})
+    assert result["score"] == 0.8
+    assert result["coverage_ratio"] == 0.5
+    assert result["confidence"] < 1.0
+    assert result["all_aligned"] is False
 
 
-def test_score_cb_policy():
-    assert score_cb_policy(4.5, "USD", 3.0) > 0  # au-dessus du neutre (2.5)
-    assert score_cb_policy(0.1, "JPY", 0.5) >= 0  # Japon, neutre = 0
-    assert score_cb_policy(-0.5, "EUR", 1.0) < 0  # en dessous du neutre
-    assert score_cb_policy(None, "USD", None) == 0.0
+def test_current_account_uses_pct_gdp_units():
+    assert score_current_account_pct_gdp(5.0) > 0
+    assert score_current_account_pct_gdp(-5.0) < 0
+    assert score_current_account_pct_gdp(None) is None
 
 
-def test_score_current_account():
-    assert score_current_account(100.0) == 1.0   # gros excédent (Japon)
-    assert score_current_account(25.0) > 0
-    assert score_current_account(-200.0) == -1.0  # gros déficit (US)
-    assert score_current_account(-50.0) < 0
-    assert score_current_account(None) == 0.0
+def test_ag5_has_no_usd_directional_prior_and_excludes_stale():
+    inputs = {
+        "growth": metric(2.0), "growth_momentum": metric(0.2),
+        "inflation": metric(2.4), "policy_rate": metric(3.5),
+        "current_account_pct_gdp": metric(-2.0),
+        "fiscal_balance_pct_gdp": metric(None), "unemployment_change_pp": metric(-0.1),
+    }
+    result = compute_ag5_macro("USD", inputs, neutral_rate={"rate_pct": 2.5, "uncertainty_pct": 1.0, "confidence": 0.35})
+    assert result["entity_id"] == "USD"
+    assert -1 <= result["macro_score"] <= 1
+    assert "fiscal" in result["missing_inputs"]
+    stale = dict(inputs)
+    stale["growth"] = metric(10.0, freshness="stale")
+    stale_result = compute_ag5_macro("USD", stale, neutral_rate={"rate_pct": 2.5, "uncertainty_pct": 1.0, "confidence": 0.35})
+    assert "growth" in stale_result["stale_inputs"]
+    assert stale_result["macro_score"] != result["macro_score"]
 
 
-def test_compute_macro_score_usd_bearish():
-    """USD avec déficit massif et croissance faible doit scorer négatif."""
-    indicators = [
-        {"currency": "USD", "indicator": "gdp_growth_qoq", "value": -0.5},
-        {"currency": "USD", "indicator": "gdp_momentum", "value": -0.3},
-        {"currency": "USD", "indicator": "cpi_yoy", "value": 4.5},
-        {"currency": "USD", "indicator": "current_account_bn_usd", "value": -200.0},
-    ]
-    policy_rates = [{"currency": "USD", "rate_pct": 4.5}]
-    result = compute_macro_score(indicators, policy_rates)
-    assert "USD" in result
-    # Déficit massif et récession doivent dominer → score négatif
-    assert result["USD"]["macro_score"] < 0.0
+def test_fx_ppp_requires_spot_and_fair_value():
+    missing_spot = compute_fx_valuation("EUR", nominal_carry_pct=1, real_carry_pct=0.5, spot_reference=None, ppp_fair_value=1.2)
+    assert missing_spot["ppp_gap"] is None
+    assert "ppp" in missing_spot["missing_inputs"]
+    valid = compute_fx_valuation("EUR", nominal_carry_pct=1, real_carry_pct=0.5, spot_reference=1.1, ppp_fair_value=1.2)
+    assert valid["ppp_gap"] > 0
+    assert valid["valuation_score"] is not None
 
 
-def test_compute_macro_score_jpy_surplus():
-    """JPY avec gros excédent courant doit scorer positivement sur CA."""
-    indicators = [
-        {"currency": "JPY", "indicator": "current_account_bn_usd", "value": 60.0},
-        {"currency": "JPY", "indicator": "cpi_yoy", "value": 2.0},
-        {"currency": "JPY", "indicator": "gdp_growth_qoq", "value": 2.0},
-    ]
-    policy_rates = [{"currency": "JPY", "rate_pct": 0.5}]
-    result = compute_macro_score(indicators, policy_rates)
-    assert "JPY" in result
-    assert result["JPY"]["macro_ca_score"] > 0.5  # CA excédent fort
+def test_cot_score_is_contrarian_and_usd_proxy_is_capped():
+    assert cot_positioning_score(2.0) < 0
+    assert cot_positioning_score(-2.0) > 0
+    synthetic = synthetic_usd_positioning({"EUR": {"z_score": 1}, "JPY": {"z_score": -1}}, {"EUR": 0.6, "JPY": 0.4})
+    assert synthetic["is_proxy"] is True
+    assert synthetic["source"] == "CFTC_SYNTHETIC_USD_BASKET"
+    assert synthetic["confidence"] <= 0.60
 
 
-def test_compute_carry_score():
-    """Devise avec taux le plus élevé doit avoir le meilleur carry score."""
-    policy_rates = [
-        {"currency": "USD", "rate_pct": 5.0},
-        {"currency": "JPY", "rate_pct": 0.1},
-        {"currency": "EUR", "rate_pct": 3.0},
-        {"currency": "GBP", "rate_pct": 4.5},
-    ]
-    result = compute_carry_score(policy_rates)
-    assert result.get("USD", 0) > result.get("JPY", 1)  # USD meilleur carry que JPY
-    assert result.get("JPY", 0) < 0  # JPY carry négatif
+def test_rates_regime_uses_direction_to_name_steepening():
+    bull = rates_regime(yield_2y=3.0, yield_10y=3.5, slope_change=0.3, yield_2y_change=-0.5, yield_10y_change=-0.2)
+    bear = rates_regime(yield_2y=3.0, yield_10y=3.5, slope_change=0.3, yield_2y_change=0.1, yield_10y_change=0.4)
+    unknown = rates_regime(yield_2y=3.0, yield_10y=3.5, slope_change=0.3)
+    assert bull["curve_regime"] == "bull_steepening"
+    assert bear["curve_regime"] == "bear_steepening"
+    assert unknown["curve_regime"] == "unknown"
 
 
-def test_all_pillar_scores_range():
-    """Tous les scores doivent être dans [-1, +1]."""
-    from scoring import compute_macro_score, compute_valuation_scores
-    indicators = [
-        {"currency": "USD", "indicator": "gdp_growth_qoq", "value": 2.5},
-        {"currency": "USD", "indicator": "cpi_yoy", "value": 3.0},
-        {"currency": "USD", "indicator": "current_account_bn_usd", "value": -150.0},
-    ]
-    policy_rates = [{"currency": "USD", "rate_pct": 5.25}]
-    cpi_history = [
-        {"currency": "USD", "indicator": "cpi_yoy", "value": 3.0},
-        {"currency": "EUR", "indicator": "cpi_yoy", "value": 2.5},
-    ]
-    macro = compute_macro_score(indicators, policy_rates)
-    valuation = compute_valuation_scores(policy_rates, cpi_history)
-    for ccy, scores in macro.items():
-        assert -1.0 <= scores["macro_score"] <= 1.0, f"Macro score out of range for {ccy}"
-    for ccy, scores in valuation.items():
-        assert -1.0 <= scores["valuation_score"] <= 1.0, f"Valuation score out of range for {ccy}"
-
-
-class FakeMacroDB:
-    def __init__(self, *, include_mxn=True, include_sek_positioning=False):
-        self.include_mxn = include_mxn
-        self.include_sek_positioning = include_sek_positioning
-
-    def get_indicators(self, currency=None, indicator=None):
-        rows = [
-            {"currency": "USD", "indicator": "gdp_growth_qoq", "value": 2.0},
-            {"currency": "USD", "indicator": "gdp_momentum", "value": 0.1},
-            {"currency": "USD", "indicator": "cpi_yoy", "value": 3.0},
-            {"currency": "USD", "indicator": "current_account_bn_usd", "value": -120.0},
-            {"currency": "MXN", "indicator": "gdp_growth_qoq", "value": 2.5},
-            {"currency": "MXN", "indicator": "gdp_momentum", "value": 0.2},
-            {"currency": "MXN", "indicator": "cpi_yoy", "value": 4.0},
-            {"currency": "MXN", "indicator": "unemployment_pct", "value": 3.0},
-            {"currency": "SEK", "indicator": "gdp_growth_qoq", "value": 1.0},
-            {"currency": "SEK", "indicator": "cpi_yoy", "value": 2.2},
-        ]
-        if indicator:
-            rows = [r for r in rows if r["indicator"] == indicator]
-        if currency:
-            rows = [r for r in rows if r["currency"] == currency]
-        return rows
-
-    def get_latest_policy_rates(self):
-        return [
-            {"currency": "USD", "rate_pct": 5.0},
-            {"currency": "EUR", "rate_pct": 2.0},
-            {"currency": "JPY", "rate_pct": 0.1},
-            {"currency": "GBP", "rate_pct": 4.0},
-            {"currency": "MXN", "rate_pct": 11.0},
-            {"currency": "SEK", "rate_pct": 2.5},
-        ]
-
-    def get_latest_cot(self):
-        rows = [
-            {
-                "currency": "MXN",
-                "positioning_score": 0.4,
-                "net_z_score": -0.8,
-                "crowded_flag": False,
-                "confidence": "high",
-            }
-        ]
-        if self.include_sek_positioning:
-            rows.append({
-                "currency": "SEK",
-                "positioning_score": 0.1,
-                "net_z_score": 0.0,
-                "crowded_flag": False,
-                "confidence": "medium",
-            })
-        return rows
-
-    def get_latest_yield_curve(self):
-        return [
-            {"currency": "MXN", "yield_2y_pct": 10.5, "yield_10y_pct": 9.5},
-            {"currency": "SEK", "yield_2y_pct": 2.2, "yield_10y_pct": 2.7},
-        ]
-
-
-def test_mxn_scores_when_all_input_families_are_complete():
-    scores = compute_all_pillar_scores(FakeMacroDB())
-    mxn = next(s for s in scores if s["currency"] == "MXN")
-    assert mxn["score_status"] == "scored"
-    assert mxn["data_completeness"] == "complete"
-    assert mxn["confidence_floor"] in ("medium", "high")
-    assert mxn["composite_score"] is not None
-
-
-def test_sek_uses_low_confidence_positioning_proxy_without_native_feed():
-    scores = compute_all_pillar_scores(FakeMacroDB())
-    sek = next(s for s in scores if s["currency"] == "SEK")
-    assert sek["score_status"] == "scored_proxy"
-    assert sek["data_completeness"] == "proxy_complete"
-    assert sek["confidence_floor"] == "low"
-    assert sek["composite_score"] is not None
-    assert "positioning_low_confidence" in sek["missing_inputs"]
+def test_effective_age_uses_oldest_truth():
+    assert effective_age_hours("2026-08-05T10:00:00Z", 8, now=NOW) == 8
+    assert effective_age_hours("2026-08-04T00:00:00Z", 1, now=NOW) == 36

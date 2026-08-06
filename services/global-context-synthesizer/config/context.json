@@ -1,0 +1,27 @@
+{
+  "config_version": "GLOBAL_CONTEXT_CONFIG_V1",
+  "schema_version": "GLOBAL_CONTEXT_V1",
+  "method_version": "GLOBAL_CONTEXT_SYNTHESIS_V2",
+  "enabled_components": ["AG5", "AG6", "AG7", "AG8", "AG9"],
+  "snapshot_max_age_hours": 12,
+  "component_weights": {"AG5": 0.25, "AG6": 0.10, "AG7": 0.20, "AG8": 0.20, "AG9": 0.25},
+  "max_age_hours": {"AG5": 36, "AG6": 36, "AG7": 240, "AG8": 36, "AG9": 8},
+  "component_quality": {
+    "AG5": {"coverage": 0.55, "confidence": 0.35, "usable_rows": 0.60},
+    "AG6": {"coverage": 0.55, "confidence": 0.40, "usable_rows": 0.60},
+    "AG7": {"coverage": 0.75, "confidence": 0.50, "usable_rows": 0.60},
+    "AG8": {"coverage": 0.65, "confidence": 0.40, "usable_rows": 0.60},
+    "AG9": {"coverage": 0.50, "confidence": 0.40, "usable_rows": 0.60}
+  },
+  "ag1_pack": {
+    "max_chars": 12000,
+    "llm_max_chars": 4000,
+    "llm_min_detail_confidence": 0.4,
+    "llm_min_global_confidence": 0.5,
+    "llm_min_global_coverage": 0.6,
+    "top_events_max": 5,
+    "top_sectors_max": 8,
+    "top_assets_max": 12,
+    "top_countries_max": 8
+  }
+}

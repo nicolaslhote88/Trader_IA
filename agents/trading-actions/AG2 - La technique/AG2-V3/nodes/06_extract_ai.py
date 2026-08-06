@@ -125,6 +125,10 @@ def extract_ai_object(d):
 
     # Sometimes the OpenAI node returns something like { "json": {...} } or nested
     deeper = [
+        get_nested(d, ["ai_validation", "output"]),
+        get_nested(d, ["ai_validation", "text"]),
+        get_nested(d, ["ai_raw", "output"]),
+        get_nested(d, ["ai_raw", "text"]),
         get_nested(d, ["response", "json"]),
         get_nested(d, ["response", "output"]),
         get_nested(d, ["output", "json"]),
