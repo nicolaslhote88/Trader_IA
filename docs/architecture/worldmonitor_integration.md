@@ -1,5 +1,13 @@
 # Intégration World Monitor
 
+## Statut production
+
+AG9 est volontairement dormant depuis le 2026-08-05 : workflow non publié,
+conteneur arrêté, `WORLD_MONITOR_ENABLED=false` et composant exclu de
+`GLOBAL_CONTEXT_ENABLED_COMPONENTS`. Le catalogue et l'adaptateur restent prêts
+pour une future qualification, mais aucune donnée distante ni aucun coût ne
+sont engagés. Voir `../operations/20260805_ag9_dormant_free_tier.md`.
+
 ## Choix technique et licence
 
 Le projet World Monitor consulté le 2026-08-05 est distribué sous

@@ -4,6 +4,11 @@
 > promotion AG5–AG8/synthèse/AG1 consultatif a ensuite été autorisée et réalisée,
 > tandis qu'AG9 a été mis en sommeil. Voir
 > [`../operations/20260805_ag5_ag8_global_context_live_deploy.md`](../operations/20260805_ag5_ag8_global_context_live_deploy.md).
+>
+> **Addendum qualité 2026-08-06 :** les limites de données macro décrites dans
+> ce rapport shadow ont été corrigées et validées live. AG5–AG8 et la synthèse
+> sont actifs avec un pack `OK/CAUTION`; AG9 reste dormant. Voir
+> [`../operations/20260806_ag5_ag8_data_quality_remediation.md`](../operations/20260806_ag5_ag8_data_quality_remediation.md).
 
 ## 1. Résumé exécutif
 

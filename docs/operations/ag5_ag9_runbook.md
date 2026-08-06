@@ -8,9 +8,12 @@ dormant ; l'absence de service World Monitor est donc attendue.
 
 ```bash
 curl -fsS http://macro-data-api:8081/health
-curl -fsS http://worldmonitor-adapter:8082/health
 curl -fsS http://global-context-synthesizer:8083/health
 ```
+
+Ne pas attendre de réponse de `worldmonitor-adapter` en production actuelle :
+son conteneur est volontairement arrêté. Le sonder uniquement pendant une
+qualification AG9 explicitement autorisée.
 
 Les états `DISABLED`, `DEGRADED`, `STALE`, `MISSING` sont des diagnostics, pas
 des données neutres. AG1 doit continuer en fail-open avec un pack warning.

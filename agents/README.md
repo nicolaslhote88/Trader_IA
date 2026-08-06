@@ -7,6 +7,8 @@ Les workflows n8n sont rangés par domaine pour éviter de mélanger les agents 
 Agents et workflows partagés :
 
 - `AG4-V3/` : news macro globales, geo-tagging et dual-write FX.
+- `global-context/` : déclencheurs minces et contrats AG5–AG9 ; AG5–AG8 sont
+  actifs, AG9 reste dormant et exclu des poids live.
 - `yf-enrichment-v1/` : enrichissement Yahoo Finance quotidien.
 
 ## `trading-actions/`
@@ -18,11 +20,13 @@ Agents spécifiques au système actions/ETF/crypto existant :
   - `AG1-PF-V1/` : mark-to-market portefeuille V4.
   - `AG1-V3-Portfolio manager/` : ancienne génération conservée en historique.
 - `AG2 - La technique/`
-  - `AG2-V3/` : signaux techniques Held+Core, Watchlist et Universe Quarantine.
+  - `AG2-V3/` : signaux techniques Held+Core, Watchlist et Universe Quarantine,
+    validation `deepseek-v4-pro`, rotation transactionnelle vérifiée.
 - `AG3 - Les fondamentaux/`
   - `AG3-V2/` : fondamentaux Held+Core et Watchlist.
 - `AG4 - Les news/`
-  - `AG4-SPE-V2/` : news single-stock Boursorama, IBKR, Finnhub et Health Alert.
+  - `AG4-SPE-V2/` : news single-stock Boursorama, IBKR et Finnhub via
+    `deepseek-v4-pro`, plus Health Alert.
 
 ## `trading-forex/`
 

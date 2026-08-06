@@ -1,5 +1,11 @@
 # AG1 — Global Context LLM V2 compact
 
+> **Addendum 2026-08-06 :** le schéma reste `AG1_GLOBAL_CONTEXT_LLM_V2`, mais
+> la remédiation des sources a porté la méthode live à
+> `GLOBAL_CONTEXT_LLM_COMPACTION_V3`. Le pack représentatif est désormais
+> `OK/CAUTION`, couverture `0,908`, confiance `0,685`. Voir
+> `20260806_ag5_ag8_data_quality_remediation.md`.
+
 ## Statut
 
 Déployé sur le VPS le 2026-08-05 vers 21:53 Europe/Paris.

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
@@ -39,6 +40,111 @@ CODE_NODES = {
     "S24 - Finalize Run": ("pythonCode", ROOT / "nodes" / "14_finalize_run.py"),
 }
 
+DEEPSEEK_CHAIN_NAME = "S19 - Analyze with DeepSeek"
+DEEPSEEK_MODEL_NAME = "S19A - DeepSeek Chat Model"
+DEEPSEEK_PARSER_NAME = "S19B - Structured Output DeepSeek"
+DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEEPSEEK_CREDENTIAL = {"id": "BlSCC28mzKodkfO5", "name": "DeepSeek account"}
+
+
+def configure_deepseek_analyzer(workflow: dict) -> None:
+    nodes = workflow.get("nodes", [])
+    analyzer = next(
+        (
+            node for node in nodes
+            if node.get("name") in {"S19 - Analyze with OpenAI", DEEPSEEK_CHAIN_NAME}
+        ),
+        None,
+    )
+    if analyzer is None:
+        raise RuntimeError("Nœud d'analyse S19 absent")
+
+    if analyzer.get("type") == "@n8n/n8n-nodes-langchain.openAi":
+        values = analyzer["parameters"]["responses"]["values"]
+        system_prompt = next(value["content"] for value in values if value.get("role") == "system")
+        user_prompt = next(value["content"] for value in values if value.get("role") != "system")
+        output_schema = analyzer["parameters"]["options"]["textFormat"]["textOptions"]["schema"]
+    else:
+        system_prompt = analyzer["parameters"]["messages"]["messageValues"][0]["message"]
+        user_prompt = analyzer["parameters"]["text"]
+        parser = next(node for node in nodes if node.get("name") == DEEPSEEK_PARSER_NAME)
+        output_schema = parser["parameters"]["inputSchema"]
+
+    old_name = analyzer["name"]
+    old_position = analyzer.get("position", [10816, 5952])
+    chain_id = analyzer.get("id") or "32c21fbf-dda1-44d1-9bd5-c4a536493628"
+    model_id = "4d2f3579-114d-4861-956c-64bc6cd134ac"
+    parser_id = "b7cf0c18-cc5b-51e2-a374-8c1fd2227346"
+
+    workflow["nodes"] = [
+        node for node in nodes
+        if node.get("name") not in {
+            old_name,
+            DEEPSEEK_MODEL_NAME,
+            DEEPSEEK_PARSER_NAME,
+        }
+        and node.get("id") not in {chain_id, model_id, parser_id}
+    ]
+    workflow["nodes"].extend(
+        [
+            {
+                "parameters": {
+                    "promptType": "define",
+                    "text": user_prompt,
+                    "hasOutputParser": True,
+                    "messages": {"messageValues": [{"message": system_prompt}]},
+                },
+                "type": "@n8n/n8n-nodes-langchain.chainLlm",
+                "typeVersion": 1.5,
+                "position": old_position,
+                "id": chain_id,
+                "name": DEEPSEEK_CHAIN_NAME,
+                "onError": analyzer.get("onError", "continueRegularOutput"),
+            },
+            {
+                "parameters": {"model": DEEPSEEK_MODEL, "options": {}},
+                "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+                "typeVersion": 1,
+                "position": [old_position[0] - 112, old_position[1] + 224],
+                "id": model_id,
+                "name": DEEPSEEK_MODEL_NAME,
+                "credentials": {"deepSeekApi": DEEPSEEK_CREDENTIAL},
+            },
+            {
+                "parameters": {"schemaType": "manual", "inputSchema": output_schema},
+                "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+                "typeVersion": 1.3,
+                "position": [old_position[0] + 112, old_position[1] + 224],
+                "id": parser_id,
+                "name": DEEPSEEK_PARSER_NAME,
+            },
+        ]
+    )
+
+    connections = workflow.setdefault("connections", {})
+    old_main = connections.pop(old_name, {}).get("main") or [[{
+        "node": "S19M - Merge AI + Context", "type": "main", "index": 1
+    }]]
+    connections.pop(DEEPSEEK_MODEL_NAME, None)
+    connections.pop(DEEPSEEK_PARSER_NAME, None)
+    for source_connections in connections.values():
+        for branches in source_connections.values():
+            for branch in branches:
+                for target in branch:
+                    if target.get("node") == old_name:
+                        target["node"] = DEEPSEEK_CHAIN_NAME
+    connections[DEEPSEEK_CHAIN_NAME] = {"main": old_main}
+    connections[DEEPSEEK_MODEL_NAME] = {
+        "ai_languageModel": [[{
+            "node": DEEPSEEK_CHAIN_NAME, "type": "ai_languageModel", "index": 0
+        }]]
+    }
+    connections[DEEPSEEK_PARSER_NAME] = {
+        "ai_outputParser": [[{
+            "node": DEEPSEEK_CHAIN_NAME, "type": "ai_outputParser", "index": 0
+        }]]
+    }
+
 
 def load_workflow(path: Path) -> dict:
     raw = json.loads(path.read_text(encoding="utf-8-sig"))
@@ -63,6 +169,19 @@ def build(source: Path) -> dict:
         elif name == "S16 - Parse Article":
             code = code.rstrip("\r\n") + "\n\n"
         by_name[name].setdefault("parameters", {})[parameter] = code
+    configure_deepseek_analyzer(workflow)
+    identity = json.dumps(
+        {
+            "id": workflow.get("id"),
+            "nodes": workflow.get("nodes", []),
+            "connections": workflow.get("connections", {}),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    workflow["versionId"] = str(uuid.uuid5(uuid.NAMESPACE_URL, identity))
+    workflow["activeVersionId"] = None
     return workflow
 
 

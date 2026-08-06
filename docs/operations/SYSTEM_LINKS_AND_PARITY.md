@@ -1,12 +1,14 @@
 # Liens entre systèmes & parité à maintenir
 
-**MAJ 2026-06-29.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
+**MAJ 2026-08-06.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
 
 ## ⚠️ Règle d'or
 Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne lit PAS la sortie du run — il recalcule à partir des bases DuckDB `ag2_v3` / `ag3_v2` / `ag4_*`). Donc :
 > **Toute modif des formules de scoring, des règles de décision, des gates ou des seuils de fraîcheur dans AG1 doit être répercutée dans `app.py` (matrice + funnel), et inversement.**
 
-⚠️ **La version LIVE du dashboard `/opt/trading-dashboard/app/app.py` a DIVERGÉ du repo `services/dashboard/app.py`** (le repo est en retard). La version live est la source de vérité ; déployer en éditant la version LIVE (cf. `SCHEDULING_AND_LOAD.md` pour les pièges Python 3.12 / backup).
+La version live `/opt/trading-dashboard/app/app.py` a été resynchronisée dans
+`services/dashboard/app.py`. Tout prochain changement doit continuer à être
+appliqué et testé des deux côtés avant déploiement.
 
 ## Carte des duplications
 
@@ -30,6 +32,11 @@ Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne li
 
 ## Autres liens inter-systèmes à garder en tête
 - **News par-symbole** : `ag4_spe_v2.news_analyzed` → R8 (impact + **texte top-3 vers le LLM**) → `Calcul Matrice` (`opportunity_pack.rows[].news` + `newsGeneratedAt`). Le dashboard n'utilise que l'**impact** (sentiment_prob), pas le texte.
+- **Contexte global** : `global_context_v1` → endpoint compact
+  `AG1_GLOBAL_CONTEXT_LLM_V2` → même objet attaché aux trois branches AG1. Le
+  dashboard lit le snapshot V1 complet ; il ne recalcule pas la confiance, la
+  fraîcheur ou les poids. Aucun score du contexte ne doit entrer dans la matrice,
+  la safety ou les quantités tant que `advisory_only=true`.
 - **Ledger ordres** : `core.orders` (AG1) mis à jour à l'exécution + **post-approbation** par le node `Update Ledger Status` du workflow `Order Approval Decide`. Écrire `ag1_v4_consensus.duckdb` **en duckdb 1.4.3** (lecteur task-runner n8n).
 - **Univers** : un symbole n'est traité par AG2/AG3 que s'il est dans `ag2_v3.universe_segments` (pas seulement `universe`). Cf `AGENTS.md` § classification.
 - **Ordonnancement / contention DuckDB** : cf `SCHEDULING_AND_LOAD.md` (crons, durées, déconfliction).
@@ -38,4 +45,5 @@ Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne li
 1. Modifier le node n8n (`Calcul Matrice`, `R8`, preflight, safety).
 2. Répercuter la même formule/seuil dans `/opt/trading-dashboard/app/app.py` (matrice ≈ L4900-5175 ET funnel System Health).
 3. Vérifier la cohérence : un même symbole doit donner le même grade/décision dans le dashboard et dans le run (`core.model_proposals` / `opportunity_pack`).
-4. Committer côté repo (`services/dashboard/app.py` à resynchroniser depuis la version live, qui a divergé).
+4. Committer ensemble le workflow AG1, `services/dashboard/app.py` et la
+   documentation de parité lorsque la modification touche une logique partagée.

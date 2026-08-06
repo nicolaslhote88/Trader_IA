@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-BASE = ROOT / "AG2-V3-Technical-Held-Core.workflow.json"
+BASE = ROOT / "AG2-V3-Technical-Watchlist-Nightly.workflow.json"
 READ_UNIVERSE_CODE = (ROOT / "nodes" / "00_read_universe.py").read_text(encoding="utf-8")
 INIT_CODE = (ROOT / "nodes" / "01_init_config.js").read_text(encoding="utf-8")
 DUCKDB_CODE = (ROOT / "nodes" / "02_duckdb_init.py").read_text(encoding="utf-8")
@@ -30,6 +30,9 @@ VARIANTS = [
         "rotation_mode": "HELD_CORE",
         "batch_size": 18,
         "batch_state_key": "last_index_actions_held_core",
+        "ai_provider": "deepseek-v4-pro",
+        "ai_model_position": [-16, 7312],
+        "ai_parser_position": [160, 7312],
     },
     {
         "id": "AG2V3WATCHNIGHT20260619",
@@ -39,6 +42,9 @@ VARIANTS = [
         "rotation_mode": "WATCHLIST",
         "batch_size": 40,
         "batch_state_key": "last_index_actions_watchlist",
+        "ai_provider": "deepseek-v4-pro",
+        "ai_model_position": [-16, 7728],
+        "ai_parser_position": [128, 7728],
     },
 ]
 
@@ -60,6 +66,116 @@ def configure_init_code(variant):
         if count != 1:
             raise RuntimeError(f"Init config substitution failed: {pattern}")
     return code
+
+
+def configure_deepseek_validator(wf, variant):
+    chain_name = "AI Validation DeepSeek - ACTIONS/ETF"
+    model_name = "DeepSeek Chat Model"
+    parser_name = "AG2 — Structured Output DeepSeek"
+    chain_id = "4b13e55a-c827-4ace-ab94-2f98e589d736"
+    model_id = "4d2f3579-114d-4861-956c-64bc6cd134ac"
+    parser_id = "77174ed3-84f3-4c81-a0ca-019ac693e1e3"
+
+    old_node = next(
+        (
+            node for node in wf.get("nodes", [])
+            if node.get("name") == "AI Validation GPT - ACTIONS/ETF"
+            or node.get("name") == chain_name
+        ),
+        None,
+    )
+    if old_node is None:
+        raise RuntimeError("AG2 AI validation node not found")
+
+    if old_node.get("type") == "@n8n/n8n-nodes-langchain.openAi":
+        response_values = old_node["parameters"]["responses"]["values"]
+        system_prompt = next(value["content"] for value in response_values if value.get("role") == "system")
+        user_prompt = next(value["content"] for value in response_values if value.get("role") != "system")
+        output_schema = old_node["parameters"]["options"]["textFormat"]["textOptions"]["schema"]
+    else:
+        system_prompt = old_node["parameters"]["messages"]["messageValues"][0]["message"]
+        user_prompt = old_node["parameters"]["text"]
+        parser_node = next(node for node in wf["nodes"] if node.get("name") == parser_name)
+        output_schema = parser_node["parameters"]["inputSchema"]
+
+    old_name = old_node["name"]
+    old_position = old_node.get("position", [-16, 7536])
+    wf["nodes"] = [
+        node for node in wf.get("nodes", [])
+        if node.get("name") not in {old_name, model_name, parser_name}
+        and node.get("id") not in {chain_id, model_id, parser_id}
+    ]
+    wf["nodes"].extend([
+        {
+            "parameters": {
+                "promptType": "define",
+                "text": user_prompt,
+                "hasOutputParser": True,
+                "messages": {"messageValues": [{"message": system_prompt}]},
+            },
+            "type": "@n8n/n8n-nodes-langchain.chainLlm",
+            "typeVersion": 1.5,
+            "position": old_position,
+            "id": chain_id,
+            "name": chain_name,
+        },
+        {
+            "parameters": {"model": "deepseek-v4-pro", "options": {}},
+            "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
+            "typeVersion": 1,
+            "position": variant["ai_model_position"],
+            "id": model_id,
+            "name": model_name,
+            "credentials": {
+                "deepSeekApi": {"id": "BlSCC28mzKodkfO5", "name": "DeepSeek account"}
+            },
+        },
+        {
+            "parameters": {"schemaType": "manual", "inputSchema": output_schema},
+            "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
+            "typeVersion": 1.3,
+            "position": variant["ai_parser_position"],
+            "id": parser_id,
+            "name": parser_name,
+        },
+    ])
+
+    connections = wf.setdefault("connections", {})
+    old_main = connections.pop(old_name, {}).get("main") or [[{
+        "node": "Merge AI + Context", "type": "main", "index": 0
+    }]]
+    connections.pop(model_name, None)
+    connections.pop(parser_name, None)
+    for source_connections in connections.values():
+        for branches in source_connections.values():
+            for branch in branches:
+                for target in branch:
+                    if target.get("node") == old_name:
+                        target["node"] = chain_name
+    connections[chain_name] = {"main": old_main}
+    connections[model_name] = {
+        "ai_languageModel": [[{"node": chain_name, "type": "ai_languageModel", "index": 0}]]
+    }
+    connections[parser_name] = {
+        "ai_outputParser": [[{"node": chain_name, "type": "ai_outputParser", "index": 0}]]
+    }
+
+    by_name = {node["name"]: node for node in wf["nodes"]}
+    compute = by_name["Compute + Filter + Write"]["parameters"]["pythonCode"]
+    old_hash_line = "sig_hash = compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind)"
+    new_hash_line = "sig_hash = fnv1a(compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind) + '|model=deepseek-v4-pro')"
+    if old_hash_line not in compute:
+        raise RuntimeError("AG2 model cache namespace hook not found")
+    by_name["Compute + Filter + Write"]["parameters"]["pythonCode"] = compute.replace(
+        old_hash_line, new_hash_line, 1
+    )
+    for node_name in ("Extract AI + Write", "Hydrate AI from cache"):
+        code = by_name[node_name]["parameters"]["pythonCode"]
+        if "gpt-5-mini" not in code:
+            raise RuntimeError(f"AG2 model lineage marker missing in {node_name}")
+        by_name[node_name]["parameters"]["pythonCode"] = code.replace(
+            "gpt-5-mini", "deepseek-v4-pro"
+        )
 
 
 def configure_workflow(base, variant):
@@ -106,6 +222,8 @@ def configure_workflow(base, variant):
         if node.get("name") in NODE_CODE_FILES:
             parameter, path = NODE_CODE_FILES[node["name"]]
             node.setdefault("parameters", {})[parameter] = path.read_text(encoding="utf-8")
+    if variant.get("ai_provider") == "deepseek-v4-pro":
+        configure_deepseek_validator(wf, variant)
     executable = json.dumps(
         {"id": wf["id"], "nodes": wf.get("nodes", []), "connections": wf.get("connections", {})},
         ensure_ascii=False,

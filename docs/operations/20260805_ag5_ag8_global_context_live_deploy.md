@@ -84,11 +84,16 @@ broker     060d649426d7ad015e68734fe1cda4909ecdf89503d1158e26d77f3a7e8b5e41
 - broker authentifié, `dry_run=false`, zéro approbation pending ;
 - aucun run AG1 et aucun ordre déclenché par le déploiement.
 
-## Observation restante
+## Validation post-déploiement
 
-Le premier run naturel AG1 enrichi est prévu le 2026-08-06 à 14:00 Paris. Après
-ce run, contrôler les champs `global_context_*` dans `core.runs`, le statut des
-trois propositions, la durée, le coût et l'absence de régression d'exécution.
+L'intégration a été validée le 2026-08-06 après exécution manuelle de chaque
+producteur AG5–AG8, de la synthèse puis d'AG1 V4. Le run AG1 `20808` s'est
+terminé en succès avec les trois branches conformes ; le pack consultatif était
+présent avant le fan-out et le consensus/safety/broker sont restés inchangés.
+
+La remédiation qualité ultérieure est documentée dans
+`20260806_ag5_ag8_data_quality_remediation.md` : pack live `OK`, politique
+`CAUTION`, couverture `0,908`, confiance `0,685`.
 
 ## Hotfix éditeur n8n
 

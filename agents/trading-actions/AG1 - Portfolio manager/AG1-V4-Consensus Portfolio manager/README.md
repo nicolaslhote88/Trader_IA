@@ -5,6 +5,11 @@ unique. Le meme brief d'entree est envoye en parallele a GPT, DeepSeek et Claude
 puis un node de consensus autorise une intention d'ordre seulement si au moins
 deux modeles sur trois votent le meme symbole et le meme intent executable.
 
+État live vérifié le 2026-08-06 : `gpt-5.6-sol`, `deepseek-v4-pro` et
+`claude-opus-4-8`. Les clés DuckDB historiques restent `chatgpt52`,
+`grok41_reasoning` et `claude_sonnet46`; utiliser `model_name`/`model_id` pour
+identifier le modèle réel.
+
 ## Principes
 
 - Perimetre : actions/ETF uniquement cote execution, avec rejet explicite du
@@ -41,6 +46,13 @@ deux modeles sur trois votent le meme symbole et le meme intent executable.
 -> `7 - Validate & Enforce Safety`
 -> `07b - IBKR Send Orders`
 -> `8/9/10 DuckDB`.
+
+Avant le fan-out, `AG1.GC — Fetch Advisory Pack` récupère le payload compact
+`AG1_GLOBAL_CONTEXT_LLM_V2`, puis `Attach Advisory Pack` attache exactement le
+même objet aux trois branches. Il est limité à 4 000 caractères,
+`advisory_only=true` et porte une politique explicite (`IGNORE`,
+`CAVEAT_ONLY`, `CAUTION`, `NORMAL`). Le consensus, les quantités, la safety et
+le transport broker ne lisent aucun score de ce contexte.
 
 En live, `07b - IBKR Send Orders` ne cree pas de fill optimiste: il soumet
 l'ordre puis interroge `/fills` pendant la fenetre `IBKR_FILL_CONFIRM_SECONDS`.

@@ -5,7 +5,7 @@ Le système combine des Portfolio Managers LLM, des analystes spécialisés, un
 Risk Manager déterministe, un broker FastAPI branché sur IBKR Client Portal et
 un dashboard Streamlit.
 
-**État opérationnel vérifié au 2026-08-05.** Le système Actions/ETF fonctionne en
+**État opérationnel vérifié au 2026-08-06.** Le système Actions/ETF fonctionne en
 **LIVE réel** sur le compte IBKR `U25651155` (`IBKR_DRY_RUN=false`,
 `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`). Le Portfolio Manager actif est
 **AG1 V4 consensus** : GPT-5.6 Sol, DeepSeek V4 Pro et Claude Opus 4.8 votent, puis le
@@ -22,10 +22,10 @@ Ne jamais déclencher ni confirmer un ordre manuellement depuis le code.
 | # | Agent | Rôle | Implémentation principale |
 |---|---|---|---|
 | 1 | Univers | Extraction et maintenance de l'univers d'investissement : tickers, métadonnées, secteurs | `outils/AG0-V1 - extraction universe/` |
-| 2 | Portfolio Manager | Allocation, cibles de position et ordres théoriques. En production Actions/ETF : AG1 V4 consensus GPT-5.5 + Grok 4.3 + Claude Fable 5 | `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/` |
-| 3 | Analyste Technique | Indicateurs, patterns et signaux de prix | `agents/trading-actions/AG2 - La technique/AG2-V3/` |
+| 2 | Portfolio Manager | Allocation, cibles de position et ordres théoriques. En production Actions/ETF : AG1 V4 consensus GPT-5.6 Sol + DeepSeek V4 Pro + Claude Opus 4.8 | `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/` |
+| 3 | Analyste Technique | Indicateurs H1/D1, validation DeepSeek et rotation Held+Core/Watchlist vérifiée | `agents/trading-actions/AG2 - La technique/AG2-V3/` |
 | 4 | Analyste Fondamental | Financials, valorisation, earnings | `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/` |
-| 5 | Analyste Sentiment / News | News macro, sentiment marché, signaux par valeur et mode AG4 dual-branch | `agents/common/AG4-V3/`, `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/` |
+| 5 | Analyste Sentiment / News | News macro, sentiment marché et signaux par valeur ; les trois workflows AG4_Spé utilisent DeepSeek V4 Pro | `agents/common/AG4-V3/`, `agents/trading-actions/AG4 - Les news/AG4-SPE-V2/` |
 | 6 | Risk Manager + Execution Trader | Validation déterministe, consensus, écriture DuckDB, envoi IBKR et approbation Telegram | `agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfolio manager/workflow/nodes/post_agent/`, `services/ibkr-broker/` |
 
 ## 2. Workflows actifs
@@ -34,10 +34,12 @@ Workflows actifs côté Actions/ETF :
 
 - `AG1V4CONSENSUS` : Portfolio Manager Actions/ETF live, consensus 2/3.
 - `AG1-PF-V1` : mark-to-market horaire V4.
-- `AG2-V3` : analyse technique.
+- `AG2V3HELDCORE20260619` et `AG2V3WATCHNIGHT20260619` : analyse technique
+  split avec curseur transactionnel ; `AG2UHQ20260619` maintient la quarantaine.
 - `AG3-V2` : analyse fondamentale (split 2026-06-22 en `Fundamental Held+Core` + `Fundamental Watchlist Nightly`).
 - `AG4-V3` : News Watcher macro, dual-branch `reduced/full`.
-- `AG4_Spé-V2` : analyse news par valeur.
+- `AG4_Spé-V2`, `AG4SPEFINNHUBV1` et `AG4_Spé-IBKR-V1` : analyse news par
+  valeur via DeepSeek V4 Pro et parseur structuré.
 - `YF-ENRICH-V1` : enrichissement Yahoo Finance.
 
 Workflows d'approbation :
@@ -56,6 +58,13 @@ en sommeil et est exclu des poids (`GLOBAL_CONTEXT_ENABLED_COMPONENTS=AG5,AG6,AG
 Architecture et statut :
 `docs/architecture/global_context_architecture.md` et
 `docs/operations/20260805_ag5_ag8_global_context_live_deploy.md`.
+
+La qualité des sources AG5–AG8 a été remédiée et validée le 2026-08-06 : le
+pack représentatif est `OK`, `use_policy=CAUTION`, couverture `0,908` et
+confiance `0,685`. La sortie LLM est compactée à 4 000 caractères maximum et
+reste strictement consultative. La rotation AG2 a également été réparée : le
+premier run Held+Core post-correction a traité 27/27 symboles et avancé
+son curseur `0 → 18`.
 
 ## 3. Exécution IBKR et approbation
 
@@ -81,9 +90,10 @@ Garde-fous broker :
 - Déviation > 15 % : rejet.
 - Prix non vérifiable (`QUOTE_TOO_OLD`, `NO_REFERENCE_PRICE`,
   `QUOTE_FETCH_FAILED`) : parking Telegram.
-- Prompt IBKR `without market data` : parking Telegram uniquement si la garde prix
-  précédente a validé une déviation <= 5 %. Au clic, le broker répond au prompt
-  IBKR existant via son `reply_id`, au lieu de recréer l'ordre.
+- Prompt IBKR `without market data` : auto-confirmation si la garde prix
+  yfinance valide une déviation ≤5 % ; sinon parking/rejet selon les bandes
+  précédentes. Une approbation re-soumet un ordre frais et traite la nouvelle
+  chaîne de prompts, sans rejouer un `reply_id` périmé.
 
 Détails : `docs/operations/order_approval_deploy_notes.md`.
 
@@ -98,7 +108,8 @@ Détails : `docs/operations/order_approval_deploy_notes.md`.
 - **yfinance-api** : quotes et données Yahoo Finance.
 - **yf-enrichment** : enrichissement quotidien.
 - **macro-data-api** : données macro et marché complémentaires.
-- **worldmonitor-adapter** : découverte/normalisation AG9, sans code World Monitor copié.
+- **worldmonitor-adapter** : découverte/normalisation AG9, sans code World
+  Monitor copié ; conteneur arrêté tant qu'AG9 reste dormant.
 - **global-context-synthesizer** : snapshot atomique et pack consultatif AG1.
 - **Streamlit dashboard** : dashboard V4-only.
 - **Traefik** : reverse proxy TLS.
@@ -115,6 +126,7 @@ Trader_IA/
 ├── agents/
 │   ├── common/
 │   │   ├── AG4-V3/
+│   │   ├── global-context/
 │   │   └── yf-enrichment-v1/
 │   ├── trading-actions/
 │   │   ├── AG1 - Portfolio manager/
@@ -166,6 +178,10 @@ déployée doit aussi être commitée dans ce dépôt.
 | Plans AG4 SPE | `docs/audits/20260617_ag4_spe_v2_analysis.md`, `docs/audits/20260617_ag4_spe_v2_remediation_plan.md` |
 | Contexte global AG5–AG9 | `docs/architecture/global_context_architecture.md` |
 | Runbook AG5–AG9 | `docs/operations/ag5_ag9_runbook.md` |
+| État fonctionnel courant | `docs/architecture/etat_des_lieux.md` |
+| Correctif qualité AG5–AG8 | `docs/operations/20260806_ag5_ag8_data_quality_remediation.md` |
+| Correctif rotation AG2 | `docs/operations/20260806_ag2_batch_rotation_cursor_fix.md` |
+| Index de la documentation | `docs/README.md` |
 
 ## 7. Conventions de sécurité
 

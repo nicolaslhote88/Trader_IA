@@ -56,7 +56,11 @@ function toBool(v, d = false) {
 }
 
 const j = $json || {};
-const raw = j.output?.[0]?.content?.[0]?.text || j.content || "{}";
+// Basic LLM Chain + Structured Output Parser returns { output: <parsed object> }.
+// Keep the legacy OpenAI response envelope as a rollback-compatible fallback.
+const raw = (j.output && !Array.isArray(j.output))
+  ? j.output
+  : (j.output?.[0]?.content?.[0]?.text || j.content || j.text || "{}");
 const ai = safeParse(raw);
 const nowIso = new Date().toISOString();
 

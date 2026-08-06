@@ -620,6 +620,8 @@ IND_KEYS = [
 for it in items:
     d = it.get("json", {}) or {}
     run_id = str(d.get("run_id", "") or "")
+    raw_batch_info = d.get("batch_info", {})
+    batch_info = dict(raw_batch_info) if isinstance(raw_batch_info, dict) else {}
     identity = normalize_identity(d)
     symbol_internal = identity["symbol_internal"]
     symbol_yahoo = identity["symbol_yahoo"]
@@ -658,8 +660,8 @@ for it in items:
         if d1_sym and d1_sym != to_upper_text(symbol_yahoo):
             data_quality_flags.append("D1_SYMBOL_MISMATCH")
 
-        exchange = base.get("exchange", "")
-        asset_class = base.get("asset_class", "EQUITY")
+        exchange = str(d.get("exchange") or "")
+        asset_class = identity["asset_class"]
         h1_result = compute_indicators(h1_resp.get("bars", []), h1_interval, exchange, asset_class)
         d1_result = compute_indicators(d1_resp.get("bars", []), d1_interval, exchange, asset_class)
 
@@ -787,6 +789,10 @@ for it in items:
         out["d1_signal"] = d1_sig
         out["h1_freshness"] = h1_freshness
         out["d1_freshness"] = d1_freshness
+        # Finalize Run receives the processed items emitted by Loop Symbols,
+        # not the original DuckDB Init items. Preserve the rotation contract so
+        # it can atomically advance and verify the batch cursor.
+        out["batch_info"] = batch_info
         out["_status"] = "ok"
         results.append({"json": out})
 
@@ -797,6 +803,7 @@ for it in items:
                     "symbol": symbol_internal or "",
                     "symbol_yahoo": symbol_yahoo or "",
                     "run_id": run_id,
+                    "batch_info": batch_info,
                     "_status": "error",
                     "error": str(e),
                     "call_ai": False,
