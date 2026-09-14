@@ -64,7 +64,9 @@ pack représentatif est `OK`, `use_policy=CAUTION`, couverture `0,908` et
 confiance `0,685`. La sortie LLM est compactée à 4 000 caractères maximum et
 reste strictement consultative. La rotation AG2 a également été réparée : le
 premier run Held+Core post-correction a traité 27/27 symboles et avancé
-son curseur `0 → 18`.
+son curseur `0 → 18`. Le garde H1 d'AG2 distingue désormais la fenêtre courte
+des appels LLM (`SOFT_STALE`) de la limite d'utilisabilité AG1 à 96 h ; la
+réparation live a restauré 184 techniques prêtes et 163 pré-tradables.
 
 ## 3. Exécution IBKR et approbation
 
@@ -181,6 +183,7 @@ déployée doit aussi être commitée dans ce dépôt.
 | État fonctionnel courant | `docs/architecture/etat_des_lieux.md` |
 | Correctif qualité AG5–AG8 | `docs/operations/20260806_ag5_ag8_data_quality_remediation.md` |
 | Correctif rotation AG2 | `docs/operations/20260806_ag2_batch_rotation_cursor_fix.md` |
+| Correctif fraîcheur H1 AG2 | `docs/operations/20260806_ag2_h1_soft_stale_fix.md` |
 | Index de la documentation | `docs/README.md` |
 
 ## 7. Conventions de sécurité

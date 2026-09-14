@@ -2139,6 +2139,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from app_modules.core import (
+    calculate_sector_portfolio_tilts,
     calculate_sector_sentiment,
     calculate_symbol_momentum,
     check_freshness,
@@ -2154,8 +2155,10 @@ from app_modules.core import (
     safe_json_parse,
     truthy_series,
 )
+from app_modules.ag2_funnel import build_ag2_operational_scope
 from app_modules.tables import render_interactive_table, render_wrapped_dataframe
 from app_modules.visualizations import _prefetch_histories, render_fx_pair_sparklines, render_portfolio_sparklines
+from app_modules.navigation import render_sidebar_navigation
 
 # ============================================================
 # HELPERS GENERAUX (modules externes)
@@ -3425,15 +3428,26 @@ def _ag2_h1_d1_matrix_figure(df: pd.DataFrame) -> go.Figure | None:
     return fig
 
 
-def _ag2_funnel_figure(total: int, actionable: int, ai_calls: int, ai_approvals: int) -> go.Figure:
-    labels = ["Analyses", "Actionables", "Appels IA", "IA approuves"]
-    values = [max(0, int(total)), max(0, int(actionable)), max(0, int(ai_calls)), max(0, int(ai_approvals))]
+def _ag2_funnel_figure(metrics: dict[str, object]) -> go.Figure:
+    labels = [
+        "Univers configuré",
+        "Rotation AG2 active",
+        "Technique prête AG1",
+        "Non bloquées par l’IA",
+    ]
+    values = [
+        max(0, int(metrics.get("universe_total", 0) or 0)),
+        max(0, int(metrics.get("rotation_active", 0) or 0)),
+        max(0, int(metrics.get("tech_ready", 0) or 0)),
+        max(0, int(metrics.get("ai_not_rejected", 0) or 0)),
+    ]
     fig = go.Figure(
         go.Funnel(
             y=labels,
             x=values,
             textinfo="value+percent previous",
             marker=dict(color=["#64748b", "#60a5fa", "#a78bfa", "#22c55e"]),
+            hovertemplate="%{label}<br>%{value} valeurs<extra></extra>",
         )
     )
     fig.update_layout(
@@ -4754,6 +4768,45 @@ def _build_multi_agent_matrix(
         next_earnings_ts = pd.to_datetime(r.get("next_earnings_date", pd.NA), errors="coerce", utc=True)
         now_utc = pd.Timestamp.now(tz="UTC")
 
+        def _row_bool(value: object) -> bool:
+            return str(value or "").strip().lower() in ("1", "true", "yes", "y", "ok")
+
+        tech_present = _row_bool(r.get("_tech_present", False))
+        h1_closed_only = _row_bool(r.get("h1_closed_only", False))
+        d1_closed_only = _row_bool(r.get("d1_closed_only", False))
+        h1_status = str(r.get("h1_status", "") or "").strip().upper()
+        d1_status = str(r.get("d1_status", "") or "").strip().upper()
+        h1_ts = pd.to_datetime(r.get("h1_date", pd.NaT), errors="coerce", utc=True)
+        d1_ts = pd.to_datetime(r.get("d1_date", pd.NaT), errors="coerce", utc=True)
+        h1_age_stored = pd.to_numeric(pd.Series([r.get("data_age_h1_hours", pd.NA)]), errors="coerce").iloc[0]
+        d1_age_stored = pd.to_numeric(pd.Series([r.get("data_age_d1_hours", pd.NA)]), errors="coerce").iloc[0]
+        h1_age_real = (now_utc - h1_ts).total_seconds() / 3600.0 if pd.notna(h1_ts) else pd.NA
+        d1_age_real = (now_utc - d1_ts).total_seconds() / 3600.0 if pd.notna(d1_ts) else pd.NA
+        h1_age_effective = max(
+            [float(v) for v in (h1_age_stored, h1_age_real) if pd.notna(v)],
+            default=pd.NA,
+        )
+        d1_age_effective = max(
+            [float(v) for v in (d1_age_stored, d1_age_real) if pd.notna(v)],
+            default=pd.NA,
+        )
+        hard_data_flags = []
+        if not tech_present:
+            hard_data_flags.append("MISSING_TECH")
+        elif not h1_closed_only or not d1_closed_only:
+            hard_data_flags.append("TECH_BARS_NOT_CLOSED")
+        if tech_present and (h1_status != "OK" or d1_status != "OK"):
+            hard_data_flags.append("TECH_STATUS_NOT_OK")
+        if pd.notna(h1_age_effective) and float(h1_age_effective) > 96.0:
+            hard_data_flags.append("STALE_H1")
+        if pd.notna(d1_age_effective) and float(d1_age_effective) > 96.0:
+            hard_data_flags.append("STALE_D1")
+        if pd.isna(r.get("yf_fetched_at", pd.NaT)):
+            hard_data_flags.append("MISSING_YF")
+        elif pd.isna(r.get("yf_age_h", pd.NA)) or float(r.get("yf_age_h")) > 72.0:
+            hard_data_flags.append("STALE_YF")
+        hard_data_gate_block = bool(hard_data_flags)
+
         days_to_next_earnings = pd.NA
         days_since_last_earnings = pd.NA
         if pd.notna(next_earnings_ts):
@@ -5004,6 +5057,9 @@ def _build_multi_agent_matrix(
             gates_note.append("INVALID_OPTIONS_STATE")
         if rr_outlier:
             gates_note.append(rr_note)
+        for hard_flag in hard_data_flags:
+            if hard_flag not in gates_note:
+                gates_note.append(hard_flag)
         gate_summary = "|".join(gates_note)
 
         options_note = ""
@@ -5068,6 +5124,11 @@ def _build_multi_agent_matrix(
                 "quadrant": quadrant,
                 "data_quality_score": data_quality_score,
                 "data_quality_gate_ok": data_quality_gate_ok,
+                "data_quality_flags": hard_data_flags,
+                "data_ok_for_trading": not hard_data_gate_block,
+                "hard_data_gate_block": hard_data_gate_block,
+                "h1_age_hours_effective": h1_age_effective,
+                "d1_age_hours_effective": d1_age_effective,
                 "earnings_gate_block": earnings_gate_block,
                 "liquidity_gate_block": liquidity_gate_block,
                 "invalid_options_state_gate": invalid_options_state_gate,
@@ -5132,6 +5193,7 @@ def _build_multi_agent_matrix(
         earnings_block = bool(row.get("earnings_gate_block", False))
         liquidity_block = bool(row.get("liquidity_gate_block", False))
         invalid_options_state = bool(row.get("invalid_options_state_gate", False))
+        hard_data_gate_block = bool(row.get("hard_data_gate_block", False))
         quality_block = data_quality < 60.0
 
         if risk_u <= risk_threshold and reward_u >= reward_threshold:
@@ -5156,7 +5218,7 @@ def _build_multi_agent_matrix(
         )
 
         reasons = []
-        if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state):
+        if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state or hard_data_gate_block):
             action = "Entrer / Renforcer"
             reasons.append("SETUP_OK")
         elif reduce_core:
@@ -5173,6 +5235,8 @@ def _build_multi_agent_matrix(
                 reasons.append("RR_OUTLIER_GATE")
             if invalid_options_state:
                 reasons.append("INVALID_OPTIONS_STATE_GATE")
+            if hard_data_gate_block:
+                reasons.append("HARD_DATA_GATE")
 
         ev_component = max(0.0, min(100.0, (ev_r / 1.5) * 100.0))
         risk_component = max(0.0, min(100.0, 100.0 - risk_u))
@@ -6856,11 +6920,9 @@ def render_macro_overview(df_macro: pd.DataFrame, df_macro_runs: pd.DataFrame, d
         over_txt = "—"
         under_txt = "—"
         if not sec_df.empty:
-            sec_agg = sec_df.groupby(["sector", "direction"], as_index=False)["score"].sum()
-            bull = sec_agg[sec_agg["direction"] == "Bullish"].sort_values("score", ascending=False)
-            bear = sec_agg[sec_agg["direction"] == "Bearish"].sort_values("score", ascending=False)
-            over_txt = ", ".join(bull["sector"].head(3).tolist()) if not bull.empty else "—"
-            under_txt = ", ".join(bear["sector"].head(3).tolist()) if not bear.empty else "—"
+            tilts = calculate_sector_portfolio_tilts(sec_df, top_n=3)
+            over_txt = ", ".join(tilts["overweight"]) or "—"
+            under_txt = ", ".join(tilts["underweight"]) or "—"
         theme_risks = []
         for _, r in df_macro_win.iterrows():
             if str(r.get("direction", "NEUTRAL")).upper() not in ("BEARISH", "NEUTRAL"):
@@ -6871,8 +6933,8 @@ def render_macro_overview(df_macro: pd.DataFrame, df_macro_runs: pd.DataFrame, d
         if theme_risks:
             th = pd.DataFrame(theme_risks).groupby("theme", as_index=False)["score"].sum().sort_values("score", ascending=False)
             risk_txt = ", ".join(th["theme"].head(4).tolist()) if not th.empty else "—"
-        s2.markdown(f"**Surponderer**: {over_txt}  \n**Sous-ponderer**: {under_txt}")
-        s3.markdown(f"**Risques a surveiller**: {risk_txt}")
+        s2.markdown(f"**Surpondérer** : {over_txt}  \n**Sous-pondérer** : {under_txt}")
+        s3.markdown(f"**Risques à surveiller** : {risk_txt}")
 
         if isinstance(df_positions_optional, pd.DataFrame) and not df_positions_optional.empty:
             pos = normalize_cols(df_positions_optional.copy())
@@ -7531,6 +7593,7 @@ def _prepare_multi_agent_view(
     else:
         tech["tech_action"] = ""
     tech["tech_confidence"] = safe_float_series(tech[conf_col]) if conf_col else 0.0
+    tech["_tech_present"] = True
     keep_tech = [
         c
         for c in [
@@ -7552,6 +7615,13 @@ def _prepare_multi_agent_view(
             "ai_regime_d1",
             "data_age_h1_hours",
             "data_age_d1_hours",
+            "h1_date",
+            "d1_date",
+            "h1_status",
+            "d1_status",
+            "h1_closed_only",
+            "d1_closed_only",
+            "_tech_present",
             "last_tech_date",
         ]
         if c in tech.columns
@@ -8128,6 +8198,21 @@ def _ag1_default_payload(key: str, cfg: dict[str, str]) -> dict[str, object]:
     }
 
 
+def _ag1_ibkr_row_is_coherent_with_snapshot(snapshot_row, ibkr_row):
+    """Reject a live overlay row older than, or sized differently from, its snapshot row."""
+    snapshot_qty = safe_float(snapshot_row.get("quantity"))
+    ibkr_qty = safe_float(ibkr_row.get("quantity"))
+    qty_tolerance = max(1e-8, abs(snapshot_qty) * 1e-8)
+    if abs(snapshot_qty - ibkr_qty) > qty_tolerance:
+        return False, "quantity_mismatch"
+
+    snapshot_ts = pd.to_datetime(snapshot_row.get("updatedat"), errors="coerce", utc=True)
+    ibkr_ts = pd.to_datetime(ibkr_row.get("updated_at"), errors="coerce", utc=True)
+    if pd.notna(snapshot_ts) and (pd.isna(ibkr_ts) or ibkr_ts < snapshot_ts):
+        return False, "snapshot_newer"
+    return True, "coherent"
+
+
 def _ag1_apply_ibkr_live_overlay(conn, df_pos):
     """P&L latent LIVE : portfolio_positions_ibkr_latest (ecrite par PF.00C a chaque run,
     valeurs deja en EUR au taux IBKR) est la source prioritaire et override le snapshot
@@ -8142,6 +8227,7 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
     try:
         ibkr = _ag1_fetchdf(conn, """
             SELECT UPPER(symbol) AS symbol,
+                   CAST(quantity AS DOUBLE) AS quantity,
                    CAST(avg_cost_eur AS DOUBLE) AS avg_cost_eur,
                    CAST(last_price_eur AS DOUBLE) AS last_price_eur,
                    CAST(market_value_eur AS DOUBLE) AS market_value_eur,
@@ -8218,13 +8304,19 @@ def _ag1_apply_ibkr_live_overlay(conn, df_pos):
         sym = str(df.at[idx, "symbol"]).upper()
         if ibkr_fresh and sym in ibkr_map:
             r = ibkr_map[sym]
-            df.at[idx, "lastprice"] = safe_float(r.get("last_price_eur"))
-            df.at[idx, "marketvalue"] = safe_float(r.get("market_value_eur"))
-            df.at[idx, "unrealizedpnl"] = safe_float(r.get("unrealized_pnl_eur"))
-            df.at[idx, "avgprice"] = safe_float(r.get("avg_cost_eur"))
-            df.at[idx, "currency"] = (str(r.get("currency") or "EUR").upper() or "EUR")
-            df.at[idx, "fx_rate"] = safe_float(r.get("fx_rate")) or 1.0
-            src = "ibkr_live"
+            coherent, skip_reason = _ag1_ibkr_row_is_coherent_with_snapshot(df.loc[idx], r)
+            if coherent:
+                df.at[idx, "lastprice"] = safe_float(r.get("last_price_eur"))
+                df.at[idx, "marketvalue"] = safe_float(r.get("market_value_eur"))
+                df.at[idx, "unrealizedpnl"] = safe_float(r.get("unrealized_pnl_eur"))
+                df.at[idx, "avgprice"] = safe_float(r.get("avg_cost_eur"))
+                df.at[idx, "currency"] = (str(r.get("currency") or "EUR").upper() or "EUR")
+                df.at[idx, "fx_rate"] = safe_float(r.get("fx_rate")) or 1.0
+                src = "ibkr_live"
+            else:
+                # A post-trade snapshot must never be overwritten with the previous
+                # PF refresh: that would combine new cash with already-sold positions.
+                src = "recon_snapshot_" + skip_reason
         elif sym in yf_map:
             r = yf_map[sym]
             ccy = (str(r.get("currency") or "EUR").upper() or "EUR")
@@ -8263,13 +8355,15 @@ def _ag1_attach_fx_breakdown(conn, df):
         for row in conn.execute(
             "SELECT UPPER(symbol), UPPER(COALESCE(currency,'EUR')), CAST(fx_rate AS DOUBLE), "
             "CAST(avg_cost_eur AS DOUBLE), CAST(last_price_eur AS DOUBLE), "
-            "CAST(market_value_eur AS DOUBLE), CAST(unrealized_pnl_eur AS DOUBLE) "
+            "CAST(market_value_eur AS DOUBLE), CAST(unrealized_pnl_eur AS DOUBLE), "
+            "CAST(quantity AS DOUBLE), updated_at "
             "FROM portfolio_positions_ibkr_latest"
         ).fetchall():
             ibkr[str(row[0]).upper()] = {
                 "ccy": row[1] or "EUR", "r1": (float(row[2]) if row[2] else 1.0) or 1.0,
                 "avg_eur": float(row[3] or 0.0), "last_eur": float(row[4] or 0.0),
                 "mv_eur": float(row[5] or 0.0), "up_eur": float(row[6] or 0.0),
+                "quantity": float(row[7] or 0.0), "updated_at": row[8],
             }
     except Exception:
         ibkr = {}
@@ -8322,7 +8416,17 @@ def _ag1_attach_fx_breakdown(conn, df):
             out.at[idx, "perf_prix_pct"] = ((last_eur / avg_eur - 1.0) * 100.0) if avg_eur else 0.0
             continue
         ccy = meta["ccy"]; r1 = meta["r1"] or 1.0
-        avg_eur = meta["avg_eur"]; last_eur = meta["last_eur"]; mv_eur = meta["mv_eur"]; up_eur = meta["up_eur"]
+        live_values_coherent, _ = _ag1_ibkr_row_is_coherent_with_snapshot(out.loc[idx], meta)
+        if live_values_coherent:
+            avg_eur = meta["avg_eur"]; last_eur = meta["last_eur"]
+            mv_eur = meta["mv_eur"]; up_eur = meta["up_eur"]
+        else:
+            # Currency/rate metadata remain useful, but monetary values must stay
+            # tied to the newer post-trade positions snapshot.
+            avg_eur = safe_float(out.at[idx, "avgprice"])
+            last_eur = safe_float(out.at[idx, "lastprice"])
+            mv_eur = safe_float(out.at[idx, "marketvalue"])
+            up_eur = safe_float(out.at[idx, "unrealizedpnl"])
         avg_loc = avg_eur / r1 if r1 else avg_eur
         last_loc = last_eur / r1 if r1 else last_eur
         mktval_loc = mv_eur / r1 if r1 else mv_eur
@@ -9536,26 +9640,7 @@ def load_ag1_v4_consensus_trace(db_path: str, db_sig: tuple[str, float, int]) ->
 # MAIN APP
 # ============================================================
 
-st.sidebar.title("TradingSim AI")
-NAV_GROUPS = {
-    "Commun": [
-        "System Health (Monitoring)",
-        "Contexte global",
-        "Vue consolidee Multi-Agents",
-        "Macro & News (AG4)",
-    ],
-    "Actions": [
-        "Dashboard Trading",
-        "Analyse Technique V2",
-        "Analyse Fondamentale V2",
-    ],
-    "Forex": [
-        "Dashboard Forex",
-        "Three Pillars Monitor",
-    ],
-}
-nav_group = st.sidebar.radio("Univers", list(NAV_GROUPS.keys()), horizontal=True, index=1)
-page = st.sidebar.radio("Page", NAV_GROUPS[nav_group])
+nav_group, page = render_sidebar_navigation()
 
 # Signatures fichiers DuckDB (invalidation cache basee sur mtime/size)
 ag1_db_sig = duckdb_file_signature(AG1_DUCKDB_PATH)
@@ -12293,7 +12378,8 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 
 if page == "Dashboard Trading":
-    st.title("AI Trading Executor Dashboard")
+    st.title("Portefeuille actions")
+    st.caption("Performance, positions, décisions multi-modèles et exposition du compte réel.")
     _render_fx_ibkr_session_status(_load_ibkr_currency_balances(IBKR_BROKER_URL))
 
     ag1_multi: dict[str, dict[str, object]] = {}
@@ -14149,7 +14235,8 @@ if page == "Dashboard Trading":
 # ============================================================
 
 elif page == "System Health (Monitoring)":
-    st.title("System Health — couverture et tradabilité AG1")
+    st.title("État du système")
+    st.caption("Verdict opérationnel, couverture des données et tradabilité du portefeuille actions.")
     st.caption(
         "Vue opérationnelle : état du système, couverture durable de l'univers et pré-éligibilité des symboles "
         "aux entrées AG1. Les contrôles IBKR de contrat, permissions et liquidité restent exécutés au moment de l'ordre."
@@ -15317,6 +15404,7 @@ elif page == "Contexte global":
             global_path=GLOBAL_CONTEXT_DUCKDB_PATH,
             world_path=WORLD_MONITOR_DUCKDB_PATH,
             macro_path=MACRO_DUCKDB_PATH,
+            ag1_path=AG1_V4_CONSENSUS_DUCKDB_PATH,
         )
     except ImportError as exc:
         st.error(f"Module Contexte global non disponible: {exc}")
@@ -15324,7 +15412,8 @@ elif page == "Contexte global":
         st.error(f"Erreur Contexte global: {exc}")
 
 elif page == "Vue consolidee Multi-Agents":
-    st.title("Vue consolidee AG2 + AG3 + AG4")
+    st.title("Décisions & opportunités")
+    st.caption("Lecture consolidée des signaux techniques, fondamentaux et actualités.")
 
     if st.button("Rafraichir", key="refresh_multi_agents"):
         load_data.clear()
@@ -17199,7 +17288,8 @@ elif page == "Vue consolidee Multi-Agents":
 # ============================================================
 
 elif page == "Macro & News (AG4)":
-    st.title("Macro & News (AG4)")
+    st.title("Macro & actualités")
+    st.caption("Régime de marché, thèmes dominants et nouvelles spécifiques aux valeurs.")
     st.caption("Vue macro AG4 + news par valeur AG4-SPE (normalisation robuste, scoring actionnable, observabilite pipeline).")
 
     ctrl_days, ctrl_limit = st.columns([1.2, 1.2], gap="medium")
@@ -17301,7 +17391,8 @@ elif page == "Macro & News (AG4)":
 # ============================================================
 
 elif page == "Analyse Technique V2":
-    st.title("Analyse Technique V2 (AG2)")
+    st.title("Analyse technique")
+    st.caption("Tendances, momentum, niveaux et effet du gate IA AG2 dans AG1.")
 
     if st.button("Rafraichir", key="refresh_v2"):
         load_data.clear()
@@ -17339,14 +17430,9 @@ elif page == "Analyse Technique V2":
             st.warning("Aucune donnee AG2 exploitable pour la vue d'ensemble.")
         else:
             run_meta = _ag2_latest_run_meta(df_runs, df_ov)
-            counts_all = _ag2_kpi_counts(df_ov)
+            _, operational = build_ag2_operational_scope(df_ov, df_univ)
 
-            latest_d1_ts = _latest_timestamp(df_ov, ["d1_ts", "workflow_ts", "workflow_date"])
-            latest_h1_ts = _latest_timestamp(df_ov, ["h1_ts", "workflow_ts", "workflow_date"])
             latest_workflow_ts = _latest_timestamp(df_ov, ["workflow_ts", "workflow_date"])
-            age_d1_h = _ag2_age_hours(latest_d1_ts)
-            age_h1_h = _ag2_age_hours(latest_h1_ts)
-            age_workflow_h = _ag2_age_hours(latest_workflow_ts)
 
             missing_core_mask = pd.Series(False, index=df_ov.index)
             for col in ["symbol", "d1_action_norm", "d1_score_num"]:
@@ -17359,18 +17445,21 @@ elif page == "Analyse Technique V2":
                     missing_core_mask = missing_core_mask | df_ov[col].astype(str).str.strip().eq("")
             missing_core_pct = float(missing_core_mask.mean() * 100.0) if len(df_ov) else 100.0
 
+            rotation_count = int(operational["rotation_active"])
+            tech_ready_count = int(operational["tech_ready"])
+            tech_coverage_pct = (100.0 * tech_ready_count / rotation_count) if rotation_count else 0.0
+
             status_level = "OK"
             status_reasons = []
             if len(df_ov) == 0:
                 status_level = "ERROR"
                 status_reasons.append("table vide")
-            if age_d1_h is None and age_h1_h is None:
+            if rotation_count == 0:
                 status_level = "ERROR"
-                status_reasons.append("dates H1/D1 indisponibles")
-            elif (age_d1_h is not None and age_d1_h > 36.0) or (age_h1_h is not None and age_h1_h > 24.0):
-                if status_level != "ERROR":
-                    status_level = "WARN"
-                status_reasons.append(f"fraicheur D1/H1 ({_ag2_fmt_age(age_d1_h)} / {_ag2_fmt_age(age_h1_h)})")
+                status_reasons.append("aucune rotation AG2 active")
+            elif tech_coverage_pct < 80.0:
+                status_level = "WARN"
+                status_reasons.append(f"couverture technique AG1 {tech_coverage_pct:.0f}%")
             if missing_core_pct > 25.0:
                 if status_level != "ERROR":
                     status_level = "WARN"
@@ -17399,41 +17488,27 @@ elif page == "Analyse Technique V2":
                     unsafe_allow_html=True,
                 )
                 c_run3.metric(
-                    "Freshness D1",
-                    _ag2_fmt_age(age_d1_h),
-                    _freshness_label_from_age(age_d1_h if age_d1_h is not None else pd.NA, 36.0, 96.0) if age_d1_h is not None else "Manquant",
+                    "Couverture technique AG1",
+                    f"{tech_coverage_pct:.1f}%" if rotation_count else "—",
+                    f"{tech_ready_count}/{rotation_count} en rotation",
                     delta_color="off",
                 )
                 c_run4.markdown(
                     (
-                        f"**Barres H1**: {_ag2_fmt_age(age_h1_h)}  \n"
-                        f"**Scan AG2**: {_ag2_fmt_age(age_workflow_h)}  \n"
-                        f"**Nulls coeur**: {missing_core_pct:.0f}%"
+                        f"**Âge H1 P50 / P90**: {_ag2_fmt_age(operational['h1_age_p50'])} / {_ag2_fmt_age(operational['h1_age_p90'])}  \n"
+                        f"**Âge D1 P50 / P90**: {_ag2_fmt_age(operational['d1_age_p50'])} / {_ag2_fmt_age(operational['d1_age_p90'])}  \n"
+                        f"**Bloquées par le contrat tech**: {operational['tech_blocked']}"
                     )
                     + (f"  \n**Notes**: {', '.join(status_reasons[:2])}" if status_reasons else "")
                 )
 
-            buy_count = counts_all["buy_count"]
-            sell_count = counts_all["sell_count"]
-            neutral_count = counts_all["neutral_count"]
-            total_symbols = counts_all["total_symbols"]
-            actionable_count = counts_all["actionable_count"]
-            ai_calls = counts_all["ai_calls"]
-            ai_approvals = counts_all["ai_approvals"]
-
-            approval_rate_txt = _ag2_ratio_text(ai_approvals, ai_calls)
-            buy_ratio_txt = _ag2_ratio_text(buy_count, actionable_count, suffix=" actionable")
-            sell_ratio_txt = _ag2_ratio_text(sell_count, actionable_count, suffix=" actionable")
-            neutral_ratio_txt = _ag2_ratio_text(neutral_count, total_symbols, suffix=" total")
-            ai_call_cov_txt = _ag2_ratio_text(ai_calls, total_symbols, suffix=" total")
-
             kc1, kc2, kc3, kc4, kc5, kc6 = st.columns(6)
-            kc1.metric("Symboles analyses", total_symbols, _ag2_delta_text(total_symbols, run_meta.get("prev_total"), digits=0), delta_color="off")
-            kc2.metric("BUY", buy_count, buy_ratio_txt, delta_color="off")
-            kc3.metric("SELL", sell_count, sell_ratio_txt, delta_color="off")
-            kc4.metric("NEUTRAL", neutral_count, neutral_ratio_txt, delta_color="off")
-            kc5.metric("Appels IA", ai_calls, _ag2_delta_text(ai_calls, run_meta.get("prev_ai_calls"), digits=0) or ai_call_cov_txt, delta_color="off")
-            kc6.metric("IA approuves", ai_approvals, _ag2_delta_text(ai_approvals, run_meta.get("prev_ai_approvals"), digits=0) or f"Tx {approval_rate_txt}", delta_color="off")
+            kc1.metric("Univers configuré", operational["universe_total"], f"{operational['signals_latest']} avec historique AG2", delta_color="off")
+            kc2.metric("Rotation AG2 active", operational["rotation_active"], f"{operational['outside_rotation']} hors rotation", delta_color="off")
+            kc3.metric("Technique prête AG1", operational["tech_ready"], f"{tech_coverage_pct:.1f}% de la rotation", delta_color="off")
+            kc4.metric("Directions D1 fraîches", operational["directional_d1"], f"BUY {operational['directional_buy']} · SELL {operational['directional_sell']}", delta_color="off")
+            kc5.metric("Appels IA exploitables", operational["ai_calls_ready"], _ag2_ratio_text(operational["ai_calls_ready"], operational["tech_ready"], suffix=" tech prêtes"), delta_color="off")
+            kc6.metric("APPROVE IA frais", operational["ai_approve_ready"], _ag2_ratio_text(operational["ai_approve_ready"], operational["ai_calls_ready"], suffix=" appels"), delta_color="off")
 
             with st.container(border=True):
                 st.markdown("#### Filtres rapides & scope")
@@ -17451,7 +17526,7 @@ elif page == "Analyse Technique V2":
                 graphs_scope = f5.radio("Scope graphes", ["All", "Filtered"], key="ag2_v3_scope_graphs")
 
                 f6, f7, f8, f9, f10 = st.columns([1.2, 1.3, 1.6, 1.3, 1.0])
-                only_actionable = f6.toggle("Only actionable", value=False, key="ag2_v3_f_only_actionable")
+                only_actionable = f6.toggle("Seulement BUY/SELL D1 bruts", value=False, key="ag2_v3_f_only_actionable")
                 only_divergences = f7.toggle("Only divergences", value=False, key="ag2_v3_f_only_div")
                 include_neutral_div = f8.toggle("Inclure div. NEUTRAL", value=False, key="ag2_v3_f_div_neutral")
                 show_advanced_cols = f9.toggle("Colonnes avancees", value=False, key="ag2_v3_f_cols_adv")
@@ -17459,7 +17534,7 @@ elif page == "Analyse Technique V2":
 
                 ai_quality_valid = pd.to_numeric(df_ov.get("ai_quality_num", pd.Series(pd.NA, index=df_ov.index)), errors="coerce").dropna()
                 max_quality = float(max(10.0, ai_quality_valid.max())) if not ai_quality_valid.empty else 10.0
-                quality_min = st.slider("Qualite IA min", 0.0, float(max_quality), 0.0, 0.5, key="ag2_v3_f_quality_min")
+                quality_min = st.slider("Score de setup IA min", 0.0, float(max_quality), 0.0, 0.5, key="ag2_v3_f_quality_min")
 
                 d1_score_valid = pd.to_numeric(df_ov.get("d1_score_num", pd.Series(pd.NA, index=df_ov.index)), errors="coerce").dropna()
                 if not d1_score_valid.empty:
@@ -17503,7 +17578,9 @@ elif page == "Analyse Technique V2":
             counts_filtered = _ag2_kpi_counts(df_filtered)
             st.caption(
                 f"Graphes={graphs_scope} | Filtre: {len(df_filtered)}/{len(df_ov)} lignes | "
-                f"Actionables(scope)={counts_scope['actionable_count']} | Tx approb IA(scope)={_ag2_ratio_text(counts_scope['ai_approvals'], counts_scope['ai_calls'])}"
+                f"Directions D1 BUY/SELL brutes(scope)={counts_scope['actionable_count']} | "
+                f"APPROVE/appels dernière ligne(scope)={_ag2_ratio_text(counts_scope['ai_approvals'], counts_scope['ai_calls'])}. "
+                "Les filtres n'affectent pas le funnel opérationnel ci-dessous."
             )
 
             g1, g2, g3 = st.columns(3, gap="large")
@@ -17543,28 +17620,38 @@ elif page == "Analyse Technique V2":
             qleft, qright = st.columns(2, gap="large")
             with qleft:
                 with st.container(border=True):
-                    st.markdown("#### Funnel IA & qualite")
+                    st.markdown("#### Funnel opérationnel AG2 → AG1")
                     st.plotly_chart(
-                        _ag2_funnel_figure(
-                            counts_scope["total_symbols"],
-                            counts_scope["actionable_count"],
-                            counts_scope["ai_calls"],
-                            counts_scope["ai_approvals"],
-                        ),
+                        _ag2_funnel_figure(operational),
                         use_container_width=True,
                         config={"displayModeBar": False},
                     )
-                    ai_quality_scope = pd.to_numeric(df_scope.get("ai_quality_num", pd.Series(pd.NA, index=df_scope.index)), errors="coerce")
-                    ai_quality_scope = ai_quality_scope[ai_quality_scope.notna() & (ai_quality_scope > 0)]
-                    ai_dec_scope = df_scope.get("ai_decision_norm", pd.Series("—", index=df_scope.index)).astype(str)
                     q1, q2, q3, q4 = st.columns(4)
-                    q1.metric("% qualite IA", _ag2_ratio_text(int(ai_quality_scope.shape[0]), len(df_scope)), delta_color="off")
-                    q2.metric("Qualite IA moy", f"{float(ai_quality_scope.mean()):.1f}/10" if not ai_quality_scope.empty else "—", delta_color="off")
-                    q3.metric("% REJECT", _ag2_ratio_text(int(ai_dec_scope.eq("REJECT").sum()), len(df_scope)), delta_color="off")
-                    q4.metric("% SKIP", _ag2_ratio_text(int(ai_dec_scope.eq("SKIP").sum()), len(df_scope)), delta_color="off")
+                    q1.metric(
+                        "Couverture appels IA",
+                        _ag2_ratio_text(operational["ai_calls_ready"], operational["tech_ready"]),
+                        delta_color="off",
+                    )
+                    q2.metric(
+                        "Score setup moyen",
+                        f"{operational['ai_quality_ready_mean']:.1f}/10" if operational["ai_quality_ready_mean"] is not None else "—",
+                        delta_color="off",
+                    )
+                    q3.metric(
+                        "REJECT / appels",
+                        _ag2_ratio_text(operational["ai_reject_ready"], operational["ai_calls_ready"]),
+                        delta_color="off",
+                    )
+                    q4.metric(
+                        "APPROVE / appels",
+                        _ag2_ratio_text(operational["ai_approve_ready"], operational["ai_calls_ready"]),
+                        delta_color="off",
+                    )
                     st.caption(
-                        f"Freshness H1={_ag2_fmt_age(age_h1_h)} | D1={_ag2_fmt_age(age_d1_h)} | "
-                        f"Status={status_level}"
+                        "Scope global, indépendant des filtres. « Technique prête AG1 » = rotation active, hors quarantaine, "
+                        "H1/D1 OK, bougies clôturées et âge effectif ≤96 h. « Non bloquée par l’IA » = décision différente "
+                        "de REJECT : APPROVE n’est pas requis par AG1, SKIP/absence d’appel reste neutre. Le score de setup "
+                        "mesure l’intérêt du signal, pas la fiabilité du modèle."
                     )
             with qright:
                 with st.container(border=True):
@@ -17930,7 +18017,8 @@ elif page == "Analyse Technique V2":
 # PAGE 4: ANALYSE FONDAMENTALE V2
 # ================================================================
 elif page == "Analyse Fondamentale V2":
-    st.title("Analyse Fondamentale V2 (AG3)")
+    st.title("Analyse fondamentale")
+    st.caption("Qualité, valorisation, croissance et consensus analystes issus d’AG3.")
 
     if st.button("Rafraichir", key="refresh_funda_v2"):
         load_data.clear()
@@ -18496,7 +18584,8 @@ elif page == "Analyse Fondamentale V2":
 # Page unifiee: indicateurs, analyse, portefeuille AG1-FX, P&L et sources.
 # ============================================================
 elif page == "Dashboard Forex":
-    st.title("Dashboard Forex")
+    st.title("Portefeuille Forex")
+    st.caption("Suivi comparatif des stratégies Forex — exécution actuellement désactivée.")
     st.caption("Vue comparative AG1-FX inspiree du Dashboard Trading actions : 3 LLM, performance, risque, activite et paires a surveiller.")
 
     fx_payloads = _load_ag1_fx_dashboard_payloads()

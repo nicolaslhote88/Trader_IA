@@ -5,9 +5,9 @@
 Les trois artefacts publiables sont générés depuis `nodes/` par les builders :
 
 - `AG2-V3-Technical-Held-Core.workflow.json` — segments HELD + CORE, 09/13/15 h Paris,
-  validation IA `deepseek-v4-pro` ;
+  validation IA `deepseek-v4-flash` ;
 - `AG2-V3-Technical-Watchlist-Nightly.workflow.json` — WATCHLIST, 22/02 h Paris,
-  validation IA `deepseek-v4-pro` ;
+  validation IA `deepseek-v4-flash` ;
 - `AG2-Universe-Health-Quarantine.workflow.json` — audit de l'univers, 20 h Paris.
 
 Le code des nœuds est la source canonique. Les builders utilisent des UUID v5 et doivent
@@ -39,6 +39,17 @@ demi-séances sont volontairement traitées au close régulier (retard conservat
 jamais d'admission anticipée). Les OHLC non positifs/incohérents et volumes
 négatifs sont rejetés avant calcul. La volatilité annualisée utilise la durée de
 session de la place ; crypto utilise 365 jours et 24 h/jour.
+
+Depuis le correctif live du 2026-08-06, la fenêtre courte de fraîcheur H1
+utilisée pour décider un nouvel appel LLM est distincte de l'utilisabilité du
+signal par AG1. Une barre close âgée de plus de 3 h pendant la fenêtre UTC
+historique devient `SOFT_STALE` : le LLM n'est pas rappelé, mais le résultat
+d'indicateurs conserve `status=OK`. Seul un âge effectif supérieur à 96 h
+produit le statut dur `STALE`, conformément à R8 et au dashboard.
+
+La réparation auditée `outils/scripts/repair_ag2_soft_stale_status.py` a remis
+à `OK` 165 dernières lignes qui respectaient déjà le contrat close + âge ≤96 h.
+Elle est dry-run par défaut et fournit `--apply` ainsi que `--rollback`.
 
 Le schema DuckDB conserve les sorties utiles a AG1 :
 

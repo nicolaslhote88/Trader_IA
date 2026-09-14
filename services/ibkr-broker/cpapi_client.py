@@ -140,6 +140,22 @@ class CPAPIClient:
     async def get_contract_info(self, conid: int) -> dict:
         return await self._get(f"/v1/api/iserver/contract/{conid}/info")
 
+    async def get_contract_rules(
+        self,
+        conid: int,
+        exchange: str = "SMART",
+        is_buy: bool = True,
+    ) -> dict:
+        """Return the authoritative trading increments for one contract/side."""
+        return await self._post(
+            "/v1/api/iserver/contract/rules",
+            {
+                "conid": int(conid),
+                "exchange": str(exchange or "SMART").strip().upper() or "SMART",
+                "isBuy": bool(is_buy),
+            },
+        )
+
     async def marketdata_snapshot(self, conids: list[int], fields: str = "") -> list[dict]:
         params = {"conids": ",".join(str(c) for c in conids)}
         if fields:

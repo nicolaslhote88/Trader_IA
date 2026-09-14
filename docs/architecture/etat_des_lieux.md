@@ -100,7 +100,7 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
 
 ### 3.2 AG2-V3 — pilier technique
 - Source : `yfinance-api` (H1/D1), indicateurs + validation
-  `deepseek-v4-pro` (verdict `ai_decision`/`ai_quality`/`ai_rr_theoretical`),
+  `deepseek-v4-flash` (verdict `ai_decision`/`ai_quality`/`ai_rr_theoretical`),
   base **`ag2_v3.duckdb`** — écrite par AG2, lue par AG3/AG4/AG1/dashboard.
 - Split live : `AG2-V3 — Technical Held+Core` (9/13/15h Paris L-V, ~23-32 min) et `AG2-V3 — Technical Watchlist Nightly` (22h/02h, 40 symboles/slot → cycle ~3,5 j).
 - **Hybride AG2→AG1 (19/06)** : AG1 consomme le verdict AG2 — REJECT = filtre dur sur « Entrer/Renforcer », APPROVE/WATCH pondérés par qualité, SKIP neutre.
@@ -108,6 +108,11 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
   corrigée le 06/08. Le run manuel post-correction Held+Core `20812` a traité 27/27 symboles,
   avancé `0 → 18`, et 538/563 derniers signaux avaient alors des âges H1/D1
   stockés ≤96 h.
+- Le même jour, la règle H1 globale de 3 h a été découplée du statut technique :
+  elle ne sert plus qu'à éviter un rappel LLM (`SOFT_STALE`). Le gate dur reste
+  H1/D1 ≤96 h. La réparation de 165 dernières lignes a porté le funnel live à
+  184 techniques prêtes et 163 pré-tradables, sans modification d'AG1, du
+  broker ou des gardes d'ordre.
 
 ### 3.3 AG3-V2 — pilier fondamental
 - **Source unique yfinance, zéro LLM.** Base `ag3_v2.duckdb` (3,4 Go) : `fundamentals_snapshot`, `analyst_consensus_history`, triage.
@@ -124,8 +129,8 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
   - Volumes 7 j au 02/07 : finnhub 1 457, ibkr 350, boursorama 69 valides.
     Les 235 dates futures observées ce jour-là ont été réparées et les parseurs
     ISO/clamp corrigés le 02/07.
-- Depuis le 30/07, les trois analyses par valeur Boursorama/IBKR/Finnhub
-  utilisent `deepseek-v4-pro` avec chaîne LangChain et parseur structuré. Les
+- Depuis le 10/08, les trois analyses par valeur Boursorama/IBKR/Finnhub
+  utilisent `deepseek-v4-flash` avec chaîne LangChain et parseur structuré. Les
   collecteurs, crons, déduplication et schémas DuckDB sont inchangés.
 - **D2** : node `20K — News Digest` injecte dans l'`opportunity_pack` d'AG1 les news ≤14 j (top 3/symbole + `held_news`). `AG4_Spé — Health Alert` (16:30 Paris) alerte Telegram si pipeline stale.
 
@@ -157,9 +162,12 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
 ### 3.7 Dashboard Streamlit (V4-only, 8501)
 - Lit les DuckDB (+ yfinance pour certains graphes) ; **réimplémente** le scoring/gates d'AG1 (matrice « Vue consolidée », funnel « System Health ») — **parité obligatoire**, voir `docs/operations/SYSTEM_LINKS_AND_PARITY.md` (source de vérité, à consulter avant toute modif scoring/gates/seuils de fraîcheur).
 - Le dashboard montre l'étape **décision matrice**, PAS le preflight IBKR (étape exécution, verdict au moment de l'ordre).
-- La version live `/opt/trading-dashboard/app/app.py` a été resynchronisée dans
-  `services/dashboard/app.py`. La règle de parité reste obligatoire pour tout
-  changement de scoring, gate ou fraîcheur.
+- La version live est resynchronisée dans `services/dashboard/`. Le chemin hôte
+  monté sur `/app` doit être lu dans `docker inspect root-trading-dashboard-1` ;
+  au 10/08 il s'agit de
+  `/opt/trader-ia/releases/ag5-ag8-global-context-20260805/services/dashboard`.
+  La règle de parité reste obligatoire pour tout changement de scoring, gate
+  ou fraîcheur.
 
 ### 3.8 Forex — trading gelé
 Les workflows de trading AG1-FX/AG2-FX/AG3-FX/AG4-FX restent inactifs et
@@ -250,7 +258,7 @@ idempotence des approbations expirées et divergence dashboard.
 ## 8. Renvois documentaires
 
 - Index : `../README.md`.
-- Opérations : `SCHEDULING_AND_LOAD.md` (crons — source de vérité), `SYSTEM_LINKS_AND_PARITY.md` (parité dashboard↔AG1 — source de vérité), `deploy.md`, `env_vars.md`, `ibkr_execution.md`, `vps-access.md`, `runbook_n8n_investigation.md`, `order_approval_deploy_notes.md`, `20260806_ag5_ag8_data_quality_remediation.md`, `20260806_ag2_batch_rotation_cursor_fix.md`.
+- Opérations : `SCHEDULING_AND_LOAD.md` (crons — source de vérité), `SYSTEM_LINKS_AND_PARITY.md` (parité dashboard↔AG1 — source de vérité), `deploy.md`, `env_vars.md`, `ibkr_execution.md`, `vps-access.md`, `runbook_n8n_investigation.md`, `order_approval_deploy_notes.md`, `20260806_ag5_ag8_data_quality_remediation.md`, `20260806_ag2_batch_rotation_cursor_fix.md`, `20260806_ag2_h1_soft_stale_fix.md`.
 - Audits : `20260702_audit_complet_projet.md` (ce jour), `20260622_ag3_v2_analysis.md`, `20260619_ag2_v3_analyse_pertinence_efficience.md`, `20260617_ag4_spe_v2_analysis.md`, `20260617_ag4_v3_news_watcher_audit.md`.
 - Specs : `ag1_v4_consensus_actions.md`, `ag1_v4_d2_news_digest.md`, `ag4_spe_v3_ibkr_news.md`, `ag1_v4_order_approval_notification_v1.md`.
 - Déploiements 06/2026 : notes `20260619_*` (hybride AG2, quarantaine, split rotation), `20260622_*` (AG3 split + STALE_FUNDA), `20260624_*` (expansion +100, Finnhub, durcissement AG2HC, auth quotidienne assistée).

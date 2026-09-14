@@ -62,6 +62,38 @@ def norm_symbol(symbol: Any) -> str:
     return str(symbol or "").strip().upper()
 
 
+IBKR_SYMBOL_BY_CONID: dict[int, str] = {}
+
+
+EXCHANGE_SUFFIX_BY_LISTING = {
+    "AEB": ".AS",
+    "AMS": ".AS",
+    "SBF": ".PA",
+    "EUDARK": ".PA",
+    "ENEXT": ".PA",
+    "PARIS": ".PA",
+    "IBIS": ".DE",
+    "XETRA": ".DE",
+    "LSE": ".L",
+    "EBS": ".SW",
+}
+
+
+def row_conid(row: dict[str, Any]) -> int | None:
+    try:
+        value = row.get("conid") or row.get("conidEx")
+        return int(str(value).split("@", 1)[0]) if value not in (None, "") else None
+    except Exception:
+        return None
+
+
+def symbol_from_listing(symbol: str, listing: str) -> str:
+    if not symbol or "." in symbol:
+        return symbol
+    suffix = EXCHANGE_SUFFIX_BY_LISTING.get(norm_symbol(listing))
+    return symbol + suffix if suffix else symbol
+
+
 def ibkr_internal_symbol(row: dict[str, Any]) -> str:
     symbol = norm_symbol(
         row.get("symbol")
@@ -72,14 +104,13 @@ def ibkr_internal_symbol(row: dict[str, Any]) -> str:
     )
     if not symbol:
         return ""
-    sec_type = norm_symbol(row.get("sec_type") or row.get("assetClass") or row.get("secType"))
+    if "." in symbol:
+        return symbol
+    conid = row_conid(row)
+    if conid is not None and conid in IBKR_SYMBOL_BY_CONID:
+        return IBKR_SYMBOL_BY_CONID[conid]
     listing = norm_symbol(row.get("listing_exchange") or row.get("listingExchange") or row.get("exchange"))
-    currency = norm_symbol(row.get("currency"))
-    if sec_type == "STK" and currency == "EUR" and (
-        listing in {"", "SBF", "EUDARK", "ENEXT", "PARIS"} or not listing
-    ):
-        return symbol if symbol.endswith(".PA") else f"{symbol}.PA"
-    return symbol
+    return symbol_from_listing(symbol, listing)
 
 
 def parse_ibkr_trade_time(row: dict[str, Any]) -> str:
@@ -140,20 +171,39 @@ def position_price_eur(row: dict[str, Any], rates: dict[str, float]) -> float:
     return position_market_value_eur(row, rates) / qty
 
 
-def fill_price_eur(row: dict[str, Any], rates: dict[str, float]) -> float:
+def fill_currency(row):
     ccy = norm_symbol(row.get("currency"))
-    # /fills often omits currency for STK rows; use the listing/symbol defaults.
-    if not ccy:
-        listing = norm_symbol(row.get("listing_exchange") or row.get("listingExchange") or row.get("exchange"))
-        ccy = "EUR" if listing in {"SBF", "EUDARK"} else "USD"
-    return parse_float(row.get("price"), 0.0) * rates.get(ccy, 1.0)
-
-
-def commission_eur(row: dict[str, Any], rates: dict[str, float]) -> float:
-    amount = abs(parse_float(row.get("commission"), 0.0))
+    if ccy:
+        return ccy
     listing = norm_symbol(row.get("listing_exchange") or row.get("listingExchange") or row.get("exchange"))
-    ccy = norm_symbol(row.get("currency")) or ("EUR" if listing in {"SBF", "EUDARK"} else "USD")
-    return amount * rates.get(ccy, 1.0)
+    currencies = {
+        "SBF": "EUR", "EUDARK": "EUR", "ENEXT": "EUR", "PARIS": "EUR",
+        "AEB": "EUR", "ENEXT.BE": "EUR", "BVME": "EUR", "IBIS": "EUR", "IBIS2": "EUR",
+        "NASDAQ": "USD", "NASDAQ.NMS": "USD", "NYSE": "USD", "AMEX": "USD", "ARCA": "USD", "BATS": "USD",
+        "LSE": "GBP", "EBS": "CHF", "SIX": "CHF", "TSE": "CAD", "VENTURE": "CAD",
+        "SEHK": "HKD", "TSEJ": "JPY", "ASX": "AUD", "SGX": "SGD",
+    }
+    if listing not in currencies:
+        raise ValueError("IBKR_FILL_CURRENCY_UNRESOLVED:" + listing)
+    return currencies[listing]
+
+
+def fill_fx_rate(row, rates):
+    ccy = fill_currency(row)
+    rate = 1.0 if ccy == "EUR" else parse_float(rates.get(ccy), 0.0)
+    if rate <= 0:
+        raise ValueError("IBKR_FILL_FX_RATE_UNAVAILABLE:" + ccy)
+    return rate
+
+
+def fill_price_eur(row, rates):
+    return parse_float(row.get("price"), 0.0) * fill_fx_rate(row, rates)
+
+
+def commission_eur(row, rates):
+    fee_row = dict(row)
+    fee_row["currency"] = row.get("commission_currency") or row.get("commissionCurrency") or fill_currency(row)
+    return abs(parse_float(row.get("commission"), 0.0)) * fill_fx_rate(fee_row, rates)
 
 
 def fetch_existing_orders(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]]:
@@ -172,6 +222,79 @@ def fetch_existing_orders(con: duckdb.DuckDBPyConnection) -> list[dict[str, Any]
     rows = con.execute(f"SELECT {', '.join(cols)} FROM core.orders").fetchall()
     names = [d[0] for d in con.description]
     return [dict(zip(names, row)) for row in rows]
+
+
+def _fill_payload(raw_value: Any) -> dict[str, Any]:
+    value = raw_value
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return {}
+    if not isinstance(value, dict):
+        return {}
+    nested = value.get("ibkrFill")
+    return nested if isinstance(nested, dict) else value
+
+
+def build_conid_symbol_map(
+    con: duckdb.DuckDBPyConnection,
+    ibkr_fills: list[dict[str, Any]],
+) -> tuple[dict[int, str], dict[str, list[str]]]:
+    candidates: dict[int, set[str]] = {}
+
+    def add(conid: Any, symbol: Any) -> None:
+        try:
+            cid = int(str(conid).split("@", 1)[0])
+        except Exception:
+            return
+        sym = norm_symbol(symbol)
+        if cid > 0 and sym:
+            candidates.setdefault(cid, set()).add(sym)
+
+    try:
+        rows = con.execute(
+            """
+            SELECT o.symbol, CAST(f.raw_fill_json AS VARCHAR)
+            FROM core.fills f
+            JOIN core.orders o ON o.order_id = f.order_id
+            WHERE o.symbol IS NOT NULL AND f.raw_fill_json IS NOT NULL
+            """
+        ).fetchall()
+        for symbol, raw_fill in rows:
+            payload = _fill_payload(raw_fill)
+            add(payload.get("conid") or payload.get("conidEx"), symbol)
+    except Exception:
+        pass
+
+    orders = fetch_existing_orders(con)
+    by_broker_order = {
+        str(order.get("broker_order_id") or "").strip(): norm_symbol(order.get("symbol"))
+        for order in orders
+        if str(order.get("broker_order_id") or "").strip() and norm_symbol(order.get("symbol"))
+    }
+    for fill in ibkr_fills:
+        if not isinstance(fill, dict):
+            continue
+        canonical = by_broker_order.get(str(fill.get("order_id") or "").strip())
+        if not canonical:
+            order_ref = str(fill.get("order_ref") or "").strip()
+            if order_ref:
+                for order in orders:
+                    if order_ref in str(order.get("rationale_json") or ""):
+                        canonical = norm_symbol(order.get("symbol"))
+                        break
+        if canonical:
+            add(fill.get("conid") or fill.get("conidEx"), canonical)
+
+    resolved = {}
+    conflicts = {}
+    for conid, symbols in candidates.items():
+        if len(symbols) == 1:
+            resolved[conid] = next(iter(symbols))
+        else:
+            conflicts[str(conid)] = sorted(symbols)
+    return resolved, conflicts
 
 
 def fetch_existing_execution_ids(con: duckdb.DuckDBPyConnection) -> set[str]:
@@ -284,6 +407,9 @@ def build_missing_fills(
                 "side": side_from_ibkr(row),
                 "qty": parse_float(row.get("size"), 0.0),
                 "price": fill_price_eur(row, rates),
+                "currency": fill_currency(row),
+                "price_native": parse_float(row.get("price"), 0.0),
+                "fx_rate_eur": fill_fx_rate(row, rates),
                 "fees_eur": commission_eur(row, rates),
                 "ts_fill": parse_ibkr_trade_time(row),
                 "broker_execution_id": execution_id,
@@ -339,8 +465,8 @@ def insert_missing_fills(con: duckdb.DuckDBPyConnection, missing: list[dict[str,
     con.executemany(
         """
         INSERT INTO core.fills (
-          fill_id, order_id, run_id, ts_fill, qty, price, fees_eur, slippage_bps, liquidity, raw_fill_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+          fill_id, order_id, run_id, ts_fill, qty, price, fees_eur, slippage_bps, liquidity, raw_fill_json, currency, price_native, fx_rate_eur
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)
         ON CONFLICT (fill_id) DO NOTHING
         """,
         [
@@ -354,6 +480,7 @@ def insert_missing_fills(con: duckdb.DuckDBPyConnection, missing: list[dict[str,
                 row["fees_eur"],
                 "IBKR_IMPORTED",
                 json.dumps({"source": "ibkr_live_reconcile", "ibkrFill": row["raw"]}, ensure_ascii=False),
+                row["currency"], row["price_native"], row["fx_rate_eur"],
             ]
             for row in missing
         ],
@@ -651,6 +778,7 @@ def make_backup(db_path: str, backup_dir: str | None) -> str:
 
 
 def main(argv: list[str]) -> int:
+    global IBKR_SYMBOL_BY_CONID
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db-path", default=os.getenv("AG1_V4_DUCKDB_PATH", DEFAULT_DB_PATH))
     parser.add_argument("--broker-url", default=os.getenv("IBKR_BROKER_URL", DEFAULT_BROKER_URL))
@@ -677,6 +805,7 @@ def main(argv: list[str]) -> int:
 
     con = duckdb.connect(args.db_path, read_only=not args.apply)
     try:
+        IBKR_SYMBOL_BY_CONID, conid_symbol_conflicts = build_conid_symbol_map(con, fills)
         before = compare_positions(con, positions, ledger, rates)
         missing, unmatched = build_missing_fills(con, fills, rates)
         if len(missing) > args.max_missing_fills:
@@ -686,6 +815,8 @@ def main(argv: list[str]) -> int:
             "mode": "apply" if args.apply else "dry-run",
             "db_path": args.db_path,
             "broker_url": args.broker_url,
+            "conid_symbol_map_count": len(IBKR_SYMBOL_BY_CONID),
+            "conid_symbol_conflicts": conid_symbol_conflicts,
             "before": before,
             "missing_fills": [
                 {

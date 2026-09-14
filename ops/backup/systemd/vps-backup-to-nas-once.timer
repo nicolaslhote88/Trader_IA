@@ -1,0 +1,11 @@
+[Unit]
+Description=Premiere sauvegarde VPS vers NAS - 8 aout 2026 a 23h Paris
+
+[Timer]
+OnCalendar=2026-08-08 23:00:00 Europe/Paris
+AccuracySec=1min
+Persistent=true
+Unit=vps-backup-to-nas-once.service
+
+[Install]
+WantedBy=timers.target

@@ -2,11 +2,15 @@ import sys
 import textwrap
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
 def load_compute_functions():
-    sys.modules.setdefault("duckdb", types.ModuleType("duckdb"))
+    try:
+        __import__("duckdb")
+    except ImportError:
+        sys.modules.setdefault("duckdb", types.ModuleType("duckdb"))
     source_path = Path(__file__).resolve().parents[1] / "nodes" / "04_compute.py"
     source = source_path.read_text(encoding="utf-8").split("items = _items", 1)[0]
     namespace = {}
@@ -57,6 +61,30 @@ class ComputeClosedBarsTests(unittest.TestCase):
         self.assertEqual(365.0 * 24.0, periods("1h", "", "CRYPTO"))
         self.assertEqual(365.0, periods("1d", "", "CRYPTO"))
 
+    def test_intraday_ai_window_is_soft_but_96h_gate_is_hard(self):
+        check = FUNCS["check_freshness"]
+        now = datetime(2026, 8, 6, 11, 0, tzinfo=timezone.utc)
+
+        self.assertEqual(
+            (False, 4.0, "SOFT_STALE"),
+            check(now - timedelta(hours=4), "1h", now),
+        )
+        self.assertEqual(
+            (False, 15.0, "SOFT_STALE"),
+            check(now - timedelta(hours=15), "1h", now),
+        )
+        self.assertEqual(
+            (False, 97.0, "STALE"),
+            check(now - timedelta(hours=97), "1h", now),
+        )
+
+    def test_daily_96h_gate_is_unchanged(self):
+        check = FUNCS["check_freshness"]
+        now = datetime(2026, 8, 6, 11, 0, tzinfo=timezone.utc)
+
+        self.assertEqual((True, 95.0, "FRESH"), check(now - timedelta(hours=95), "1d", now))
+        self.assertEqual((False, 97.0, "STALE"), check(now - timedelta(hours=97), "1d", now))
+
     def test_node_runtime_uses_current_item_context(self):
         class FakeConnection:
             def execute(self, *_args, **_kwargs):
@@ -65,31 +93,39 @@ class ComputeClosedBarsTests(unittest.TestCase):
             def close(self):
                 return None
 
-        sys.modules["duckdb"].connect = lambda *_args, **_kwargs: FakeConnection()
+        duckdb_module = sys.modules["duckdb"]
+        old_connect = getattr(duckdb_module, "connect", None)
+        duckdb_module.connect = lambda *_args, **_kwargs: FakeConnection()
         source_path = Path(__file__).resolve().parents[1] / "nodes" / "04_compute.py"
         source = source_path.read_text(encoding="utf-8")
         wrapped = "def node_main(_items):\n" + textwrap.indent(source, "    ")
         namespace = {}
-        exec(compile(wrapped, str(source_path), "exec"), namespace)
+        try:
+            exec(compile(wrapped, str(source_path), "exec"), namespace)
 
-        payload = {
-            "run_id": "test_run",
-            "symbol": "AIR.PA",
-            "symbol_internal": "AIR.PA",
-            "symbol_yahoo": "AIR.PA",
-            "asset_class": "EQUITY",
-            "exchange": "Euronext Paris",
-            "currency": "EUR",
-            "batch_info": {
-                "start": 40,
-                "size": 1,
-                "state_key": "last_index_actions_watchlist",
-                "next_index": 80,
-            },
-            "h1_response": {"bars": [], "interval": "1h", "closedOnly": True},
-            "d1_response": {"bars": [], "interval": "1d", "closedOnly": True},
-        }
-        result = namespace["node_main"]([{"json": payload}])
+            payload = {
+                "run_id": "test_run",
+                "symbol": "AIR.PA",
+                "symbol_internal": "AIR.PA",
+                "symbol_yahoo": "AIR.PA",
+                "asset_class": "EQUITY",
+                "exchange": "Euronext Paris",
+                "currency": "EUR",
+                "batch_info": {
+                    "start": 40,
+                    "size": 1,
+                    "state_key": "last_index_actions_watchlist",
+                    "next_index": 80,
+                },
+                "h1_response": {"bars": [], "interval": "1h", "closedOnly": True},
+                "d1_response": {"bars": [], "interval": "1d", "closedOnly": True},
+            }
+            result = namespace["node_main"]([{"json": payload}])
+        finally:
+            if old_connect is None:
+                delattr(duckdb_module, "connect")
+            else:
+                duckdb_module.connect = old_connect
 
         self.assertEqual(1, len(result))
         self.assertEqual("ok", result[0]["json"]["_status"])

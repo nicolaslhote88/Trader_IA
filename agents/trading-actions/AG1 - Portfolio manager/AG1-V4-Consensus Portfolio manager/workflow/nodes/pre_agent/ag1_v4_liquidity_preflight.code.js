@@ -11,6 +11,8 @@ const maxSpreadPct = Number(input.config?.max_spread_pct ?? 1.5);
 const maxEntryQuoteDeviationPct = Number($env.AG1_LIQUIDITY_MAX_ENTRY_QUOTE_DEVIATION_PCT || 3);
 const maxQuoteAgeSeconds = Number($env.IBKR_PRICE_GUARD_MAX_QUOTE_AGE_SECONDS || 28800);
 const defaultWeightPct = Math.min(5, Number(input.config?.max_pos_pct ?? 25));
+const minOrderValueEUR = Number(input.config?.min_order_value_eur ?? input.config?.minOrderValueEUR ?? 1000);
+const maxPositionPct = Number(input.config?.max_pos_pct ?? input.config?.maxPositionPct ?? 25);
 // When the instantaneous bid/ask is unavailable (e.g. Euronext outside RTH, or a
 // momentary quoting gap) but the name is demonstrably liquid, treat the spread as
 // "unquoted" rather than "unknown" so a LIMIT entry is not hard-rejected. Reversible.
@@ -19,6 +21,8 @@ const allowUnquotedSpread = String($env.AG1_LIQUIDITY_ALLOW_UNQUOTED_SPREAD ?? "
 function isObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
 function normSymbol(v) { return String(v ?? "").trim().toUpperCase(); }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+function positive(v) { const n = num(v); return n !== null && n > 0 ? n : null; }
+function round4(v) { return v === null ? null : Math.round(v * 10000) / 10000; }
 function gateList(value) {
   return String(value || "").split("|").map((x) => x.trim()).filter((x) => x && x !== "OK");
 }
@@ -137,6 +141,8 @@ let ibkrSnapshotAttempts = 0;
 const ibkrHistoryMap = new Map();
 let ibkrHistoryAttempts = 0;
 const preflightWarnings = [];
+const fxRateToEUR = new Map([["EUR", 1]]);
+let accountLedgerLoaded = false;
 
 if (yahooSymbols.length) {
   try {
@@ -149,6 +155,40 @@ if (yahooSymbols.length) {
     resolution = await getJson(`${brokerUrl}/contracts/equity/resolve?symbols=${encodeURIComponent(internalSymbols.join(","))}`);
   } catch (err) {
     preflightWarnings.push(`IBKR_CONTRACT_PREFLIGHT_UNAVAILABLE:${err?.message || err}`);
+  }
+  try {
+    const ledger = await getJson(`${brokerUrl}/account/ledger`);
+    for (const [key, value] of Object.entries(isObj(ledger) ? ledger : {})) {
+      const currency = normSymbol(value?.currency || key);
+      const rate = positive(value?.exchangerate);
+      if (currency && currency !== "BASE" && rate !== null) fxRateToEUR.set(currency, rate);
+    }
+    accountLedgerLoaded = true;
+  } catch (err) {
+    preflightWarnings.push(`IBKR_ACCOUNT_LEDGER_UNAVAILABLE:${err?.message || err}`);
+  }
+
+  const missingCurrencies = Array.from(new Set(
+    (resolution.results || [])
+      .map((row) => normSymbol(row.currency))
+      .filter((currency) => currency && currency !== "EUR" && !fxRateToEUR.has(currency))
+  ));
+  if (missingCurrencies.length) {
+    try {
+      const pairs = missingCurrencies.map((currency) => `${currency}EUR`);
+      const response = await getJson(`${brokerUrl}/marketdata/fx/snapshot?pairs=${encodeURIComponent(pairs.join(","))}`);
+      for (const quote of (response?.quotes || [])) {
+        const pair = normSymbol(quote?.pair);
+        if (!pair.endsWith("EUR") || pair.length !== 6) continue;
+        const rate = positive(quote?.mid ?? quote?.last);
+        if (rate !== null) fxRateToEUR.set(pair.slice(0, 3), rate);
+      }
+      for (const error of (response?.errors || [])) {
+        preflightWarnings.push(`IBKR_FX_RATE_UNAVAILABLE:${error?.pair || "UNKNOWN"}:${error?.error || "UNKNOWN"}`);
+      }
+    } catch (err) {
+      preflightWarnings.push(`IBKR_FX_PREFLIGHT_UNAVAILABLE:${err?.message || err}`);
+    }
   }
   const conids = (resolution.results || []).map((row) => row.conid).filter((x) => x !== null && x !== undefined);
   if (conids.length) {
@@ -178,10 +218,17 @@ if (yahooSymbols.length) {
 }
 
 const quoteMap = new Map(quotes.map((q) => [normSymbol(q.symbol || q.resolvedSymbol), q]));
+const resolutionMap = new Map((resolution.results || []).map((r) => [normSymbol(r.symbol), r]));
 const conidMap = new Map((resolution.results || []).map((r) => [normSymbol(r.symbol), r.conid]));
 const unresolved = new Set((resolution.errors || []).map((r) => normSymbol(r.symbol)));
 const snapshotMap = new Map(ibkrSnapshots.map((r) => [String(r.conid), r]));
 const totalValue = num(input.portfolio_pack?.totalValueEUR ?? input.portfolioBrief?.totalValue) || 0;
+const cashEUR = num(input.portfolio_pack?.cashEUR ?? input.portfolioBrief?.cash) || 0;
+const positionMap = new Map(
+  (Array.isArray(input.portfolio_pack?.positions) ? input.portfolio_pack.positions : [])
+    .map((position) => [normSymbol(position?.symbol || position?.Symbol), position])
+    .filter(([symbol]) => Boolean(symbol))
+);
 const now = Date.now();
 
 for (const row of rows) {
@@ -189,7 +236,10 @@ for (const row of rows) {
   const symbol = normSymbol(row.symbol);
   const yahoo = normSymbol(row.symbol_yahoo || row.symbol);
   const quote = quoteMap.get(yahoo) || quoteMap.get(symbol) || {};
-  const conid = conidMap.get(symbol) ?? null;
+  const contract = resolutionMap.get(symbol) || {};
+  const conid = contract.conid ?? null;
+  const currency = normSymbol(contract.currency || row.currency || "EUR") || "EUR";
+  const fxRate = currency === "EUR" ? 1 : positive(fxRateToEUR.get(currency));
   const snapshot = conid !== null ? (snapshotMap.get(String(conid)) || {}) : {};
   const ibkrPrice = num(snapshot["31"] ?? snapshot.lastPrice ?? snapshot.price);
   const ibkrBid = num(snapshot["84"] ?? snapshot.bid);
@@ -200,6 +250,7 @@ for (const row of rows) {
   const ibkrHasHistoryPrice = ibkrHistoryPrice !== null && ibkrHistoryPrice > 0;
   const yahooPrice = num(quote.regularMarketPrice);
   const price = num((ibkrHasFreshPrice ? ibkrPrice : (ibkrHasHistoryPrice ? ibkrHistoryPrice : yahooPrice)) ?? row.entry);
+  const priceEUR = price !== null && price > 0 && fxRate !== null ? price * fxRate : null;
   const volume = num(quote.volume ?? row.volume);
   const spreadFromIbkr = ibkrBid !== null && ibkrAsk !== null && ibkrBid > 0 && ibkrAsk > 0
     ? ((ibkrAsk - ibkrBid) / ((ibkrAsk + ibkrBid) / 2)) * 100
@@ -211,7 +262,7 @@ for (const row of rows) {
       ? ibkrHistory.time
       : (quote.regularMarketTime || row.regular_market_time || quote.fetchedAt || row.quote_fetched_at || null));
   const quoteAgeMinutes = parseTime(quoteTime) === null ? null : Math.max(0, (now - parseTime(quoteTime)) / 60000);
-  const targetQty = totalValue > 0 && price > 0 ? Math.floor((totalValue * defaultWeightPct / 100) / price) : null;
+  const targetQty = totalValue > 0 && priceEUR > 0 ? Math.floor((totalValue * defaultWeightPct / 100) / priceEUR) : null;
   const orderVolumePct = targetQty !== null && volume > 0 ? targetQty / volume * 100 : null;
   const entry = num(row.entry);
   const priceDivergencePct = entry && price ? Math.abs(price - entry) / entry * 100 : null;
@@ -222,6 +273,34 @@ for (const row of rows) {
   const gates = new Set(gateList(row.gates).filter((g) => !STALE_LIQ.has(g)));
 
   if (unresolved.has(symbol) || conid === null) gates.add("IBKR_CONTRACT_UNRESOLVED");
+  if (currency !== "EUR" && fxRate === null) gates.add("FX_RATE_UNAVAILABLE");
+
+  const currentPosition = positionMap.get(symbol) || {};
+  const currentQty = Math.max(0, num(currentPosition.quantity ?? currentPosition.Quantity ?? currentPosition.qty) || 0);
+  const minAdditionalQty = priceEUR !== null && priceEUR > 0
+    ? Math.max(1, Math.ceil(minOrderValueEUR / priceEUR))
+    : null;
+  const minFinalQty = minAdditionalQty === null ? null : currentQty + minAdditionalQty;
+  const maxFinalQty = totalValue > 0 && priceEUR !== null && priceEUR > 0
+    ? Math.floor((totalValue * maxPositionPct / 100) / priceEUR)
+    : null;
+  const minTargetWeightPct = minFinalQty !== null && totalValue > 0
+    ? (minFinalQty * priceEUR / totalValue) * 100
+    : null;
+  const minOrderFeasible = (
+    minAdditionalQty !== null
+    && maxFinalQty !== null
+    && minFinalQty <= maxFinalQty
+    && cashEUR + 1e-9 >= minAdditionalQty * priceEUR
+  );
+  const feasibilityReason = minAdditionalQty === null
+    ? "FX_RATE_OR_EUR_PRICE_UNAVAILABLE"
+    : (maxFinalQty === null || minFinalQty > maxFinalQty
+      ? "MIN_TICKET_EXCEEDS_POSITION_CAP"
+      : (cashEUR + 1e-9 < minAdditionalQty * priceEUR ? "INSUFFICIENT_CASH_FOR_MIN_TICKET" : "OK"));
+  if (String(row.decision || "") === "Entrer / Renforcer" && !minOrderFeasible) {
+    gates.add("MIN_ORDER_UNFEASIBLE");
+  }
   // Strong liquidity evidence: resolved contract, fresh non-stale price, daily
   // volume above floor, and a target order within the volume cap. BUYs are
   // LIMIT-only downstream, so a missing instantaneous spread on such a name is a
@@ -254,6 +333,26 @@ for (const row of rows) {
     row.matrix_entry = row.matrix_entry ?? row.entry;
     row.entry = Math.round(price * 10000) / 10000;
   }
+  row.currency = currency;
+  row.fx_rate_to_eur = fxRate;
+  row.price_eur = priceEUR === null ? null : round4(priceEUR);
+  row.min_price_increment = positive(contract.increment);
+  row.increment_rules = Array.isArray(contract.increment_rules) ? contract.increment_rules : [];
+  row.execution_constraints = {
+    feasible: minOrderFeasible,
+    reason: feasibilityReason,
+    minOrderValueEUR,
+    currentQty,
+    minAdditionalQty,
+    minFinalQty,
+    maxFinalQty,
+    minTargetWeightPct: minTargetWeightPct === null ? null : round4(minTargetWeightPct),
+    maxTargetWeightPct: maxPositionPct,
+    cashEUR: round4(cashEUR),
+    priceEUR: priceEUR === null ? null : round4(priceEUR),
+    currency,
+    fxRateToEUR: fxRate,
+  };
   row.quote_source = ibkrHasFreshPrice
     ? "ibkr_cpapi_snapshot"
     : (ibkrHasHistoryPrice ? `ibkr_cpapi_history_${ibkrHistory.barSize}` : (quote.source || row.quote_source || null));
@@ -273,6 +372,12 @@ for (const row of rows) {
     quoteAgeMinutes: quoteAgeMinutes === null ? null : Math.round(quoteAgeMinutes * 10) / 10,
     marketState: row.market_state,
     price,
+    priceEUR: priceEUR === null ? null : round4(priceEUR),
+    currency,
+    fxRateToEUR: fxRate,
+    minPriceIncrement: positive(contract.increment),
+    incrementDigits: num(contract.increment_digits),
+    incrementRules: Array.isArray(contract.increment_rules) ? contract.increment_rules : [],
     bid: ibkrHasFreshPrice ? ibkrBid : num(quote.bid),
     ask: ibkrHasFreshPrice ? ibkrAsk : num(quote.ask),
     spreadPct,
@@ -289,7 +394,8 @@ for (const row of rows) {
     ibkrHistoryPrice,
     ibkrHistoryTime: ibkrHistory?.time || null,
     ibkrHistoryBar: ibkrHistory ? { period: ibkrHistory.period, barSize: ibkrHistory.barSize } : null,
-    readOnlyChecks: ["yfinance_quote", "ibkr_contract_resolution", "ibkr_market_snapshot", "ibkr_market_history"],
+    executionConstraints: row.execution_constraints,
+    readOnlyChecks: ["yfinance_quote", "ibkr_contract_resolution", "ibkr_contract_rules", "ibkr_account_ledger", "ibkr_fx_snapshot", "ibkr_market_snapshot", "ibkr_market_history"],
   };
 }
 
@@ -304,6 +410,8 @@ pack.liquidityPreflight = {
   ibkrSnapshotAttempts,
   ibkrHistoryAttempts,
   ibkrHistoryPricedCount: ibkrHistoryMap.size,
+  accountLedgerLoaded,
+  fxCurrenciesResolved: Array.from(fxRateToEUR.keys()).sort(),
   warnings: preflightWarnings,
   orderEndpointsCalled: false,
 };

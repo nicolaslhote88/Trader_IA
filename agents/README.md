@@ -21,12 +21,12 @@ Agents spécifiques au système actions/ETF/crypto existant :
   - `AG1-V3-Portfolio manager/` : ancienne génération conservée en historique.
 - `AG2 - La technique/`
   - `AG2-V3/` : signaux techniques Held+Core, Watchlist et Universe Quarantine,
-    validation `deepseek-v4-pro`, rotation transactionnelle vérifiée.
+    validation `deepseek-v4-flash`, rotation transactionnelle vérifiée.
 - `AG3 - Les fondamentaux/`
   - `AG3-V2/` : fondamentaux Held+Core et Watchlist.
 - `AG4 - Les news/`
   - `AG4-SPE-V2/` : news single-stock Boursorama, IBKR et Finnhub via
-    `deepseek-v4-pro`, plus Health Alert.
+    `deepseek-v4-flash`, plus Health Alert.
 
 ## `trading-forex/`
 

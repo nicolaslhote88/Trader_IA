@@ -43,7 +43,7 @@ CODE_NODES = {
 DEEPSEEK_CHAIN_NAME = "S19 - Analyze with DeepSeek"
 DEEPSEEK_MODEL_NAME = "S19A - DeepSeek Chat Model"
 DEEPSEEK_PARSER_NAME = "S19B - Structured Output DeepSeek"
-DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 DEEPSEEK_CREDENTIAL = {"id": "BlSCC28mzKodkfO5", "name": "DeepSeek account"}
 
 

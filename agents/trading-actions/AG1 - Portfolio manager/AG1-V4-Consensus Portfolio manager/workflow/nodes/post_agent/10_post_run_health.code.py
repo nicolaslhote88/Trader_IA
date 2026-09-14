@@ -1,4 +1,5 @@
 import duckdb
+import json
 
 
 def _get_cols(con, table_name):
@@ -127,6 +128,100 @@ def _sync_ledger_to_mtm(con, run_id):
     return True, None
 
 
+def _insert_chronic_alerts(con, run_id):
+    rows = con.execute(
+        """
+        WITH normalized AS (
+          SELECT
+            run_id,
+            ts,
+            CASE
+              WHEN UPPER(COALESCE(code, '')) = 'AGENT_WARNING'
+                   AND message LIKE 'ORDER_REJECT:%'
+                THEN UPPER(split_part(message, ':', 2))
+              WHEN message LIKE 'IBKR_ORDER_REJECTED:%'
+                   AND LOWER(message) LIKE '%minimum price variation%'
+                THEN 'IBKR_MIN_PRICE_VARIATION'
+              WHEN message LIKE 'IBKR_ORDER_REJECTED:%'
+                THEN 'IBKR_ORDER_REJECTED'
+              ELSE UPPER(COALESCE(NULLIF(code, ''), 'UNCLASSIFIED_AGENT_WARNING'))
+            END AS norm_code,
+            CASE
+              WHEN message LIKE 'ORDER_REJECT:%' THEN UPPER(split_part(message, ':', 3))
+              WHEN message LIKE 'IBKR_ORDER_REJECTED:%' THEN UPPER(split_part(message, ':', 2))
+              ELSE UPPER(COALESCE(NULLIF(symbol, ''), 'GLOBAL'))
+            END AS norm_symbol
+          FROM core.alerts
+          WHERE ts >= CURRENT_TIMESTAMP - INTERVAL '8 days'
+            AND UPPER(COALESCE(code, '')) NOT IN ('NO_TRADE', 'CHRONIC_AGENT_WARNING')
+        ),
+        current_keys AS (
+          SELECT DISTINCT norm_code, norm_symbol
+          FROM normalized
+          WHERE run_id = ?
+        ),
+        pair_counts AS (
+          SELECT n.norm_code, n.norm_symbol, COUNT(DISTINCT n.run_id) AS run_count, COUNT(*) AS occurrence_count
+          FROM normalized n
+          INNER JOIN current_keys c
+            ON c.norm_code = n.norm_code AND c.norm_symbol = n.norm_symbol
+          GROUP BY n.norm_code, n.norm_symbol
+          HAVING COUNT(DISTINCT n.run_id) >= 3
+        ),
+        global_counts AS (
+          SELECT n.norm_code, 'GLOBAL' AS norm_symbol, COUNT(DISTINCT n.run_id) AS run_count, COUNT(*) AS occurrence_count
+          FROM normalized n
+          WHERE n.norm_code IN (SELECT norm_code FROM current_keys)
+          GROUP BY n.norm_code
+          HAVING COUNT(DISTINCT n.run_id) >= 5
+        )
+        SELECT norm_code, norm_symbol, run_count, occurrence_count, 'symbol' AS scope FROM pair_counts
+        UNION ALL
+        SELECT norm_code, norm_symbol, run_count, occurrence_count, 'system' AS scope FROM global_counts
+        ORDER BY norm_code, scope, norm_symbol
+        """,
+        [run_id],
+    ).fetchall()
+
+    inserted = 0
+    for code, symbol, run_count, occurrence_count, scope in rows:
+        safe_key = "".join(ch if ch.isalnum() else "_" for ch in (str(code) + "_" + str(symbol)))[:80]
+        alert_id = "ALT_" + str(run_id) + "_CHRONIC_" + safe_key
+        payload = json.dumps(
+            {
+                "reason_code": str(code),
+                "symbol": str(symbol),
+                "window_days": 8,
+                "distinct_runs": int(run_count),
+                "occurrences": int(occurrence_count),
+                "scope": str(scope),
+                "threshold_runs": 3 if scope == "symbol" else 5,
+            },
+            ensure_ascii=True,
+        )
+        message = (
+            "Alerte chronique sur 8 jours: " + str(code) + " / " + str(symbol)
+            + " dans " + str(run_count) + " runs (" + str(occurrence_count) + " occurrences)"
+        )
+        con.execute(
+            """
+            INSERT INTO core.alerts (alert_id, run_id, ts, severity, category, symbol, message, code, payload_json)
+            VALUES (?, ?, CURRENT_TIMESTAMP, 'ERROR', 'HEALTH', ?, ?, 'CHRONIC_AGENT_WARNING', ?)
+            ON CONFLICT (alert_id) DO UPDATE SET
+              ts = excluded.ts,
+              severity = excluded.severity,
+              category = excluded.category,
+              symbol = excluded.symbol,
+              message = excluded.message,
+              code = excluded.code,
+              payload_json = excluded.payload_json
+            """,
+            [alert_id, run_id, str(symbol), message, payload],
+        )
+        inserted += 1
+    return inserted
+
+
 items = _items or []
 out = []
 
@@ -174,6 +269,7 @@ for it in items:
             continue
 
         ok, err = _sync_ledger_to_mtm(con, run_id)
+        chronic_alerts = _insert_chronic_alerts(con, run_id)
 
         out.append(
             {
@@ -182,6 +278,7 @@ for it in items:
                     "health_ok": True,
                     "mtm_sync_ok": bool(ok),
                     "mtm_sync_error": err,
+                    "chronic_alerts": chronic_alerts,
                     "db_path": db_path,
                 }
             }

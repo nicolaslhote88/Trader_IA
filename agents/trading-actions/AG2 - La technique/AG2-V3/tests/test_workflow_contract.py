@@ -60,7 +60,7 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("ZERO HALLUCINATION", chain["parameters"]["messages"]["messageValues"][0]["message"])
         self.assertIn("JSON.stringify($json.ai_context", chain["parameters"]["text"])
         self.assertEqual("@n8n/n8n-nodes-langchain.lmChatDeepSeek", model["type"])
-        self.assertEqual("deepseek-v4-pro", model["parameters"]["model"])
+        self.assertEqual("deepseek-v4-flash", model["parameters"]["model"])
         self.assertEqual("BlSCC28mzKodkfO5", model["credentials"]["deepSeekApi"]["id"])
         self.assertEqual("@n8n/n8n-nodes-langchain.outputParserStructured", parser["type"])
         self.assertEqual([-16, 7312], model["position"])
@@ -79,15 +79,15 @@ class WorkflowContractTests(unittest.TestCase):
             workflow["connections"]["AG2 — Structured Output DeepSeek"]["ai_outputParser"][0][0]["node"],
         )
         self.assertIn(
-            "model=deepseek-v4-pro",
+            "model=deepseek-v4-flash",
             node(workflow, "Compute + Filter + Write")["parameters"]["pythonCode"],
         )
         self.assertIn(
-            '"ai_model": "deepseek-v4-pro"',
+            '"ai_model": "deepseek-v4-flash"',
             node(workflow, "Extract AI + Write")["parameters"]["pythonCode"],
         )
         self.assertIn(
-            'ai_data["ai_model"] = "deepseek-v4-pro"',
+            'ai_data["ai_model"] = "deepseek-v4-flash"',
             node(workflow, "Hydrate AI from cache")["parameters"]["pythonCode"],
         )
         self.assertNotIn("gpt-5-mini", json.dumps(workflow, ensure_ascii=False))
@@ -105,7 +105,7 @@ class WorkflowContractTests(unittest.TestCase):
         parser = node(workflow, "AG2 — Structured Output DeepSeek")
         self.assertEqual("@n8n/n8n-nodes-langchain.chainLlm", chain["type"])
         self.assertTrue(chain["parameters"]["hasOutputParser"])
-        self.assertEqual("deepseek-v4-pro", model["parameters"]["model"])
+        self.assertEqual("deepseek-v4-flash", model["parameters"]["model"])
         self.assertEqual("BlSCC28mzKodkfO5", model["credentials"]["deepSeekApi"]["id"])
         self.assertEqual("@n8n/n8n-nodes-langchain.outputParserStructured", parser["type"])
         self.assertEqual([-16, 7728], model["position"])
@@ -115,11 +115,11 @@ class WorkflowContractTests(unittest.TestCase):
             workflow["connections"]["Snapshot Context"]["main"][0][0]["node"],
         )
         self.assertIn(
-            "model=deepseek-v4-pro",
+            "model=deepseek-v4-flash",
             node(workflow, "Compute + Filter + Write")["parameters"]["pythonCode"],
         )
         self.assertIn(
-            '"ai_model": "deepseek-v4-pro"',
+            '"ai_model": "deepseek-v4-flash"',
             node(workflow, "Extract AI + Write")["parameters"]["pythonCode"],
         )
         self.assertNotIn("gpt-5-mini", json.dumps(workflow, ensure_ascii=False))

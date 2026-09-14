@@ -153,7 +153,7 @@
       },
       {
         "parameters": {
-          "model": "deepseek-v4-pro",
+          "model": "deepseek-v4-flash",
           "options": {}
         },
         "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
@@ -306,7 +306,7 @@
     },
     "meta": null,
     "pinData": {},
-    "versionId": "c7a7f80f-d8ce-539d-b4fb-fbe6cd0b860b",
+    "versionId": "57f83d19-70ec-5c1a-8e05-96c1385f69e8",
     "activeVersionId": null,
     "versionCounter": 72,
     "triggerCount": 1,

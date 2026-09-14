@@ -66,6 +66,47 @@ function pickTargetWeightPct(action) {
   return toNumOrNull(action?.targetWeightPct ?? action?.target_weight_pct);
 }
 
+function pickCurrency(matrix) {
+  return String(matrix?.currency || matrix?.liquidity?.currency || "EUR").trim().toUpperCase() || "EUR";
+}
+
+function pickFxRateToEUR(matrix) {
+  const currency = pickCurrency(matrix);
+  const fx = toNumOrNull(matrix?.fx_rate_to_eur ?? matrix?.liquidity?.fxRateToEUR);
+  return fx !== null && fx > 0 ? fx : (currency === "EUR" ? 1 : null);
+}
+
+function pickPriceEUR(matrix) {
+  const direct = toNumOrNull(matrix?.price_eur ?? matrix?.liquidity?.priceEUR);
+  if (direct !== null && direct > 0) return direct;
+  const nativePrice = toNumOrNull(matrix?.entry);
+  const fx = pickFxRateToEUR(matrix);
+  return nativePrice !== null && nativePrice > 0 && fx !== null ? nativePrice * fx : null;
+}
+
+function evaluateBuyVoteFeasibility(action, matrix, portfolioSummary, posQtyMap, config) {
+  const constraints = matrix?.execution_constraints || matrix?.liquidity?.executionConstraints || {};
+  if (constraints?.feasible === false) {
+    return { ok: false, reason: String(constraints.reason || "PREFLIGHT_UNFEASIBLE") };
+  }
+  const symbol = normSymbol(action?.symbol_internal || action?.symbol);
+  const priceEUR = pickPriceEUR(matrix);
+  const targetWeightPct = pickTargetWeightPct(action);
+  const totalValue = toNumOrNull(portfolioSummary?.totalPortfolioValueEUR) ?? 0;
+  const minOrderValueEUR = toNumOrNull(config?.min_order_value_eur ?? config?.minOrderValueEUR) ?? 1000;
+  if (!priceEUR || priceEUR <= 0) return { ok: false, reason: "FX_RATE_OR_EUR_PRICE_UNAVAILABLE" };
+  if (!targetWeightPct || targetWeightPct <= 0) return { ok: false, reason: "MISSING_TARGET_WEIGHT" };
+  const targetFinalQty = Math.floor((totalValue * targetWeightPct / 100) / priceEUR);
+  const currentQty = toNumOrNull(posQtyMap?.[symbol]) ?? 0;
+  const deltaQty = Math.max(0, targetFinalQty - currentQty);
+  const deltaValueEUR = deltaQty * priceEUR;
+  if (deltaQty <= 0) return { ok: false, reason: "TARGET_NOT_ABOVE_CURRENT_POSITION", targetFinalQty, deltaQty, deltaValueEUR, priceEUR };
+  if (deltaValueEUR + 1e-9 < minOrderValueEUR) {
+    return { ok: false, reason: "MIN_ORDER_VALUE_EUR", targetFinalQty, deltaQty, deltaValueEUR, priceEUR, minOrderValueEUR };
+  }
+  return { ok: true, targetFinalQty, deltaQty, deltaValueEUR, priceEUR, minOrderValueEUR };
+}
+
 function pickConfidence(action) {
   const n = toNumOrNull(action?.confidence);
   if (n === null) return null;
@@ -215,9 +256,12 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
   const votedWeight = conservativeWeight(votes.map((v) => v.targetWeightPct));
   const weight = Math.max(0, Math.min(maxPosPct, votedWeight ?? (intent === "BUY" ? 5 : 0)));
   const selectedLimit = toNumOrNull(matrix.entry) ?? (intent === "SELL" ? pickPositionPrice(portfolioSummary, symbol) : null);
+  const currency = pickCurrency(matrix);
+  const fxRateToEUR = pickFxRateToEUR(matrix);
+  const selectedPriceEUR = pickPriceEUR(matrix) ?? (intent === "SELL" ? pickPositionPrice(portfolioSummary, symbol) : null);
   const totalValue = toNumOrNull(portfolioSummary.totalPortfolioValueEUR) ?? 0;
-  let qty = selectedLimit && selectedLimit > 0 && totalValue > 0
-    ? Math.floor((totalValue * weight / 100) / selectedLimit)
+  let qty = selectedPriceEUR && selectedPriceEUR > 0 && totalValue > 0
+    ? Math.floor((totalValue * weight / 100) / selectedPriceEUR)
     : null;
   if (selectedAction === "CLOSE") qty = 0;
   if (selectedAction === "DECREASE" && qty !== null) qty = Math.min(currentQty, qty);
@@ -249,6 +293,38 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
     };
   }
 
+  if (intent === "BUY") {
+    const minOrderValueEUR = toNumOrNull(config?.min_order_value_eur ?? config?.minOrderValueEUR) ?? 1000;
+    const deltaQty = qty === null ? 0 : Math.max(0, qty - currentQty);
+    const deltaValueEUR = selectedPriceEUR ? deltaQty * selectedPriceEUR : 0;
+    if (!selectedLimit || !selectedPriceEUR || fxRateToEUR === null) {
+      return {
+        decision: {
+          consensus_id: consensusId, symbol, intent, action: selectedAction, side,
+          vote_count: votes.length, valid_model_count: group.validModelCount,
+          model_keys: modelKeys.join(","), status: "REJECTED_PRICE_OR_FX_UNAVAILABLE",
+          reason: "A native limit price and EUR-normalized price are required before consensus sizing",
+          selected_qty: null, selected_weight_pct: weight, selected_limit_price: selectedLimit,
+          confidence, payload_json: { votes, matrix, currency, fxRateToEUR, selectedPriceEUR },
+        },
+        action: null,
+      };
+    }
+    if (deltaQty <= 0 || deltaValueEUR + 1e-9 < minOrderValueEUR) {
+      return {
+        decision: {
+          consensus_id: consensusId, symbol, intent, action: selectedAction, side,
+          vote_count: votes.length, valid_model_count: group.validModelCount,
+          model_keys: modelKeys.join(","), status: "REJECTED_MIN_ORDER_VALUE_EUR",
+          reason: `Consensus final target creates a EUR ${deltaValueEUR.toFixed(2)} ticket below EUR ${minOrderValueEUR}`,
+          selected_qty: qty, selected_weight_pct: weight, selected_limit_price: selectedLimit,
+          confidence, payload_json: { votes, matrix, currency, fxRateToEUR, selectedPriceEUR, deltaQty, deltaValueEUR, minOrderValueEUR },
+        },
+        action: null,
+      };
+    }
+  }
+
   const entryPlan = {
     orderType: side === "BUY" ? "LIMIT" : "MARKET",
     limitPrice: side === "BUY" ? selectedLimit : null,
@@ -258,7 +334,9 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
   const takeProfitPrice = toNumOrNull(matrix.tp);
   const stopLossPct = selectedLimit && stopPrice ? ((stopPrice - selectedLimit) / selectedLimit) * 100 : null;
   const takeProfitPct = selectedLimit && takeProfitPrice ? ((takeProfitPrice - selectedLimit) / selectedLimit) * 100 : null;
-  const maxLossEUR = qty && selectedLimit && stopPrice ? Math.max(0, qty * (selectedLimit - stopPrice)) : null;
+  const maxLossEUR = qty && selectedLimit && stopPrice && fxRateToEUR
+    ? Math.max(0, qty * (selectedLimit - stopPrice) * fxRateToEUR)
+    : null;
 
   const action = {
     ...representative,
@@ -267,6 +345,12 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
     symbol_yahoo: matrix.symbol_yahoo || symbol,
     assetClass: normAssetClass(matrix.asset_class || representative.assetClass || representative.AssetClass),
     sector: matrix.sector || representative.sector || "UNKNOWN",
+    currency,
+    fxRateToEUR,
+    priceEUR: selectedPriceEUR,
+    minPriceIncrement: toNumOrNull(matrix.min_price_increment ?? matrix.liquidity?.minPriceIncrement),
+    incrementRules: matrix.increment_rules || matrix.liquidity?.incrementRules || [],
+    executionConstraints: matrix.execution_constraints || matrix.liquidity?.executionConstraints || null,
     action: selectedAction,
     signal: side,
     confidence,
@@ -293,7 +377,7 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
       modelKeys,
       modelKeysCanonical,
       modelIds: votes.map((v) => v.modelId).filter(Boolean).sort(),
-      sizingRule: "deterministic_target_weight_to_final_quantity",
+      sizingRule: "deterministic_eur_normalized_target_weight_to_final_quantity",
       priceRule: "pre_llm_fresh_entry",
     },
   };
@@ -379,10 +463,14 @@ for (let i = 0; i < proposalItems.length; i += 1) {
       && matrix.decision === "Entrer / Renforcer"
       && (!gates || gates === "OK");
     const sellEligible = intent === "SELL" && (posQtyMap[symbol] || 0) > 0;
+    const buyFeasibility = intent === "BUY"
+      ? evaluateBuyVoteFeasibility(action, matrix, portfolioSummary, posQtyMap, context.config || {})
+      : { ok: true };
     const executable = (buyEligible || sellEligible)
       && symbol
       && !isFxSymbol(action)
-      && ["EQUITY", "ETF"].includes(assetClass);
+      && ["EQUITY", "ETF"].includes(assetClass)
+      && buyFeasibility.ok;
     const vote = {
       vote_id: `VOTE_${runId}_${modelKey}_${symbol || "UNKNOWN"}_${intent}_${aIdx}`,
       run_id: runId,
@@ -396,6 +484,7 @@ for (let i = 0; i < proposalItems.length; i += 1) {
       action: rawAction,
       side: sideForIntent(intent),
       executable,
+      feasibility: buyFeasibility,
       confidence: pickConfidence(action),
       target_qty: pickTargetQty(action),
       targetQty: pickTargetQty(action),

@@ -212,6 +212,13 @@ for (const a of agentDecision.actions || []) {
   const limitPx = toNumOrNull(a.entryPlan?.limitPrice ?? a.limitPrice);
   const lastPx = toNumOrNull(posLast[symbol]);
   const priceHint = limitPx ?? toNumOrNull(a.priceHint) ?? lastPx;
+  const currency = String(a.currency || a?.liquidity?.currency || "EUR").trim().toUpperCase() || "EUR";
+  const fxRateRaw = toNumOrNull(a.fxRateToEUR ?? a.fx_rate_to_eur ?? a?.liquidity?.fxRateToEUR);
+  const fxRateToEUR = fxRateRaw !== null && fxRateRaw > 0 ? fxRateRaw : (currency === "EUR" ? 1 : null);
+  const explicitPriceEUR = toNumOrNull(a.priceEUR ?? a.price_eur ?? a?.liquidity?.priceEUR);
+  const priceEUR = explicitPriceEUR !== null && explicitPriceEUR > 0
+    ? explicitPriceEUR
+    : (priceHint !== null && priceHint > 0 && fxRateToEUR !== null ? priceHint * fxRateToEUR : null);
   let qty = null;
 
   if (action === "CLOSE") {
@@ -231,7 +238,7 @@ for (const a of agentDecision.actions || []) {
     }
   } else if (action === "OPEN") {
     const tq = toNumOrNull(a.targetQty);
-    qty = tq !== null && tq > 0 ? tq : inferQtyFromWeightPct(portfolioSummary, a.targetWeightPct, priceHint);
+    qty = tq !== null && tq > 0 ? tq : inferQtyFromWeightPct(portfolioSummary, a.targetWeightPct, priceEUR);
   }
 
   qty = Math.floor(toNum(qty, 0));
@@ -243,6 +250,10 @@ for (const a of agentDecision.actions || []) {
   const buyPx = orderType === "LIMIT" ? limitPx : priceHint;
   const notionalPx = buyPx ?? priceHint;
   if (!notionalPx || notionalPx <= 0) { reject(symbol, "NO_PRICE"); continue; }
+  if (!priceEUR || priceEUR <= 0 || (currency !== "EUR" && fxRateToEUR === null)) {
+    reject(symbol, "FX_RATE_UNAVAILABLE", currency);
+    continue;
+  }
 
   if (side === "BUY" && limits.killSwitchActive) {
     reject(symbol, "KILL_SWITCH_BUY_BLOCKED");
@@ -287,17 +298,17 @@ for (const a of agentDecision.actions || []) {
   if (side === "BUY" && spreadPct === null && !spreadUnquotedOk) { reject(symbol, "LIQUIDITY_UNKNOWN", "spread"); continue; }
   if (side === "BUY" && spreadPct !== null && spreadPct > limits.maxSpreadPct) { reject(symbol, "SPREAD_TOO_WIDE", String(spreadPct)); continue; }
 
-  const grossNotional = qty * notionalPx;
-  const expectedFeesEUR = grossNotional * limits.defaultFeeBps / 10000.0;
-  const postSymbolValue = Math.max(0, (posMarketValue[symbol] || 0) + (side === "BUY" ? grossNotional : -grossNotional));
+  const grossNotionalEUR = qty * priceEUR;
+  const expectedFeesEUR = grossNotionalEUR * limits.defaultFeeBps / 10000.0;
+  const postSymbolValue = Math.max(0, (posMarketValue[symbol] || 0) + (side === "BUY" ? grossNotionalEUR : -grossNotionalEUR));
   const postSymbolPct = portfolioValue > 0 ? (postSymbolValue / portfolioValue) * 100 : 0;
   const sector = clampText(a.sector ?? a.Sector ?? posSector[symbol] ?? "UNKNOWN", 128) || "UNKNOWN";
-  const postSectorValue = Math.max(0, (sectorValue[sector] || 0) + (side === "BUY" ? grossNotional : -grossNotional));
+  const postSectorValue = Math.max(0, (sectorValue[sector] || 0) + (side === "BUY" ? grossNotionalEUR : -grossNotionalEUR));
   const postSectorPct = portfolioValue > 0 ? (postSectorValue / portfolioValue) * 100 : 0;
-  const orderValuePct = portfolioValue > 0 ? (grossNotional / portfolioValue) * 100 : 0;
+  const orderValuePct = portfolioValue > 0 ? (grossNotionalEUR / portfolioValue) * 100 : 0;
 
   // Plancher de ticket : rejette les micro-ordres d'achat manges par les frais fixes.
-  if (side === "BUY" && grossNotional < limits.minOrderValueEUR) { reject(symbol, "MIN_ORDER_VALUE_EUR", `${grossNotional.toFixed(0)}<${limits.minOrderValueEUR}`); continue; }
+  if (side === "BUY" && grossNotionalEUR < limits.minOrderValueEUR) { reject(symbol, "MIN_ORDER_VALUE_EUR", `${grossNotionalEUR.toFixed(0)}<${limits.minOrderValueEUR}`); continue; }
   // Plafond du nombre de lignes : rejette une NOUVELLE ouverture au-dela du max (concentration).
   const isNewOpen = side === "BUY" && (action === "OPEN" || currentQty <= 0);
   if (isNewOpen && openPositionsCount >= limits.maxOpenPositions) { reject(symbol, "MAX_OPEN_POSITIONS", `${openPositionsCount}>=${limits.maxOpenPositions}`); continue; }
@@ -312,11 +323,14 @@ for (const a of agentDecision.actions || []) {
     quantity: qty,
     assetClass,
     sector,
+    currency,
+    fxRateToEUR,
     isin: clampText(a.isin ?? a.ISIN ?? "", 64) || null,
     orderType,
     limitPrice: orderType === "LIMIT" ? limitPx : null,
     priceHint: notionalPx,
-    estNotionalEUR: Math.round(grossNotional * 100) / 100,
+    priceEUR,
+    estNotionalEUR: Math.round(grossNotionalEUR * 100) / 100,
     expectedFeesEUR: Math.round(expectedFeesEUR * 100) / 100,
     riskCheckPassed: true,
     riskChecks: {
@@ -330,6 +344,9 @@ for (const a of agentDecision.actions || []) {
       contractResolved,
       orderToVolumePct,
       dataFlags: flags,
+      currency,
+      fxRateToEUR,
+      priceEUR,
     },
   });
 }
@@ -337,8 +354,8 @@ for (const a of agentDecision.actions || []) {
 let availableCash = cashEUR;
 for (const o of orders) {
   if (o.side !== "SELL") continue;
-  const sellPx = (normalizeOrderType(o.orderType) === "LIMIT" ? toNumOrNull(o.limitPrice) : null) ?? toNumOrNull(posLast[o.symbol]) ?? toNumOrNull(o.priceHint) ?? 0;
-  availableCash += toNum(o.quantity, 0) * sellPx;
+  const sellPriceEUR = toNumOrNull(o.priceEUR) ?? toNumOrNull(posLast[o.symbol]) ?? 0;
+  availableCash += toNum(o.quantity, 0) * sellPriceEUR;
 }
 
 const cashSafeOrders = [];
@@ -348,23 +365,27 @@ for (const o of orders) {
     continue;
   }
 
-  const buyPx = (normalizeOrderType(o.orderType) === "LIMIT" ? toNumOrNull(o.limitPrice) : null) ?? toNumOrNull(o.priceHint) ?? toNumOrNull(posLast[o.symbol]);
-  if (!buyPx || buyPx <= 0) {
+  const buyPriceEUR = toNumOrNull(o.priceEUR);
+  if (!buyPriceEUR || buyPriceEUR <= 0) {
     reject(o.symbol, "NO_BUY_PRICE");
     continue;
   }
 
   const requestedQty = toNum(o.quantity, 0);
-  const affordableQty = Math.floor((availableCash + 1e-9) / (buyPx * (1 + limits.defaultFeeBps / 10000.0)));
+  const affordableQty = Math.floor((availableCash + 1e-9) / (buyPriceEUR * (1 + limits.defaultFeeBps / 10000.0)));
   if (affordableQty <= 0) {
-    reject(o.symbol, "INSUFFICIENT_CASH", `need=${(requestedQty * buyPx).toFixed(2)}:avail=${availableCash.toFixed(2)}`);
+    reject(o.symbol, "INSUFFICIENT_CASH", `need=${(requestedQty * buyPriceEUR).toFixed(2)}:avail=${availableCash.toFixed(2)}`);
     continue;
   }
   if (affordableQty < requestedQty) {
+    if (affordableQty * buyPriceEUR + 1e-9 < limits.minOrderValueEUR) {
+      reject(o.symbol, "MIN_ORDER_VALUE_EUR_AFTER_CASH_CAP", `${(affordableQty * buyPriceEUR).toFixed(0)}<${limits.minOrderValueEUR}`);
+      continue;
+    }
     warnings.push(`ORDER_RESIZED:CASH_CAP:${o.symbol}:from=${requestedQty}:to=${affordableQty}`);
     o.quantity = affordableQty;
-    o.estNotionalEUR = Math.round(affordableQty * buyPx * 100) / 100;
-    o.expectedFeesEUR = Math.round((affordableQty * buyPx * limits.defaultFeeBps / 10000.0) * 100) / 100;
+    o.estNotionalEUR = Math.round(affordableQty * buyPriceEUR * 100) / 100;
+    o.expectedFeesEUR = Math.round((affordableQty * buyPriceEUR * limits.defaultFeeBps / 10000.0) * 100) / 100;
   }
   availableCash -= toNum(o.estNotionalEUR, 0) + toNum(o.expectedFeesEUR, 0);
   cashSafeOrders.push(o);

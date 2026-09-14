@@ -300,6 +300,48 @@ def calculate_sector_sentiment(df_news: pd.DataFrame, days_lookback: int = 30) -
     return df_res
 
 
+def calculate_sector_portfolio_tilts(sec_df: pd.DataFrame, top_n: int = 3) -> dict[str, list[str]]:
+    """Return mutually exclusive sector tilts from bullish and bearish evidence.
+
+    The dashboard previously ranked both directions independently, which could
+    recommend the same sector for overweighting and underweighting.  Netting the
+    two scores first gives each sector a single portfolio direction.  A zero net
+    score is intentionally omitted because it carries no actionable tilt.
+    """
+    empty = {"overweight": [], "underweight": []}
+    required = {"sector", "direction", "score"}
+    if sec_df is None or sec_df.empty or not required.issubset(sec_df.columns):
+        return empty
+
+    wk = sec_df.loc[:, ["sector", "direction", "score"]].copy()
+    wk["sector"] = wk["sector"].fillna("").astype(str).str.strip()
+    wk["direction"] = wk["direction"].fillna("").astype(str).str.strip().str.casefold()
+    wk["score"] = pd.to_numeric(wk["score"], errors="coerce").fillna(0.0).abs()
+    wk = wk[
+        wk["sector"].ne("")
+        & wk["direction"].isin(["bullish", "bearish"])
+        & wk["score"].gt(0.0)
+    ]
+    if wk.empty:
+        return empty
+
+    wk["signed_score"] = wk["score"].where(wk["direction"].eq("bullish"), -wk["score"])
+    net = wk.groupby("sector", as_index=False)["signed_score"].sum()
+    net = net[net["signed_score"].abs().gt(1e-9)]
+
+    overweight = net[net["signed_score"].gt(0.0)].sort_values(
+        ["signed_score", "sector"], ascending=[False, True]
+    )
+    underweight = net[net["signed_score"].lt(0.0)].sort_values(
+        ["signed_score", "sector"], ascending=[True, True]
+    )
+    limit = max(0, int(top_n))
+    return {
+        "overweight": overweight["sector"].head(limit).tolist(),
+        "underweight": underweight["sector"].head(limit).tolist(),
+    }
+
+
 def calculate_symbol_momentum(df_news: pd.DataFrame, days_lookback: int = 30, top_n: int = 10) -> pd.DataFrame:
     """Palmares actions base sur news_raw_Symbol (publishedat, symbol, impactscore, companyname/name)."""
     if df_news is None or df_news.empty:
