@@ -35,6 +35,8 @@ AG2 laisse 35 minutes avant AG1 : durées récentes observées 10–16 minutes, 
 
 ## Validation et preuves
 
+**Complément après les premiers crons PF :** les exécutions 22059/22060 ont révélé une dépendance implicite `pytz` absente des runners. Les rejeux initiaux utilisaient le Python du conteneur n8n et ne reproduisaient pas ce manque. Lecture temporelle corrigée et rejeu de l’entrée réelle validé dans le sandbox des trois runners : [incident et correctif](20260914_pf_runner_timezone_fix.md).
+
 - 65 tests Python sur broker, dashboard, contrat de modèle, unités techniques, positions et réconciliation PF ; tests JavaScript de consensus, devises, extracteurs et contrat d’exécution.
 - Rejeu avec données du VPS sur copies : PF, enrichissement des dix positions, R8 sur 361 lignes, matrice, préflight en GET uniquement, consensus synthétique sans action, validateur et écriture du journal sur copie. Aucun endpoint d’ordre appelé.
 - Régression : prix USD constant et change variable, versement/retrait, absence de change, dates manquantes, précision microseconde/nanoseconde, réouverture, cash nul pour une vente, produits de ventes non exécutées, lot japonais, concentration cumulée, perte journalière et remplacement des dix premiers candidats infaisables.

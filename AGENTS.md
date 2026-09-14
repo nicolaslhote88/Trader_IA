@@ -119,6 +119,7 @@ Code : `services/ibkr-broker/approval.py` + endpoints/guard `app.py`. Workflows 
 
 ## 🧰 Pièges dev (vérifiés 2026-08-06)
 - **Sandbox Python n8n (task-runner)** : imports autorisés = `duckdb, json, time, datetime, math, numpy, pandas`. **`hashlib` INTERDIT** ; imports combinés rejetés → **un import par ligne**, jamais hashlib (sinon « Security violations »).
+- **DuckDB TIMESTAMPTZ → Python** : `fetchone/fetchall` sur une date avec fuseau réclame `pytz`, absent des trois runners. Retourner `CAST(ts AS VARCHAR)` ou `epoch_ms(ts)` et conserver les comparaisons temporelles dans SQL. Valider dans le sandbox des runners, pas seulement dans le Python de `root-n8n-1`. Incident PF corrigé : `docs/operations/20260914_pf_runner_timezone_fix.md`.
 - **Outils d'édition tronquent les gros fichiers** (>~160 lignes OU >~10 Ko : `app.py`, `01_build_symbol_queue.py`, `AGENTS.md`…). Éditer/écrire ces fichiers via **patch python/heredoc shell**, jamais l'éditeur direct ; vérifier `py_compile`/taille après.
 - **Vue DuckDB `SELECT *`** cassée par tout `ALTER TABLE ADD COLUMN` → la **recréer** (`CREATE OR REPLACE VIEW`) après migration.
 - **Heredoc ssh non quoté** : `${VAR}` et backticks sont interprétés par le shell distant → passer les scripts par `scp` ou neutraliser les `$`.

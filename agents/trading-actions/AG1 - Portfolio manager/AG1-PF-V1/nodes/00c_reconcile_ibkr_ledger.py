@@ -818,7 +818,9 @@ def confirmed_fx_rate(rates, currency):
 def measured_snapshot_risk(con, ts, nav, cash, positions):
     peak = parse_float(con.execute("SELECT MAX(total_value_eur) FROM core.portfolio_snapshot WHERE ts <= ?", [ts]).fetchone()[0], nav)
     drawdown = nav / max(nav, peak, 1e-9) - 1.0
-    previous = con.execute("SELECT total_value_eur, ts FROM core.portfolio_snapshot WHERE ts < date_trunc('day', CAST(? AS TIMESTAMPTZ)) ORDER BY ts DESC LIMIT 1", [ts]).fetchone()
+    # Keep timezone-aware values inside DuckDB: Python TIMESTAMPTZ decoding
+    # imports optional pytz, which is absent from the production task runners.
+    previous = con.execute("SELECT total_value_eur, CAST(ts AS VARCHAR) FROM core.portfolio_snapshot WHERE ts < date_trunc('day', CAST(? AS TIMESTAMPTZ)) ORDER BY ts DESC LIMIT 1", [ts]).fetchone()
     daily_return = None
     if previous and parse_float(previous[0], 0) > 0:
         flows = con.execute("SELECT COALESCE(SUM(amount), 0) FROM core.cash_ledger WHERE ts > ? AND ts <= ? AND UPPER(type) IN ('DEPOSIT','WITHDRAWAL','EXTERNAL_DEPOSIT','EXTERNAL_WITHDRAWAL') AND currency='EUR'", [previous[1], ts]).fetchone()[0]
