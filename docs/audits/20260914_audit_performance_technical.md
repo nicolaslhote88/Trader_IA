@@ -1,5 +1,7 @@
 # Audit technique du calcul de performance et des entrées AG1
 
+> État avant corrections. Les défauts établis ont ensuite été corrigés et déployés : [résultat, validation et limites](../operations/20260914_performance_contract_remediation.md). Les propositions de recherche restent à évaluer.
+
 Audit du 14 septembre 2026. Cette note décrit des contrats logiciels et leur validation. Les séries financières, positions, propositions détaillées et extractions de production restent dans les livrables locaux, hors de ce dépôt public. Aucun ordre ni changement de stratégie en production n’a été réalisé pour l’audit.
 
 L’architecture permet de mettre en œuvre une stratégie multi-piliers, mais ses tests logiciels ne prouvent pas un avantage d’investissement après coûts. Les priorités sont la cohérence des données de décision, la qualité de la mesure et un protocole d’évaluation hors échantillon. Les pondérations et la fréquence d’appel des modèles ne doivent pas être optimisées sur les seuls gagnants observés après coup.

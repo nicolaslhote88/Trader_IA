@@ -53,10 +53,10 @@ VARIANTS = [
         "id": "AG3V2HELDCORE20260622",
         "name": "AG3-V2 — Fundamental Held+Core",
         "file": "AG3-V2-Fundamental-Held-Core.workflow.json",
-        # Quotidien (week-ends inclus) a 01:00 UTC -> garantit une fraicheur <= 24h
+        # Quotidien (week-ends inclus) a 00:00 Paris -> fraicheur cible <= 24h
         # sur les positions detenues + le top 50 (CORE_AUTO).
-        "cron": "0 1 * * *",
-        "segments": ["HELD", "CORE_AUTO"],
+        "cron": "0 0 * * *",
+        "segments": ["HELD", "CORE_AUTO", "CORE_MANUAL"],
         # ~56 symboles aujourd'hui : un seul batch couvre tout (pas de rotation reelle).
         "batch_size": 80,
         "batch_state_key": "ag3_v2_held_core_last_index",
@@ -65,9 +65,9 @@ VARIANTS = [
         "id": "AG3V2WATCHNIGHT20260622",
         "name": "AG3-V2 — Fundamental Watchlist Nightly",
         "file": "AG3-V2-Fundamental-Watchlist-Nightly.workflow.json",
-        # Quotidien a 02:00 UTC (apres Held+Core, pas de collision lock DuckDB).
+        # Quotidien a 01:00 et 04:00 Paris, apres Held+Core.
         # ~198 symboles / batch 60 -> cycle complet ~4 jours calendaires (< 5 j cible).
-        "cron": "0 2 * * *",
+        "cron": "0 1,4 * * *",
         "segments": ["WATCHLIST"],
         "batch_size": 60,
         "batch_state_key": "ag3_v2_watchlist_last_index",
@@ -90,7 +90,7 @@ def patch_read_universe(code: str, segments: list[str]) -> str:
 
 
 def patch_duckdb_init(code: str, batch_state_key: str, batch_size: int) -> str:
-    out = code
+    out = (ROOT / "nodes/06_duckdb_init.py").read_text(encoding="utf-8")
     if 'BATCH_STATE_KEY = "ag3_v2_last_index"' not in out:
         raise SystemExit("ERREUR: BATCH_STATE_KEY de reference introuvable dans " + DUCKDB_INIT_NODE)
     out = out.replace(

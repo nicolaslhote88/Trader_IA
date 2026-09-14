@@ -1294,7 +1294,7 @@ def _upsert_risk_metrics_row(
             _to_float(row.get("cash_pct"), 0.0),
             _to_float(row.get("top1_pos_pct"), 0.0),
             _to_float(row.get("top1_sector_pct"), 0.0),
-            _to_float(row.get("var95_est_eur"), 0.0),
+            _to_float(row.get("var95_est_eur"), None),
             _to_int(row.get("positions_count"), 0),
             _clean_text(row.get("risk_status"), 32) or "BALANCED",
             _json_text(row.get("limits_json")),
@@ -1503,10 +1503,16 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
     total_pnl_eur = total_value_eur - initial_capital if initial_capital else 0.0
     roi = (total_pnl_eur / initial_capital) if initial_capital else 0.0
     cash_pct = (cash_eur / total_value_eur) if total_value_eur > 0 else 0.0
-    var95_est_eur = equity_eur * 0.015 * 1.65
+    var95_est_eur = None  # No covariance/volatility model has been calibrated.
+    previous = con.execute("SELECT total_value_eur, ts FROM core.portfolio_snapshot WHERE ts < date_trunc('day', CAST(? AS TIMESTAMPTZ)) ORDER BY ts DESC LIMIT 1", [ts]).fetchone()
+    daily_return_pct = None
+    if previous and float(previous[0]) > 0:
+        flows = con.execute("SELECT COALESCE(SUM(amount),0) FROM core.cash_ledger WHERE ts > ? AND ts <= ? AND UPPER(type) IN ('DEPOSIT','WITHDRAWAL','EXTERNAL_DEPOSIT','EXTERNAL_WITHDRAWAL') AND currency='EUR'", [previous[1], ts]).fetchone()[0]
+        daily_return_pct = ((total_value_eur - float(flows)) / float(previous[0]) - 1) * 100
+
 
     risk_status = "BALANCED"
-    if kill_switch_active and max_daily_drawdown_pct is not None and abs(drawdown_pct) * 100 >= max_daily_drawdown_pct:
+    if kill_switch_active:
         risk_status = "RISK_OFF"
     elif cash_pct >= 0.80:
         risk_status = "DEFENSIVE"
@@ -1515,14 +1521,17 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
 
     limits_json = {
         "kill_switch_active": kill_switch_active,
+        "daily_return_pct": daily_return_pct,
+        "daily_reference_at": str(previous[1]) if previous else None,
+        "var_method": "NOT_ESTIMATED",
         "max_pos_pct": max_pos_pct,
         "max_sector_pct": max_sector_pct,
         "max_daily_drawdown_pct": max_daily_drawdown_pct,
         "breaches": {
             "max_pos_pct": (top1_pos_pct * 100 > max_pos_pct) if max_pos_pct is not None else False,
             "max_sector_pct": (top1_sector_pct * 100 > max_sector_pct) if max_sector_pct is not None else False,
-            "daily_drawdown_pct": (abs(drawdown_pct) * 100 > max_daily_drawdown_pct)
-            if max_daily_drawdown_pct is not None
+            "daily_drawdown_pct": (daily_return_pct <= -max_daily_drawdown_pct)
+            if max_daily_drawdown_pct is not None and daily_return_pct is not None
             else False,
         },
     }
@@ -1542,7 +1551,7 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
             "total_pnl_eur": round(total_pnl_eur, 2),
             "roi": roi,
             "drawdown_pct": drawdown_pct,
-            "meta_json": {"config_version": config_version},
+            "meta_json": {"config_version": config_version, "drawdown_method": "observed_NAV_peak_not_flow_adjusted", "ai_cost_coverage": "BOOKED_ONLY_EXTERNAL_BILLING_UNKNOWN", "external_flow_coverage": "BOOKED_ONLY_NOT_STATEMENT_RECONCILED"},
         },
     )
     _upsert_risk_metrics_row(
@@ -1554,7 +1563,7 @@ def _compute_snapshots_with_con(con: duckdb.DuckDBPyConnection, run_id: str) -> 
             "cash_pct": cash_pct,
             "top1_pos_pct": top1_pos_pct,
             "top1_sector_pct": top1_sector_pct,
-            "var95_est_eur": round(var95_est_eur, 2),
+            "var95_est_eur": var95_est_eur,
             "positions_count": len(positions),
             "risk_status": risk_status,
             "limits_json": limits_json,

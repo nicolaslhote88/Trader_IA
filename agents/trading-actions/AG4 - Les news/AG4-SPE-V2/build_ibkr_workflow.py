@@ -24,6 +24,13 @@ const raw = (j.output && !Array.isArray(j.output))
 def build(source: Path) -> dict:
     workflow = load_workflow(source)
     configure_deepseek_analyzer(workflow)
+    sources = {"Normalize + Dedup IBKR": ("pythonCode", "ibkr_normalize.py"),
+               "Write IBKR DuckDB": ("pythonCode", "ibkr_write.py"),
+               "S20 - Parse LLM Output": ("jsCode", "ibkr_parse.js")}
+    for node in workflow.get("nodes", []):
+        if node.get("name") in sources:
+            key, filename = sources[node["name"]]
+            node["parameters"][key] = (ROOT / "nodes" / filename).read_text(encoding="utf-8")
     parser = next(
         node for node in workflow.get("nodes", [])
         if node.get("name") == "S20 - Parse LLM Output"

@@ -189,12 +189,6 @@ def db_con(path, retries=6, delay=0.2):
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
             try:
                 con.close()
             except Exception:
@@ -280,175 +274,178 @@ def pick_best_probe(probes):
 
 
 def load_fx_ref_map(db_path):
-    # FIX 2026-07-13 : taux/devise autoritaires IBKR pour convertir les prix natifs (USD...) en EUR.
+    """IBKR average cost translated at the snapshot FX; never historical EUR cost."""
     out = {}
-    try:
-        with db_con(db_path) as con:
-            if con is None or not table_exists(con, "portfolio_positions_ibkr_latest"):
-                return out
-            rows = query_rows(con, """
-                SELECT symbol, currency, CAST(fx_rate AS DOUBLE) AS fx_rate,
-                       CAST(last_price_eur AS DOUBLE) AS last_price_eur
-                FROM portfolio_positions_ibkr_latest
-            """)
-            for r in rows:
-                sym = norm_symbol(r.get("symbol"))
-                if not sym:
-                    continue
-                out[sym] = {
-                    "currency": (str(r.get("currency") or "").strip().upper() or None),
-                    "fx": to_num(r.get("fx_rate"), None),
-                    "lp_eur": to_num(r.get("last_price_eur"), None),
-                }
-    except Exception:
-        return out
+    with db_con(db_path) as con:
+        if con is None or not table_exists(con, "portfolio_positions_ibkr_latest"):
+            return out
+        rows = query_rows(con, """
+            SELECT symbol, currency, quantity, fx_rate, avg_cost_eur, last_price_eur, updated_at
+            FROM portfolio_positions_ibkr_latest
+        """)
+        for row in rows:
+            sym = norm_symbol(row.get("symbol"))
+            out[sym] = {
+                "currency": norm_text(row.get("currency")),
+                "fx": to_num(row.get("fx_rate"), None),
+                "lp_eur": to_num(row.get("last_price_eur"), None),
+                "avg_eur_at_current_fx": to_num(row.get("avg_cost_eur"), None),
+                "quantity": to_num(row.get("quantity"), None),
+                "updatedAt": to_iso(row.get("updated_at"), None),
+            }
     return out
 
 
-def load_position_overrides(db_path):
-    out = {}
-    source = None
+def load_portfolio_reference(db_path):
     with db_con(db_path) as con:
         if con is None:
-            return out, source
-        if table_exists(con, "core.positions_snapshot"):
-            rows = query_rows(
-                con,
-                """
-                SELECT symbol, qty, avg_cost, last_price, market_value_eur, unrealized_pnl_eur, ts_ms
-                FROM (
-                  SELECT
-                    symbol,
-                    CAST(qty AS DOUBLE) AS qty,
-                    CAST(avg_cost AS DOUBLE) AS avg_cost,
-                    CAST(last_price AS DOUBLE) AS last_price,
-                    CAST(market_value_eur AS DOUBLE) AS market_value_eur,
-                    CAST(unrealized_pnl_eur AS DOUBLE) AS unrealized_pnl_eur,
-                    epoch_ms(ts) AS ts_ms,
-                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY ts DESC, run_id DESC) AS rn
-                  FROM core.positions_snapshot
-                ) x
-                WHERE rn = 1
-                """,
-            )
-            for r in rows:
-                sym = norm_symbol(r.get("symbol"))
-                if not sym:
-                    continue
-                out[sym] = {
-                    "quantity": to_num(r.get("qty"), None),
-                    "avgPrice": to_num(r.get("avg_cost"), None),
-                    "lastPrice": to_num(r.get("last_price"), None),
-                    "marketValue": to_num(r.get("market_value_eur"), None),
-                    "unrealizedPnL": to_num(r.get("unrealized_pnl_eur"), None),
-                    "updatedAt": to_iso(r.get("ts_ms"), None),
-                }
-            source = "core.positions_snapshot"
+            return {}
+        rows = query_rows(con, "SELECT run_id, cash_eur, total_value_eur, epoch_ms(ts) AS ts_ms FROM core.portfolio_snapshot ORDER BY ts DESC, run_id DESC LIMIT 1")
+        if not rows:
+            return {}
+        row = rows[0]
+        previous = query_rows(con, "SELECT total_value_eur, epoch_ms(ts) AS ts_ms FROM core.portfolio_snapshot WHERE ts < date_trunc('day', now()) ORDER BY ts DESC LIMIT 1")
+        row["dailyReturnPct"] = None
+        if previous and to_num(previous[0].get("total_value_eur"), 0) > 0:
+            flows = query_rows(con, "SELECT COALESCE(SUM(amount),0) AS amount FROM core.cash_ledger WHERE ts > to_timestamp(? / 1000.0) AND ts <= to_timestamp(? / 1000.0) AND UPPER(type) IN ('DEPOSIT','WITHDRAWAL','EXTERNAL_DEPOSIT','EXTERNAL_WITHDRAWAL') AND currency='EUR'", [previous[0]["ts_ms"], row["ts_ms"]])
+            row["dailyReturnPct"] = ((to_num(row["total_value_eur"], 0) - to_num(flows[0]["amount"], 0)) / to_num(previous[0]["total_value_eur"], 0) - 1) * 100
+            row["dailyReferenceAt"] = to_iso(previous[0]["ts_ms"], None)
+        return row
 
-        if table_exists(con, "portfolio_positions_mtm_latest"):
-            rows = query_rows(
-                con,
-                """
-                SELECT symbol, quantity, avg_price, last_price, market_value, unrealized_pnl, CAST(updated_at AS VARCHAR) AS updated_at
-                FROM portfolio_positions_mtm_latest
-                """,
-            )
-            for r in rows:
-                sym = norm_symbol(r.get("symbol"))
-                if not sym:
-                    continue
-                out[sym] = {
-                    "quantity": to_num(r.get("quantity"), None),
-                    "avgPrice": to_num(r.get("avg_price"), None),
-                    "lastPrice": to_num(r.get("last_price"), None),
-                    "marketValue": to_num(r.get("market_value"), None),
-                    "unrealizedPnL": to_num(r.get("unrealized_pnl"), None),
-                    "updatedAt": to_iso(r.get("updated_at"), None),
+
+def load_position_overrides(db_path, snapshot_run_id=None):
+    """One coherent portfolio snapshot. An older MTM must not replace its quantities."""
+    out = {}
+    with db_con(db_path) as con:
+        if con is None:
+            return out, None
+        if table_exists(con, "core.positions_snapshot"):
+            rows = query_rows(con, """
+                SELECT p.symbol, p.qty, p.avg_cost, p.last_price, p.market_value_eur,
+                       p.unrealized_pnl_eur, epoch_ms(p.ts) AS ts_ms
+                FROM core.positions_snapshot p
+                WHERE p.run_id = COALESCE(?, (SELECT run_id FROM core.portfolio_snapshot
+                                  ORDER BY ts DESC, run_id DESC LIMIT 1))
+            """, [snapshot_run_id])
+            for row in rows:
+                out[norm_symbol(row.get("symbol"))] = {
+                    "quantity": to_num(row.get("qty"), None),
+                    "avgPrice": to_num(row.get("avg_cost"), None),
+                    "lastPrice": to_num(row.get("last_price"), None),
+                    "marketValue": to_num(row.get("market_value_eur"), None),
+                    "unrealizedPnL": to_num(row.get("unrealized_pnl_eur"), None),
+                    "updatedAt": to_iso(row.get("ts_ms"), None),
                 }
-            source = "portfolio_positions_mtm_latest"
-    return out, source
+            if rows or query_rows(con, "SELECT 1 FROM core.portfolio_snapshot LIMIT 1"):
+                return out, "core.positions_snapshot"
+    return out, None
+
+
+def lifecycle_from_fills(rows):
+    """Only fills establish dates. A flat position starts a new lifecycle on re-entry."""
+    out = {}
+    for row in rows:
+        sym = norm_symbol(row.get("symbol"))
+        qty = to_num(row.get("qty"), 0.0) or 0.0
+        side = norm_text(row.get("side"))
+        ts = to_iso(row.get("ts_ms"), None)
+        if not sym or qty <= 0 or not ts or side not in ("BUY", "SELL"):
+            continue
+        rec = out.setdefault(sym, {"netQty": 0.0, "openedAt": None, "lastBuyAt": None,
+                                  "lastSellAt": None, "source": "core.fills", "openingStopLossPct": None,
+                                  "openingStopPriceNative": None, "openingFillId": None,
+                                  "openingStopSource": None, "openingPriceNative": None})
+        if side == "BUY":
+            if rec["netQty"] <= 1e-8:
+                native = to_num(row.get("price_native"), None)
+                stop = to_num(row.get("stop_loss"), None)
+                if stop is not None and not (-100 < stop < 0):
+                    stop = None
+                rec.update({"openedAt": ts, "openingFillId": row.get("fill_id"),
+                            "openingPriceNative": native, "openingStopLossPct": stop,
+                            "openingStopPriceNative": native * (1 + stop / 100) if native and stop else None,
+                            "openingStopSource": "opening_signal_pct_at_fill" if native and stop else None})
+            rec["lastBuyAt"] = ts
+            rec["netQty"] += qty
+        else:
+            rec["lastSellAt"] = ts
+            rec["netQty"] = max(0.0, rec["netQty"] - qty)
+            if rec["netQty"] <= 1e-8:
+                rec["openedAt"] = None
+                rec["openingFillId"] = None
+                rec["openingStopLossPct"] = None
+                rec["openingStopPriceNative"] = None
+                rec["openingStopSource"] = None
+    return out
 
 
 def load_position_lifecycle(db_path):
-    """Best-effort lifecycle dates from executed BUY/SELL orders."""
-    out = {}
     with db_con(db_path) as con:
-        if con is None or not table_exists(con, "core.orders"):
-            return out
-        if table_exists(con, "core.fills"):
-            rows = query_rows(
-                con,
-                """
-                WITH fills_by_order AS (
-                  SELECT
-                    order_id,
-                    SUM(CAST(qty AS DOUBLE)) AS exec_qty,
-                    SUM(CAST(qty AS DOUBLE) * CAST(price AS DOUBLE)) / NULLIF(SUM(CAST(qty AS DOUBLE)), 0) AS avg_price
-                  FROM core.fills
-                  GROUP BY order_id
-                )
-                SELECT
-                  UPPER(TRIM(o.symbol)) AS symbol,
-                  UPPER(TRIM(o.side)) AS side,
-                  epoch_ms(o.ts_created) AS ts_ms,
-                  COALESCE(CAST(f.exec_qty AS DOUBLE), CAST(o.qty AS DOUBLE)) AS qty,
-                  COALESCE(CAST(f.avg_price AS DOUBLE), CAST(o.limit_price AS DOUBLE)) AS price
-                FROM core.orders o
-                LEFT JOIN fills_by_order f ON f.order_id = o.order_id
-                WHERE UPPER(TRIM(o.side)) IN ('BUY', 'SELL')
-                ORDER BY o.ts_created ASC
-                """,
-            )
-        else:
-            rows = query_rows(
-                con,
-                """
-                SELECT
-                  UPPER(TRIM(symbol)) AS symbol,
-                  UPPER(TRIM(side)) AS side,
-                  epoch_ms(ts_created) AS ts_ms,
-                  CAST(qty AS DOUBLE) AS qty,
-                  CAST(limit_price AS DOUBLE) AS price
-                FROM core.orders
-                WHERE UPPER(TRIM(side)) IN ('BUY', 'SELL')
-                ORDER BY ts_created ASC
-                """,
-            )
-    for r in rows:
-        sym = norm_symbol(r.get("symbol"))
-        side = norm_text(r.get("side"))
-        qty = to_num(r.get("qty"), 0.0) or 0.0
-        ts = to_iso(r.get("ts_ms"), None)
-        if not sym or not ts or qty <= 0:
-            continue
-        rec = out.setdefault(
-            sym,
-            {
-                "openedAt": None,
-                "lastBuyAt": None,
-                "lastSellAt": None,
-                "buyQty": 0.0,
-                "buyNotional": 0.0,
-                "source": "core.orders",
-            },
-        )
-        if side == "BUY":
-            if rec["openedAt"] is None or parse_ts_key(ts) < parse_ts_key(rec["openedAt"]):
-                rec["openedAt"] = ts
-            if rec["lastBuyAt"] is None or parse_ts_key(ts) > parse_ts_key(rec["lastBuyAt"]):
-                rec["lastBuyAt"] = ts
-            rec["buyQty"] += qty
-            price = to_num(r.get("price"), None)
-            if price is not None:
-                rec["buyNotional"] += qty * price
-        elif side == "SELL":
-            if rec["lastSellAt"] is None or parse_ts_key(ts) > parse_ts_key(rec["lastSellAt"]):
-                rec["lastSellAt"] = ts
-    for rec in out.values():
-        rec["avgExecutedBuyPrice"] = round2(rec["buyNotional"] / rec["buyQty"]) if rec["buyQty"] > 0 else None
-        rec["buyQty"] = round2(rec["buyQty"])
-        rec.pop("buyNotional", None)
-    return out
+        if con is None or not table_exists(con, "core.fills"):
+            return {}
+        signal_join = ""
+        stop_select = "NULL AS stop_loss"
+        if table_exists(con, "core.ai_signals"):
+            signal_join = """LEFT JOIN (SELECT run_id, symbol, stop_loss FROM core.ai_signals
+                QUALIFY row_number() OVER(PARTITION BY run_id, symbol ORDER BY ts DESC, signal_id DESC)=1) s
+                ON s.run_id=o.run_id AND s.symbol=o.symbol"""
+            stop_select = "s.stop_loss"
+        rows = query_rows(con, """
+            SELECT o.symbol, o.side, f.fill_id, f.qty, f.price_native,
+                   epoch_ms(f.ts_fill) AS ts_ms, """ + stop_select + """
+            FROM core.fills f JOIN core.orders o ON o.order_id=f.order_id
+            """ + signal_join + """ ORDER BY f.ts_fill, f.fill_id
+        """)
+        result = lifecycle_from_fills(rows)
+        if table_exists(con, "core.position_lots"):
+            costs = query_rows(con, """
+                SELECT symbol, SUM(CAST(remaining_qty AS DOUBLE)) AS remaining_qty,
+                       SUM(CAST(remaining_qty AS DOUBLE) * open_price
+                           + CASE WHEN open_qty>0 THEN CAST(open_fees_eur AS DOUBLE)
+                             * CAST(remaining_qty AS DOUBLE)/CAST(open_qty AS DOUBLE) ELSE 0 END) AS paid_cost_eur
+                FROM core.position_lots WHERE remaining_qty>0 GROUP BY symbol
+            """)
+            for row in costs:
+                sym = norm_symbol(row.get("symbol"))
+                if sym in result:
+                    result[sym]["costBasisQty"] = to_num(row.get("remaining_qty"), None)
+                    result[sym]["paidCostEUR"] = to_num(row.get("paid_cost_eur"), None)
+        return result
+
+
+def position_currency_contract(reference, lifecycle, quantity, updated_at, market_value, avg_price_eur, last_price_eur):
+    currency = norm_text(reference.get("currency")) or None
+    fx = to_num(reference.get("fx"), None)
+    reference_qty = to_num(reference.get("quantity"), None)
+    coherent = (reference_qty is not None and abs(reference_qty - quantity) < 1e-8
+                and parse_ts_key(reference.get("updatedAt")) >= parse_ts_key(updated_at))
+    if currency == "EUR":
+        fx = 1.0
+    avg_native = last_native = None
+    if coherent and fx and fx > 0:
+        avg_current = to_num(reference.get("avg_eur_at_current_fx"), None)
+        last_current = to_num(reference.get("lp_eur"), None)
+        avg_native = avg_current / fx if avg_current is not None else None
+        last_native = last_current / fx if last_current is not None else None
+    elif currency == "EUR":
+        avg_native, last_native = avg_price_eur, last_price_eur
+    cost_qty = to_num(lifecycle.get("costBasisQty"), None)
+    paid_cost = to_num(lifecycle.get("paidCostEUR"), None)
+    cost_coherent = cost_qty is not None and abs(cost_qty - quantity) < 1e-8
+    if not cost_coherent:
+        paid_cost = None
+    return {
+        "currency": currency, "priceCurrency": "EUR", "fxRateToEUR": fx if coherent else None,
+        "fxAsOf": reference.get("updatedAt") if coherent else None,
+        "nativePriceSource": "ibkr_snapshot" if coherent else ("eur_snapshot" if currency == "EUR" else None),
+        "avgPriceNative": avg_native, "lastPriceNative": last_native,
+        "avgPriceEUR": avg_price_eur, "lastPriceEUR": last_price_eur,
+        "paidCostEUR": paid_cost,
+        "paidCostSource": "remaining_lots_including_allocated_fees" if paid_cost is not None else None,
+        "perfLocalPct": (last_native / avg_native - 1) * 100 if avg_native and last_native else None,
+        "perfEURPct": (market_value / paid_cost - 1) * 100 if paid_cost and paid_cost > 0 else None,
+        "unrealizedPnLEURAtPaidCost": market_value - paid_cost if paid_cost is not None else None,
+    }
 
 
 def load_instrument_overrides(db_path):
@@ -832,7 +829,8 @@ db_probe_results = [probe_db_memory(p) for p in db_candidates]
 db_probe_selected = pick_best_probe(db_probe_results) or {"path": normalize_db_path(db_path_raw)}
 db_path = str(db_probe_selected.get("path") or normalize_db_path(db_path_raw))
 
-position_overrides, override_source = load_position_overrides(db_path)
+portfolio_reference = load_portfolio_reference(db_path)
+position_overrides, override_source = load_position_overrides(db_path, portfolio_reference.get("run_id"))
 instrument_overrides = load_instrument_overrides(db_path)
 position_lifecycle = load_position_lifecycle(db_path)
 fx_ref_map = load_fx_ref_map(db_path)
@@ -843,6 +841,10 @@ if isinstance(portfolio_summary_in, dict) and isinstance(portfolio_summary_in.ge
 if not base_rows and isinstance(rows_from_4b, list):
     base_rows = rows_from_4b
 
+if override_source == "core.positions_snapshot":
+    base_by_symbol = {norm_symbol(r.get("symbol") or r.get("Symbol")): r for r in base_rows if isinstance(r, dict)}
+    base_rows = [{**base_by_symbol.get(sym, {}), "symbol": sym, "Symbol": sym}
+                 for sym, value in position_overrides.items() if (to_num(value.get("quantity"), 0.0) or 0.0) > 0]
 positions = []
 seen_symbols = set()
 for row in base_rows:
@@ -860,31 +862,8 @@ for row in base_rows:
     quantity = to_num(ov.get("quantity"), to_num(row.get("Quantity"), to_num(row.get("qty"), 0.0)))
     avg_price = to_num(ov.get("avgPrice"), to_num(row.get("AvgPrice"), to_num(row.get("avgPrice"), None)))
     last_price = to_num(ov.get("lastPrice"), to_num(row.get("LastPrice"), to_num(row.get("price"), 0.0)))
-    _perf_local_pct = ((last_price / avg_price - 1.0) * 100.0) if (avg_price and last_price and avg_price > 0) else None  # perf PRIX devise locale (avant conversion FX)
     market_value = to_num(ov.get("marketValue"), to_num(row.get("MarketValue"), to_num(row.get("value"), quantity * last_price)))
     unrealized_pnl = to_num(ov.get("unrealizedPnL"), to_num(row.get("UnrealizedPnL"), to_num(row.get("pnl"), 0.0)))
-    # FIX 2026-07-13 : conversion FX -> EUR des positions non-EUR (MTM/consensus stockent en devise
-    # native -> equity gonflee + ecart positions vs snapshot IBKR). Detection d'echelle pour ne
-    # jamais double-convertir ; avg_price est deja en EUR. Gardee (try/except) : ne casse jamais le run.
-    try:
-        _fx = fx_ref_map.get(symbol)
-        if _fx and _fx.get("currency") and _fx.get("currency") != "EUR" and _fx.get("fx") and _fx["fx"] > 0:
-            _factor = float(_fx["fx"])
-            _lp_ref = _fx.get("lp_eur")
-            _lp = to_num(last_price, None)
-            if _lp is not None and _lp > 0:
-                _cand = _lp * _factor
-                _do = True
-                if _lp_ref is not None and _lp_ref > 0:
-                    _do = abs(_cand - _lp_ref) < abs(_lp - _lp_ref)
-                if _do:
-                    _qty = to_num(quantity, 0.0) or 0.0
-                    last_price = _cand
-                    market_value = _qty * last_price
-                    if avg_price is not None:
-                        unrealized_pnl = (last_price - avg_price) * _qty
-    except Exception:
-        pass
     updated_at = ov.get("updatedAt") or to_iso(row.get("UpdatedAt"), None) or datetime.now(timezone.utc).isoformat()
 
     last_decision = normalize_last_decision((decision_memory or {}).get(symbol), symbol_hint=symbol)
@@ -897,7 +876,11 @@ for row in base_rows:
         continue
     last_decision["assetClass"] = normalize_asset_class(last_decision.get("assetClass"), symbol) or asset_class
     lifecycle = position_lifecycle.get(symbol, {})
+    if abs((to_num(lifecycle.get("netQty"), -1.0) or 0.0) - quantity) > 1e-8:
+        lifecycle = {}  # a quantity mismatch cannot establish the current lot's age
     opened_at = lifecycle.get("openedAt")
+    currency_contract = position_currency_contract(fx_ref_map.get(symbol, {}), lifecycle, quantity,
+                                                   updated_at, market_value, avg_price, last_price)
     name = str(row.get("Name") or row.get("name") or "").strip()
     if (is_unknown_text(name) or norm_symbol(name) == symbol) and not is_unknown_text(meta_ov.get("name")):
         name = str(meta_ov.get("name")).strip()
@@ -924,7 +907,7 @@ for row in base_rows:
             "quantity": quantity,
             "avgPrice": round2(avg_price) if avg_price is not None else None,
             "lastPrice": round2(last_price),
-            "perfLocalPct": (round2(_perf_local_pct) if _perf_local_pct is not None else None),
+            **currency_contract,
             "marketValue": round2(market_value),
             "unrealizedPnL": round2(unrealized_pnl),
             "updatedAt": updated_at,
@@ -944,10 +927,14 @@ for row in base_rows:
 positions.sort(key=lambda p: to_num(p.get("marketValue"), 0.0), reverse=True)
 
 cash_value = to_num((portfolio_summary_in or {}).get("cashEUR"), 0.0) if isinstance(portfolio_summary_in, dict) else 0.0
+if portfolio_reference:
+    cash_value = to_num(portfolio_reference.get("cash_eur"), cash_value)
 market_value = sum(to_num(p.get("marketValue"), 0.0) for p in positions)
 computed_total_value = cash_value + market_value
 upstream_total_value = to_num((portfolio_summary_in or {}).get("totalPortfolioValueEUR"), None) if isinstance(portfolio_summary_in, dict) else None
-if upstream_total_value is None or upstream_total_value <= 0:
+if portfolio_reference and to_num(portfolio_reference.get("total_value_eur"), 0) > 0:
+    total_value = to_num(portfolio_reference["total_value_eur"], computed_total_value)
+elif upstream_total_value is None or upstream_total_value <= 0:
     total_value = computed_total_value
 elif abs(upstream_total_value - computed_total_value) > 0.01:
     total_value = computed_total_value
@@ -992,6 +979,8 @@ summary = {
     "totalValue": round2(total_value),
     "positionsCount": len(positions),
     "marketValue": round2(market_value),
+    "navComponentResidualEUR": round2(total_value - computed_total_value),
+    "navSource": "core.portfolio_snapshot" if portfolio_reference else "portfolio_components",
     "exposurePct": round2(exposure_pct),
 }
 
@@ -1017,6 +1006,9 @@ return [
             "db_path": input0.get("db_path"),
             "portfolioBrief": {
                 "generatedAt": datetime.now(timezone.utc).isoformat(),
+                "dailyReturnPct": portfolio_reference.get("dailyReturnPct"),
+                "dailyReferenceAt": portfolio_reference.get("dailyReferenceAt"),
+                "dailyRiskAsOf": to_iso(portfolio_reference.get("ts_ms"), None),
                 "portfolioUpdatedAt": portfolio_updated_at,
                 "summary": summary,
                 "cash": summary["cash"],

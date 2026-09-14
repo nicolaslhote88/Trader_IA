@@ -20,7 +20,11 @@ def build() -> dict:
                     "interval": [
                         {
                             "field": "cronExpression",
-                            "expression": "0 15 9-17 * * 1-5",
+                            "expression": "0 15 9-16 * * 1-5",
+                        },
+                        {"field": "cronExpression", "expression": "0 40 17 * * 1-5"},
+                        {
+                            "field": "cronExpression", "expression": "0 15 23 * * 1-5",
                         }
                     ]
                 }

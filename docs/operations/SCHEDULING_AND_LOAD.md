@@ -1,6 +1,6 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-08-06.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-09-14.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
@@ -25,14 +25,14 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 | Workflow | Cron (Paris) | Fréq. | Durée moy. | Max | Base principale (rôle) |
 |---|---|---|---|---|---|
 | AG2-V3 Technical Watchlist | `0 22,2 * * *` | 7j/7 | ~41 min | 59 | ag2_v3 (écrivain) |
-| AG2-V3 Technical Held+Core | `0 9,13,15 * * 1-5` | L-V | ~23 min | 27 | ag2_v3 (écrivain) |
+| AG2-V3 Technical Held+Core | `0 9,13 * * 1-5` + `35 16 * * 1-5` | L-V | 10–16 min récemment | 27 historique | ag2_v3 (écrivain) |
 | AG2 Universe Health Quarantine | `0 20 * * 1-5` | L-V | ~8 min | 12 | ag2_v3 (écrivain) |
 | AG3-V2 Fundamental Held+Core | `0 0 * * *` | 7j/7 | ~18 min | 28 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
 | AG3-V2 Fundamental Watchlist | `0 1,4 * * *` | 7j/7 | ~17 min | 20 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
 | AG4-V3 News Watcher | `45 6,10,18 * * 1-5` | L-V | ~89 min | 92 | ag4_v3 (écrit) / ag2_v3 (lit brièvement au start) |
 | AG4_Spé-V2 News symbole | `0 5 8,11,14,17 * * 1-5` | L-V | ~24 min | 34 | ag4_spe (écrit) / ag2_v3 (lit au start) |
-| AG1 V4 Consensus PM | `0 0 14 * * 1-5` + `0 30 16 * * 1-5` | L-V | ~6 min | 12 | ag1_v4 (écrit) / lit ag2_v3·ag3_v2·ag4 — **2 créneaux** : 14:00 (Euronext) + **16:30 (US ouvert depuis 15:30 + Euronext jusqu'à 17:30)**. Le 16:30 rend les actions US réellement tradables (à 14:00 le marché US est fermé → cotations "C"/figées → gate liquidité). Ne pas déplacer sans raison. |
-| AG1-PF MTM | `0 15 9-17 * * 1-5` | L-V | <1 min | 3 | ag1_v4 (MTM horaire) — **H+15 depuis 2026-07-02** (F4 : locks avec AG1 V4 14:00/16:30 + recon qui écrivent la même base) |
+| AG1 V4 Consensus PM | `0 10 17 * * 1-5` | L-V, une fois/jour | ~6 min | 12 historique | ag1_v4 (écrit), ag2/3/4 (lit). Après AG2 16:35, avant clôture Euronext usuelle 17:30. |
+| AG1-PF MTM | `0 15 9-16 * * 1-5` + `0 40 17 * * 1-5` + `0 15 23 * * 1-5` | L-V | <1 min | 3 | ag1_v4 ; relevé après PM et relevé de fin de journée, même si NAV stable. |
 | AG4_Spé-Finnhub Global News | `0 0 10,13,16 * * 1-5` | L-V | ~20 min | 30 | ag4_spe |
 | AG4_Spé-IBKR Portfolio News | `0 0 10,13,16 * * 1-5` | L-V | ~9 min | 13 | ag4_spe |
 | AG4_Spé Health Alert | `0 30 16 * * 1-5` | L-V | <1 min | 2 | ag4_spe |
@@ -49,6 +49,20 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 `Finalize Run`; un lot complet `SUCCESS` ou `PARTIAL` avance et relit son
 curseur dans la transaction. Toute incohérence devient
 `AG2_CURSOR_GUARD_FAILED`. Le run manuel Held+Core `20812` a vérifié `0 → 18`.
+
+## Ajustement du 14 septembre 2026
+
+La version publiée avant intervention avait **un seul passage AG1 à 16:30** ;
+les deux passages figurant dans la documentation étaient obsolètes. Il reste
+un seul passage, déplacé à 17:10, après le dernier AG2 déplacé de 15:00 à 16:35.
+Le budget de 35 minutes conserve huit minutes au-delà du maximum AG2 historique
+de 27 minutes. PF quitte 17:15 pour 17:40 ; 23:15 ajoute une observation après
+clôtures actions et change quotidien. Le cron de couverture, lecture seule,
+est à 23:45 UTC du lundi au vendredi. Aucun autre cron n’a été déplacé.
+
+Voir [preuves et limites](20260914_performance_contract_remediation.md).
+Les sections suivantes retracent la déconfliction historique ; leurs anciennes
+heures ne remplacent pas le tableau courant ci-dessus.
 
 ## Stratégie de déconfliction (déployée 2026-06-28)
 
@@ -71,7 +85,7 @@ curseur dans la transaction. Toute incohérence devient
 1. Avant d'ajouter/déplacer un cron, vérifier les **écrivains** de la même base et garantir un écart ≥ durée_max + marge.
 2. Plusieurs **lecteurs** d'une même base peuvent coexister ; seul un écrivain bloque.
 3. Garder chaque node < 20 min (timeout tâche) → préférer +de slots à +gros batch.
-4. Ne jamais déplacer l'heure d'**AG1 V4 (14:00)** sans décision explicite (run de trading).
+4. Tout déplacement d’AG1 V4 doit être autorisé et documenté ; le passage courant est 17:10 Paris.
 
 ## Maintenance DuckDB hors n8n
 

@@ -2,7 +2,7 @@
 
 function isObj(x) { return x && typeof x === "object" && !Array.isArray(x); }
 function safeJsonParse(s) { try { return JSON.parse(s); } catch { return null; } }
-function toNumOrNull(x) { const n = Number(x); return Number.isFinite(n) ? n : null; }
+function toNumOrNull(x) { if (x === null || x === undefined || x === "") return null; const n = Number(x); return Number.isFinite(n) ? n : null; }
 function toNum(x, dflt = 0) { const n = Number(x); return Number.isFinite(n) ? n : dflt; }
 function normSymbol(v) { return String(v ?? "").trim().toUpperCase(); }
 function clampText(v, max = 0) {
@@ -255,6 +255,15 @@ for (const a of agentDecision.actions || []) {
     continue;
   }
 
+  const step = Math.max(1, toNumOrNull(a.quantityIncrement) ?? 1);
+  if (Math.abs(qty / step - Math.round(qty / step)) > 1e-8) {
+    reject(symbol, "BOARD_LOT_MISMATCH", String(step)); continue;
+  }
+  const dailyReturn = toNumOrNull(portfolioSummary.dailyReturnPct);
+  const dailyLimit = cfgNumber(configRaw, ["max_daily_drawdown_pct"], 6);
+  if (side === "BUY" && dailyReturn !== null && dailyLimit > 0 && dailyReturn <= -dailyLimit) {
+    reject(symbol, "DAILY_LOSS_BUY_BLOCKED", String(dailyReturn)); continue;
+  }
   if (side === "BUY" && limits.killSwitchActive) {
     reject(symbol, "KILL_SWITCH_BUY_BLOCKED");
     continue;
@@ -317,10 +326,12 @@ for (const a of agentDecision.actions || []) {
   if (side === "BUY" && orderValuePct > limits.maxOrderValuePct) { reject(symbol, "MAX_ORDER_VALUE_PCT", orderValuePct.toFixed(2)); continue; }
 
   orders.push({
+    sector,
     symbol,
     action: effectiveAction,
     side,
     quantity: qty,
+    quantityIncrement: Math.max(1, toNumOrNull(a.quantityIncrement) ?? 1),
     assetClass,
     sector,
     currency,
@@ -352,13 +363,12 @@ for (const a of agentDecision.actions || []) {
 }
 
 let availableCash = cashEUR;
-for (const o of orders) {
-  if (o.side !== "SELL") continue;
-  const sellPriceEUR = toNumOrNull(o.priceEUR) ?? toNumOrNull(posLast[o.symbol]) ?? 0;
-  availableCash += toNum(o.quantity, 0) * sellPriceEUR;
-}
+// Proposed sales are not cash. Only subsequent confirmed fills can finance another order.
 
 const cashSafeOrders = [];
+const reservedPositions = { ...posMarketValue };
+const reservedSectors = { ...sectorValue };
+const reservedSymbols = new Set(Object.keys(posQty).filter((s) => posQty[s] > 0));
 for (const o of orders) {
   if (o.side === "SELL") {
     cashSafeOrders.push(o);
@@ -372,7 +382,8 @@ for (const o of orders) {
   }
 
   const requestedQty = toNum(o.quantity, 0);
-  const affordableQty = Math.floor((availableCash + 1e-9) / (buyPriceEUR * (1 + limits.defaultFeeBps / 10000.0)));
+  const quantityIncrement = Math.max(1, toNumOrNull(o.quantityIncrement) ?? 1);
+  const affordableQty = Math.floor((availableCash + 1e-9) / (buyPriceEUR * (1 + limits.defaultFeeBps / 10000.0) * quantityIncrement)) * quantityIncrement;
   if (affordableQty <= 0) {
     reject(o.symbol, "INSUFFICIENT_CASH", `need=${(requestedQty * buyPriceEUR).toFixed(2)}:avail=${availableCash.toFixed(2)}`);
     continue;
@@ -387,7 +398,22 @@ for (const o of orders) {
     o.estNotionalEUR = Math.round(affordableQty * buyPriceEUR * 100) / 100;
     o.expectedFeesEUR = Math.round((affordableQty * buyPriceEUR * limits.defaultFeeBps / 10000.0) * 100) / 100;
   }
-  availableCash -= toNum(o.estNotionalEUR, 0) + toNum(o.expectedFeesEUR, 0);
+  const reservedValue = toNum(o.estNotionalEUR, 0);
+  const reservedSector = o.sector || posSector[o.symbol] || "UNKNOWN";
+  const newSymbol = !reservedSymbols.has(o.symbol);
+  if (newSymbol && reservedSymbols.size >= limits.maxOpenPositions) {
+    reject(o.symbol, "MAX_OPEN_POSITIONS_BATCH"); continue;
+  }
+  if (((reservedPositions[o.symbol] || 0) + reservedValue) / portfolioValue * 100 > limits.maxPosPct + 1e-8) {
+    reject(o.symbol, "MAX_POSITION_PCT_BATCH"); continue;
+  }
+  if (reservedSector !== "UNKNOWN" && ((reservedSectors[reservedSector] || 0) + reservedValue) / portfolioValue * 100 > limits.maxSectorPct + 1e-8) {
+    reject(o.symbol, "MAX_SECTOR_PCT_BATCH"); continue;
+  }
+  reservedSymbols.add(o.symbol);
+  reservedPositions[o.symbol] = (reservedPositions[o.symbol] || 0) + reservedValue;
+  reservedSectors[reservedSector] = (reservedSectors[reservedSector] || 0) + reservedValue;
+  availableCash -= reservedValue + toNum(o.expectedFeesEUR, 0);
   cashSafeOrders.push(o);
 }
 

@@ -23,6 +23,9 @@ documents ci-dessous décrivent l'état courant.
 
 ## Derniers changements live
 
+- Contrat de performance, positions, préflight, comparaison EUR et horaires US :
+  [corrections du 14 septembre 2026](operations/20260914_performance_contract_remediation.md).
+
 - AG5–AG8, synthèse atomique et pack consultatif AG1 :
   `operations/20260805_ag5_ag8_global_context_live_deploy.md`.
 - Remédiation de la qualité des sources AG5–AG8 :

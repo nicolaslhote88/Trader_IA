@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
+from market_contracts import equity_quantity_rules, quantity_error, normalize_news_time
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
@@ -1173,12 +1174,7 @@ async def news_portfolio() -> dict:
         if " - " in headline:
             symbol_guess = headline.split(" - ", 1)[0].strip().upper()
         rt = it.get("receiptTime_r") or it.get("displayTime_r")
-        published_at = None
-        if rt:
-            try:
-                published_at = datetime.fromtimestamp(int(rt) / 1000.0, tz=timezone.utc).isoformat()
-            except Exception:
-                published_at = None
+        time_contract = normalize_news_time(rt)
         out.append(
             {
                 "news_article_id": it.get("id"),
@@ -1187,7 +1183,7 @@ async def news_portfolio() -> dict:
                 "source": it.get("source"),
                 "provider": it.get("provider"),
                 "sentiment": it.get("sentiment"),
-                "published_at": published_at,
+                **time_contract,
                 "receipt_time": it.get("receiptTime"),
                 "tickers": it.get("tickers"),
             }
@@ -1322,6 +1318,9 @@ async def resolve_equity_contracts(
                 "increment_digits": rules.get("incrementDigits"),
                 "increment_rules": rules.get("incrementRules") or [],
                 "price_magnifier": rules.get("priceMagnifier"),
+                **equity_quantity_rules(symbol, info, rules),
+                "account_trade_allowed": (ACCOUNT_ID_OVERRIDE in rules["canTradeAcctIds"]
+                    if isinstance(rules.get("canTradeAcctIds"), list) and ACCOUNT_ID_OVERRIDE else None),
                 "metadata_error": (
                     str(info_result) if isinstance(info_result, Exception) else None
                 ),
@@ -1606,6 +1605,19 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                 "error": str(exc),
             })
             continue
+
+        if not DRY_RUN:
+            try:
+                quantity_info = await client.get_contract_info(conid)
+                quantity_contract = equity_quantity_rules(symbol, quantity_info, {})
+                qty_error = quantity_error(order.quantity, quantity_contract, ibkr_side)
+                if qty_error:
+                    raise ValueError(qty_error)
+            except (CPAPIError, ValueError) as exc:
+                errors.append({"order_id": order.order_id,
+                    "client_order_id": order.client_order_id or order.order_id,
+                    "error": f"IBKR_QUANTITY_PREFLIGHT_FAILED:{symbol}:{exc}"})
+                continue
 
         order_type = normalize_order_type(order.order_type)
         if not DRY_RUN and order_type == "LMT" and order.limit_price:

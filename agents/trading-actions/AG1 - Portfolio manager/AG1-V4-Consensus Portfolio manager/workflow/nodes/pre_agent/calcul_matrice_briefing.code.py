@@ -404,7 +404,9 @@ for r in rows:
     )
 
     funda_score = safe_float(r.get("Funda_Score"), 50.0)
-    tech_prob = 50.0 + (8.0 if tech_action == "BUY" else (-8.0 if tech_action == "SELL" else 0.0)) + (tech_conf - 50.0) * 0.20
+    tech_direction = 1.0 if tech_action == "BUY" else (-1.0 if tech_action == "SELL" else 0.0)
+    tech_strength = max(0.0, 8.0 + (max(0.0, min(100.0, tech_conf)) - 50.0) * 0.20)
+    tech_prob = 50.0 + tech_direction * tech_strength
     funda_prob = 0.7 * funda_score + 0.3 * (100.0 - funda_risk)
     sentiment_prob = clamp(50.0 + symbol_news_impact * 4.0 + macro_impact * 1.5, 0.0, 100.0)
 
@@ -697,7 +699,7 @@ def fmt_row(r):
     return (
         f"- {r['symbol']} ({r['name']}) [{r.get('asset_class','EQUITY')}:{r['sector']}] | {r['matrix_action']} | G{r['setup_grade']} | "
         f"Risk {int(r['risk_score_u'])}/100 | Reward {int(r['reward_score_u'])}/100 | "
-        f"R {safe_float(r['r_multiple']):.2f} | EV {safe_float(r['ev_r']):.2f} | pWin {safe_float(r['p_win'])*100:.1f}% | "
+        f"R {safe_float(r['r_multiple']):.2f} | EV score {safe_float(r['ev_r']):.2f} | score {safe_float(r['p_win'])*100:.1f}/100 | "
         f"DataQ {safe_float(r['data_quality_score']):.0f}/100 | size {safe_float(r['size_reco_pct']):.1f}% | "
         f"E {safe_float(r['entry_price']):.2f} S {safe_float(r['stop_price']):.2f} TP {safe_float(r['tp_price']):.2f} | gates={gates}"
     )
@@ -733,7 +735,7 @@ brief_lines.append(
     f"AG2 LLM: APPROVE={count_llm_approve} | WATCH={count_llm_watch} | REJECT={count_llm_reject} "
     f"(REJECT exclu de Entrer/Renforcer ; APPROVE/WATCH ponderes par qualite)"
 )
-brief_lines.append(f"EV(R) moyen={avg_ev:.2f} | Prob.win moyenne={avg_pwin:.1f}%")
+brief_lines.append(f"EV heuristique moyen={avg_ev:.2f} | Score moyen={avg_pwin:.1f}/100 (non calibre)")
 brief_lines.append("")
 brief_lines.append(
     "Selection structuree transmise dans opportunity_pack.rows "
@@ -767,7 +769,9 @@ thresholds = {
 
 pack_rows = []
 held_exit_rows = [r for r in exit_rows if safe_float(r.get("symbol_weight"), 0.0) > 0.0]
-selected_rows = enter_rows[:PACK_TOP_ENTER] + watch_rows[:PACK_TOP_WATCH] + held_exit_rows[:PACK_TOP_EXIT]
+# The final top ten are selected after executable constraints, with a bounded reserve.
+held_rows = [r for r in matrix_rows if safe_float(r.get("symbol_weight"), 0.0) > 0.0]
+selected_rows = enter_rows[:50] + held_rows + watch_rows[:PACK_TOP_WATCH]
 seen_pack_symbols = set()
 for r in selected_rows:
     symbol_key = str(r.get("symbol") or "").strip().upper()
@@ -791,6 +795,10 @@ for r in selected_rows:
             "r": round(safe_float(r["r_multiple"]), 4),
             "ev_r": round(safe_float(r["ev_r"]), 4),
             "p_win_pct": round(safe_float(r["p_win"]) * 100.0, 2),
+            "score_calibrated": False,
+            "score_semantics": "heuristic_not_probability",
+            "held": safe_float(r.get("symbol_weight"), 0.0) > 0.0,
+            "matrix_rank": matrix_rows.index(r) + 1,
             "data_quality": round(safe_float(r["data_quality_score"]), 2),
             "size_reco_pct": round(safe_float(r["size_reco_pct"]), 2),
             "gates": r.get("gate_summary") or "OK",

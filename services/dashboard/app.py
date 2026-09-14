@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 import duckdb
+from performance_metrics import BENCHMARK_DEFAULTS, benchmark_contract, benchmark_eur, benchmark_at_nav_times, flow_neutral_index
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -1389,24 +1390,20 @@ def _build_fx_pair_history_matrix(pair: str, history: pd.DataFrame) -> go.Figure
     return fig
 
 
-DEFAULT_BENCHMARKS = {
-    "CAC 40": {"ticker": "^FCHI"},
-    "S&P 500": {"ticker": "^GSPC"},
-    "EURO STOXX 50": {"ticker": "^STOXX50E"},
-}
+DEFAULT_BENCHMARKS = BENCHMARK_DEFAULTS
 
 
 def _load_benchmarks_config_from_env() -> dict[str, dict[str, str]]:
     raw = str(os.getenv("BENCHMARK_TICKERS_JSON", "") or "").strip()
     if not raw:
-        return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+        return {k: dict(v) for k, v in DEFAULT_BENCHMARKS.items()}
     try:
         parsed = json.loads(raw)
     except Exception:
-        return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+        return {k: dict(v) for k, v in DEFAULT_BENCHMARKS.items()}
 
     if not isinstance(parsed, dict):
-        return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+        return {k: dict(v) for k, v in DEFAULT_BENCHMARKS.items()}
 
     out: dict[str, dict[str, str]] = {}
     for label, cfg in parsed.items():
@@ -1419,11 +1416,11 @@ def _load_benchmarks_config_from_env() -> dict[str, dict[str, str]]:
         else:
             ticker = str(cfg or "").strip().upper()
         if ticker:
-            out[lbl] = {"ticker": ticker}
+            out[lbl] = benchmark_contract(ticker, cfg if isinstance(cfg, dict) else {})
 
     if out:
         return out
-    return {k: {"ticker": str(v.get("ticker", "")).strip().upper()} for k, v in DEFAULT_BENCHMARKS.items()}
+    return {k: dict(v) for k, v in DEFAULT_BENCHMARKS.items()}
 
 
 BENCHMARKS_CONFIG = _load_benchmarks_config_from_env()
@@ -1597,8 +1594,8 @@ METRICS_META: dict[str, dict[str, str]] = {
     },
     "ev_r": {
         "label": "EV(R)",
-        "definition_short": "Esperance de gain en multiple R.",
-        "definition_long": "EV(R) combine proba de gain et asymetrie R. Positif = avantage statistique; negatif = desavantage.",
+        "definition_short": "Score de gain théorique en multiple R.",
+        "definition_long": "EV(R) combine proba de gain et asymetrie R. Positif = classement favorable du score, sans preuve statistique; negatif = desavantage.",
         "formula": "p_win x R_utilise - (1 - p_win)",
         "unit": "R",
         "source": "Derived",
@@ -1607,14 +1604,14 @@ METRICS_META: dict[str, dict[str, str]] = {
         "display_format": "signed_float_2",
     },
     "p_win": {
-        "label": "Prob. win",
-        "definition_short": "Probabilite estimee de scenario gagnant.",
-        "definition_long": "Issue du score probabiliste AG2+AG3+AG4 avec ajustements regime/alignment.",
+        "label": "Score /100",
+        "definition_short": "Score heuristique non calibré en probabilité.",
+        "definition_long": "Combinaison heuristique AG2+AG3+AG4 avec ajustements ; aucune fréquence de succès mesurée.",
         "formula": "p_win = clamp(prob_score / 100, 0.05, 0.95)",
         "unit": "%",
         "source": "Derived (AG2+AG3+AG4)",
         "update_frequency": "A chaque rafraichissement dashboard",
-        "impact_on_decision": "Transforme le ratio R en esperance reelle via EV(R).",
+        "impact_on_decision": "Combine le score au ratio R pour le classement ; aucun rendement attendu validé.",
         "display_format": "pct_1",
     },
     "data_quality_score": {
@@ -1778,14 +1775,14 @@ TEXTS_FR: dict[str, object] = {
   “R = (TP − Entry) / (Entry − Stop).”
   “R > 2 : ratio généralement intéressant ; R < 1 : ratio faible.”
 
-- Prob. win (%)
-  “Probabilité estimée (modèle) que le scénario gagne (TP atteint avant Stop).”
-  “C’est une estimation, sensible à la qualité et fraîcheur des données.”
+- Score /100
+  “Score heuristique de classement, non calibré en probabilité de succès.”
+  “Il dépend de la qualité et de la fraîcheur des données ; aucun taux de réussite n’est mesuré ici.”
 
 - EV(R)
-  “Valeur espérée du trade en unités de risque.”
+  “Score théorique combinant le score heuristique et le ratio de risque.”
   “EV(R) > 0 : favorable ; ≈ 0 : neutre ; < 0 : défavorable.”
-  “Plus |EV(R)| est grand, plus la conviction est forte.”
+  “La magnitude du score ne démontre pas un avantage statistique.”
 
 - Grade (A/B/C)
   “Classement relatif sur l’univers du jour.”
@@ -1805,8 +1802,8 @@ TEXTS_FR: dict[str, object] = {
         "Risque": "Risque relatif (0–100). 0 = faible risque vs l’univers, 100 = risque élevé. Voir ‘Décomposition risque’.",
         "Reward": "Reward relatif (0–100). 0 = faible attractivité vs l’univers, 100 = forte attractivité. Voir ‘Décomposition reward’.",
         "R": "R du plan : (TP−Entry)/(Entry−Stop). Mesure l’asymétrie du trade.",
-        "EV(R)": "Valeur espérée (en R). Positif = favorable, négatif = défavorable. Plus |EV(R)| est grand, plus la conviction est forte.",
-        "Prob. win": "Probabilité estimée de succès du setup (modèle). Dépend de la qualité des données.",
+        "EV(R)": "Score théorique (en R). Positif = classement favorable, négatif = défavorable ; aucun avantage statistique démontré.",
+        "Score /100": "Score heuristique sur 100. Il ne mesure pas une probabilité de réussite.",
         "Data quality": "Score (0–100) de complétude/fiabilité des inputs. Si < seuil, gates WARN/BLOCK.",
         "Sizing reco": "Taille recommandée (%). Ajustée par EV(R), risque, liquidité, concentration, data quality.",
     },
@@ -3639,6 +3636,15 @@ def _benchmark_lookback_days(period_key: str, min_start_ts: object = None) -> in
     return int(min(days, 3650))
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_external_flows_for_comparison(db_path):
+    try:
+        with duckdb.connect(str(db_path), read_only=True) as con:
+            return con.execute("SELECT ts AS timestamp, CAST(amount AS DOUBLE) AS amount FROM core.cash_ledger WHERE UPPER(type) IN ('DEPOSIT','WITHDRAWAL','EXTERNAL_DEPOSIT','EXTERNAL_WITHDRAWAL') AND currency='EUR' ORDER BY ts").fetchdf(), True
+    except Exception:
+        return pd.DataFrame(columns=["timestamp", "amount"]), False
+
+
 @st.cache_data(ttl=1800, show_spinner=False)
 def fetch_benchmarks_history(
     tickers: tuple[str, ...],
@@ -3734,9 +3740,9 @@ def _align_daily_normalized_series(series_map: dict[str, pd.DataFrame]) -> pd.Da
     merged = merged.sort_values("date")
     value_cols = [c for c in merged.columns if c != "date"]
     if value_cols:
-        merged[value_cols] = merged[value_cols].ffill()
-        merged = merged.dropna(subset=value_cols, how="all")
-        merged = merged.dropna(subset=value_cols, how="any")
+        # Benchmark observations were already aligned backward with a four-day bound.
+        # An additional forward-fill here would silently erase missing-data limits.
+        merged = merged.dropna(subset=value_cols)
     return merged
 
 
@@ -5014,7 +5020,9 @@ def _build_multi_agent_matrix(
         reward_score_100 = max(0.0, min(100.0, reward_score_100))
 
         funda_score = safe_float(r.get("funda_score", 50))
-        tech_prob = 50.0 + (8.0 if tech_action == "BUY" else (-8.0 if tech_action == "SELL" else 0.0)) + (tech_conf - 50.0) * 0.20
+        tech_direction = 1.0 if tech_action == "BUY" else (-1.0 if tech_action == "SELL" else 0.0)
+        tech_strength = max(0.0, 8.0 + (max(0.0, min(100.0, tech_conf)) - 50.0) * 0.20)
+        tech_prob = 50.0 + tech_direction * tech_strength
         funda_prob = 0.7 * funda_score + 0.3 * (100.0 - funda_risk)
         sentiment_prob = min(100.0, max(0.0, 50.0 + symbol_news_impact * 4.0 + macro_impact * 1.5))
         regime = str(r.get("ai_regime_d1", "")).upper().strip()
@@ -7582,7 +7590,7 @@ def _prepare_multi_agent_view(
     if "symbol" in tech.columns:
         tech["symbol"] = tech["symbol"].astype(str).str.strip().str.upper()
     action_col = _first_existing_column(tech, ["d1_action", "action", "signal"]) if not tech.empty else None
-    conf_col = _first_existing_column(tech, ["d1_confidence", "confidence", "d1_score"]) if not tech.empty else None
+    conf_col = _first_existing_column(tech, ["d1_confidence", "confidence"]) if not tech.empty else None
     ts_col_tech = _first_existing_column(tech, ["workflow_date", "d1_date", "updated_at", "created_at"]) if not tech.empty else None
     if ts_col_tech:
         tech["last_tech_date"] = pd.to_datetime(tech[ts_col_tech], errors="coerce", utc=True)
@@ -12809,7 +12817,7 @@ if page == "Dashboard Trading":
                     a4.metric("Trades run", _fmt_number(c.get("trades_this_run"), 0))
                     st.caption(
                         f"CumFees: {_fmt_currency(c.get('cum_fees_eur'), 2)} | "
-                        f"CumAiCost: {_fmt_currency(c.get('cum_ai_cost_eur'), 2)} | "
+                        f"Coût IA comptabilisé (facturation externe inconnue): {_fmt_currency(c.get('cum_ai_cost_eur'), 2)} | "
                         f"Derniere MAJ data: {_fmt_paris_datetime(c.get('last_data_update'), '%d/%m %H:%M')}"
                     )
 
@@ -13964,7 +13972,7 @@ if page == "Dashboard Trading":
 
             ref_default = "CAC 40" if "CAC 40" in selected_benchmarks else (selected_benchmarks[0] if selected_benchmarks else "")
             alpha_ref = b2.selectbox(
-                "Benchmark reference (alpha)",
+                "Référence pour l’écart de rendement",
                 options=selected_benchmarks if selected_benchmarks else benchmark_labels_all,
                 index=(
                     (selected_benchmarks if selected_benchmarks else benchmark_labels_all).index(ref_default)
@@ -14005,6 +14013,13 @@ if page == "Dashboard Trading":
                     current_ts = pd.Timestamp.now(tz="UTC")
                 raw_series = pd.DataFrame([{"timestamp": current_ts, "value": total_val}])
 
+            external_flows, flow_read_ok = fetch_external_flows_for_comparison(AG1_V4_CONSENSUS_DUCKDB_PATH)
+            if flow_read_ok:
+                raw_series = flow_neutral_index(raw_series, external_flows)
+            else:
+                raw_series = pd.DataFrame(columns=["timestamp", "value"])
+                st.warning("Comparaison suspendue : le journal des apports/retraits est inaccessible.")
+            st.caption("Rendement chaîné corrigé des apports/retraits EUR comptabilisés, supposés en fin d’intervalle. La couverture des flux externes doit être rapprochée du relevé courtier ; les dividendes et les transactions restent dans la performance.")
             norm_series = normalize_to_base100(raw_series, ts_col="timestamp", value_col="value")
             if norm_series.empty:
                 portfolio_missing.append(p_label)
@@ -14025,7 +14040,7 @@ if page == "Dashboard Trading":
                 if BENCHMARKS_CONFIG.get(lbl, {}).get("ticker", "")
             )
             benchmarks_raw = fetch_benchmarks_history(
-                selected_tickers,
+                selected_tickers + ("EURUSD=X",),
                 YFINANCE_API_URL,
                 lookback_days=lookback_days,
                 interval="1d",
@@ -14046,6 +14061,13 @@ if page == "Dashboard Trading":
                     benchmark_missing.append(f"{bench_label} ({ticker})")
                     continue
 
+                raw = benchmark_eur(raw, BENCHMARKS_CONFIG.get(bench_label, {}), benchmarks_raw.get("EURUSD=X"))
+                raw = benchmark_at_nav_times(raw, raw_series)
+                if raw.empty:
+                    benchmark_missing.append(f"{bench_label} (devise, change ou clôture datée indisponible)")
+                    continue
+                observed = raw["benchmark_as_of"].iloc[-1]
+                st.caption(f"{bench_label} : indice en EUR · {BENCHMARKS_CONFIG.get(bench_label, {}).get('variant')} · dernière clôture utilisable {observed:%d/%m/%Y %H:%M UTC}")
                 wk = raw[["timestamp", "close"]].rename(columns={"close": "total_value"})
                 wk = _slice_timeseries_by_period(wk, compare_period)
                 if wk is None or wk.empty:
@@ -14066,7 +14088,7 @@ if page == "Dashboard Trading":
                 k_last_close = float(k_last.iloc[-1]) if not k_last.empty else pd.NA
                 k_ret = _series_period_return_pct(pd.to_numeric(wk.get("total_value", pd.Series(dtype=float)), errors="coerce"))
                 k_ts = pd.to_datetime(wk.get("timestamp", pd.Series(dtype=object)), errors="coerce", utc=True).dropna()
-                k_last_ts = k_ts.iloc[-1] if not k_ts.empty else pd.NaT
+                k_last_ts = observed
 
                 benchmark_kpis.append(
                     {
@@ -14078,6 +14100,7 @@ if page == "Dashboard Trading":
                     }
                 )
 
+            st.caption("Comparaison en EUR avec les dernières clôtures disponibles à la date du relevé. Les indices de prix excluent les dividendes réinvestis ; le portefeuille les reçoit. Les heures diffèrent selon les places. Les nouveaux relevés de fin de journée améliorent la comparabilité. Courtage inclus dans la NAV ; coûts IA/infrastructure externes non inclus.")
             if benchmark_missing:
                 st.warning("Benchmarks ignores (ticker invalide/vide): " + ", ".join(benchmark_missing))
 
@@ -14087,7 +14110,7 @@ if page == "Dashboard Trading":
                     close_txt = f"{safe_float(row.get('last_close')):,.2f}".replace(",", " ") if pd.notna(row.get("last_close")) else "N/A"
                     ret_v = row.get("return_pct")
                     delta_txt = f"{float(ret_v):+.2f}%" if ret_v is not None and pd.notna(ret_v) else "N/A"
-                    kpi_cols[idx].metric(f"{row.get('label')} ({row.get('ticker')})", close_txt, delta=delta_txt)
+                    kpi_cols[idx].metric(f"{row.get('label')} en EUR", close_txt)
                     ts = pd.to_datetime(row.get("last_ts"), errors="coerce", utc=True)
                     kpi_cols[idx].caption(f"Derniere barre: {_fmt_dt_short(ts)}")
 
@@ -14200,7 +14223,7 @@ if page == "Dashboard Trading":
                                 "Portfolio": p_label,
                                 "Return portfolio (%)": round(float(port_ret), 2) if port_ret is not None and pd.notna(port_ret) else pd.NA,
                                 f"Return {alpha_ref} (%)": round(float(bench_ret), 2) if bench_ret is not None and pd.notna(bench_ret) else pd.NA,
-                                "Alpha (pp)": round(float(alpha_pp), 2) if pd.notna(alpha_pp) else pd.NA,
+                                "Écart de rendement (points)": round(float(alpha_pp), 2) if pd.notna(alpha_pp) else pd.NA,
                             }
                         )
 
@@ -14215,14 +14238,14 @@ if page == "Dashboard Trading":
                         )
 
                     if alpha_rows:
-                        st.markdown("#### Alpha vs benchmark de reference")
+                        st.markdown("#### Écart au benchmark de référence")
                         render_interactive_table(pd.DataFrame(alpha_rows), key_suffix="benchmarks_alpha_table", height=220)
                         fig_alpha.add_hline(y=0.0, line_dash="dot", line_color="#888")
                         fig_alpha.update_layout(
-                            title=f"Courbe alpha vs {alpha_ref}",
+                            title=f"Écart de rendement vs {alpha_ref}",
                             height=360,
                             margin=dict(t=45, b=20, l=20, r=20),
-                            yaxis=dict(title="Alpha (points base 100)"),
+                            yaxis=dict(title="Écart (points de rendement)"),
                             legend=dict(orientation="h", yanchor="bottom", y=1.02),
                         )
                         st.plotly_chart(fig_alpha, use_container_width=True)
@@ -15707,7 +15730,7 @@ elif page == "Vue consolidee Multi-Agents":
                     "risk_score_plot": "Risque (0-100)",
                     "reward_score_plot": "Reward (0-100)",
                 },
-                title="Matrice Risk / Reward / Probabilite (echelle 0-100)",
+                title="Matrice risque / potentiel / score heuristique (0–100)",
             )
 
             hover_template = (
@@ -15716,7 +15739,7 @@ elif page == "Vue consolidee Multi-Agents":
                 "Decision: %{customdata[3]} | Grade: %{customdata[4]}<br>"
                 "Risque / Reward: %{customdata[5]:.0f} / %{customdata[6]:.0f}<br>"
                 "R utilise / R brut: %{customdata[7]:.2f} / %{customdata[8]:.2f}<br>"
-                "EV(R): %{customdata[9]:+.2f} | Prob. win: %{customdata[10]:.1f}%<br>"
+                "EV(R): %{customdata[9]:+.2f} | Score: %{customdata[10]:.1f}/100<br>"
                 "Data quality: %{customdata[11]:.1f}/100<br>"
                 "Gates actifs: %{customdata[12]}<br>"
                 "Raison decision: %{customdata[13]}<br>"
@@ -15804,7 +15827,7 @@ elif page == "Vue consolidee Multi-Agents":
 - Reward % = `(TP-Entree)/Entree` = `{reward_ex:.2f}%`
 - **R** = `(TP-Entree)/(Entree-Stop)` = `{r_ex:.2f}R`
 - Avec `p_win={pwin_ex*100:.1f}%`, **EV(R)** = `p_win x R - (1-p_win)` = `{evr_ex:+.2f}R`
-- Interpretation: EV(R) positif = avantage statistique, EV(R) negatif = setup defavorable.
+- Interpretation: EV(R) positif = score favorable, sans avantage statistique démontré, EV(R) negatif = setup defavorable.
 """
                 )
 
@@ -15898,7 +15921,7 @@ elif page == "Vue consolidee Multi-Agents":
                         "atr_stop_floor_pct": "Plancher ATR %",
                         "rr_outlier": "RR outlier",
                         "ev_r": "EV(R)",
-                        "p_win": "Prob. win %",
+                        "p_win": "Score /100",
                         "size_reco_pct": "Sizing reco %",
                         "action_reason": "Raison action",
                         "reward_pct": "Reward %",
@@ -16298,7 +16321,7 @@ elif page == "Vue consolidee Multi-Agents":
                     "risk": ["Risk", "Risque", "risk_score", "risk_score_u", "risk_score_100", "risk_0_100"],
                     "reward": ["Reward", "reward_score", "reward_score_u", "reward_score_100", "reward_0_100"],
                     "evr": ["EV(R)", "EVR", "ev_r", "evR"],
-                    "prob_win": ["Prob. win %", "Prob_win_%", "prob_win", "p_win", "probWin"],
+                    "prob_win": ["Score /100", "Prob_win_%", "prob_win", "p_win", "probWin"],
                     "data_quality": ["Data quality", "data_quality", "data_quality_score", "dq_score"],
                     "sizing": ["Sizing reco %", "size_reco_pct", "sizing_reco_pct", "sizingPct"],
                     "entry": ["entry_price", "entry", "Entry"],
@@ -16356,7 +16379,7 @@ elif page == "Vue consolidee Multi-Agents":
                     _kpi_metric_with_info("EV(R)", ev_txt, str(TEXTS_FR["kpi_tooltips_exact"]["EV(R)"]))
                 with s7:
                     p_win_v = safe_get(row, field_keys["prob_win"], default=pd.NA)
-                    _kpi_metric_with_info("Prob. win", _fmt_pct_auto(p_win_v, ndigits=1), str(TEXTS_FR["kpi_tooltips_exact"]["Prob. win"]))
+                    _kpi_metric_with_info("Score /100", _fmt_pct_auto(p_win_v, ndigits=1).replace("%", "/100"), str(TEXTS_FR["kpi_tooltips_exact"]["Score /100"]))
                 with s8:
                     _kpi_metric_with_info(
                         "Data quality",

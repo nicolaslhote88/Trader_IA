@@ -24,12 +24,6 @@ def db_con(path=DEFAULT_DB_PATH, retries=5, delay=0.3):
         yield con
     finally:
         if con is not None:
-            # CHECKPOINT avant close pour libérer les pages orphelines laissées
-            # par les INSERT OR REPLACE / UPDATE. Cf. infra/maintenance/defrag_duckdb.py.
-            try:
-                con.execute("CHECKPOINT")
-            except Exception:
-                pass
             try:
                 con.close()
             except Exception:
@@ -45,6 +39,8 @@ if len(items) > 0:
 run_id = f"AG4SPEV2_{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S')}"
 
 with db_con(db_path) as con:
+    con.execute("UPDATE run_log SET status='ERROR', finished_at=CURRENT_TIMESTAMP, error_detail=COALESCE(error_detail,'') || ' AUTO_RECONCILED_STALE_RUN: exceeded six-hour completion SLA' WHERE status='RUNNING' AND started_at < CURRENT_TIMESTAMP - INTERVAL '6 hours'")
+
     if len(items) == 0:
         con.execute(
             """
