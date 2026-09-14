@@ -44,6 +44,85 @@ function extractSymbolFromText(text) {
   return m ? m[0] : "GLOBAL";
 }
 
+function parseWarning(value) {
+  const message = clampText(value, 2048);
+  const parts = String(message || "").split(":");
+  let code = "UNCLASSIFIED_AGENT_WARNING";
+  let symbol = "GLOBAL";
+  let stage = "agent";
+  let detail = message;
+
+  if (parts[0] === "ORDER_REJECT" && parts.length >= 3) {
+    code = clampText(parts[1], 96).toUpperCase() || code;
+    symbol = clampText(parts[2], 32).toUpperCase() || "GLOBAL";
+    stage = "safety";
+    detail = parts.slice(3).join(":");
+  } else if (parts[0] === "ORDER_RESIZED" && parts.length >= 3) {
+    code = `ORDER_RESIZED_${clampText(parts[1], 64).toUpperCase()}`;
+    symbol = clampText(parts[2], 32).toUpperCase() || "GLOBAL";
+    stage = "safety";
+    detail = parts.slice(3).join(":");
+  } else if (parts[0] === "IBKR_ORDER_REJECTED" && parts.length >= 2) {
+    symbol = clampText(parts[1], 32).toUpperCase() || "GLOBAL";
+    stage = "broker";
+    detail = parts.slice(2).join(":");
+    const normalized = detail.toLowerCase();
+    code = normalized.includes("minimum price variation")
+      ? "IBKR_MIN_PRICE_VARIATION"
+      : (normalized.includes("price_rule") || normalized.includes("price rule")
+        ? "IBKR_PRICE_RULE_PREFLIGHT_FAILED"
+        : "IBKR_ORDER_REJECTED");
+  } else if (parts[0] === "CONSENSUS_MODEL_INVALID") {
+    code = "CONSENSUS_MODEL_INVALID";
+    stage = "consensus";
+    detail = parts.slice(1).join(":");
+  } else if (parts[0] === "CONSENSUS_NO_TRADE") {
+    code = "CONSENSUS_NO_TRADE";
+    stage = "consensus";
+    detail = parts.slice(1).join(":");
+  } else if (parts[0] === "AGENT_DECISION_PARSE") {
+    code = "AGENT_DECISION_PARSE";
+    stage = "parser";
+    detail = parts.slice(1).join(":");
+  } else if (parts[0]?.startsWith("YFINANCE_")) {
+    code = clampText(parts[0], 96).toUpperCase();
+    stage = "preflight";
+    detail = parts.slice(1).join(":");
+  } else if (parts[0]?.startsWith("IBKR_")) {
+    code = clampText(parts[0], 96).toUpperCase();
+    stage = "broker";
+    detail = parts.slice(1).join(":");
+  }
+
+  const dataCodes = new Set([
+    "MISSING_TECH", "TECH_BARS_NOT_CLOSED", "TECH_STATUS_NOT_OK", "STALE_H1",
+    "STALE_D1", "MISSING_YF", "STALE_YF", "STALE_QUOTE", "FX_RATE_UNAVAILABLE",
+    "IBKR_CONTRACT_UNRESOLVED", "YFINANCE_QUOTE_UNAVAILABLE",
+  ]);
+  const riskCodes = new Set([
+    "MIN_ORDER_VALUE_EUR", "MIN_ORDER_VALUE_EUR_AFTER_CASH_CAP", "MIN_ORDER_UNFEASIBLE",
+    "MAX_POSITION_PCT", "MAX_SECTOR_PCT", "MAX_ORDER_VALUE_PCT", "MAX_OPEN_POSITIONS",
+    "INSUFFICIENT_CASH", "QTY_NONPOSITIVE", "ORDER_RESIZED_CASH_CAP", "ORDER_RESIZED_SELL_POSITION_CAP",
+  ]);
+  const category = dataCodes.has(code) ? "DATA" : (riskCodes.has(code) ? "RISK" : (stage === "broker" ? "BROKER" : "AGENT"));
+  const thresholdMatch = String(detail || "").match(/(-?\d+(?:\.\d+)?)\s*<\s*(-?\d+(?:\.\d+)?)/);
+  return {
+    message,
+    code,
+    symbol: symbol === "GLOBAL" ? extractSymbolFromText(message) : symbol,
+    category,
+    severity: code.startsWith("ORDER_RESIZED_") ? "INFO" : "WARN",
+    payload: {
+      warning: String(value),
+      reason_code: code,
+      stage,
+      detail: detail || null,
+      observed: thresholdMatch ? Number(thresholdMatch[1]) : null,
+      threshold: thresholdMatch ? Number(thresholdMatch[2]) : null,
+    },
+  };
+}
+
 function roundTo(v, digits = 2) {
   const n = Number(v);
   if (!Number.isFinite(n)) return 0;
@@ -261,8 +340,8 @@ function buildSnapshotsFromPortfolio(portfolioSummary, orders, priceMap, ts, met
     const side = String(order?.side || "").trim().toUpperCase();
     const qty = toNum(order?.quantity, 0);
     const orderType = normalizeOrderType(order?.orderType);
-    const price =
-      (orderType === "LIMIT" ? toNum(order?.limitPrice, null) : null) ??
+    const price = toNum(order?.priceEUR, null) ??
+      (orderType === "LIMIT" && String(order?.currency || "EUR").toUpperCase() === "EUR" ? toNum(order?.limitPrice, null) : null) ??
       toNum(priceMap[symbol], null);
 
     if (!symbol || qty <= 0 || !Number.isFinite(price) || price <= 0) continue;
@@ -434,7 +513,7 @@ if (Array.isArray(portfolioSummary.positions)) {
 if (Array.isArray(agentDecision.actions)) {
   agentDecision.actions.forEach((a) => {
     const sym = String(a.symbol_internal || a.symbol || "").trim();
-    const lp = Number(a.entryPlan?.limitPrice);
+    const lp = Number(a.priceEUR ?? a.entryPlan?.limitPrice);
     if (sym && !(sym in priceMap) && Number.isFinite(lp) && lp > 0) priceMap[sym] = lp;
     if (sym && !instrumentMap.has(sym)) {
       instrumentMap.set(sym, {
@@ -451,7 +530,7 @@ if (Array.isArray(agentDecision.actions)) {
 
 ordersIn.forEach((o) => {
   const sym = String(o.symbol || "").trim();
-  const lp = Number(o.limitPrice);
+  const lp = Number(o.priceEUR ?? o.limitPrice);
   if (sym && !(sym in priceMap) && Number.isFinite(lp) && lp > 0) priceMap[sym] = lp;
 });
 
@@ -483,17 +562,17 @@ if (Array.isArray(agentDecision.actions)) {
 
 const alerts = [];
 warnings.forEach((w, i) => {
-  const msg = clampText(w, 2048);
-  if (!msg) return;
+  const parsed = parseWarning(w);
+  if (!parsed.message) return;
   alerts.push({
     alert_id: `ALT_${run_id}_${i}`,
     ts: ts_end,
-    severity: "WARN",
-    category: "AGENT",
-    symbol: extractSymbolFromText(msg),
-    message: msg,
-    code: "AGENT_WARNING",
-    payload_json: { warning: String(w) },
+    severity: parsed.severity,
+    category: parsed.category,
+    symbol: parsed.symbol,
+    message: parsed.message,
+    code: parsed.code,
+    payload_json: parsed.payload,
   });
 });
 
@@ -564,6 +643,18 @@ const fillCostRecords = fillRecords.map((f) => ({
 }));
 
 const snapshots = buildSnapshotsFromPortfolio(portfolioSummary, fillEffectOrders, priceMap, ts_end, meta);
+const approvedConsensusCount = consensusDecisions.filter((row) => String(row?.status || "").toUpperCase() === "CONSENSUS_APPROVED").length;
+const safetyRejectCount = warnings.filter((warning) => String(warning || "").startsWith("ORDER_REJECT:")).length;
+const brokerRejectCount = warnings.filter((warning) => String(warning || "").startsWith("IBKR_ORDER_REJECTED:")).length;
+const riskGateJson = {
+  approved_consensus_count: approvedConsensusCount,
+  safety_reject_count: safetyRejectCount,
+  broker_reject_count: brokerRejectCount,
+  executable_order_count: ordersIn.length,
+  consensus_to_order_rate: approvedConsensusCount > 0 ? roundTo(ordersIn.length / approvedConsensusCount, 4) : null,
+  structured_alert_codes: true,
+};
+const dataOkForTrading = !alerts.some((alert) => alert.category === "DATA" && ["WARN", "ERROR"].includes(alert.severity));
 
 const bundle = {
   run: {
@@ -585,7 +676,8 @@ const bundle = {
     global_context_pack_json: runCtx.global_context_pack || null,
     db_path: db_path || null,
     decision_summary: input.decision || "NO_TRADE",
-    data_ok_for_trading: true,
+    data_ok_for_trading: dataOkForTrading,
+    risk_gate_json: riskGateJson,
     agent_output_json: agentDecision,
     warnings_json: warnings,
   },

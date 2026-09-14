@@ -1,0 +1,16 @@
+[Unit]
+Description=Sauvegarde applicative unique du VPS vers le NAS Synology
+Wants=network-online.target
+After=network-online.target docker.service tailscaled.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/root/run_backup_vps_to_nas_once.sh
+TimeoutStartSec=12h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=multi-user.target

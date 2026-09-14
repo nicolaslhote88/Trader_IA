@@ -242,14 +242,28 @@ publiee avant de laisser repartir le cron.
 
 ### 4.b Dashboard Streamlit uniquement
 
-Sur le VPS actuel, le dashboard live est monte depuis `/opt/trading-dashboard/app`
-dans le conteneur `root-trading-dashboard-1`. Pour deploiement rapide d'une
-modification Streamlit :
+Le chemin hôte du dashboard change avec certaines releases. Ne pas supposer
+que `/opt/trading-dashboard/app` est encore monté. Résoudre d'abord la source
+réellement montée sur `/app` :
+
+```bash
+ssh vps "docker inspect root-trading-dashboard-1 \
+  --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}'"
+
+# Reporter ici la source de la ligne dont la destination est /app.
+dashboard_host_dir=/opt/trader-ia/releases/<release>/services/dashboard
+ssh vps "test -d '$dashboard_host_dir'"
+printf '%s\n' "$dashboard_host_dir"
+```
+
+Au 2026-08-10, le chemin live est
+`/opt/trader-ia/releases/ag5-ag8-global-context-20260805/services/dashboard`.
+Pour déployer une modification Streamlit :
 
 ```bash
 # Depuis le poste local
-scp services/dashboard/app.py root@100.104.236.78:/opt/trading-dashboard/app/app.py
-scp -r services/dashboard/app_modules root@100.104.236.78:/opt/trading-dashboard/app/
+scp services/dashboard/app.py vps:"$dashboard_host_dir/app.py"
+scp -r services/dashboard/app_modules vps:"$dashboard_host_dir/"
 
 # Sur le VPS actuel
 cd /docker/root

@@ -447,6 +447,23 @@ for r in rows:
     liquidity_unknown = spread_pct is None or volume is None
     liquidity_gate_block = liq_risk >= 85.0
     invalid_options_state_gate = invalid_options_state
+    raw_data_flags = str(r.get("Data_Quality_Flags") or "")
+    data_quality_flags = [
+        flag.strip().upper()
+        for flag in raw_data_flags.replace("|", ",").split(",")
+        if flag.strip()
+    ]
+    hard_data_flag_set = {
+        "MISSING_TECH",
+        "TECH_BARS_NOT_CLOSED",
+        "TECH_STATUS_NOT_OK",
+        "STALE_H1",
+        "STALE_D1",
+        "MISSING_YF",
+        "STALE_YF",
+    }
+    hard_data_flags = [flag for flag in data_quality_flags if flag in hard_data_flag_set]
+    hard_data_gate_block = bool(hard_data_flags)
 
     gates = []
     if not data_quality_gate_ok:
@@ -461,6 +478,9 @@ for r in rows:
         gates.append("INVALID_OPTIONS_STATE")
     if rr_outlier:
         gates.append("RR_OUTLIER")
+    for hard_flag in hard_data_flags:
+        if hard_flag not in gates:
+            gates.append(hard_flag)
 
     matrix_rows.append(
         {
@@ -468,6 +488,7 @@ for r in rows:
             "symbol_yahoo": symbol_yahoo,
             "name": name,
             "asset_class": asset_class,
+            "currency": str(r.get("Currency") or "EUR").strip().upper(),
             "sector": sector,
             "entry_price": entry,
             "stop_price": stop,
@@ -489,6 +510,9 @@ for r in rows:
             "p_win": p_win,
             "ev_r": ev_r,
             "data_quality_score": data_quality_score,
+            "data_quality_flags": data_quality_flags,
+            "data_ok_for_trading": not hard_data_gate_block,
+            "hard_data_gate_block": hard_data_gate_block,
             "days_to_next_earnings": days_to_next_earnings,
             "days_since_last_earnings": days_since_last_earnings,
             "spread_pct": spread_pct,
@@ -593,7 +617,8 @@ for r in matrix_rows:
     reasons = []
     ai_decision_row = str(r.get("ai_decision") or "").upper().strip()
     llm_reject_block = (ai_decision_row == "REJECT")
-    if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state or llm_reject_block):
+    hard_data_gate_block = bool(r.get("hard_data_gate_block"))
+    if enter_core and not (quality_block or earnings_block or rr_outlier or invalid_options_state or llm_reject_block or hard_data_gate_block):
         action = "Entrer / Renforcer"
         reasons.append("SETUP_OK")
         if ai_decision_row == "APPROVE":
@@ -616,6 +641,8 @@ for r in matrix_rows:
             reasons.append("RR_OUTLIER_GATE")
         if invalid_options_state:
             reasons.append("INVALID_OPTIONS_STATE_GATE")
+        if hard_data_gate_block:
+            reasons.append("HARD_DATA_GATE")
 
     ev_component = clamp((ev_r / 1.5) * 100.0, 0.0, 100.0)
     risk_component = clamp(100.0 - risk_u, 0.0, 100.0)
@@ -753,6 +780,7 @@ for r in selected_rows:
             "symbol_yahoo": r.get("symbol_yahoo") or "",
             "name": r["name"],
             "asset_class": r.get("asset_class") or "EQUITY",
+            "currency": r.get("currency") or "EUR",
             "sector": r["sector"],
             "decision": r["matrix_action"],
             "grade": r["setup_grade"],
@@ -766,6 +794,9 @@ for r in selected_rows:
             "data_quality": round(safe_float(r["data_quality_score"]), 2),
             "size_reco_pct": round(safe_float(r["size_reco_pct"]), 2),
             "gates": r.get("gate_summary") or "OK",
+            "data_quality_flags": r.get("data_quality_flags") or [],
+            "data_ok_for_trading": bool(r.get("data_ok_for_trading")),
+            "hard_data_gate_block": bool(r.get("hard_data_gate_block")),
             "entry": round(safe_float(r["entry_price"]), 4),
             "stop": round(safe_float(r["stop_price"]), 4),
             "tp": round(safe_float(r["tp_price"]), 4),

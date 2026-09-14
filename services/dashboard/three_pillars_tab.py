@@ -824,7 +824,8 @@ def render_three_pillars_tab(st):
     macro_db_path = os.environ.get("MACRO_DUCKDB_PATH", "/files/duckdb/macro_data.duckdb")
     con = _connect(macro_db_path)
 
-    st.header("🧭 Three Pillars Monitor — Framework Global Macro")
+    st.title("Contexte & piliers Forex")
+    st.caption("Croissance, inflation, liquidité et régime macro du marché des changes.")
 
     if con is None:
         st.error(f"Base de données macro non disponible : `{macro_db_path}`")

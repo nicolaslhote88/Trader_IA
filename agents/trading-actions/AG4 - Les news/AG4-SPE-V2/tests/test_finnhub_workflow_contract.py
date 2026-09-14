@@ -32,7 +32,7 @@ class FinnhubWorkflowContractTests(unittest.TestCase):
 
         self.assertEqual("@n8n/n8n-nodes-langchain.chainLlm", chain["type"])
         self.assertTrue(chain["parameters"]["hasOutputParser"])
-        self.assertEqual("deepseek-v4-pro", model["parameters"]["model"])
+        self.assertEqual("deepseek-v4-flash", model["parameters"]["model"])
         self.assertEqual("BlSCC28mzKodkfO5", model["credentials"]["deepSeekApi"]["id"])
         self.assertEqual("@n8n/n8n-nodes-langchain.outputParserStructured", parser["type"])
         self.assertEqual(

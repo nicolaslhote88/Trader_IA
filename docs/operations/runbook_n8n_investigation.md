@@ -7,7 +7,7 @@
 >
 > **MAJ 2026-08-06** : AG1 V4 = GPT-5.6 Sol / DeepSeek V4 Pro / Claude Opus 4.8
 > (Gemini et Grok retirés du consensus live). AG2 et les trois workflows
-> AG4_Spé utilisent aussi `deepseek-v4-pro`; AG4-V3 macro conserve son mode
+> AG4_Spé utilisent `deepseek-v4-flash`; AG1 V4 conserve `deepseek-v4-pro` et AG4-V3 macro conserve son mode
 > dual-branch propre.
 > (2) **Deux stacks compose** : n8n sous `/docker/root`, **IBKR/yfinance/broker sous `/docker/yfinance`**
 > (pour le broker, utiliser `docker exec ibkr-broker …`, pas `docker compose` depuis `/docker/root`).

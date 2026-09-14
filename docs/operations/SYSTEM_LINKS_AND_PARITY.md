@@ -19,16 +19,48 @@ appliqué et testé des deux côtés avant déploiement.
 | **risk_score V2** (2026-06-30) | poids tactiques `vol 0.26 / liq 0.18 / event 0.16 / funda 0.16 / news 0.10 / conc 0.09 / options 0.05` + **renorm sur composantes observées** (exclut les défauts) | **idem** (mêmes poids + même renorm, flags `funda_usable`/`news_count`/earnings/spread/IV) |
 | **Règle décision** `enter_core` / `reduce_core` | `Calcul Matrice` (`ev_r≥0.20 ET reward≥seuil ET risk≤seuil ET grade∈{A,B}` ; reduce si ev_r<0 …) | **idem** (≈ L5111-5140) |
 | **Grades A/B/C** | quantiles dynamiques sur `prob_score_for_grade` | idem (seuils p-quantile recalculés) |
-| **Gates matrice** (data_quality, earnings≤7j, liquidité `liq_risk≥85`, rr_outlier, options) | `Calcul Matrice` | idem |
+| **Gates matrice** (data_quality, earnings≤7j, liquidité `liq_risk≥85`, rr_outlier, options, données techniques/YF dures) | `Calcul Matrice` : `MISSING_TECH`, `TECH_BARS_NOT_CLOSED`, `TECH_STATUS_NOT_OK`, `STALE_H1`, `STALE_D1`, `MISSING_YF`, `STALE_YF` interdisent `Entrer / Renforcer` | idem dans `_build_multi_agent_matrix` ; `HARD_DATA_GATE` force `Surveiller` |
 | **Funnel tradabilité** (System Health) | implicite (R8 + preflight) | recalcul dans `app.py` (`spread_exploitable`, `tech_gate_ready`, etc.) |
 | **Seuils de fraîcheur** | H1≤96h, D1≤96h, YF≤72h, funda≤168h (R8) | **idem** (funnel + matrice) |
 | **Contrat barres AG2** | H1/D1 `status=OK`, `closed_only=true`, OHLCV validé ; D1 après close place +10 min | **idem** (funnel + matrice) |
 | **`data_age` = max(stocké, âge réel = now − date du dernier bar)** | R8 (`R8 — Data Prep for Matrix`) | **idem** (`h1_age_hours_effective`/`d1_age_hours_effective`) — ne PAS revenir au `data_age` figé |
 
+Depuis le 2026-08-06, la fenêtre AG2 de rappel LLM et le gate de données sont
+explicitement séparés. `SOFT_STALE` signifie « ne pas rappeler le LLM » et ne
+doit jamais écraser `h1_status=OK`. Le blocage technique autoritatif reste
+`closed_only=true`, statut de calcul `OK` et âge effectif H1/D1 ≤96 h. Ne pas
+réintroduire une fenêtre globale UTC de 3 h dans le statut consommé par R8 ou
+le dashboard.
+
+Depuis le 2026-08-13, le funnel de la page **Analyse technique** suit un contrat
+global, monotone et indépendant des filtres graphiques : **univers configuré →
+rotation AG2 active → technique prête AG1 → non bloquée par l'IA**. La dernière
+étape signifie uniquement `ai_decision != REJECT` : `APPROVE` n'est pas requis
+par AG1 et `SKIP`/absence d'appel reste neutre. Les directions D1 BUY/SELL et les
+résultats des appels IA sont des métriques séparées, avec leurs dénominateurs
+explicites. La fraîcheur ne doit plus être résumée par la seule barre la plus
+récente ; afficher la couverture du gate et les âges P50/P90.
+
 ## Étapes du pipeline = ce que chaque vue montre (NE PAS confondre)
 1. **Étape décision matrice** (`Calcul Matrice` / nuage dashboard + funnel) : scoring + gates basés sur les données **yfinance/AG2/AG3/AG4**. C'est ce que le dashboard affiche.
 2. **Étape exécution / preflight** (`AG1.V4 — Liquidity Preflight` + node 7 safety) : verdict liquidité **autoritatif basé IBKR** (snapshot bid/ask), + contrat, permissions, cash. **NON reflété dans le dashboard.** C'est ici que vivent les tolérances liquidité (warm-up sous-lots, `SPREAD_UNQUOTED`, filet haut-volume ≥1M). Cf [[18-ag1-run-timing-us]] en mémoire.
 > Conséquence : un symbole « Entrer » dans le dashboard repasse un **contrôle liquidité IBKR final au moment de l'ordre**. Le dashboard le rappelle déjà (« les contrôles IBKR … liquidité restent exécutés au moment de l'ordre »). Ne PAS chercher à dupliquer le verdict IBKR dans le dashboard (il n'a pas d'accès IBKR per-symbole).
+
+Depuis le 2026-08-10, le contrat d'exécution AG1 est également explicite :
+
+- `entry` et le prix limite restent exprimés dans la devise native du contrat ;
+- `currency`, `fx_rate_to_eur` et `price_eur` viennent du préflight IBKR et le
+  sizing/les limites de risque sont calculés en EUR ; sans taux de change, un
+  BUY/INCREASE est bloqué par `FX_RATE_UNAVAILABLE` ;
+- `execution_constraints` expose avant les LLM le ticket minimal faisable et
+  les poids cibles min/max ; une proposition sous le minimum n'est pas un vote
+  exécutable ;
+- le broker relit `/iserver/contract/rules` juste avant un ordre LIMIT et
+  arrondit le prix au pas actif sans détériorer la limite (BUY vers le bas,
+  SELL vers le haut).
+
+Ces règles d'exécution ne sont pas recalculées dans le dashboard, qui n'a pas
+accès au contrat IBKR live. Seul le gate dur de qualité des données est dupliqué.
 
 ## Autres liens inter-systèmes à garder en tête
 - **News par-symbole** : `ag4_spe_v2.news_analyzed` → R8 (impact + **texte top-3 vers le LLM**) → `Calcul Matrice` (`opportunity_pack.rows[].news` + `newsGeneratedAt`). Le dashboard n'utilise que l'**impact** (sentiment_prob), pas le texte.

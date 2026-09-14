@@ -87,7 +87,12 @@ DBS = [
     "ag4_v3.duckdb",
     "ag4_spe_v2.duckdb",
     "broker_costs.duckdb",
+    "global_context_v1.duckdb",
+    "global_context_v1_shadow.duckdb",
     "macro_data.duckdb",
+    "macro_data_ag5ag9_shadow.duckdb",
+    "siga_v1.duckdb",
+    "worldmonitor_v1_shadow.duckdb",
     "yf_enrichment_v1.duckdb",
 ]
 
@@ -230,15 +235,27 @@ def defrag_one(src: Path, tmp_dir: Path, dry_run: bool) -> tuple[int, int, float
             ORDER BY schema_name, view_name
             """
         ).fetchall()
-        for sch, v, ddl in views:
-            if not ddl:
-                continue
-            if sch != "main":
-                con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
-            try:
-                con.execute(ddl.replace("CREATE VIEW", "CREATE OR REPLACE VIEW", 1))
-            except Exception as e:
-                raise RuntimeError(f'Echec recreation vue "{sch}"."{v}" : {e}') from e
+        # Les vues peuvent dependre d'autres vues. duckdb_views() ne fournit
+        # pas un ordre topologique, donc les rejouer par passes successives.
+        pending_views = [row for row in views if row[2]]
+        while pending_views:
+            deferred = []
+            errors = {}
+            for sch, v, ddl in pending_views:
+                if sch != "main":
+                    con.execute(f'CREATE SCHEMA IF NOT EXISTS "{sch}"')
+                try:
+                    con.execute(ddl.replace("CREATE VIEW", "CREATE OR REPLACE VIEW", 1))
+                except Exception as e:
+                    deferred.append((sch, v, ddl))
+                    errors[(sch, v)] = str(e)
+            if len(deferred) == len(pending_views):
+                details = "; ".join(
+                    f'"{sch}"."{v}": {errors[(sch, v)]}'
+                    for sch, v, _ in deferred
+                )
+                raise RuntimeError(f"Echec recreation vues par dependances : {details}")
+            pending_views = deferred
 
         # Verification structurelle avant tout swap : colonnes, contraintes,
         # index et vues doivent etre strictement equivalents.
@@ -431,7 +448,9 @@ def main() -> int:
             f"{ratio:>7.1f}x {nt:>7} {dt:>5.1f}s"
         )
 
-        if args.apply and not failures:
+        # Chaque base est reconstruite et validee independamment. Un echec sur
+        # une base ne doit pas empecher le swap des suivantes deja validees.
+        if args.apply:
             try:
                 swap_atomically(src)
             except Exception as e:

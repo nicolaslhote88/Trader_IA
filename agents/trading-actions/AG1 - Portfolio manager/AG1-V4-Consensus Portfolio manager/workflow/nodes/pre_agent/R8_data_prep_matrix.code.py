@@ -206,6 +206,7 @@ universe_rows = run_query(
            UPPER(TRIM(COALESCE(symbol_yahoo, symbol))) AS symbol_yahoo,
            COALESCE(name, '') AS name,
            UPPER(TRIM(COALESCE(asset_class, 'EQUITY'))) AS asset_class,
+           UPPER(TRIM(COALESCE(currency, 'EUR'))) AS currency,
            COALESCE(sector, '') AS sector,
            COALESCE(industry, '') AS industry
     FROM universe
@@ -502,6 +503,7 @@ for r in universe_rows:
         "symbol_yahoo": str(r.get("symbol_yahoo") or sym).strip().upper(),
         "name": str(r.get("name") or "").strip(),
         "asset_class": str(r.get("asset_class") or "EQUITY").strip().upper(),
+        "currency": str(r.get("currency") or "EUR").strip().upper(),
         "sector": str(r.get("sector") or "").strip(),
         "industry": str(r.get("industry") or "").strip(),
     }
@@ -730,6 +732,7 @@ for sym in sorted(symbols):
             "Symbol_Yahoo": symbol_yahoo,
             "Name": name,
             "AssetClass": asset_class,
+            "Currency": str(u.get("currency") or "EUR").strip().upper(),
             "Sector": sector,
             "Industry": industry,
             "Tech_Action": str(t.get("d1_action") or "").upper().strip(),

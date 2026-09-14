@@ -38,6 +38,7 @@ import logging
 import os
 import uuid
 from contextlib import asynccontextmanager
+from decimal import Decimal, InvalidOperation, ROUND_CEILING, ROUND_FLOOR
 from datetime import datetime, timezone
 from typing import Any
 
@@ -419,6 +420,9 @@ class EquityOrder(BaseModel):
     limit_price: float | None = None
     isin: str | None = None
     exchange: str | None = None
+    currency: str | None = None
+    fx_rate_to_eur: float | None = None
+    price_eur: float | None = None
 
 
 class FXOrdersRequest(BaseModel):
@@ -444,6 +448,54 @@ def normalize_order_type(value: str) -> str:
     if text == "LIMIT":
         return "LMT"
     return text or "MKT"
+
+
+def _price_increment_for(price: float, rules: dict | None) -> Decimal | None:
+    """Select the active IBKR increment rule for a native-currency price."""
+    try:
+        px = Decimal(str(price))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    if px <= 0:
+        return None
+
+    selected = None
+    for row in (rules or {}).get("incrementRules") or []:
+        try:
+            lower = Decimal(str(row.get("lowerEdge")))
+            increment = Decimal(str(row.get("increment")))
+        except (InvalidOperation, TypeError, ValueError, AttributeError):
+            continue
+        if increment > 0 and lower <= px and (selected is None or lower >= selected[0]):
+            selected = (lower, increment)
+    if selected is not None:
+        return selected[1]
+
+    try:
+        increment = Decimal(str((rules or {}).get("increment")))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+    return increment if increment > 0 else None
+
+
+def normalize_limit_price(price: float, rules: dict | None, side: str) -> tuple[float, dict]:
+    """Snap a limit price to IBKR's tiered tick grid without worsening the limit."""
+    increment = _price_increment_for(price, rules)
+    if increment is None:
+        raise ValueError("IBKR_PRICE_INCREMENT_UNAVAILABLE")
+    px = Decimal(str(price))
+    rounding = ROUND_FLOOR if str(side or "").upper() == "BUY" else ROUND_CEILING
+    snapped = (px / increment).to_integral_value(rounding=rounding) * increment
+    if snapped <= 0:
+        raise ValueError("IBKR_NORMALIZED_LIMIT_PRICE_NONPOSITIVE")
+    normalized = float(snapped)
+    return normalized, {
+        "requested_price": float(px),
+        "normalized_price": normalized,
+        "increment": float(increment),
+        "side_rounding": "FLOOR" if rounding == ROUND_FLOOR else "CEILING",
+        "changed": snapped != px,
+    }
 
 
 def _dry_run_result(order_id: str, details: dict) -> dict:
@@ -917,12 +969,14 @@ async def _account_alignment_status(client: CPAPIClient) -> dict[str, Any]:
 
 
 def _contract_exchanges(contract: dict) -> set[str]:
+    def add_many(target: set[str], raw: Any) -> None:
+        text = str(raw or "").replace(";", ",")
+        target.update(part.strip().upper() for part in text.split(",") if part.strip())
+
     exchanges = {
         str(contract.get("listingExchange") or "").upper(),
         str(contract.get("exchange") or "").upper(),
     }
-    all_exchanges = str(contract.get("allExchanges") or "")
-    exchanges.update(part.strip().upper() for part in all_exchanges.split(",") if part.strip())
     description = str(contract.get("description") or "").strip()
     if description:
         exchanges.add(description.upper())
@@ -931,8 +985,11 @@ def _contract_exchanges(contract: dict) -> set[str]:
         suffix = company_header.rsplit(" - ", 1)[-1].strip()
         if suffix:
             exchanges.add(suffix.upper())
+    # A secdef search result can include OPT/WAR/CFD routing exchanges for the
+    # same issuer. Those are not evidence of the stock's primary listing.
     for section in contract.get("sections") or []:
-        exchanges.add(str(section.get("exchange") or "").upper())
+        if str(section.get("secType") or "").strip().upper() == "STK":
+            add_many(exchanges, section.get("exchange"))
     return {exchange for exchange in exchanges if exchange}
 
 
@@ -970,6 +1027,9 @@ async def _resolve_stk_conid(
         for x in str(exchange_override or "").replace(";", ",").split(",")
         if x.strip()
     ) or yahoo_suffix_to_ibkr_exchanges(suffix)
+    strict_suffix_exchange = bool(
+        suffix and any(exchange != "SMART" for exchange in exchange_candidates)
+    )
 
     contracts = []
     if isin:
@@ -990,6 +1050,8 @@ async def _resolve_stk_conid(
     # on refuse le fallback vers un autre marche afin d'eviter CRI.PA -> CRI US.
     best = None
     for wanted_exchange in exchange_candidates:
+        if strict_suffix_exchange and wanted_exchange == "SMART":
+            continue
         for c in contracts:
             if wanted_exchange in _contract_exchanges(c):
                 best = {"conid": int(c["conid"]), "exchange": wanted_exchange}
@@ -999,13 +1061,14 @@ async def _resolve_stk_conid(
 
     if not best:
         if suffix:
-            # Controlled fallback for suffixed symbols: SMART is acceptable only
-            # when CPAPI advertises it for the returned contract. This fixes
-            # .PA failures caused by SBF not being listed in CPAPI search output.
-            for c in contracts:
-                if "SMART" in _contract_exchanges(c):
-                    best = {"conid": int(c["conid"]), "exchange": "SMART"}
-                    break
+            # Preserve the legacy SMART fallback only for suffixes without a
+            # known primary-exchange mapping. Known suffixes (.PA, .AS, etc.)
+            # must match their primary listing and cannot cross-resolve.
+            if not strict_suffix_exchange:
+                for c in contracts:
+                    if "SMART" in _contract_exchanges(c):
+                        best = {"conid": int(c["conid"]), "exchange": "SMART"}
+                        break
             if not best:
                 available = sorted({ex for c in contracts for ex in _contract_exchanges(c)})
                 raise HTTPException(
@@ -1243,7 +1306,29 @@ async def resolve_equity_contracts(
     for symbol in requested:
         try:
             conid = await _resolve_stk_conid(client, symbol, exchange_override=exchange or None)
-            results.append({"symbol": symbol, "conid": conid})
+            info_result, rules_result = await asyncio.gather(
+                client.get_contract_info(conid),
+                client.get_contract_rules(conid, exchange=exchange or "SMART", is_buy=True),
+                return_exceptions=True,
+            )
+            info = info_result if isinstance(info_result, dict) else {}
+            rules = rules_result if isinstance(rules_result, dict) else {}
+            results.append({
+                "symbol": symbol,
+                "conid": conid,
+                "currency": str(rules.get("cashCcy") or info.get("currency") or "").strip().upper() or None,
+                "exchange": str(info.get("exchange") or exchange or "SMART").strip().upper() or "SMART",
+                "increment": rules.get("increment"),
+                "increment_digits": rules.get("incrementDigits"),
+                "increment_rules": rules.get("incrementRules") or [],
+                "price_magnifier": rules.get("priceMagnifier"),
+                "metadata_error": (
+                    str(info_result) if isinstance(info_result, Exception) else None
+                ),
+                "rules_error": (
+                    str(rules_result) if isinstance(rules_result, Exception) else rules.get("error")
+                ),
+            })
         except HTTPException as exc:
             errors.append({"symbol": symbol, "error": exc.detail})
         except CPAPIError as exc:
@@ -1498,6 +1583,8 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
     for order in req.orders:
         symbol = order.symbol.strip()
         ibkr_side = stk_ibkr_side(order.side)
+        normalized_limit_price = order.limit_price
+        price_normalization = None
 
         try:
             if DRY_RUN:
@@ -1519,6 +1606,30 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                 "error": str(exc),
             })
             continue
+
+        order_type = normalize_order_type(order.order_type)
+        if not DRY_RUN and order_type == "LMT" and order.limit_price:
+            try:
+                contract_rules = await client.get_contract_rules(
+                    conid,
+                    exchange=order.exchange or "SMART",
+                    is_buy=ibkr_side == "BUY",
+                )
+                if contract_rules.get("error"):
+                    raise ValueError(f"IBKR_CONTRACT_RULES_ERROR:{contract_rules.get('error')}")
+                normalized_limit_price, price_normalization = normalize_limit_price(
+                    order.limit_price,
+                    contract_rules,
+                    ibkr_side,
+                )
+            except (CPAPIError, ValueError) as exc:
+                logger.error("Equity price-rule preflight failed symbol=%s: %s", symbol, exc)
+                errors.append({
+                    "order_id": order.order_id,
+                    "client_order_id": order.client_order_id or order.order_id,
+                    "error": f"IBKR_PRICE_RULE_PREFLIGHT_FAILED:{symbol}:{exc}",
+                })
+                continue
 
         if not DRY_RUN and ibkr_side == "SELL":
             try:
@@ -1544,14 +1655,14 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
 
         ibkr_payload = {
             "conid": conid,
-            "orderType": normalize_order_type(order.order_type),
+            "orderType": order_type,
             "side": ibkr_side,
             "quantity": order.quantity,
             "tif": "DAY",
             "cOID": order.client_order_id or order.order_id,
         }
-        if ibkr_payload["orderType"] == "LMT" and order.limit_price:
-            ibkr_payload["price"] = order.limit_price
+        if ibkr_payload["orderType"] == "LMT" and normalized_limit_price:
+            ibkr_payload["price"] = normalized_limit_price
 
         logger.info(
             "Equity order | run=%s | symbol=%s | side=%s | qty=%s | dry=%s",
@@ -1587,6 +1698,8 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                         "ibkr_response": terminal_response,
                         "initial_ibkr_response": ibkr_resp,
                         "confirmation_chain": confirmation,
+                        "normalized_limit_price": normalized_limit_price,
+                        "price_normalization": price_normalization,
                         "sent_at": now_iso(),
                     })
                     continue
@@ -1611,6 +1724,8 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                     run_id=req.run_id,
                 )
                 if _appr_result is not None:
+                    _appr_result["normalized_limit_price"] = normalized_limit_price
+                    _appr_result["price_normalization"] = price_normalization
                     results.append(_appr_result)
                     continue
                 errors.append(_reply_required_error(
@@ -1631,6 +1746,8 @@ async def place_equity_orders(req: EquityOrdersRequest) -> dict[str, Any]:
                 "client_order_id": client_order_id,
                 "status": "submitted",
                 "ibkr_response": ibkr_resp,
+                "normalized_limit_price": normalized_limit_price,
+                "price_normalization": price_normalization,
                 "sent_at": now_iso(),
             })
         except CPAPIError as exc:

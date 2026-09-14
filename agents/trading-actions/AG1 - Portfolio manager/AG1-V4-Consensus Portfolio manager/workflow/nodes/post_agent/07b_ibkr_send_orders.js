@@ -300,6 +300,9 @@ if (!DRY_RUN && !modelIbkrAllowed && actionableOrders.length > 0) {
       client_order_id: o.clientOrderId,
       order_type: normalizeOrderType(o.orderType),
       limit_price: o.limitPrice ?? null,
+      currency: o.currency || null,
+      fx_rate_to_eur: o.fxRateToEUR ?? null,
+      price_eur: o.priceEUR ?? null,
       isin: o.isin || null,
       exchange: o.exchange || null,
     })),
@@ -360,6 +363,22 @@ for (const order of orders) {
   const fill = ibkrFillPoll.byOrderKey?.[oid] || ibkrFillPoll.byOrderKey?.[cid] || null;
 
   if (result) {
+    const normalizedLimitPrice = toNum(result.normalized_limit_price, 0);
+    if (normalizedLimitPrice > 0 && normalizeOrderType(order.orderType) === "LMT") {
+      const previousPriceEUR = toNum(order.priceEUR, 0);
+      order.requestedLimitPrice = order.limitPrice;
+      order.limitPrice = normalizedLimitPrice;
+      order.priceHint = normalizedLimitPrice;
+      order.priceNormalization = result.price_normalization || null;
+      const fxRateToEUR = toNum(order.fxRateToEUR, String(order.currency || "EUR").toUpperCase() === "EUR" ? 1 : 0);
+      if (fxRateToEUR > 0) {
+        order.priceEUR = normalizedLimitPrice * fxRateToEUR;
+        order.estNotionalEUR = Math.round(toNum(order.quantity) * order.priceEUR * 100) / 100;
+        if (previousPriceEUR > 0 && toNum(order.expectedFeesEUR, 0) > 0) {
+          order.expectedFeesEUR = Math.round(toNum(order.expectedFeesEUR) * order.priceEUR / previousPriceEUR * 100) / 100;
+        }
+      }
+    }
     order.ibkrStatus = fill ? "filled" : (result.status || "unknown");
     order.ibkrResponse = result;
     if (fill) order.ibkrFill = fill;

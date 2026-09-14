@@ -466,13 +466,22 @@ def check_freshness(last_bar_time, interval, now=None):
 
     il = (interval or "").lower()
     if "h" in il or "m" in il:
-        max_age_h = 72
+        # AG1 and the dashboard use the explicit 96 h market-data gate.  The
+        # shorter window below only decides whether a new LLM validation is
+        # worthwhile; it must not turn an otherwise usable indicator result
+        # into a hard STALE status.  The old implementation used a global
+        # weekday/UTC 3 h rule and therefore rejected US data before the US
+        # open, plus Euronext data whenever Yahoo lagged by a few hours.
+        hard_max_age_h = 96
+        ai_fresh_max_age_h = 72
         wd = now.weekday()
         hr = now.hour
         if wd < 5 and 7 <= hr <= 18:
-            max_age_h = 3
-        if age_hours > max_age_h:
+            ai_fresh_max_age_h = 3
+        if age_hours > hard_max_age_h:
             return False, age_hours, "STALE"
+        if age_hours > ai_fresh_max_age_h:
+            return False, age_hours, "SOFT_STALE"
     else:
         if age_hours > 96:
             return False, age_hours, "STALE"
@@ -673,6 +682,11 @@ for it in items:
             h1_result["status"] = "STALE"
             h1_result.setdefault("warnings", []).append(f"H1 data is {h1_age_h}h old - STALE")
             data_quality_flags.append("STALE_H1")
+        elif not h1_fresh and h1_freshness == "SOFT_STALE":
+            h1_result.setdefault("warnings", []).append(
+                f"H1 data is {h1_age_h}h old - outside AG2 AI freshness window"
+            )
+            data_quality_flags.append("H1_OUTSIDE_AI_FRESHNESS_WINDOW")
         if not d1_fresh and d1_freshness == "STALE":
             d1_result["status"] = "STALE"
             d1_result.setdefault("warnings", []).append(f"D1 data is {d1_age_h}h old - STALE")
@@ -691,7 +705,7 @@ for it in items:
         pass_ai, filter_reason = pre_filter(h1_result, d1_result)
         if pass_ai and (not h1_fresh or not d1_fresh):
             pass_ai = False
-            filter_reason = "STALE_H1_OR_D1_DATA"
+            filter_reason = "H1_OR_D1_OUTSIDE_AI_FRESHNESS_WINDOW"
         if h1_resp.get("closedOnly") is not True or d1_resp.get("closedOnly") is not True:
             pass_ai = False
             filter_reason = "CLOSED_BARS_UNVERIFIED"

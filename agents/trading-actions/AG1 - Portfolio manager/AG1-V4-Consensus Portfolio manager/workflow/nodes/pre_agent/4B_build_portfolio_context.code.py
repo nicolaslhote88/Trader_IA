@@ -25,7 +25,7 @@ NO_ORDER_REASONS_ALLOWED = {
     "NO_TRADE",
     "UNKNOWN",
 }
-STATUS_PRIORITY = {"SKIPPED": 5, "RESIZED": 4, "NO_ORDER": 3, "EXECUTED": 2}
+STATUS_PRIORITY = {"REJECTED": 6, "SKIPPED": 5, "RESIZED": 4, "NO_ORDER": 3, "EXECUTED": 2}
 SOURCE_PRIORITY = {"WARNING": 3, "ORDER": 2, "INFERRED": 1}
 NOISY_SYMBOL_TOKENS = {
     "ORDER",
@@ -383,6 +383,15 @@ def parse_warning_event(alert_row):
         if len(tokens) >= 3:
             symbol, _ = parse_symbol_from_tokens(tokens, 2)
         side = side or "SELL"
+    elif up.startswith("ORDER_REJECT:"):
+        status = "REJECTED"
+        reason = alert_code or (tokens[1] if len(tokens) >= 2 else "ORDER_REJECT")
+        if len(tokens) >= 3:
+            symbol, _ = parse_symbol_from_tokens(tokens, 2)
+    elif alert_code and alert_code not in {"AGENT_WARNING", "NO_TRADE", "CHRONIC_AGENT_WARNING"}:
+        status = "REJECTED"
+        reason = alert_code
+        symbol = norm_symbol(alert_row.get("symbol")) or norm_symbol(payload.get("symbol"))
     elif alert_code == "NO_TRADE" or "NO EXECUTABLE ORDERS FOR THIS RUN" in up:
         status = "NO_ORDER"
         reason = "NO_TRADE"

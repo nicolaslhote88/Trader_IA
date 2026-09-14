@@ -30,7 +30,7 @@ VARIANTS = [
         "rotation_mode": "HELD_CORE",
         "batch_size": 18,
         "batch_state_key": "last_index_actions_held_core",
-        "ai_provider": "deepseek-v4-pro",
+        "ai_provider": "deepseek-v4-flash",
         "ai_model_position": [-16, 7312],
         "ai_parser_position": [160, 7312],
     },
@@ -42,7 +42,7 @@ VARIANTS = [
         "rotation_mode": "WATCHLIST",
         "batch_size": 40,
         "batch_state_key": "last_index_actions_watchlist",
-        "ai_provider": "deepseek-v4-pro",
+        "ai_provider": "deepseek-v4-flash",
         "ai_model_position": [-16, 7728],
         "ai_parser_position": [128, 7728],
     },
@@ -120,7 +120,7 @@ def configure_deepseek_validator(wf, variant):
             "name": chain_name,
         },
         {
-            "parameters": {"model": "deepseek-v4-pro", "options": {}},
+            "parameters": {"model": "deepseek-v4-flash", "options": {}},
             "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
             "typeVersion": 1,
             "position": variant["ai_model_position"],
@@ -163,7 +163,7 @@ def configure_deepseek_validator(wf, variant):
     by_name = {node["name"]: node for node in wf["nodes"]}
     compute = by_name["Compute + Filter + Write"]["parameters"]["pythonCode"]
     old_hash_line = "sig_hash = compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind)"
-    new_hash_line = "sig_hash = fnv1a(compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind) + '|model=deepseek-v4-pro')"
+    new_hash_line = "sig_hash = fnv1a(compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind) + '|model=deepseek-v4-flash')"
     if old_hash_line not in compute:
         raise RuntimeError("AG2 model cache namespace hook not found")
     by_name["Compute + Filter + Write"]["parameters"]["pythonCode"] = compute.replace(
@@ -174,7 +174,7 @@ def configure_deepseek_validator(wf, variant):
         if "gpt-5-mini" not in code:
             raise RuntimeError(f"AG2 model lineage marker missing in {node_name}")
         by_name[node_name]["parameters"]["pythonCode"] = code.replace(
-            "gpt-5-mini", "deepseek-v4-pro"
+            "gpt-5-mini", "deepseek-v4-flash"
         )
 
 
@@ -222,7 +222,7 @@ def configure_workflow(base, variant):
         if node.get("name") in NODE_CODE_FILES:
             parameter, path = NODE_CODE_FILES[node["name"]]
             node.setdefault("parameters", {})[parameter] = path.read_text(encoding="utf-8")
-    if variant.get("ai_provider") == "deepseek-v4-pro":
+    if variant.get("ai_provider") == "deepseek-v4-flash":
         configure_deepseek_validator(wf, variant)
     executable = json.dumps(
         {"id": wf["id"], "nodes": wf.get("nodes", []), "connections": wf.get("connections", {})},
