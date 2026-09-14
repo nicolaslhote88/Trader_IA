@@ -93,15 +93,27 @@ def normalize(con: duckdb.DuckDBPyConnection) -> int:
         except Exception:
             rj = {}
         src = str(rj.get("source") or "")
-        if "." in sym:  # titre EUR local
+        broker_fill = rj.get("ibkrFill") or {}
+        if "reconcile" in src and broker_fill.get("price"):
+            # Reconciler already wrote EUR. Recover native execution directly,
+            # never reverse it using a later FX rate (or the static fallback).
+            native = float(broker_fill["price"])
+            instrument = con.execute(
+                "SELECT currency FROM core.instruments WHERE UPPER(symbol)=?", [sym]
+            ).fetchone()
+            ccy = str(broker_fill.get("currency") or (instrument[0] if instrument else "") or "").upper()
+            if not ccy or native <= 0 or price <= 0:
+                log(f"SKIP fill {fid}: missing verified currency/native price")
+                continue
+            final = native if ccy == "EUR" else price
+            updates.append((ccy, native, final / native, final, fid))
+            continue
+        if "." in sym:  # legacy non-reconciler writer
             updates.append(("EUR", price, 1.0, price, fid))
             continue
         if age_h > 48:
             log(f"WARN fill {fid} {sym} age {age_h:.0f}h : taux courant approximatif")
-        if "reconcile" in src:  # deja EUR
-            final, native = price, price / rate
-        else:  # natif USD
-            native, final = price, round(price * rate, 6)
+        native, final = price, round(price * rate, 6)
         rp = ref_price(con, sym, day)
         if rp:
             ratio = final / rp

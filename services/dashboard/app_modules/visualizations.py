@@ -258,7 +258,7 @@ def _extract_trade_events(
     start_ts: pd.Timestamp | None,
     end_ts: pd.Timestamp | None,
 ) -> pd.DataFrame:
-    cols = ["timestamp", "side"]
+    cols = ["timestamp", "side", "price", "quantity"]
     if tx is None or tx.empty:
         return pd.DataFrame(columns=cols)
 
@@ -280,13 +280,8 @@ def _extract_trade_events(
     if ev.empty:
         return pd.DataFrame(columns=cols)
 
-    ev = (
-        ev.sort_values("timestamp")
-        .drop_duplicates(subset=["trade_day", "side"], keep="first")
-        .sort_values("timestamp")
-    )
-    ev["timestamp"] = ev["trade_day"]
-    return ev[cols]
+    # Keep each execution at its exact timestamp and actual EUR fill price.
+    return ev.sort_values("timestamp")[cols]
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -580,8 +575,8 @@ def _build_position_sparkline(
             line=dict(color=line_color, width=1.6),
             fill="tozeroy",
             fillcolor=fill_color,
-            name="Close",
-            hovertemplate="%{x|%Y-%m-%d}<br>Close: %{y:.2f}<extra></extra>",
+            name="Clôture EUR",
+            hovertemplate="%{x|%Y-%m-%d}<br>Clôture : %{y:.4f} EUR<extra></extra>",
         )
     )
 
@@ -601,6 +596,17 @@ def _build_position_sparkline(
                 y1=y_max,
                 line=dict(color=color, width=1.5, dash="dot"),
             )
+
+            price = safe_float(getattr(ev, "price", 0))
+            if price > 0:
+                label = "Achat exécuté" if str(ev.side).upper() == "BUY" else "Vente exécutée"
+                fig.add_trace(go.Scatter(
+                    x=[ev.timestamp], y=[price], mode="markers",
+                    marker=dict(color=color, size=9, symbol="triangle-up" if str(ev.side).upper() == "BUY" else "triangle-down"),
+                    name=label,
+                    customdata=[[safe_float(getattr(ev, "quantity", 0))]],
+                    hovertemplate=label + "<br>%{x|%d/%m/%Y %H:%M UTC}<br>%{y:.4f} EUR<br>Qté : %{customdata[0]}<extra></extra>",
+                ))
 
     for level in buy_levels:
         fig.add_hline(
