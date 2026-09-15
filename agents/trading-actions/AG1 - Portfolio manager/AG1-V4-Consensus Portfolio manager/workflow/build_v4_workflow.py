@@ -313,6 +313,7 @@ def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
     }
     try:
         existing = get_node(workflow, "Anthropic Chat Model")
+        node_payload["position"] = existing.get("position", node_payload["position"])
         existing.clear()
         existing.update(node_payload)
     except KeyError:

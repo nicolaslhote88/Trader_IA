@@ -263,6 +263,9 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
   let qty = selectedPriceEUR && selectedPriceEUR > 0 && totalValue > 0
     ? Math.floor((totalValue * weight / 100) / selectedPriceEUR)
     : null;
+  const quantityIncrement = Math.max(1, toNumOrNull(matrix.quantity_increment) ?? 1);
+  if (intent === "BUY" && qty !== null) qty = currentQty + Math.floor(Math.max(0, qty - currentQty) / quantityIncrement) * quantityIncrement;
+  if (selectedAction === "DECREASE" && qty !== null) qty = currentQty - Math.floor(Math.max(0, currentQty - qty) / quantityIncrement) * quantityIncrement;
   if (selectedAction === "CLOSE") qty = 0;
   if (selectedAction === "DECREASE" && qty !== null) qty = Math.min(currentQty, qty);
   const confidence = Math.round(median(votes.map((v) => v.confidence).filter((x) => x !== null)) ?? 50);
@@ -349,6 +352,8 @@ function buildSelectedAction(group, posQtyMap, runId, opportunityMap, portfolioS
     fxRateToEUR,
     priceEUR: selectedPriceEUR,
     minPriceIncrement: toNumOrNull(matrix.min_price_increment ?? matrix.liquidity?.minPriceIncrement),
+    quantityIncrement,
+    minQuantity: toNumOrNull(matrix.min_quantity) ?? quantityIncrement,
     incrementRules: matrix.increment_rules || matrix.liquidity?.incrementRules || [],
     executionConstraints: matrix.execution_constraints || matrix.liquidity?.executionConstraints || null,
     action: selectedAction,
@@ -411,6 +416,8 @@ const runId = String(run.runId || run.run_id || `RUN_${Date.now()}`);
 const dbPath = String(context.db_path || context.ag1_db_path || run.db_path || "/files/duckdb/ag1_v4_consensus.duckdb");
 const meta = isObj(context.meta) ? context.meta : { initialCapitalEUR: 10000 };
 const portfolioSummary = buildPortfolioSummary(context);
+portfolioSummary.dailyReturnPct = context.portfolio_pack?.dailyReturnPct ?? null;
+portfolioSummary.dailyRiskAsOf = context.portfolio_pack?.dailyRiskAsOf ?? null;
 const posQtyMap = buildPositionQtyMap(portfolioSummary);
 const opportunityMap = Object.fromEntries(
   safeArray(context?.opportunity_pack?.rows)
@@ -461,7 +468,7 @@ for (let i = 0; i < proposalItems.length; i += 1) {
     const gates = String(matrix.gates || "");
     const buyEligible = intent === "BUY"
       && matrix.decision === "Entrer / Renforcer"
-      && (!gates || gates === "OK");
+      && gates.split("|").every((g) => ["", "OK", "SPREAD_UNQUOTED"].includes(g.trim()));
     const sellEligible = intent === "SELL" && (posQtyMap[symbol] || 0) > 0;
     const buyFeasibility = intent === "BUY"
       ? evaluateBuyVoteFeasibility(action, matrix, portfolioSummary, posQtyMap, context.config || {})
@@ -572,6 +579,7 @@ const targetExposurePct = median(validDecisions.map((p) => toNumOrNull(p.targetE
 const maxNewPositionVotes = validDecisions.map((p) => toNumOrNull(p.maxNewPositions)).filter((x) => x !== null && x >= 0);
 const maxNewPositions = maxNewPositionVotes.length ? Math.floor(Math.min(...maxNewPositionVotes)) : null;
 const agentDecision = {
+  decisionInput: { schemaVersion: "performance_contract_v1", asOf: ts, portfolio: context.portfolio_pack, opportunities: context.opportunity_pack, executionAudit: context.execution_audit || [], inputSnapshot: run.inputSnapshot },
   decisionMeta: {
     runId,
     model: "ag1_v4_consensus",

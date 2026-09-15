@@ -118,6 +118,13 @@ def parse_stk_symbol(symbol: str) -> tuple[str, str]:
 
 
 SUFFIX_TO_EXCHANGE: dict[str, str] = {
+    "T": "TSEJ",
+    "KS": "KRX",
+    "KQ": "KOSDAQ",
+    "HK": "SEHK",
+    "AX": "ASX",
+    "TO": "TSE",
+    "V": "VENTURE",
     "PA": "SBF",
     "DE": "IBIS",
     "AS": "AEB",

@@ -1,14 +1,27 @@
 # Liens entre systèmes & parité à maintenir
 
-**MAJ 2026-08-06.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
+**MAJ 2026-09-14.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
 
 ## ⚠️ Règle d'or
 Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne lit PAS la sortie du run — il recalcule à partir des bases DuckDB `ag2_v3` / `ag3_v2` / `ag4_*`). Donc :
 > **Toute modif des formules de scoring, des règles de décision, des gates ou des seuils de fraîcheur dans AG1 doit être répercutée dans `app.py` (matrice + funnel), et inversement.**
 
-La version live `/opt/trading-dashboard/app/app.py` a été resynchronisée dans
-`services/dashboard/app.py`. Tout prochain changement doit continuer à être
-appliqué et testé des deux côtés avant déploiement.
+La source du dashboard montée sur `/app` est actuellement
+`/opt/trader-ia/releases/ag5-ag8-global-context-20260805/services/dashboard`.
+Toujours revérifier le montage avant déploiement.
+
+**Contrat technique du 14 septembre 2026 :** R8 lit `d1_confidence` (0–100),
+jamais `d1_score` (−6–6) comme confiance. Des deux côtés, le terme technique
+est `50 + direction * max(0, 8 + .2 * (confidence - 50))` : direction +1 BUY,
+−1 SELL, 0 sinon, confiance bornée à 0–100. Les scores ne sont pas calibrés en
+probabilités. Le test `test_technical_confidence_units.py` vérifie la symétrie
+et la parité sur plusieurs confiances. [Contrat complet](20260914_performance_contract_remediation.md).
+
+`execution_constraints` reste un alias BUY : les modèles reçoivent désormais
+`buy_feasibility`/`sell_feasibility`. Le préflight sélectionne les entrées après
+contrôle, conserve les positions détenues et expose les lots. Les sorties
+proposées ne financent pas les achats. Ces contrôles d’exécution ne sont pas
+répliqués dans la matrice du dashboard.
 
 ## Carte des duplications
 

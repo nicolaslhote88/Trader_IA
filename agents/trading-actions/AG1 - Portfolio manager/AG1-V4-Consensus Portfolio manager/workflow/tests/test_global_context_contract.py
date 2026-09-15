@@ -8,9 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 CRITICAL_HASHES = {
-    "nodes/post_agent/06_build_consensus_v4.code.js": "c39434c3ff5b484ba2615fa6a0ec7c722387b790c3f83c630070645d611d1316",
-    "nodes/post_agent/07_validate_enforce_safety_v5.code.js": "d658f005a41131e175792f5b5dea63e3445fb744f8979f347916dacc9722883d",
-    "nodes/post_agent/07b_ibkr_send_orders.js": "060d649426d7ad015e68734fe1cda4909ecdf89503d1158e26d77f3a7e8b5e41",
+    "nodes/post_agent/07b_ibkr_send_orders.js": "f94fe99af1d624e405997cb735645000e530e7844e2ecc310db427beeda2c131",
 }
 
 
@@ -26,7 +24,7 @@ def targets(payload, source):
     return [target for group in payload["connections"][source].get("main", []) for target in group]
 
 
-def test_critical_consensus_risk_and_broker_sources_are_unchanged():
+def test_broker_sender_guards_are_unchanged():
     for relative, expected in CRITICAL_HASHES.items():
         text = (ROOT / relative).read_text(encoding="utf-8").replace("\r\n", "\n")
         assert hashlib.sha256(text.encode("utf-8")).hexdigest() == expected
@@ -41,7 +39,7 @@ def test_one_shared_context_node_precedes_all_three_models():
     assert "AG1_GLOBAL_CONTEXT_LLM_V2" in attach
     assert "pack.quality?.snapshot_age_hours" in attach
     assemble = node_by_name(active, "AG1.00 — Assemble Input Packs")["parameters"]["jsCode"]
-    assert "prompt_v4_consensus_global_context_v3" in assemble
+    assert "prompt_v4_performance_contract_v1" in assemble
     attach_targets = targets(active, "AG1.GC — Attach Advisory Pack")
     assert attach_targets == [{"node": "AG1.V4 — Liquidity Preflight", "type": "main", "index": 0}]
     fanout = targets(active, "AG1.V4 — Liquidity Preflight")

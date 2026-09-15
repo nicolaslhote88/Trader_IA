@@ -175,7 +175,7 @@ def exchange_rates_from_ledger(ledger):
 def position_market_value_eur(row, rates):
     ccy = norm_symbol(row.get("currency"))
     mv = parse_float(row.get("mktValue") or row.get("marketValue") or row.get("market_value"), 0.0)
-    return mv * rates.get(ccy, 1.0)
+    return mv * confirmed_fx_rate(rates, ccy)
 
 
 def position_price_eur(row, rates):
@@ -798,7 +798,7 @@ def position_rows_from_ibkr(positions, rates, total_value_eur, run_id, ts):
         if not symbol or qty <= 0:
             continue
         ccy = norm_symbol(row.get("currency"))
-        rate = rates.get(ccy, 1.0)
+        rate = confirmed_fx_rate(rates, ccy)
         avg_cost = parse_float(row.get("avgCost") or row.get("avgPrice") or row.get("avg_price"), 0.0) * rate
         market_value = position_market_value_eur(row, rates)
         last_price = market_value / qty if qty else 0.0
@@ -806,6 +806,45 @@ def position_rows_from_ibkr(positions, rates, total_value_eur, run_id, ts):
         weight = market_value / total_value_eur if total_value_eur > 0 else 0.0
         rows.append([run_id, ts, symbol, qty, avg_cost, last_price, money(market_value), money(unrealized), weight])
     return rows
+
+
+def confirmed_fx_rate(rates, currency):
+    rate = 1.0 if currency == "EUR" else parse_float(rates.get(currency), 0.0)
+    if rate <= 0:
+        raise RuntimeError("RECON_FX_RATE_UNAVAILABLE:" + currency)
+    return rate
+
+
+def measured_snapshot_risk(con, ts, nav, cash, positions):
+    peak = parse_float(con.execute("SELECT MAX(total_value_eur) FROM core.portfolio_snapshot WHERE ts <= ?", [ts]).fetchone()[0], nav)
+    drawdown = nav / max(nav, peak, 1e-9) - 1.0
+    # Keep timezone-aware values inside DuckDB: Python TIMESTAMPTZ decoding
+    # imports optional pytz, which is absent from the production task runners.
+    previous = con.execute("SELECT total_value_eur, CAST(ts AS VARCHAR) FROM core.portfolio_snapshot WHERE ts < date_trunc('day', CAST(? AS TIMESTAMPTZ)) ORDER BY ts DESC LIMIT 1", [ts]).fetchone()
+    daily_return = None
+    if previous and parse_float(previous[0], 0) > 0:
+        flows = con.execute("SELECT COALESCE(SUM(amount), 0) FROM core.cash_ledger WHERE ts > ? AND ts <= ? AND UPPER(type) IN ('DEPOSIT','WITHDRAWAL','EXTERNAL_DEPOSIT','EXTERNAL_WITHDRAWAL') AND currency='EUR'", [previous[1], ts]).fetchone()[0]
+        daily_return = (nav - float(flows)) / float(previous[0]) - 1
+    sectors = dict(con.execute("SELECT symbol, COALESCE(sector, 'UNKNOWN') FROM core.instruments").fetchall())
+    totals, unknown = {}, 0.0
+    for row in positions:
+        sector = sectors.get(row[2]) or "UNKNOWN"
+        value = parse_float(row[6], 0.0)
+        totals[sector] = totals.get(sector, 0.0) + value
+        if sector.upper() == "UNKNOWN":
+            unknown += value
+    top_sector = max(totals.values(), default=0.0) / nav if nav > 0 and unknown == 0 else None
+    booked_ai = parse_float(con.execute("SELECT SUM(ABS(amount)) FROM core.cash_ledger WHERE UPPER(type)='AI_COST' AND ts <= ?", [ts]).fetchone()[0], 0.0)
+    cash_pct = cash / nav if nav > 0 else 0.0
+    status = "DEFENSIVE" if cash_pct >= .8 else "RISK_ON" if cash_pct <= .1 else "BALANCED"
+    meta = {"method_version": "performance_contract_v1", "drawdown_method": "observed_NAV_peak_not_flow_adjusted",
+            "daily_return_pct": daily_return * 100 if daily_return is not None else None,
+            "daily_reference_at": str(previous[1]) if previous else None,
+            "daily_method": "previous_UTC_day_last_NAV_external_EUR_flows_at_end",
+            "external_flow_coverage": "BOOKED_ONLY_NOT_STATEMENT_RECONCILED",
+            "ai_cost_coverage": "BOOKED_ONLY_EXTERNAL_BILLING_UNKNOWN", "var_method": "NOT_ESTIMATED",
+            "unknown_sector_value_eur": unknown}
+    return {"drawdown": drawdown, "top_sector": top_sector, "booked_ai": booked_ai, "status": status, "meta": meta}
 
 
 def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missing, cfg):
@@ -862,13 +901,14 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
             position_rows,
         )
 
+    measured = measured_snapshot_risk(con, ts, total_value_eur, cash_eur, position_rows)
     con.execute("DELETE FROM core.portfolio_snapshot WHERE run_id = ?", [run_id])
     con.execute(
         """
         INSERT INTO core.portfolio_snapshot (
           run_id, ts, cash_eur, equity_eur, total_value_eur, cum_fees_eur, cum_ai_cost_eur,
           trades_this_run, total_pnl_eur, roi, drawdown_pct, meta_json
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             run_id,
@@ -877,9 +917,11 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
             money(equity_eur),
             money(total_value_eur),
             money(cum_fees),
+            money(measured["booked_ai"]),
             len(missing),
             money(total_value_eur - initial),
             (total_value_eur - initial) / initial if initial else 0.0,
+            measured["drawdown"],
             json.dumps(
                 {
                     "source": "ibkr_pf_reconcile",
@@ -887,6 +929,7 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
                     "base_ledger": base,
                     "rates": rates,
                     "position_filter": cfg.get("ibkr_position_filter") or {},
+                    **measured["meta"],
                 },
                 ensure_ascii=False,
             ),
@@ -909,11 +952,11 @@ def insert_reconciliation_run_and_snapshot(con, positions, ledger, rates, missin
             ts,
             cash_pct,
             top1,
-            top1,
-            money(equity_eur * 0.015 * 1.65),
+            measured["top_sector"],
+            None,
             len(position_rows),
-            "BALANCED",
-            json.dumps({"source": "ibkr_pf_reconcile"}, ensure_ascii=False),
+            measured["status"],
+            json.dumps({"source": "ibkr_pf_reconcile", **measured["meta"]}, ensure_ascii=False),
         ],
     )
 
@@ -964,7 +1007,7 @@ def upsert_ibkr_positions_latest(con, positions, rates, ts):
         if not symbol or qty <= 0:
             continue
         ccy = norm_symbol(row.get("currency"))
-        rate = rates.get(ccy, 1.0)
+        rate = confirmed_fx_rate(rates, ccy)
         avg_cost = parse_float(row.get("avgCost") or row.get("avgPrice") or row.get("avg_price"), 0.0) * rate
         market_value = position_market_value_eur(row, rates)
         last_price = market_value / qty if qty else 0.0
@@ -1077,7 +1120,8 @@ try:
     ]
     cfg["ibkr_reconcile_position_diffs"] = position_diffs
     cfg["ibkr_reconcile_value_diffs"] = value_diffs
-    if write_needed:
+    # The late EOD slot records an observation even if NAV changed by less than EUR 1.
+    if write_needed or now_utc().hour >= 21:
         con.execute("BEGIN TRANSACTION")
         try:
             upsert_instruments_for_positions(con, filtered_positions)
@@ -1111,10 +1155,6 @@ try:
             cfg["ibkr_live_mtm_error"] = str(_live_err)
         cfg["ibkr_reconcile_status"] = "NO_DIFF"
 finally:
-    try:
-        con.execute("CHECKPOINT")
-    except Exception:
-        pass
     con.close()
 
 return [{"json": cfg}]

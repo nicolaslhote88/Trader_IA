@@ -5,7 +5,7 @@ const incoming = $input.all();
 
 function isObj(x) { return !!x && typeof x === "object" && !Array.isArray(x); }
 function normSymbol(v) { return String(v ?? "").trim().toUpperCase(); }
-function toNumOrNull(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+function toNumOrNull(v) { if (v === null || v === undefined || v === "") return null; const n = Number(v); return Number.isFinite(n) ? n : null; }
 function mergeDeep(base, value) {
   const out = isObj(base) ? { ...base } : {};
   if (!isObj(value)) return out;
@@ -84,7 +84,31 @@ const positions = (Array.isArray(portfolioBrief.positions) ? portfolioBrief.posi
       weightPct: toNumOrNull(p.weightPct ?? p.WeightPct ?? p.weight_pct),
       sector: String(p.sector ?? p.Sector ?? "").trim() || "UNKNOWN",
       unrealizedPnlPct: toNumOrNull(p.unrealizedPnlPct ?? p.UnrealizedPnlPct),
-      lastAction: String(lastDecision?.action || "").trim() || null,
+      currency: p.currency || null,
+      priceCurrency: p.priceCurrency || "EUR",
+      avgPriceNative: toNumOrNull(p.avgPriceNative),
+      lastPriceNative: toNumOrNull(p.lastPriceNative),
+      avgPriceEUR: toNumOrNull(p.avgPriceEUR ?? p.avgPrice),
+      lastPriceEUR: toNumOrNull(p.lastPriceEUR ?? p.lastPrice),
+      fxRateToEUR: toNumOrNull(p.fxRateToEUR),
+      fxAsOf: p.fxAsOf || null,
+      nativePriceSource: p.nativePriceSource || null,
+      paidCostEUR: toNumOrNull(p.paidCostEUR),
+      paidCostSource: p.paidCostSource || null,
+      perfLocalPct: toNumOrNull(p.perfLocalPct),
+      perfEURPct: toNumOrNull(p.perfEURPct),
+      openedAt: p.openedAt || null,
+      heldDays: toNumOrNull(p.holdingDays),
+      lastBuyAt: p.positionLifecycle?.lastBuyAt || null,
+      lastSellAt: p.positionLifecycle?.lastSellAt || null,
+      lifecycleSource: p.positionLifecycle?.source || null,
+      openingStopPriceNative: toNumOrNull(p.positionLifecycle?.openingStopPriceNative),
+      openingStopLossPct: toNumOrNull(p.positionLifecycle?.openingStopLossPct),
+      openingStopSource: p.positionLifecycle?.openingStopSource || null,
+      stopProtection: "INDICATIVE_NOT_BROKER_ORDER",
+      lastProposalAction: String(lastDecision?.action || "").trim() || null,
+      lastProposalAt: lastDecision?.ts || null,
+      lastExecutedSide: execution?.lastOrderSide || null,
       lastExecutionStatus: String(execution?.lastExecutionStatus || "").trim() || null,
     };
   });
@@ -105,8 +129,13 @@ const memoryIdeas = recentIdeas
 const summary = isObj(portfolioBrief.summary) ? portfolioBrief.summary : {};
 const portfolioPack = {
   generatedAt: portfolioBrief.generatedAt || null,
+  dailyReturnPct: toNumOrNull(portfolioBrief.dailyReturnPct),
+  dailyReferenceAt: portfolioBrief.dailyReferenceAt || null,
+  dailyRiskAsOf: portfolioBrief.dailyRiskAsOf || null,
   totalValueEUR: toNumOrNull(portfolioBrief.totalValue ?? summary.totalValue ?? summary.totalPortfolioValueEUR),
   cashEUR: toNumOrNull(portfolioBrief.cash ?? summary.cash ?? summary.cashEUR),
+  navComponentResidualEUR: toNumOrNull(summary.navComponentResidualEUR),
+  navSource: summary.navSource || null,
   exposurePct: toNumOrNull(portfolioBrief.exposurePct ?? summary.exposurePct),
   positionsCount: positions.length,
   positions,
@@ -127,7 +156,7 @@ const universeScope = Array.isArray(run.universe_scope)
   : ["EQUITY", "ETF"];
 const portfolioDates = positions.map((p) => p.updatedAt).filter(Boolean);
 const inputSnapshot = {
-  portfolioUpdatedAt: latestTimestamp([portfolioBrief.portfolioUpdatedAt, portfolioBrief.updatedAt, portfolioBrief.generatedAt, ...portfolioDates]),
+  portfolioUpdatedAt: latestTimestamp([portfolioBrief.portfolioUpdatedAt, portfolioBrief.updatedAt, ...portfolioDates]),
   technicalUpdatedAt: opportunityPack.generatedAt || null,
   researchUpdatedAt: opportunityPack.generatedAt || null,
   newsGeneratedAt: opportunityPack.newsGeneratedAt || null,
@@ -137,14 +166,14 @@ const inputSnapshot = {
 config = {
   strategyVersion: run.strategyVersion || "strategy_v4_consensus",
   configVersion: run.configVersion || "ag1_v4_consensus_v1",
-  promptVersion: "prompt_v4_consensus_global_context_v3",
+  promptVersion: "prompt_v4_performance_contract_v1",
   ...config,
 };
 run = {
   ...run,
   strategyVersion: run.strategyVersion || config.strategyVersion,
   configVersion: run.configVersion || config.configVersion,
-  promptVersion: "prompt_v4_consensus_global_context_v3",
+  promptVersion: "prompt_v4_performance_contract_v1",
   model: "ag1_v4_consensus",
   universe_scope: universeScope,
   inputSnapshot,
