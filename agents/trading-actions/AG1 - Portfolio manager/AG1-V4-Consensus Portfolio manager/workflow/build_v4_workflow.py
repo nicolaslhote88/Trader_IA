@@ -326,6 +326,7 @@ def patch_model_options(workflow: Dict[str, Any]) -> None:
     rename_node(workflow, "OpenAI Chat Model - GPT5.2", "OpenAI Chat Model - GPT6sol")
     rename_node(workflow, "OpenAI Chat Model - GPT5.6sol", "OpenAI Chat Model - GPT6sol")
     openai = get_node(workflow, "OpenAI Chat Model - GPT6sol")
+    existing_parameters = copy.deepcopy(openai["parameters"])
     openai["parameters"] = {
         "model": {
             "__rl": True,
@@ -334,8 +335,13 @@ def patch_model_options(workflow: Dict[str, Any]) -> None:
             "cachedResultName": "gpt-6-sol",
         },
         "builtInTools": {},
+        "responsesApiEnabled": True,
         "options": {"reasoningEffort": "medium", "timeout": 1500000},
     }
+
+    # Preserve explicit operator choices on an already migrated GPT-6 node.
+    if existing_parameters.get("model", {}).get("value") == "gpt-6-sol":
+        openai["parameters"] = existing_parameters
 
     if has_node(workflow, "xAI Grok Chat Model"):
         rename_node(workflow, "xAI Grok Chat Model", "DeepSeek Chat Model")

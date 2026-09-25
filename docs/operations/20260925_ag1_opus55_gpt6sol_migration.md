@@ -1,5 +1,20 @@
 # AG1 V4 — Opus 5.5 et GPT-6 Sol (2026-09-25)
 
+## Synchronisation locale/GitHub après sauvegarde dans l'éditeur
+
+Dernière version publiée relue : `447203d7-c110-473e-a5cc-1500107d20e5`,
+active. L'export local reproduit exactement ses nœuds et connexions.
+Par rapport au déploiement testé ci-dessous : positions de deux nœuds ajustées ;
+`responsesApiEnabled` et `options.reasoningEffort` absents du nœud GPT-6 Sol.
+Ces derniers réglages sont conservés, sans nouvelle écriture sur le VPS.
+Le builder préserve les choix d'un nœud GPT-6 déjà migré.
+
+Le replay décrit ci-dessous concerne la version initialement déployée avec
+Responses API et effort medium explicites. La configuration OpenAI sauvegardée
+ensuite n'a pas fait l'objet d'un nouveau replay ; ne pas étendre la preuve
+précédente à ces deux options absentes. Aucun nouveau run AG1 n'était enregistré
+au contrôle de synchronisation.
+
 ## Faits validés
 
 Déployé sur `AG1V4CONSENSUS`, actif, version publiée

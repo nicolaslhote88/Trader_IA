@@ -13,10 +13,12 @@ def migrate(workflow):
     w = copy.deepcopy(workflow)
     by = {n['name']: n for n in w['nodes']}
     gpt = next(n for n in w['nodes'] if n['type'].endswith('.lmChatOpenAi') and n['name'].startswith('OpenAI Chat Model - GPT'))
+    already_migrated = gpt['parameters']['model'].get('value') == 'gpt-6-sol'
     old_name = gpt['name']
     gpt['name'] = 'OpenAI Chat Model - GPT6sol'
     gpt['parameters']['model'] = {'__rl': True, 'value': 'gpt-6-sol', 'mode': 'id'}
-    gpt['parameters']['responsesApiEnabled'] = True
+    if not already_migrated:
+        gpt['parameters']['responsesApiEnabled'] = True
     if old_name != gpt['name']:
         w['connections'][gpt['name']] = w['connections'].pop(old_name)
         for connections in w['connections'].values():
@@ -50,7 +52,7 @@ def migrate(workflow):
         http['name'] = 'Anthropic Messages - Opus5.5'
         http['type'] = 'n8n-nodes-base.httpRequest'
         http['typeVersion'] = 4.2
-        http['position'] = [agent['position'][0] + 200, agent['position'][1]]
+        http['position'] = http.get('position', [agent['position'][0] + 200, agent['position'][1]])
         http['parameters'] = {
             'method': 'POST', 'url': 'https://api.anthropic.com/v1/messages',
             'authentication': 'predefinedCredentialType', 'nodeCredentialType': 'anthropicApi',
@@ -67,7 +69,7 @@ def migrate(workflow):
         decoder['type'] = 'n8n-nodes-base.code'
         decoder['typeVersion'] = 2
         decoder['parameters'] = {'jsCode': 'const SCHEMA = ' + json.dumps(schema, ensure_ascii=False) + ';\n' + (ROOT / 'nodes/agent_input/claude_messages_decode.code.js').read_text(encoding='utf-8')}
-        decoder['position'] = [agent['position'][0] + 400, agent['position'][1]]
+        decoder['position'] = decoder.get('position', [agent['position'][0] + 400, agent['position'][1]])
         decoder.pop('onError', None)
         w['connections'].pop('Anthropic Chat Model', None)
         w['connections'][CLAUDE_AGENT] = {'main': [[{'node': http['name'], 'type': 'main', 'index': 0}]]}

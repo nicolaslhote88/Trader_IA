@@ -13,8 +13,8 @@ Ce fichier est le point d'entrée durable du projet (la mémoire interne peut ne
 à moindre coût : (1) lire ce fichier en entier ; (2) pour l'état live réel, se connecter au VPS (§ VPS/infra) et
 lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détail par sujet dans `docs/`.
 État vérifié sur le VPS au **2026-08-06**. Analyse fonctionnelle courante :
-`docs/architecture/etat_des_lieux.md`; index : `docs/README.md`. Branche repo :
-`codex/ag5-ag9-global-context-20260805`.
+`docs/architecture/etat_des_lieux.md`; index : `docs/README.md`. Branche de la migration modèles du 2026-09-25 :
+`codex/ag1-models-20260925`.
 
 ⚠️ **AG5–AG8 + contexte global validés live** : producteurs et synthèse actifs,
 pack AG1 `AG1_GLOBAL_CONTEXT_LLM_V2` strictement consultatif, qualité live
@@ -49,7 +49,7 @@ leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vé
 `git diff --check` et stager des chemins explicites.
 
 ## Modèles AG1 — LIVE 2026-09-25
-- Claude Opus 5.5 utilise Messages API via HTTP (thinking adaptive + JSON structuré), car le nœud Anthropic de n8n 2.3.5 est incompatible. GPT-6 Sol utilise le nœud OpenAI avec Responses API. Effort medium ; clés historiques de stockage conservées.
+- Claude Opus 5.5 utilise Messages API via HTTP (thinking adaptive + JSON structuré), car le nœud Anthropic de n8n 2.3.5 est incompatible. GPT-6 Sol utilise le nœud OpenAI ; replay validé avec Responses API/medium explicites. Une sauvegarde ultérieure retire ces deux options : version `447203d7-c110-473e-a5cc-1500107d20e5` reflétée localement, réglages OpenAI à revalider. Clés historiques de stockage conservées.
 - Replay isolé validé, publication vérifiée ; prochain cron à observer. Preuves et rollback : `docs/operations/20260925_ag1_opus55_gpt6sol_migration.md`.
 
 ## Corrections de performance — LIVE 2026-09-14

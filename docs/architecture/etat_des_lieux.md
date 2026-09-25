@@ -1,6 +1,10 @@
 # État des lieux fonctionnel — Trader_IA
 
 **Dernière consolidation du socle live : 2026-08-06.**
+**Mise à jour ciblée AG1 : 2026-09-25**, modèles et transport validés live ;
+voir [la note de migration](../operations/20260925_ag1_opus55_gpt6sol_migration.md).
+Horaires AG1 alignés sur la correction du 2026-09-14 ; les autres observations
+datées ci-dessous restent historiques.
 **Méthode :** audit exhaustif du 2026-07-02, puis vérifications live ciblées les
 2026-08-05/06 (broker `/health`, approbations, SQLite n8n, DuckDB en lecture
 seule, replays AG1/AG2 et contexte global). Les métriques de portefeuille et de
@@ -14,11 +18,10 @@ volume explicitement datées du 02/07 restent des snapshots historiques.
 
 Trader_IA est une **plateforme multi-agents de trading actions/ETF en LIVE réel** sur IBKR (compte `U25651155`), orchestrée par **n8n** sur un VPS Hostinger, avec **DuckDB** comme source de vérité, un **broker FastAPI** devant l'API IBKR Client Portal, une **approbation d'ordres via Telegram**, et un **dashboard Streamlit**.
 
-Le cœur décisionnel est **AG1 V4 Consensus** : trois LLM (GPT-5.6 Sol,
-DeepSeek V4 Pro, Claude Opus 4.8) proposent chacun des décisions de portefeuille ;
+Le cœur décisionnel est **AG1 V4 Consensus** : trois LLM (GPT-6 Sol,
+DeepSeek V4 Pro, Claude Opus 5.5) proposent chacun des décisions de portefeuille ;
 une règle de **consensus 2/3** filtre ce qui part à l'exécution, derrière un Risk
-Manager déterministe et un preflight liquidité IBKR. Il tourne **2×/jour ouvré :
-14:00 Paris (Euronext) et 16:30 Paris (US ouvert)**.
+Manager déterministe et un preflight liquidité IBKR. Il tourne **une fois par jour ouvré à 17:10 Paris**, après AG2 à 16:35.
 
 Les piliers d'analyse sont alimentés par des workflows autonomes : **AG2-V3** (technique, yfinance, split Held+Core / Watchlist), **AG3-V2** (fondamental, yfinance pur sans LLM, split Held+Core / Watchlist), **AG4-V3** (news macro), **AG4_Spé** (news par valeur, 3 sources : Boursorama, IBKR portfolio, Finnhub global).
 
@@ -135,10 +138,10 @@ Hors projet mais sur le même hôte : `hermes-*`, `siga-dashboard`, `voice-gatew
 - **D2** : node `20K — News Digest` injecte dans l'`opportunity_pack` d'AG1 les news ≤14 j (top 3/symbole + `held_news`). `AG4_Spé — Health Alert` (16:30 Paris) alerte Telegram si pipeline stale.
 
 ### 3.5 AG1 V4 Consensus — décision
-- Workflow `AG1V4CONSENSUS`, **2 crons : 14:00 et 16:30 Paris L-V** (le 16:30 rend les US tradables : à 14:00 le NYSE est fermé → cotations figées → gate liquidité les bloque, comportement normal).
+- Workflow `AG1V4CONSENSUS`, **un cron à 17:10 Paris L-V**, depuis le 2026-09-14. Référence : `../operations/SCHEDULING_AND_LOAD.md`.
 - Pipeline interne : R8 (préparation données, fraîcheurs H1≤96 h / D1≤96 h / YF≤72 h / funda≤168 h, `data_age = max(stocké, réel)`, exclusion quarantaine, verdicts AG2, STALE_FUNDA) → `Calcul Matrice & Briefing` (prob_score `0.36 tech + 0.34 funda + 0.20 news + 0.10 régime` ; **risk_score V2** renormalisé sur composantes observées, pondération tactique vol/liq/event ; grades A/B/C par quantiles ; règle `enter_core` ; stop-fallback ≥ plancher ATR) → 3 LLM en parallèle → **consensus 2/3** → safety node 7 (Risk Manager déterministe) → **preflight liquidité IBKR** (warm-up snapshot jusqu'au bid/ask, `SPREAD_UNQUOTED` toléré sur noms prouvés liquides) → envoi broker.
 - Ledger **`ag1_v4_consensus.duckdb`** : `core.runs/orders/fills/consensus_*/model_proposals/positions_snapshot/portfolio_snapshot/…` (17 tables). 99 runs au 02/07 ; `strategy_version`/`prompt_version`/`n8n_execution_id` renseignés sur les runs récents.
-- Modèles : `gpt-5.6-sol`, `deepseek-v4-pro`, `claude-opus-4-8`. Les
+- Modèles : `gpt-6-sol`, `deepseek-v4-pro`, `claude-opus-5-5`. Les
   `model_keys` persistés restent `chatgpt52`, `grok41_reasoning` et
   `claude_sonnet46` pour compatibilité historique ; `model_name`/`model_id`
   portent l'identité réelle.
@@ -193,11 +196,11 @@ Résumé des crons actifs (heure Paris) après déconfliction anti-contention du
 | 10:05 / 13:05 / 16:05 (L-V) | Global Context Synthesizer | global_context_v1 |
 | 10:00 / 13:00 / 16:00 (L-V) | AG4_Spé Finnhub + IBKR news | ag4_spe |
 | 9h-17h horaire (L-V) | AG1-PF MTM | ag1_v4 |
-| **14:00 + 16:30 (L-V)** | **AG1 V4 Consensus** | ag1_v4 |
+| **17:10 (L-V)** | **AG1 V4 Consensus** | ag1_v4 |
 | 16:30 (L-V) | AG4_Spé Health Alert | — |
 | 20:00 (L-V) | AG2 Universe Quarantine | ag2_v3 |
 
-Règles : un seul écrivain par base ; écart ≥ durée_max + marge entre écrivains d'une même base ; nodes <20 min (timeout tâche 1200 s) ; ne pas déplacer AG1 V4 sans décision explicite. Contention résiduelle connue sur `ag1_v4` (MTM vs AG1 V4 14:00 / recon, audit F4) ; retry-hardening des `db_con` proposé, non déployé.
+Règles : un seul écrivain par base ; écart ≥ durée_max + marge entre écrivains d'une même base ; nodes <20 min (timeout tâche 1200 s) ; ne pas déplacer AG1 V4 sans décision explicite. La contention MTM/AG1 à 14:00 appartient à l’audit historique ; les horaires courants et la déconfliction sont décrits dans `../operations/SCHEDULING_AND_LOAD.md`.
 
 ---
 
