@@ -24,6 +24,13 @@ const raw = (j.output && !Array.isArray(j.output))
 def build(source: Path) -> dict:
     workflow = load_workflow(source)
     configure_deepseek_analyzer(workflow)
+    files = {'Load+Normalize Finnhub Staging': ('pythonCode','finnhub_load_staging.py'),
+             'S20 - Parse LLM Output': ('jsCode','finnhub_parse.js'),
+             'Write Finnhub DuckDB': ('pythonCode','finnhub_write.py')}
+    for n in workflow['nodes']:
+        if n['name'] in files:
+            key, filename = files[n['name']]
+            n['parameters'][key] = (ROOT/'nodes'/filename).read_text(encoding='utf-8-sig')
     parser = next(
         node for node in workflow.get("nodes", [])
         if node.get("name") == "S20 - Parse LLM Output"

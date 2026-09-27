@@ -47,11 +47,14 @@ function passesHardFilter(nn) {
 }
 
 if (old) {
-  const age = hoursBetween(nowIso, old.firstSeenAt || old.publishedAt || old.analyzedAt || nowIso);
+  const age = hoursBetween(nowIso, old.analyzedAt || old.firstSeenAt || old.publishedAt || nowIso);
   const preImpact = toNum(n.preImpactScore, 0);
 
-  if (preImpact >= 7 && age >= REANALYZE_HOURS) {
-    return [{ json: { ...n, _action: 'analyze', _reason: 'stale_high_impact_refresh', seenNowAt: nowIso } }];
+  const changedTitle = String(n.title || '').trim() !== String(old.title || '').trim();
+  const legacyRecent = old.tagger_version && old.tagger_version !== 'reduced_deepseek_flash_v2' && hoursBetween(nowIso, n.publishedAtNormalized || n.publishedAt) <= 72;
+  const newerRelease = new Date(n.publishedAtNormalized || n.publishedAt) - new Date(old.publishedAt) > 12 * 3600000;
+  if (changedTitle || newerRelease || legacyRecent || (preImpact >= 7 && age >= REANALYZE_HOURS)) {
+    return [{ json: { ...n, _action: 'analyze', _reason: changedTitle ? 'changed_title' : legacyRecent ? 'provider_recovery' : 'stale_high_impact_refresh', seenNowAt: nowIso } }];
   }
 
   return [{
@@ -59,6 +62,8 @@ if (old) {
       ...n,
       _action: 'skip',
       _reason: 'duplicate_known',
+      publishedAt: old.publishedAt || n.publishedAt,
+      publishedAtNormalized: old.publishedAt || n.publishedAt,
       seenNowAt: nowIso,
       historyRowNumber: old.row_number ?? old.rowNumber ?? old.row ?? null,
 

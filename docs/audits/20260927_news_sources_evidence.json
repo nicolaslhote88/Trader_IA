@@ -1,0 +1,3539 @@
+{
+  "audit_date": "2026-09-27",
+  "read_only_live": true,
+  "window_note": "Rolling 7/14/30 days at each query; sequential observations starting 15:29 UTC; Sunday audit.",
+  "workflow_publication": [
+    {
+      "id": "H0cfY1coMx8dvMuXScMc_",
+      "name": "AG4_Spé-V2",
+      "active": 1,
+      "versionId": "586522d8-a7b3-43b3-bb74-916bb0aae582",
+      "activeVersionId": "586522d8-a7b3-43b3-bb74-916bb0aae582"
+    },
+    {
+      "id": "rP2cyaIKt8tiVjYX5AH1e",
+      "name": "AG4-V3 - News Watcher",
+      "active": 1,
+      "versionId": "95555b29-d3ab-45b2-a19a-8c2b61dd7b88",
+      "activeVersionId": "95555b29-d3ab-45b2-a19a-8c2b61dd7b88"
+    },
+    {
+      "id": "AG5FXMacroPillarsV1",
+      "name": "AG5 — Macro & Flows V2",
+      "active": 1,
+      "versionId": "cbfb4a7d-0847-4d0a-9843-2f5123e9bb0b",
+      "activeVersionId": "cbfb4a7d-0847-4d0a-9843-2f5123e9bb0b"
+    },
+    {
+      "id": "AG6FXValuationPillarsV1",
+      "name": "AG6 — FX Relative Valuation V2",
+      "active": 1,
+      "versionId": "97e8cc91-d751-4bbc-9d4f-e533ea54c1de",
+      "activeVersionId": "97e8cc91-d751-4bbc-9d4f-e533ea54c1de"
+    },
+    {
+      "id": "AG7FXPositioningPillarsV1",
+      "name": "AG7 — Positioning V2",
+      "active": 1,
+      "versionId": "4ee7261e-d662-461d-b08a-bbd74f07a2d7",
+      "activeVersionId": "4ee7261e-d662-461d-b08a-bbd74f07a2d7"
+    },
+    {
+      "id": "AG8FXRatesPillarsV1",
+      "name": "AG8 — Rates & Liquidity V2",
+      "active": 1,
+      "versionId": "6f971c00-eee9-499c-a69a-bbd5fa6e018c",
+      "activeVersionId": "6f971c00-eee9-499c-a69a-bbd5fa6e018c"
+    },
+    {
+      "id": "AG1V4CONSENSUS",
+      "name": "AG1 V4 - Consensus Portfolio Manager",
+      "active": 1,
+      "versionId": "447203d7-c110-473e-a5cc-1500107d20e5",
+      "activeVersionId": "447203d7-c110-473e-a5cc-1500107d20e5"
+    },
+    {
+      "id": "uXW5M4vc1imTExB4",
+      "name": "AG4_Spé — Health Alert",
+      "active": 1,
+      "versionId": "931449a8-ed8b-4fe4-9949-d6b1a318b751",
+      "activeVersionId": "931449a8-ed8b-4fe4-9949-d6b1a318b751"
+    },
+    {
+      "id": "hSqxVSb8YAO9Nc6A",
+      "name": "AG4_Spé-IBKR-V1 — Portfolio News",
+      "active": 1,
+      "versionId": "fe14e1e1-c345-493f-ad29-d43cf6d2ea7f",
+      "activeVersionId": "fe14e1e1-c345-493f-ad29-d43cf6d2ea7f"
+    },
+    {
+      "id": "AG4SPEFINNHUBV1",
+      "name": "AG4_Spé-Finnhub-V1 — Global News",
+      "active": 1,
+      "versionId": "458c95bb-09a4-4181-89cb-a6974fbddbad",
+      "activeVersionId": "458c95bb-09a4-4181-89cb-a6974fbddbad"
+    }
+  ],
+  "coverage": {
+    "WATCHLIST": {
+      "denominator": 289,
+      "7d": {
+        "covered": 69,
+        "missing": [
+          "1211.HK",
+          "1810.HK",
+          "3690.HK",
+          "6501.T",
+          "7974.T",
+          "8058.T",
+          "AB.PA",
+          "ABB",
+          "ABBV",
+          "ABEO.PA",
+          "ABNX.PA",
+          "AC.PA",
+          "ACAN.PA",
+          "AD.AS",
+          "ADOC.PA",
+          "ADP.PA",
+          "AELIS.PA",
+          "AF.PA",
+          "AKE.PA",
+          "AKW.PA",
+          "AL2SI.PA",
+          "ALATI.PA",
+          "ALCAT.PA",
+          "ALCIS.PA",
+          "ALCLA.PA",
+          "ALCOX.PA",
+          "ALDMS.PA",
+          "ALDV.PA",
+          "ALDVI.PA",
+          "ALECP.PA",
+          "ALGAE.PA",
+          "ALGID.PA",
+          "ALHF.PA",
+          "ALINN.PA",
+          "ALLDL.PA",
+          "ALMIB.PA",
+          "ALMKT.PA",
+          "ALNTG.PA",
+          "ALPJT.PA",
+          "ALPM.PA",
+          "ALPRG.PA",
+          "ALTA.PA",
+          "ALTOU.PA",
+          "ALU10.PA",
+          "ALV.DE",
+          "ALVIO.PA",
+          "AMUN.PA",
+          "ARG.PA",
+          "ATE.PA",
+          "AUB.PA",
+          "AVT.PA",
+          "BA",
+          "BAS.DE",
+          "BB.PA",
+          "BN",
+          "BOL.PA",
+          "BON.PA",
+          "BP",
+          "BSD.PA",
+          "BX4.PA",
+          "CA.PA",
+          "CAP.PA",
+          "CARM.PA",
+          "CAT",
+          "CBA.AX",
+          "CDA.PA",
+          "CDI.PA",
+          "CNDF.PA",
+          "CNI",
+          "COH.PA",
+          "COST",
+          "COV.PA",
+          "CRBP2.PA",
+          "CRI.PA",
+          "CSL.AX",
+          "D05.SI",
+          "DBG.PA",
+          "DBV.PA",
+          "DEC.PA",
+          "DEO",
+          "DG.PA",
+          "DIM.PA",
+          "DIS",
+          "DPT.PA",
+          "EAPI.PA",
+          "EEM.PA",
+          "EGR.PA",
+          "EIFF.PA",
+          "EKI.PA",
+          "ELEC.PA",
+          "ELIOR.PA",
+          "ELIS.PA",
+          "EMEIS.PA",
+          "EN.PA",
+          "ENB",
+          "ENGI.PA",
+          "ENX.PA",
+          "ERA.PA",
+          "ERF.PA",
+          "EXA.PA",
+          "EXENS.PA",
+          "FDE.PA",
+          "FDJU.PA",
+          "FGA.PA",
+          "FGR.PA",
+          "FII.PA",
+          "FINM.PA",
+          "FIPP.PA",
+          "FMX",
+          "FNAC.PA",
+          "FPG.PA",
+          "FRVIA.PA",
+          "GBT.PA",
+          "GE",
+          "GET.PA",
+          "GFC.PA",
+          "GLO.PA",
+          "GNFT.PA",
+          "GUI.PA",
+          "HCO.PA",
+          "HD",
+          "HDB",
+          "HSBC",
+          "IBN",
+          "ICAD.PA",
+          "IDL.PA",
+          "IPH.PA",
+          "IPS.PA",
+          "ITP.PA",
+          "ITUB",
+          "ITX.MC",
+          "IVA.PA",
+          "JD",
+          "KER.PA",
+          "LACR.PA",
+          "LHYFE.PA",
+          "LI.PA",
+          "LOCAL.PA",
+          "LOUP.PA",
+          "LPE.PA",
+          "LR.PA",
+          "LSS.PA",
+          "LVC.PA",
+          "MA",
+          "MBG.DE",
+          "MDM.PA",
+          "MEMS.PA",
+          "MF.PA",
+          "ML.PA",
+          "MMB.PA",
+          "MMT.PA",
+          "MQG.AX",
+          "MRK",
+          "MRN.PA",
+          "MTU.PA",
+          "MUFG",
+          "NAE.PA",
+          "NEX.PA",
+          "NK.PA",
+          "NRG.PA",
+          "NRO.PA",
+          "NXI.PA",
+          "O39.SI",
+          "OPM.PA",
+          "PG",
+          "PLX.PA",
+          "POMRY.PA",
+          "POXEL.PA",
+          "PRC.PA",
+          "PROAC.PA",
+          "PUB.PA",
+          "PVL.PA",
+          "RCO.PA",
+          "RI.PA",
+          "ROG.SW",
+          "RUI.PA",
+          "RXL.PA",
+          "RY",
+          "S30.PA",
+          "SAN",
+          "SAN.PA",
+          "SCHP.PA",
+          "SCR.PA",
+          "SFPI.PA",
+          "SGO.PA",
+          "SIGHT.PA",
+          "SK.PA",
+          "SMCP.PA",
+          "SOI.PA",
+          "SONY",
+          "SOP.PA",
+          "STLAP.PA",
+          "STMPA.PA",
+          "SWP.PA",
+          "TD",
+          "TEAM",
+          "TFF.PA",
+          "TFI.PA",
+          "THEP.PA",
+          "TSLA",
+          "UBS",
+          "VAC.PA",
+          "VANTI.PA",
+          "VCT.PA",
+          "VETO.PA",
+          "VIE.PA",
+          "VIL.PA",
+          "VIRI.PA",
+          "VIRP.PA",
+          "VIV.PA",
+          "VLA.PA",
+          "VLTSA.PA",
+          "VMX.PA",
+          "VRLA.PA",
+          "VZ",
+          "WDS.AX",
+          "WES.AX",
+          "WLN.PA",
+          "WMT",
+          "XFAB.PA"
+        ]
+      },
+      "14d": {
+        "covered": 115,
+        "missing": [
+          "1211.HK",
+          "1810.HK",
+          "3690.HK",
+          "6501.T",
+          "7974.T",
+          "8058.T",
+          "AB.PA",
+          "ABB",
+          "ABEO.PA",
+          "AC.PA",
+          "ACAN.PA",
+          "AD.AS",
+          "AF.PA",
+          "AKE.PA",
+          "ALCAT.PA",
+          "ALCIS.PA",
+          "ALCLA.PA",
+          "ALDV.PA",
+          "ALECP.PA",
+          "ALGAE.PA",
+          "ALGID.PA",
+          "ALHF.PA",
+          "ALINN.PA",
+          "ALLDL.PA",
+          "ALMIB.PA",
+          "ALMKT.PA",
+          "ALPM.PA",
+          "ALPRG.PA",
+          "ALTA.PA",
+          "ALU10.PA",
+          "ALV.DE",
+          "ALVIO.PA",
+          "ATE.PA",
+          "AVT.PA",
+          "BA",
+          "BAS.DE",
+          "BB.PA",
+          "BN",
+          "BON.PA",
+          "BP",
+          "BSD.PA",
+          "BX4.PA",
+          "CARM.PA",
+          "CAT",
+          "CBA.AX",
+          "CDA.PA",
+          "CDI.PA",
+          "CNDF.PA",
+          "CNI",
+          "COH.PA",
+          "COST",
+          "COV.PA",
+          "CRI.PA",
+          "CSL.AX",
+          "D05.SI",
+          "DBG.PA",
+          "DBV.PA",
+          "DEO",
+          "DIM.PA",
+          "DIS",
+          "DPT.PA",
+          "EAPI.PA",
+          "EEM.PA",
+          "EGR.PA",
+          "EIFF.PA",
+          "EKI.PA",
+          "ELEC.PA",
+          "ELIOR.PA",
+          "ELIS.PA",
+          "EMEIS.PA",
+          "ENB",
+          "ERA.PA",
+          "ERF.PA",
+          "FDE.PA",
+          "FDJU.PA",
+          "FGA.PA",
+          "FGR.PA",
+          "FII.PA",
+          "FINM.PA",
+          "FIPP.PA",
+          "FMX",
+          "FPG.PA",
+          "FRVIA.PA",
+          "GBT.PA",
+          "GE",
+          "GET.PA",
+          "GFC.PA",
+          "GLO.PA",
+          "GUI.PA",
+          "HCO.PA",
+          "HD",
+          "HDB",
+          "HSBC",
+          "IBN",
+          "ICAD.PA",
+          "IDL.PA",
+          "ITP.PA",
+          "ITUB",
+          "ITX.MC",
+          "IVA.PA",
+          "JD",
+          "LACR.PA",
+          "LHYFE.PA",
+          "LI.PA",
+          "LOCAL.PA",
+          "LOUP.PA",
+          "LPE.PA",
+          "LR.PA",
+          "LVC.PA",
+          "MBG.DE",
+          "MDM.PA",
+          "MEMS.PA",
+          "MF.PA",
+          "ML.PA",
+          "MMB.PA",
+          "MMT.PA",
+          "MQG.AX",
+          "MRK",
+          "MRN.PA",
+          "MTU.PA",
+          "MUFG",
+          "NAE.PA",
+          "NEX.PA",
+          "NK.PA",
+          "NRG.PA",
+          "NRO.PA",
+          "NXI.PA",
+          "O39.SI",
+          "OPM.PA",
+          "PLX.PA",
+          "POMRY.PA",
+          "POXEL.PA",
+          "PRC.PA",
+          "PROAC.PA",
+          "PVL.PA",
+          "ROG.SW",
+          "RUI.PA",
+          "RXL.PA",
+          "RY",
+          "SAN",
+          "SCHP.PA",
+          "SCR.PA",
+          "SFPI.PA",
+          "SGO.PA",
+          "SIGHT.PA",
+          "SMCP.PA",
+          "SONY",
+          "SOP.PA",
+          "STLAP.PA",
+          "STMPA.PA",
+          "SWP.PA",
+          "TD",
+          "TEAM",
+          "TFI.PA",
+          "THEP.PA",
+          "TSLA",
+          "UBS",
+          "VAC.PA",
+          "VANTI.PA",
+          "VCT.PA",
+          "VETO.PA",
+          "VIL.PA",
+          "VIRI.PA",
+          "VIV.PA",
+          "VLA.PA",
+          "VLTSA.PA",
+          "VMX.PA",
+          "VRLA.PA",
+          "VZ",
+          "WDS.AX",
+          "WES.AX",
+          "WLN.PA",
+          "WMT",
+          "XFAB.PA"
+        ]
+      },
+      "30d": {
+        "covered": 170,
+        "missing": [
+          "1211.HK",
+          "1810.HK",
+          "3690.HK",
+          "6501.T",
+          "7974.T",
+          "8058.T",
+          "AB.PA",
+          "ABB",
+          "ACAN.PA",
+          "AD.AS",
+          "ALCIS.PA",
+          "ALCLA.PA",
+          "ALDV.PA",
+          "ALECP.PA",
+          "ALHF.PA",
+          "ALINN.PA",
+          "ALMKT.PA",
+          "ALPM.PA",
+          "ALTA.PA",
+          "ALU10.PA",
+          "ALV.DE",
+          "ALVIO.PA",
+          "ATE.PA",
+          "AVT.PA",
+          "BA",
+          "BAS.DE",
+          "BN",
+          "BON.PA",
+          "BP",
+          "BSD.PA",
+          "BX4.PA",
+          "CARM.PA",
+          "CAT",
+          "CBA.AX",
+          "CDA.PA",
+          "CDI.PA",
+          "CNDF.PA",
+          "COH.PA",
+          "COST",
+          "COV.PA",
+          "CSL.AX",
+          "D05.SI",
+          "DEO",
+          "DIM.PA",
+          "DIS",
+          "DPT.PA",
+          "EAPI.PA",
+          "EEM.PA",
+          "EGR.PA",
+          "EIFF.PA",
+          "ELEC.PA",
+          "EMEIS.PA",
+          "ENB",
+          "ERF.PA",
+          "FDJU.PA",
+          "FII.PA",
+          "FINM.PA",
+          "FIPP.PA",
+          "FMX",
+          "FPG.PA",
+          "GBT.PA",
+          "GE",
+          "GFC.PA",
+          "GLO.PA",
+          "GUI.PA",
+          "HD",
+          "HDB",
+          "HSBC",
+          "IBN",
+          "IDL.PA",
+          "ITUB",
+          "ITX.MC",
+          "JD",
+          "LI.PA",
+          "LOCAL.PA",
+          "LOUP.PA",
+          "LPE.PA",
+          "LVC.PA",
+          "MBG.DE",
+          "MDM.PA",
+          "MF.PA",
+          "MMB.PA",
+          "MMT.PA",
+          "MQG.AX",
+          "MRK",
+          "MRN.PA",
+          "MTU.PA",
+          "MUFG",
+          "NAE.PA",
+          "NRG.PA",
+          "NXI.PA",
+          "O39.SI",
+          "OPM.PA",
+          "PLX.PA",
+          "PRC.PA",
+          "PROAC.PA",
+          "PVL.PA",
+          "ROG.SW",
+          "RY",
+          "SAN",
+          "SCR.PA",
+          "SFPI.PA",
+          "SMCP.PA",
+          "SONY",
+          "SWP.PA",
+          "TD",
+          "TEAM",
+          "TFI.PA",
+          "THEP.PA",
+          "TSLA",
+          "UBS",
+          "VAC.PA",
+          "VMX.PA",
+          "VRLA.PA",
+          "VZ",
+          "WDS.AX",
+          "WES.AX",
+          "WMT",
+          "XFAB.PA"
+        ]
+      }
+    },
+    "CORE_AUTO": {
+      "denominator": 50,
+      "7d": {
+        "covered": 42,
+        "missing": [
+          "000660.KS",
+          "6861.T",
+          "8035.T",
+          "9983.T",
+          "ABCA.PA",
+          "DSY.PA",
+          "MAU.PA",
+          "PLNW.PA"
+        ]
+      },
+      "14d": {
+        "covered": 44,
+        "missing": [
+          "6861.T",
+          "8035.T",
+          "9983.T",
+          "ABCA.PA",
+          "DSY.PA",
+          "PLNW.PA"
+        ]
+      },
+      "30d": {
+        "covered": 46,
+        "missing": [
+          "6861.T",
+          "9983.T",
+          "ABCA.PA",
+          "PLNW.PA"
+        ]
+      }
+    },
+    "HELD": {
+      "denominator": 8,
+      "7d": {
+        "covered": 8,
+        "missing": []
+      },
+      "14d": {
+        "covered": 8,
+        "missing": []
+      },
+      "30d": {
+        "covered": 8,
+        "missing": []
+      }
+    },
+    "CORE_MANUAL": {
+      "denominator": 18,
+      "7d": {
+        "covered": 17,
+        "missing": [
+          "RHM.DE"
+        ]
+      },
+      "14d": {
+        "covered": 18,
+        "missing": []
+      },
+      "30d": {
+        "covered": 18,
+        "missing": []
+      }
+    },
+    "HELD_LEDGER": {
+      "denominator": 8,
+      "7d": {
+        "covered": 8,
+        "missing": []
+      },
+      "14d": {
+        "covered": 8,
+        "missing": []
+      },
+      "30d": {
+        "covered": 8,
+        "missing": []
+      }
+    },
+    "ALL_UNQUARANTINED": {
+      "denominator": 364,
+      "7d": {
+        "covered": 135,
+        "missing": [
+          "000660.KS",
+          "1211.HK",
+          "1810.HK",
+          "3690.HK",
+          "6501.T",
+          "6861.T",
+          "7974.T",
+          "8035.T",
+          "8058.T",
+          "9983.T",
+          "AB.PA",
+          "ABB",
+          "ABBV",
+          "ABCA.PA",
+          "ABEO.PA",
+          "ABNX.PA",
+          "AC.PA",
+          "ACAN.PA",
+          "AD.AS",
+          "ADOC.PA",
+          "ADP.PA",
+          "AELIS.PA",
+          "AF.PA",
+          "AKE.PA",
+          "AKW.PA",
+          "AL2SI.PA",
+          "ALATI.PA",
+          "ALCAT.PA",
+          "ALCIS.PA",
+          "ALCLA.PA",
+          "ALCOX.PA",
+          "ALDMS.PA",
+          "ALDV.PA",
+          "ALDVI.PA",
+          "ALECP.PA",
+          "ALGAE.PA",
+          "ALGID.PA",
+          "ALHF.PA",
+          "ALINN.PA",
+          "ALLDL.PA",
+          "ALMIB.PA",
+          "ALMKT.PA",
+          "ALNTG.PA",
+          "ALPJT.PA",
+          "ALPM.PA",
+          "ALPRG.PA",
+          "ALTA.PA",
+          "ALTOU.PA",
+          "ALU10.PA",
+          "ALV.DE",
+          "ALVIO.PA",
+          "AMUN.PA",
+          "ARG.PA",
+          "ATE.PA",
+          "AUB.PA",
+          "AVT.PA",
+          "BA",
+          "BAS.DE",
+          "BB.PA",
+          "BN",
+          "BOL.PA",
+          "BON.PA",
+          "BP",
+          "BSD.PA",
+          "BX4.PA",
+          "CA.PA",
+          "CAP.PA",
+          "CARM.PA",
+          "CAT",
+          "CBA.AX",
+          "CDA.PA",
+          "CDI.PA",
+          "CNDF.PA",
+          "CNI",
+          "COH.PA",
+          "COST",
+          "COV.PA",
+          "CRBP2.PA",
+          "CRI.PA",
+          "CSL.AX",
+          "D05.SI",
+          "DBG.PA",
+          "DBV.PA",
+          "DEC.PA",
+          "DEO",
+          "DG.PA",
+          "DIM.PA",
+          "DIS",
+          "DPT.PA",
+          "DSY.PA",
+          "EAPI.PA",
+          "EEM.PA",
+          "EGR.PA",
+          "EIFF.PA",
+          "EKI.PA",
+          "ELEC.PA",
+          "ELIOR.PA",
+          "ELIS.PA",
+          "EMEIS.PA",
+          "EN.PA",
+          "ENB",
+          "ENGI.PA",
+          "ENX.PA",
+          "ERA.PA",
+          "ERF.PA",
+          "EXA.PA",
+          "EXENS.PA",
+          "FDE.PA",
+          "FDJU.PA",
+          "FGA.PA",
+          "FGR.PA",
+          "FII.PA",
+          "FINM.PA",
+          "FIPP.PA",
+          "FMX",
+          "FNAC.PA",
+          "FPG.PA",
+          "FRVIA.PA",
+          "GBT.PA",
+          "GE",
+          "GET.PA",
+          "GFC.PA",
+          "GLO.PA",
+          "GNFT.PA",
+          "GUI.PA",
+          "HCO.PA",
+          "HD",
+          "HDB",
+          "HSBC",
+          "IBN",
+          "ICAD.PA",
+          "IDL.PA",
+          "IPH.PA",
+          "IPS.PA",
+          "ITP.PA",
+          "ITUB",
+          "ITX.MC",
+          "IVA.PA",
+          "JD",
+          "KER.PA",
+          "LACR.PA",
+          "LHYFE.PA",
+          "LI.PA",
+          "LOCAL.PA",
+          "LOUP.PA",
+          "LPE.PA",
+          "LR.PA",
+          "LSS.PA",
+          "LVC.PA",
+          "MA",
+          "MAU.PA",
+          "MBG.DE",
+          "MDM.PA",
+          "MEMS.PA",
+          "MF.PA",
+          "ML.PA",
+          "MMB.PA",
+          "MMT.PA",
+          "MQG.AX",
+          "MRK",
+          "MRN.PA",
+          "MTU.PA",
+          "MUFG",
+          "NAE.PA",
+          "NEX.PA",
+          "NK.PA",
+          "NRG.PA",
+          "NRO.PA",
+          "NXI.PA",
+          "O39.SI",
+          "OPM.PA",
+          "PG",
+          "PLNW.PA",
+          "PLX.PA",
+          "POMRY.PA",
+          "POXEL.PA",
+          "PRC.PA",
+          "PROAC.PA",
+          "PUB.PA",
+          "PVL.PA",
+          "RCO.PA",
+          "RHM.DE",
+          "RI.PA",
+          "ROG.SW",
+          "RUI.PA",
+          "RXL.PA",
+          "RY",
+          "S30.PA",
+          "SAN",
+          "SAN.PA",
+          "SCHP.PA",
+          "SCR.PA",
+          "SFPI.PA",
+          "SGO.PA",
+          "SIGHT.PA",
+          "SK.PA",
+          "SMCP.PA",
+          "SOI.PA",
+          "SONY",
+          "SOP.PA",
+          "STLAP.PA",
+          "STMPA.PA",
+          "SWP.PA",
+          "TD",
+          "TEAM",
+          "TFF.PA",
+          "TFI.PA",
+          "THEP.PA",
+          "TSLA",
+          "UBS",
+          "VAC.PA",
+          "VANTI.PA",
+          "VCT.PA",
+          "VETO.PA",
+          "VIE.PA",
+          "VIL.PA",
+          "VIRI.PA",
+          "VIRP.PA",
+          "VIV.PA",
+          "VLA.PA",
+          "VLTSA.PA",
+          "VMX.PA",
+          "VRLA.PA",
+          "VZ",
+          "WDS.AX",
+          "WES.AX",
+          "WLN.PA",
+          "WMT",
+          "XFAB.PA"
+        ]
+      },
+      "14d": {
+        "covered": 184,
+        "missing": [
+          "1211.HK",
+          "1810.HK",
+          "3690.HK",
+          "6501.T",
+          "6861.T",
+          "7974.T",
+          "8035.T",
+          "8058.T",
+          "9983.T",
+          "AB.PA",
+          "ABB",
+          "ABCA.PA",
+          "ABEO.PA",
+          "AC.PA",
+          "ACAN.PA",
+          "AD.AS",
+          "AF.PA",
+          "AKE.PA",
+          "ALCAT.PA",
+          "ALCIS.PA",
+          "ALCLA.PA",
+          "ALDV.PA",
+          "ALECP.PA",
+          "ALGAE.PA",
+          "ALGID.PA",
+          "ALHF.PA",
+          "ALINN.PA",
+          "ALLDL.PA",
+          "ALMIB.PA",
+          "ALMKT.PA",
+          "ALPM.PA",
+          "ALPRG.PA",
+          "ALTA.PA",
+          "ALU10.PA",
+          "ALV.DE",
+          "ALVIO.PA",
+          "ATE.PA",
+          "AVT.PA",
+          "BA",
+          "BAS.DE",
+          "BB.PA",
+          "BN",
+          "BON.PA",
+          "BP",
+          "BSD.PA",
+          "BX4.PA",
+          "CARM.PA",
+          "CAT",
+          "CBA.AX",
+          "CDA.PA",
+          "CDI.PA",
+          "CNDF.PA",
+          "CNI",
+          "COH.PA",
+          "COST",
+          "COV.PA",
+          "CRI.PA",
+          "CSL.AX",
+          "D05.SI",
+          "DBG.PA",
+          "DBV.PA",
+          "DEO",
+          "DIM.PA",
+          "DIS",
+          "DPT.PA",
+          "DSY.PA",
+          "EAPI.PA",
+          "EEM.PA",
+          "EGR.PA",
+          "EIFF.PA",
+          "EKI.PA",
+          "ELEC.PA",
+          "ELIOR.PA",
+          "ELIS.PA",
+          "EMEIS.PA",
+          "ENB",
+          "ERA.PA",
+          "ERF.PA",
+          "FDE.PA",
+          "FDJU.PA",
+          "FGA.PA",
+          "FGR.PA",
+          "FII.PA",
+          "FINM.PA",
+          "FIPP.PA",
+          "FMX",
+          "FPG.PA",
+          "FRVIA.PA",
+          "GBT.PA",
+          "GE",
+          "GET.PA",
+          "GFC.PA",
+          "GLO.PA",
+          "GUI.PA",
+          "HCO.PA",
+          "HD",
+          "HDB",
+          "HSBC",
+          "IBN",
+          "ICAD.PA",
+          "IDL.PA",
+          "ITP.PA",
+          "ITUB",
+          "ITX.MC",
+          "IVA.PA",
+          "JD",
+          "LACR.PA",
+          "LHYFE.PA",
+          "LI.PA",
+          "LOCAL.PA",
+          "LOUP.PA",
+          "LPE.PA",
+          "LR.PA",
+          "LVC.PA",
+          "MBG.DE",
+          "MDM.PA",
+          "MEMS.PA",
+          "MF.PA",
+          "ML.PA",
+          "MMB.PA",
+          "MMT.PA",
+          "MQG.AX",
+          "MRK",
+          "MRN.PA",
+          "MTU.PA",
+          "MUFG",
+          "NAE.PA",
+          "NEX.PA",
+          "NK.PA",
+          "NRG.PA",
+          "NRO.PA",
+          "NXI.PA",
+          "O39.SI",
+          "OPM.PA",
+          "PLNW.PA",
+          "PLX.PA",
+          "POMRY.PA",
+          "POXEL.PA",
+          "PRC.PA",
+          "PROAC.PA",
+          "PVL.PA",
+          "ROG.SW",
+          "RUI.PA",
+          "RXL.PA",
+          "RY",
+          "SAN",
+          "SCHP.PA",
+          "SCR.PA",
+          "SFPI.PA",
+          "SGO.PA",
+          "SIGHT.PA",
+          "SMCP.PA",
+          "SONY",
+          "SOP.PA",
+          "STLAP.PA",
+          "STMPA.PA",
+          "SWP.PA",
+          "TD",
+          "TEAM",
+          "TFI.PA",
+          "THEP.PA",
+          "TSLA",
+          "UBS",
+          "VAC.PA",
+          "VANTI.PA",
+          "VCT.PA",
+          "VETO.PA",
+          "VIL.PA",
+          "VIRI.PA",
+          "VIV.PA",
+          "VLA.PA",
+          "VLTSA.PA",
+          "VMX.PA",
+          "VRLA.PA",
+          "VZ",
+          "WDS.AX",
+          "WES.AX",
+          "WLN.PA",
+          "WMT",
+          "XFAB.PA"
+        ]
+      },
+      "30d": {
+        "covered": 241,
+        "missing": [
+          "1211.HK",
+          "1810.HK",
+          "3690.HK",
+          "6501.T",
+          "6861.T",
+          "7974.T",
+          "8058.T",
+          "9983.T",
+          "AB.PA",
+          "ABB",
+          "ABCA.PA",
+          "ACAN.PA",
+          "AD.AS",
+          "ALCIS.PA",
+          "ALCLA.PA",
+          "ALDV.PA",
+          "ALECP.PA",
+          "ALHF.PA",
+          "ALINN.PA",
+          "ALMKT.PA",
+          "ALPM.PA",
+          "ALTA.PA",
+          "ALU10.PA",
+          "ALV.DE",
+          "ALVIO.PA",
+          "ATE.PA",
+          "AVT.PA",
+          "BA",
+          "BAS.DE",
+          "BN",
+          "BON.PA",
+          "BP",
+          "BSD.PA",
+          "BX4.PA",
+          "CARM.PA",
+          "CAT",
+          "CBA.AX",
+          "CDA.PA",
+          "CDI.PA",
+          "CNDF.PA",
+          "COH.PA",
+          "COST",
+          "COV.PA",
+          "CSL.AX",
+          "D05.SI",
+          "DEO",
+          "DIM.PA",
+          "DIS",
+          "DPT.PA",
+          "EAPI.PA",
+          "EEM.PA",
+          "EGR.PA",
+          "EIFF.PA",
+          "ELEC.PA",
+          "EMEIS.PA",
+          "ENB",
+          "ERF.PA",
+          "FDJU.PA",
+          "FII.PA",
+          "FINM.PA",
+          "FIPP.PA",
+          "FMX",
+          "FPG.PA",
+          "GBT.PA",
+          "GE",
+          "GFC.PA",
+          "GLO.PA",
+          "GUI.PA",
+          "HD",
+          "HDB",
+          "HSBC",
+          "IBN",
+          "IDL.PA",
+          "ITUB",
+          "ITX.MC",
+          "JD",
+          "LI.PA",
+          "LOCAL.PA",
+          "LOUP.PA",
+          "LPE.PA",
+          "LVC.PA",
+          "MBG.DE",
+          "MDM.PA",
+          "MF.PA",
+          "MMB.PA",
+          "MMT.PA",
+          "MQG.AX",
+          "MRK",
+          "MRN.PA",
+          "MTU.PA",
+          "MUFG",
+          "NAE.PA",
+          "NRG.PA",
+          "NXI.PA",
+          "O39.SI",
+          "OPM.PA",
+          "PLNW.PA",
+          "PLX.PA",
+          "PRC.PA",
+          "PROAC.PA",
+          "PVL.PA",
+          "ROG.SW",
+          "RY",
+          "SAN",
+          "SCR.PA",
+          "SFPI.PA",
+          "SMCP.PA",
+          "SONY",
+          "SWP.PA",
+          "TD",
+          "TEAM",
+          "TFI.PA",
+          "THEP.PA",
+          "TSLA",
+          "UBS",
+          "VAC.PA",
+          "VMX.PA",
+          "VRLA.PA",
+          "VZ",
+          "WDS.AX",
+          "WES.AX",
+          "WMT",
+          "XFAB.PA"
+        ]
+      }
+    },
+    "HELD_CORE_UNION": {
+      "denominator": 75,
+      "7d": {
+        "covered": 66,
+        "missing": [
+          "000660.KS",
+          "6861.T",
+          "8035.T",
+          "9983.T",
+          "ABCA.PA",
+          "DSY.PA",
+          "MAU.PA",
+          "PLNW.PA",
+          "RHM.DE"
+        ]
+      },
+      "14d": {
+        "covered": 69,
+        "missing": [
+          "6861.T",
+          "8035.T",
+          "9983.T",
+          "ABCA.PA",
+          "DSY.PA",
+          "PLNW.PA"
+        ]
+      },
+      "30d": {
+        "covered": 71,
+        "missing": [
+          "6861.T",
+          "9983.T",
+          "ABCA.PA",
+          "PLNW.PA"
+        ]
+      }
+    }
+  },
+  "metrics": {
+    "last_exec_H0cfY1coMx8dvMuXScMc_": [],
+    "last_exec_rP2cyaIKt8tiVjYX5AH1e": [
+      {
+        "id": 22482,
+        "status": "success",
+        "startedAt": "2026-09-25 16:45:00.387",
+        "stoppedAt": "2026-09-25 17:45:18.550"
+      },
+      {
+        "id": 22461,
+        "status": "success",
+        "startedAt": "2026-09-25 08:45:00.060",
+        "stoppedAt": "2026-09-25 09:39:42.529"
+      },
+      {
+        "id": 22447,
+        "status": "success",
+        "startedAt": "2026-09-25 04:45:00.051",
+        "stoppedAt": "2026-09-25 05:34:58.689"
+      },
+      {
+        "id": 22437,
+        "status": "success",
+        "startedAt": "2026-09-24 16:45:00.077",
+        "stoppedAt": "2026-09-24 17:36:19.119"
+      }
+    ],
+    "last_exec_AG1V4CONSENSUS": [
+      {
+        "id": 22480,
+        "status": "success",
+        "startedAt": "2026-09-25 15:10:00.108",
+        "stoppedAt": "2026-09-25 15:14:15.964"
+      },
+      {
+        "id": 22453,
+        "status": "success",
+        "startedAt": "2026-09-25 06:15:36.744",
+        "stoppedAt": "2026-09-25 06:20:56.868"
+      },
+      {
+        "id": 22452,
+        "status": "canceled",
+        "startedAt": "2026-09-25 06:13:06.715",
+        "stoppedAt": "2026-09-25 06:15:33.934"
+      },
+      {
+        "id": 22435,
+        "status": "success",
+        "startedAt": "2026-09-24 15:10:00.101",
+        "stoppedAt": "2026-09-24 15:15:38.176"
+      }
+    ],
+    "last_exec_uXW5M4vc1imTExB4": [
+      {
+        "id": 22477,
+        "status": "success",
+        "startedAt": "2026-09-25 14:30:00.156",
+        "stoppedAt": "2026-09-25 14:30:06.393"
+      },
+      {
+        "id": 22432,
+        "status": "success",
+        "startedAt": "2026-09-24 14:30:00.121",
+        "stoppedAt": "2026-09-24 14:30:06.986"
+      }
+    ],
+    "last_exec_hSqxVSb8YAO9Nc6A": [
+      {
+        "id": 22473,
+        "status": "success",
+        "startedAt": "2026-09-25 14:00:00.125",
+        "stoppedAt": "2026-09-25 14:00:43.805"
+      },
+      {
+        "id": 22466,
+        "status": "success",
+        "startedAt": "2026-09-25 11:00:00.536",
+        "stoppedAt": "2026-09-25 11:01:04.398"
+      },
+      {
+        "id": 22457,
+        "status": "success",
+        "startedAt": "2026-09-25 08:00:00.186",
+        "stoppedAt": "2026-09-25 08:01:47.269"
+      },
+      {
+        "id": 22428,
+        "status": "success",
+        "startedAt": "2026-09-24 14:00:00.177",
+        "stoppedAt": "2026-09-24 14:00:54.936"
+      }
+    ],
+    "last_exec_AG4SPEFINNHUBV1": [
+      {
+        "id": 22474,
+        "status": "success",
+        "startedAt": "2026-09-25 14:00:00.151",
+        "stoppedAt": "2026-09-25 14:01:50.272"
+      },
+      {
+        "id": 22467,
+        "status": "success",
+        "startedAt": "2026-09-25 11:00:00.694",
+        "stoppedAt": "2026-09-25 11:12:31.326"
+      },
+      {
+        "id": 22458,
+        "status": "success",
+        "startedAt": "2026-09-25 08:00:00.188",
+        "stoppedAt": "2026-09-25 08:09:08.676"
+      },
+      {
+        "id": 22429,
+        "status": "success",
+        "startedAt": "2026-09-24 14:00:00.188",
+        "stoppedAt": "2026-09-24 14:01:46.404"
+      }
+    ],
+    "ag1_runs": [
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925231500",
+        "ts_start": "2026-09-25 21:15:14+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925231500",
+        "global_context_status": null
+      },
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925174000",
+        "ts_start": "2026-09-25 15:40:13+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925174000",
+        "global_context_status": null
+      },
+      {
+        "run_id": "RUN_20260925_171000_22480",
+        "ts_start": "2026-09-25 15:10:00+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "22480",
+        "global_context_status": "OK"
+      },
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925161500",
+        "ts_start": "2026-09-25 14:15:14+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925161500",
+        "global_context_status": null
+      },
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925151500",
+        "ts_start": "2026-09-25 13:15:14+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925151500",
+        "global_context_status": null
+      },
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925141500",
+        "ts_start": "2026-09-25 12:15:08+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925141500",
+        "global_context_status": null
+      },
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925131500",
+        "ts_start": "2026-09-25 11:15:13+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925131500",
+        "global_context_status": null
+      },
+      {
+        "run_id": "RUN_RECON_IBKR_PF_PFMTM_20260925121500",
+        "ts_start": "2026-09-25 10:15:13+00",
+        "news_count": 0,
+        "data_ok_for_trading": true,
+        "n8n_execution_id": "PFMTM_20260925121500",
+        "global_context_status": null
+      }
+    ],
+    "spe_sources": [
+      {
+        "source": "ibkr",
+        "total": 4481,
+        "new_7d": 221,
+        "new_30d": 1244,
+        "symbols": 30,
+        "last_ingest": "2026-09-25 14:00:11.740555",
+        "last_published": "2026-09-25 14:00:01.576536"
+      },
+      {
+        "source": "boursorama",
+        "total": 11432,
+        "new_7d": 674,
+        "new_30d": 3048,
+        "symbols": 253,
+        "last_ingest": "2026-09-25 15:30:44.126",
+        "last_published": "2026-09-25 14:52:00"
+      },
+      {
+        "source": "finnhub",
+        "total": 20947,
+        "new_7d": 2127,
+        "new_30d": 7601,
+        "symbols": 78,
+        "last_ingest": "2026-09-25 12:00:01.916294",
+        "last_published": "2026-09-25 11:34:06"
+      }
+    ],
+    "spe_quality_7": [
+      {
+        "source": "boursorama",
+        "status": "ANALYZED",
+        "n": 672,
+        "useful": 193,
+        "symbols": 108,
+        "median_text_chars": 1505.0,
+        "median_snippet_chars": 242.0
+      },
+      {
+        "source": "finnhub",
+        "status": "ANALYZED",
+        "n": 2127,
+        "useful": 1073,
+        "symbols": 60,
+        "median_text_chars": 152.0,
+        "median_snippet_chars": 152.0
+      },
+      {
+        "source": "ibkr",
+        "status": "ANALYZED",
+        "n": 221,
+        "useful": 94,
+        "symbols": 9,
+        "median_text_chars": 82.0,
+        "median_snippet_chars": 82.0
+      },
+      {
+        "source": "boursorama",
+        "status": "SKIPPED",
+        "n": 2,
+        "useful": 0,
+        "symbols": 2,
+        "median_text_chars": 1253.0,
+        "median_snippet_chars": 245.0
+      }
+    ],
+    "spe_quality_30": [
+      {
+        "source": "boursorama",
+        "status": "ANALYZED",
+        "n": 3038,
+        "useful": 723,
+        "symbols": 191,
+        "median_text_chars": 1587.0,
+        "median_snippet_chars": 242.0
+      },
+      {
+        "source": "ibkr",
+        "status": "ANALYZED",
+        "n": 1244,
+        "useful": 629,
+        "symbols": 15,
+        "median_text_chars": 93.0,
+        "median_snippet_chars": 93.0
+      },
+      {
+        "source": "finnhub",
+        "status": "ANALYZED",
+        "n": 7601,
+        "useful": 3540,
+        "symbols": 67,
+        "median_text_chars": 149.0,
+        "median_snippet_chars": 149.0
+      },
+      {
+        "source": "boursorama",
+        "status": "SKIPPED",
+        "n": 10,
+        "useful": 0,
+        "symbols": 4,
+        "median_text_chars": 879.0,
+        "median_snippet_chars": 242.0
+      }
+    ],
+    "spe_errors": [],
+    "spe_runs": [
+      {
+        "first_run": "2026-08-31 06:05:16.622863",
+        "last_run": "2026-09-25 15:05:14.340503",
+        "status": "SUCCESS",
+        "n": 80,
+        "articles": 3036,
+        "analyzed": 3026,
+        "symbols_total": 2292,
+        "symbols_error": 0
+      }
+    ],
+    "spe_last_runs": [
+      {
+        "run_id": "AG4SPEV2_20260925150511",
+        "started_at": "2026-09-25 15:05:14.340503",
+        "finished_at": "2026-09-25 15:33:55.796705",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 45,
+        "items_analyzed": 45,
+        "items_skipped": 0,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260925120511",
+        "started_at": "2026-09-25 12:05:14.067242",
+        "finished_at": "2026-09-25 12:31:28.814019",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 31,
+        "items_analyzed": 31,
+        "items_skipped": 0,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260925090510",
+        "started_at": "2026-09-25 09:05:13.546171",
+        "finished_at": "2026-09-25 09:35:16.530638",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 61,
+        "items_analyzed": 61,
+        "items_skipped": 0,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260925060514",
+        "started_at": "2026-09-25 06:05:16.791976",
+        "finished_at": "2026-09-25 06:33:05.25725",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 48,
+        "items_analyzed": 48,
+        "items_skipped": 0,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260924150511",
+        "started_at": "2026-09-24 15:05:14.547065",
+        "finished_at": "2026-09-24 15:29:56.349567",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 25,
+        "items_analyzed": 25,
+        "items_skipped": 0,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260924120511",
+        "started_at": "2026-09-24 12:05:14.387435",
+        "finished_at": "2026-09-24 12:27:52.793879",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 15,
+        "items_analyzed": 15,
+        "items_skipped": 0,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260924090508",
+        "started_at": "2026-09-24 09:05:13.167528",
+        "finished_at": "2026-09-24 09:33:27.656977",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 50,
+        "items_analyzed": 49,
+        "items_skipped": 1,
+        "errors_logged": 0
+      },
+      {
+        "run_id": "AG4SPEV2_20260924060511",
+        "started_at": "2026-09-24 06:05:13.955952",
+        "finished_at": "2026-09-24 06:30:55.197198",
+        "status": "SUCCESS",
+        "symbols_total": 30,
+        "articles_total": 35,
+        "items_analyzed": 35,
+        "items_skipped": 0,
+        "errors_logged": 0
+      }
+    ],
+    "spe_dates": [
+      {
+        "source": "boursorama",
+        "future": 0,
+        "missing": 3,
+        "old_at_collection": 13,
+        "median_delay_h": 2.35,
+        "p90_delay_h": 61.3
+      },
+      {
+        "source": "ibkr",
+        "future": 0,
+        "missing": 0,
+        "old_at_collection": 0,
+        "median_delay_h": 0.0,
+        "p90_delay_h": 18.29
+      },
+      {
+        "source": "finnhub",
+        "future": 0,
+        "missing": 0,
+        "old_at_collection": 0,
+        "median_delay_h": 10.5,
+        "p90_delay_h": 21.3
+      }
+    ],
+    "spe_providers": [
+      {
+        "source": "finnhub",
+        "provider": "Yahoo",
+        "n": 6407
+      },
+      {
+        "source": "boursorama",
+        "provider": null,
+        "n": 3048
+      },
+      {
+        "source": "finnhub",
+        "provider": "SeekingAlpha",
+        "n": 529
+      },
+      {
+        "source": "finnhub",
+        "provider": "Benzinga",
+        "n": 497
+      },
+      {
+        "source": "ibkr",
+        "provider": "Reuters News",
+        "n": 219
+      },
+      {
+        "source": "finnhub",
+        "provider": "ChartMill",
+        "n": 131
+      },
+      {
+        "source": "ibkr",
+        "provider": "Trading Central",
+        "n": 118
+      },
+      {
+        "source": "ibkr",
+        "provider": "The Motley Fool RSS",
+        "n": 110
+      },
+      {
+        "source": "ibkr",
+        "provider": "Benzinga",
+        "n": 104
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Global Equity Trader",
+        "n": 100
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Global News",
+        "n": 81
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Korean Local Language News",
+        "n": 72
+      },
+      {
+        "source": "ibkr",
+        "provider": "Seeking Alpha",
+        "n": 54
+      },
+      {
+        "source": "ibkr",
+        "provider": "Seeking Alpha in Korean",
+        "n": 49
+      },
+      {
+        "source": "ibkr",
+        "provider": "The Fly",
+        "n": 43
+      },
+      {
+        "source": "finnhub",
+        "provider": "CNBC",
+        "n": 35
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Top Stories Global",
+        "n": 34
+      },
+      {
+        "source": "ibkr",
+        "provider": "Zacks Investment Research Newswire",
+        "n": 30
+      },
+      {
+        "source": "ibkr",
+        "provider": "Benzinga Korean RSS",
+        "n": 28
+      },
+      {
+        "source": "ibkr",
+        "provider": "Reflexivity AI Newsfeed in English",
+        "n": 25
+      },
+      {
+        "source": "ibkr",
+        "provider": "IB Market Signals",
+        "n": 20
+      },
+      {
+        "source": "ibkr",
+        "provider": "Reflexivity AI Newsfeed in Korean",
+        "n": 19
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Global Press Release",
+        "n": 17
+      },
+      {
+        "source": "ibkr",
+        "provider": "US Press Release",
+        "n": 17
+      },
+      {
+        "source": "ibkr",
+        "provider": "StreetInsider.com Analyst Actions",
+        "n": 16
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Top Stories Europe",
+        "n": 16
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Top Stories Asia Pacific",
+        "n": 12
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Trader News",
+        "n": 11
+      },
+      {
+        "source": "ibkr",
+        "provider": "StreetInsider.com",
+        "n": 9
+      },
+      {
+        "source": "ibkr",
+        "provider": "LSEG Filings",
+        "n": 7
+      },
+      {
+        "source": "ibkr",
+        "provider": "Benzinga Crypto News",
+        "n": 5
+      },
+      {
+        "source": "ibkr",
+        "provider": "LSEG Significant Developments",
+        "n": 5
+      },
+      {
+        "source": "ibkr",
+        "provider": "ValuEngine",
+        "n": 4
+      },
+      {
+        "source": "ibkr",
+        "provider": "Smartkarma Preview",
+        "n": 3
+      },
+      {
+        "source": "ibkr",
+        "provider": "Dow Jones Newswire Press Release",
+        "n": 3
+      },
+      {
+        "source": "ibkr",
+        "provider": "ISS-EVA Company and Sector Reports",
+        "n": 3
+      },
+      {
+        "source": "ibkr",
+        "provider": "LSEG Street Events",
+        "n": 2
+      },
+      {
+        "source": "ibkr",
+        "provider": "Simply Wall Street",
+        "n": 2
+      },
+      {
+        "source": "finnhub",
+        "provider": "Fintel",
+        "n": 2
+      },
+      {
+        "source": "ibkr",
+        "provider": "Stock Traders Daily - Trading Reports",
+        "n": 1
+      },
+      {
+        "source": "ibkr",
+        "provider": "ISS-EVA Macro Research",
+        "n": 1
+      },
+      {
+        "source": "ibkr",
+        "provider": "Morningstar Advisor Equity Research Package",
+        "n": 1
+      },
+      {
+        "source": "ibkr",
+        "provider": "Zacks Company Reports - Free",
+        "n": 1
+      },
+      {
+        "source": "ibkr",
+        "provider": "Briefing.com Analyst Actions",
+        "n": 1
+      },
+      {
+        "source": "ibkr",
+        "provider": "Briefing.com General Market Columns",
+        "n": 1
+      }
+    ],
+    "staging": [
+      {
+        "n": 444,
+        "symbols": 56,
+        "last_seen": "2026-09-25 15:00:02.472396",
+        "n7": 444,
+        "pending": 121,
+        "pending7": 121
+      }
+    ],
+    "rss_config": [
+      {
+        "source_id": "institution-amf-france-offres-operations",
+        "family": "Institution",
+        "source": "AMF France",
+        "feed_name": "Offres & Opérations",
+        "url": "https://www.amf-france.org/fr/flux-rss/display/29",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "macro-eco-banque-centrale-bce-communiques-de-presse",
+        "family": "Macro-Eco",
+        "source": "Banque Centrale (BCE)",
+        "feed_name": "Communiqués de Presse",
+        "url": "https://www.ecb.europa.eu/rss/press.html",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "institution-amf-france-sanctions",
+        "family": "Institution",
+        "source": "AMF France",
+        "feed_name": "Sanctions",
+        "url": "https://www.amf-france.org/fr/flux-rss/display/24",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "site-bourse-investing-com-actualites-generales",
+        "family": "Site Bourse",
+        "source": "Investing.com",
+        "feed_name": "Actualités Générales",
+        "url": "https://fr.investing.com/rss/news.rss",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "site-bourse-investing-com-forex",
+        "family": "Site Bourse",
+        "source": "Investing.com",
+        "feed_name": "Forex",
+        "url": "https://fr.investing.com/rss/news_1.rss",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "media-eco-bfm-business-economie",
+        "family": "Média Eco",
+        "source": "BFM Business",
+        "feed_name": "Économie",
+        "url": "https://www.bfmtv.com/rss/economie/",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "site-bourse-easybourse-media-articles",
+        "family": "Site Bourse",
+        "source": "EasyBourse",
+        "feed_name": "Média / Articles",
+        "url": "https://www.easybourse.com/feeds/media/",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-bank-of-england-news",
+        "family": "Banque Centrale",
+        "source": "Bank of England",
+        "feed_name": "News",
+        "url": "https://www.bankofengland.co.uk/rss/news",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-bank-of-england-publications",
+        "family": "Banque Centrale",
+        "source": "Bank of England",
+        "feed_name": "Publications",
+        "url": "https://www.bankofengland.co.uk/rss/publications",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-bank-of-japan-what-s-new",
+        "family": "Banque Centrale",
+        "source": "Bank of Japan",
+        "feed_name": "What's New",
+        "url": "https://www.boj.or.jp/en/rss/whatsnew.xml",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "presse-fin-capital-entreprises-marches",
+        "family": "Presse Fin.",
+        "source": "Capital",
+        "feed_name": "Entreprises & Marchés",
+        "url": "https://feed.prismamediadigital.com/v1/cap/rss?sources=capital,polemik,xerfi,capital-avec-agence-france-presse,capital-avec-aof,capital-avec-reuters&categories=entreprises-marches",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "presse-fin-le-monde-economie",
+        "family": "Presse Fin.",
+        "source": "Le Monde",
+        "feed_name": "Économie",
+        "url": "https://www.lemonde.fr/economie/rss_full.xml",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "presse-fin-le-monde-economie-mondiale",
+        "family": "Presse Fin.",
+        "source": "Le Monde",
+        "feed_name": "Économie Mondiale",
+        "url": "https://www.lemonde.fr/economie-mondiale/rss_full.xml",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "site-bourse-fxstreet-news",
+        "family": "Site Bourse",
+        "source": "FXStreet",
+        "feed_name": "News",
+        "url": "https://www.fxstreet.com/rss/news",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "site-bourse-fxstreet-analysis",
+        "family": "Site Bourse",
+        "source": "FXStreet",
+        "feed_name": "Analysis",
+        "url": "https://www.fxstreet.com/rss/analysis",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "secteur-tech-journal-du-net-index-general",
+        "family": "Secteur Tech",
+        "source": "Journal du Net",
+        "feed_name": "Index général",
+        "url": "https://www.journaldunet.com/rss/index.xml",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "secteur-tech-numerama-articles",
+        "family": "Secteur Tech",
+        "source": "Numerama",
+        "feed_name": "Articles",
+        "url": "https://www.numerama.com/feed/",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "secteur-tech-clubic-news",
+        "family": "Secteur Tech",
+        "source": "Clubic",
+        "feed_name": "News",
+        "url": "https://www.clubic.com/feed/news.rss",
+        "source_tier": 2,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-federal-reserve-press-all",
+        "family": "Banque Centrale",
+        "source": "Federal Reserve",
+        "feed_name": "Press All",
+        "url": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-federal-reserve-press-monetary-policy",
+        "family": "Banque Centrale",
+        "source": "Federal Reserve",
+        "feed_name": "Press Monetary Policy",
+        "url": "https://www.federalreserve.gov/feeds/press_monetary.xml",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-federal-reserve-speeches",
+        "family": "Banque Centrale",
+        "source": "Federal Reserve",
+        "feed_name": "Speeches",
+        "url": "https://www.federalreserve.gov/feeds/speeches.xml",
+        "source_tier": 1,
+        "enabled": true
+      },
+      {
+        "source_id": "banque-centrale-swiss-national-bank-news",
+        "family": "Banque Centrale",
+        "source": "Swiss National Bank",
+        "feed_name": "News",
+        "url": "https://www.snb.ch/public/en/rss/news",
+        "source_tier": 2,
+        "enabled": true
+      }
+    ],
+    "macro_sources": [
+      {
+        "source": "unknown",
+        "action": "skip",
+        "n": 5047,
+        "impact_ge2": 0,
+        "feeds": 20,
+        "last_ingest": "2026-09-25 17:43:59.772"
+      },
+      {
+        "source": "unknown",
+        "action": "analyze",
+        "n": 1348,
+        "impact_ge2": 0,
+        "feeds": 17,
+        "last_ingest": "2026-09-25 17:43:07.948"
+      }
+    ],
+    "macro_dates": [
+      {
+        "n": 6395,
+        "future": 0,
+        "missing": 0,
+        "unknown_source": 6395,
+        "missing_feed": 0,
+        "last_ingest": "2026-09-25 17:43:59.772"
+      }
+    ],
+    "macro_errors": [
+      {
+        "feed_url": "https://www.fxstreet.com/rss/news",
+        "http_code": null,
+        "n": 34,
+        "last_error": "2026-09-25 17:09:18.897"
+      },
+      {
+        "feed_url": "https://www.fxstreet.com/rss/analysis",
+        "http_code": null,
+        "n": 34,
+        "last_error": "2026-09-25 17:42:37.068"
+      },
+      {
+        "feed_url": "https://www.federalreserve.gov/feeds/press_all.xml",
+        "http_code": null,
+        "n": 3,
+        "last_error": "2026-09-23 04:53:10.898"
+      }
+    ],
+    "macro_runs": [
+      {
+        "status": "SUCCESS",
+        "n": 27,
+        "first_run": "2026-08-28 16:45:13.942856",
+        "last_run": "2026-09-10 08:45:10.790118",
+        "feeds_ok": 594,
+        "feeds_error": 0,
+        "avg_seconds": 3790.6296296296296
+      },
+      {
+        "status": "PARTIAL",
+        "n": 34,
+        "first_run": "2026-09-10 16:45:11.208468",
+        "last_run": "2026-09-25 16:45:19.006772",
+        "feeds_ok": 677,
+        "feeds_error": 71,
+        "avg_seconds": 3084.294117647059
+      }
+    ],
+    "macro_last_runs": [
+      {
+        "run_id": "AG4V2_20260925164513",
+        "started_at": "2026-09-25 16:45:19.006772",
+        "finished_at": "2026-09-25 17:45:16.778018",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 103,
+        "items_analyzed": 24,
+        "items_skipped": 79
+      },
+      {
+        "run_id": "AG4V2_20260925084505",
+        "started_at": "2026-09-25 08:45:08.643982",
+        "finished_at": "2026-09-25 09:39:41.043922",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 83,
+        "items_analyzed": 19,
+        "items_skipped": 64
+      },
+      {
+        "run_id": "AG4V2_20260925044508",
+        "started_at": "2026-09-25 04:45:11.467878",
+        "finished_at": "2026-09-25 05:34:57.934308",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 61,
+        "items_analyzed": 23,
+        "items_skipped": 38
+      },
+      {
+        "run_id": "AG4V2_20260924164507",
+        "started_at": "2026-09-24 16:45:10.293915",
+        "finished_at": "2026-09-24 17:36:18.340564",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 117,
+        "items_analyzed": 28,
+        "items_skipped": 89
+      },
+      {
+        "run_id": "AG4V2_20260924084507",
+        "started_at": "2026-09-24 08:45:10.150684",
+        "finished_at": "2026-09-24 09:36:08.217935",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 84,
+        "items_analyzed": 25,
+        "items_skipped": 59
+      },
+      {
+        "run_id": "AG4V2_20260924044507",
+        "started_at": "2026-09-24 04:45:11.159578",
+        "finished_at": "2026-09-24 05:30:17.277663",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 58,
+        "items_analyzed": 15,
+        "items_skipped": 43
+      },
+      {
+        "run_id": "AG4V2_20260923164510",
+        "started_at": "2026-09-23 16:45:14.32432",
+        "finished_at": "2026-09-23 17:31:46.940491",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 124,
+        "items_analyzed": 30,
+        "items_skipped": 94
+      },
+      {
+        "run_id": "AG4V2_20260923084506",
+        "started_at": "2026-09-23 08:45:09.481561",
+        "finished_at": "2026-09-23 09:31:52.60954",
+        "status": "PARTIAL",
+        "sources_total": 22,
+        "feeds_ok": 20,
+        "feeds_error": 2,
+        "items_total": 80,
+        "items_analyzed": 16,
+        "items_skipped": 64
+      }
+    ],
+    "gc_latest": [
+      {
+        "snapshot_id": "GC_20260925T140500Z_a1cf8e83",
+        "as_of": "2026-09-25 14:05:00.095403",
+        "status": "OK",
+        "coverage_ratio": 0.8288888888888889,
+        "confidence": 0.5580037611111112,
+        "freshness_status": "aging"
+      }
+    ],
+    "gc_components": [
+      {
+        "component": "AG5",
+        "as_of": "2026-09-25 05:21:03.592746",
+        "status": "OK",
+        "coverage_ratio": 0.86,
+        "confidence": 0.5237654166666666,
+        "row_count": 12
+      },
+      {
+        "component": "AG6",
+        "as_of": "2026-09-25 05:40:10.418777",
+        "status": "OK",
+        "coverage_ratio": 0.9,
+        "confidence": 0.5309063333333334,
+        "row_count": 12
+      },
+      {
+        "component": "AG7",
+        "as_of": "2026-09-25 06:00:17.472178",
+        "status": "OK",
+        "coverage_ratio": 0.75,
+        "confidence": 0.6266666666666666,
+        "row_count": 9
+      },
+      {
+        "component": "AG8",
+        "as_of": "2026-09-25 06:20:00.073786",
+        "status": "OK",
+        "coverage_ratio": 0.8333333333333334,
+        "confidence": 0.5456875,
+        "row_count": 12
+      },
+      {
+        "component": "AG9",
+        "as_of": null,
+        "status": "DISABLED",
+        "coverage_ratio": 0.0,
+        "confidence": 0.0,
+        "row_count": 0
+      }
+    ]
+  },
+  "execution_summary": {
+    "22482_20F - Normalize RSS Items": {
+      "runs": 20,
+      "items": 677,
+      "keys": [
+        "run_id",
+        "fetchedAt",
+        "publishedAt",
+        "source",
+        "url",
+        "canonicalUrl",
+        "title",
+        "snippet",
+        "symbols",
+        "type",
+        "feedUrl",
+        "sourceTier",
+        "sourceId",
+        "_itemsLoopReset"
+      ],
+      "impact_nonzero": 0,
+      "sources": {
+        "unknown": 677
+      },
+      "url_present": 677,
+      "taxonomy_len": {
+        "0": 677
+      }
+    },
+    "22482_20DBW - Upsert News DuckDB": {
+      "runs": 475,
+      "items": 475,
+      "keys": [
+        "run_id",
+        "sourceTier",
+        "sourceId",
+        "dedupeKey",
+        "eventKey",
+        "canonicalUrl",
+        "publishedAt",
+        "title",
+        "source",
+        "feedUrl",
+        "symbols",
+        "type",
+        "notes",
+        "ImpactScore",
+        "confidence",
+        "urgency",
+        "Snippet",
+        "firstSeenAt",
+        "Strategy",
+        "sectors_bearish",
+        "sectors_bullish",
+        "currencies_bearish",
+        "currencies_bullish",
+        "Losers",
+        "Winners",
+        "Theme",
+        "Regime",
+        "impact_region",
+        "impact_asset_class",
+        "impact_magnitude",
+        "impact_fx_pairs",
+        "tagger_version",
+        "analyzedAt",
+        "_action",
+        "_reason"
+      ],
+      "impact_nonzero": 5,
+      "sources": {
+        "unknown": 475
+      },
+      "url_present": 475,
+      "taxonomy_len": {
+        "0": 475
+      }
+    },
+    "22482_20H1R - Analyze with Grok": {
+      "runs": 34,
+      "items": 34,
+      "keys": [
+        "error"
+      ],
+      "impact_nonzero": 0,
+      "sources": {
+        "None": 34
+      },
+      "url_present": 0,
+      "taxonomy_len": {
+        "0": 34
+      },
+      "body_type": "NoneType",
+      "body_keys": null,
+      "llm_content_type": "NoneType"
+    },
+    "22482_20H1BR - Merge Grok + Context": {
+      "runs": 34,
+      "items": 34,
+      "keys": [
+        "run_id",
+        "fetchedAt",
+        "publishedAt",
+        "source",
+        "url",
+        "canonicalUrl",
+        "title",
+        "snippet",
+        "symbols",
+        "type",
+        "feedUrl",
+        "sourceTier",
+        "sourceId",
+        "_itemsLoopReset",
+        "canonicalUrlNormalized",
+        "publishedAtNormalized",
+        "dedupeKey",
+        "eventKey",
+        "_isValid",
+        "_kind",
+        "universeSectors",
+        "candidateSectors",
+        "preImpactScore",
+        "preUrgency",
+        "preAnalyzeHint",
+        "_action",
+        "_reason",
+        "seenNowAt",
+        "analysisMode",
+        "llmInput",
+        "grokRequest",
+        "error"
+      ],
+      "impact_nonzero": 0,
+      "sources": {
+        "unknown": 34
+      },
+      "url_present": 34,
+      "taxonomy_len": {
+        "11": 34
+      },
+      "body_type": "NoneType",
+      "body_keys": null,
+      "llm_content_type": "NoneType"
+    },
+    "22482_20H2R - Parse Grok Output": {
+      "runs": 34,
+      "items": 34,
+      "keys": [
+        "run_id",
+        "sourceTier",
+        "sourceId",
+        "dedupeKey",
+        "eventKey",
+        "canonicalUrl",
+        "publishedAt",
+        "title",
+        "source",
+        "feedUrl",
+        "symbols",
+        "type",
+        "notes",
+        "isActionable",
+        "ImpactScore",
+        "confidence",
+        "urgency",
+        "Snippet",
+        "firstSeenAt",
+        "Strategy",
+        "sectors_bearish",
+        "sectors_bullish",
+        "currencies_bearish",
+        "currencies_bullish",
+        "Losers",
+        "Winners",
+        "Theme",
+        "Regime",
+        "impact_region",
+        "impact_asset_class",
+        "impact_magnitude",
+        "impact_fx_pairs",
+        "tagger_version",
+        "_taxonomyViolations",
+        "analyzedAt",
+        "_action",
+        "_reason",
+        "analysisMode"
+      ],
+      "impact_nonzero": 0,
+      "sources": {
+        "unknown": 34
+      },
+      "url_present": 34,
+      "taxonomy_len": {
+        "0": 34
+      }
+    },
+    "22480_AG4.01 - Récupération des news générales": {
+      "runs": 1,
+      "items": 2,
+      "keys": [
+        "publishedAt",
+        "ImpactScore",
+        "sectors_bullish",
+        "sectors_bearish",
+        "Winners",
+        "Losers",
+        "lookbackDays",
+        "_sectorFieldSource"
+      ],
+      "news_summary": {
+        "rows": 0,
+        "with_news": 0,
+        "held": []
+      }
+    },
+    "22480_20J_FINAL — Build MarketNewsPack Final": {
+      "runs": 1,
+      "items": 1,
+      "keys": [
+        "sector_brief",
+        "sector_momentum_window_days",
+        "sector_momentum_universe",
+        "sector_momentum_scores",
+        "sector_momentum_meta"
+      ],
+      "pack": [
+        {
+          "sector_brief": "=== SECTOR MOMENTUM REPORT (Last 10 Days | Universe Sectors Only) ===\nTracked sectors: 12 | Active sectors: 2 | Rows used: 2\nFiltered non-sector/legacy labels: 0/3\n\nMIXED / NEUTRAL (Universe sectors with conflicting or weak flows):\n- Financial Services (Net: +6, Bull: 6, Bear: 0, Mentions: 2)\n- Consumer Cyclical (Net: -3, Bull: 0, Bear: 3, Mentions: 1)",
+          "sector_momentum_window_days": 10,
+          "sector_momentum_universe": [
+            "Financial Services",
+            "Utilities",
+            "Unknown",
+            "Technology",
+            "Real Estate",
+            "Industrials",
+            "Healthcare",
+            "Energy",
+            "Consumer Defensive",
+            "Communication Services",
+            "Basic Materials",
+            "Consumer Cyclical"
+          ],
+          "sector_momentum_scores": [
+            {
+              "sector": "Financial Services",
+              "mentions": 2,
+              "bull_mentions": 2,
+              "bear_mentions": 0,
+              "netScore": 6,
+              "bullScore": 6,
+              "bearScore": 0
+            },
+            {
+              "sector": "Utilities",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Unknown",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Technology",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Real Estate",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Industrials",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Healthcare",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Energy",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Consumer Defensive",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Communication Services",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Basic Materials",
+              "mentions": 0,
+              "bull_mentions": 0,
+              "bear_mentions": 0,
+              "netScore": 0,
+              "bullScore": 0,
+              "bearScore": 0
+            },
+            {
+              "sector": "Consumer Cyclical",
+              "mentions": 1,
+              "bull_mentions": 0,
+              "bear_mentions": 1,
+              "netScore": -3,
+              "bullScore": 0,
+              "bearScore": 3
+            }
+          ],
+          "sector_momentum_meta": {
+            "rows_total": 2,
+            "rows_used": 2,
+            "lookback_days": 10,
+            "min_impact": 2,
+            "raw_mentions": 3,
+            "dropped_labels": 0
+          }
+        }
+      ],
+      "news_summary": {
+        "rows": 0,
+        "with_news": 0,
+        "held": []
+      }
+    },
+    "22480_R8 — Data Prep for Matrix (Fusion Filter)": {
+      "runs": 1,
+      "items": 364,
+      "keys": [
+        "Symbol",
+        "Symbol_Yahoo",
+        "Name",
+        "AssetClass",
+        "Currency",
+        "Sector",
+        "Industry",
+        "Tech_Action",
+        "Tech_Confidence",
+        "Tech_Score",
+        "Last_Close",
+        "D1_RSI14",
+        "D1_ATR_Pct",
+        "D1_Resistance",
+        "D1_Support",
+        "D1_Dist_Res_Pct",
+        "D1_Dist_Sup_Pct",
+        "AI_Stop_Loss",
+        "AI_RR_Theoretical",
+        "AI_Decision",
+        "AI_Quality",
+        "AI_Alignment",
+        "AI_Regime_D1",
+        "Data_Age_H1_Hours",
+        "Data_Age_D1_Hours",
+        "Last_Tech_Date",
+        "Funda_Score",
+        "Funda_Risk",
+        "Funda_Upside",
+        "Recommendation",
+        "Target_Price",
+        "Funda_Horizon",
+        "Last_Funda_Date",
+        "Funda_Age_Hours",
+        "Funda_Usable",
+        "Symbol_News_Count_7d",
+        "Symbol_News_Count_30d",
+        "Symbol_News_Impact_7d",
+        "Symbol_News_Impact_30d",
+        "Symbol_News_Last_Date",
+        "Symbol_News_Items",
+        "News_Generated_At",
+        "Macro_News_Count_30d",
+        "Macro_Impact_30d",
+        "Macro_Last_Date",
+        "Macro_Themes",
+        "Last_News_Date",
+        "Regular_Market_Price",
+        "Bid",
+        "Ask",
+        "Bid_Size",
+        "Ask_Size",
+        "SpreadPct",
+        "SlippageProxyPct",
+        "Volume",
+        "Market_State",
+        "Regular_Market_Time",
+        "Exchange_Data_Delayed_By",
+        "Quote_Source",
+        "Quote_Fetched_At",
+        "IV_ATM",
+        "Options_Ok",
+        "Options_Error",
+        "Options_Warning",
+        "Next_Earnings_Date",
+        "Days_To_Earnings",
+        "YF_Fetched_At",
+        "YF_Age_Hours",
+        "Data_Quality_Flags",
+        "Data_OK_For_Trading",
+        "Sector_Weight_Pct",
+        "Symbol_Weight_Pct",
+        "Universe_Quarantine_Reason"
+      ],
+      "news_summary": {
+        "rows": 364,
+        "with_news": 240,
+        "held": []
+      }
+    },
+    "22480_Calcul Matrice & Briefing": {
+      "runs": 1,
+      "items": 1,
+      "keys": [
+        "opportunity_brief",
+        "opportunity_pack",
+        "opportunity_stats",
+        "matrix_thresholds"
+      ],
+      "news_summary": {
+        "rows": 25,
+        "with_news": 23,
+        "held": [
+          {
+            "path": "[0].opportunity_pack.rows[10]",
+            "symbol": "TXN",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[14]",
+            "symbol": "GOOGL",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[15]",
+            "symbol": "UNP",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[16]",
+            "symbol": "PRX.AS",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[17]",
+            "symbol": "TKO.PA",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[18]",
+            "symbol": "KO",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[19]",
+            "symbol": "TSM",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[20]",
+            "symbol": "VK.PA",
+            "held": true,
+            "news_n": 3
+          }
+        ]
+      }
+    },
+    "22480_AG1.00 — Assemble Input Packs": {
+      "runs": 1,
+      "items": 1,
+      "keys": [
+        "run",
+        "config",
+        "meta",
+        "portfolioBrief",
+        "portfolio_pack",
+        "sector_brief",
+        "opportunity_brief",
+        "opportunity_pack",
+        "opportunity_stats",
+        "matrix_thresholds",
+        "__debug"
+      ],
+      "news_summary": {
+        "rows": 25,
+        "with_news": 23,
+        "held": [
+          {
+            "path": "[0].opportunity_pack.rows[10]",
+            "symbol": "TXN",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[14]",
+            "symbol": "GOOGL",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[15]",
+            "symbol": "UNP",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[16]",
+            "symbol": "PRX.AS",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[17]",
+            "symbol": "TKO.PA",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[18]",
+            "symbol": "KO",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[19]",
+            "symbol": "TSM",
+            "held": true,
+            "news_n": 3
+          },
+          {
+            "path": "[0].opportunity_pack.rows[20]",
+            "symbol": "VK.PA",
+            "held": true,
+            "news_n": 3
+          }
+        ]
+      }
+    },
+    "22474_Load+Normalize Finnhub Staging": {
+      "runs": 1,
+      "items": 33,
+      "keys": [
+        "run_id",
+        "db_path",
+        "newsId",
+        "symbol",
+        "company_name",
+        "companyName",
+        "isin",
+        "source",
+        "provider",
+        "newsArticleId",
+        "reason",
+        "url",
+        "articleUrl",
+        "articleCanonicalUrl",
+        "canonicalUrl",
+        "title",
+        "articleTitle",
+        "publishedAt",
+        "snippet",
+        "text",
+        "firstSeenAt",
+        "_reason",
+        "_runAI",
+        "_articlesLoopReset",
+        "llmInput"
+      ]
+    },
+    "22473_Normalize + Dedup IBKR": {
+      "runs": 1,
+      "items": 7,
+      "keys": [
+        "run_id",
+        "db_path",
+        "newsId",
+        "symbol",
+        "company_name",
+        "companyName",
+        "isin",
+        "source",
+        "provider",
+        "newsArticleId",
+        "ibkrSentiment",
+        "providerTimeContract",
+        "url",
+        "articleUrl",
+        "articleCanonicalUrl",
+        "canonicalUrl",
+        "title",
+        "articleTitle",
+        "publishedAt",
+        "snippet",
+        "text",
+        "firstSeenAt",
+        "_reason",
+        "_runAI",
+        "_articlesLoopReset",
+        "llmInput"
+      ],
+      "symbols": {
+        "KO": 1,
+        "GOOGL": 1,
+        "TXN": 1,
+        "VK.PA": 1,
+        "TSM": 3
+      },
+      "timestamp_quality": {
+        "INVALID_PROVIDER_TIME": 4,
+        "UNVERIFIED_PROVIDER_TIME": 3
+      }
+    },
+    "22477_Compute Health": {
+      "runs": 1,
+      "items": 0,
+      "keys": [],
+      "health": []
+    },
+    "macro_distribution": [
+      [
+        "skip",
+        4,
+        "geo_v1",
+        6
+      ],
+      [
+        "skip",
+        8,
+        "geo_v1",
+        3
+      ],
+      [
+        "skip",
+        0,
+        "",
+        7886
+      ],
+      [
+        "analyze",
+        6,
+        "reduced_grok_v1",
+        9
+      ],
+      [
+        "analyze",
+        3,
+        "reduced_grok_v1",
+        29
+      ],
+      [
+        "analyze",
+        7,
+        "reduced_grok_v1",
+        4
+      ],
+      [
+        "analyze",
+        2,
+        "reduced_grok_v1",
+        9
+      ],
+      [
+        "analyze",
+        4,
+        "reduced_grok_v1",
+        2
+      ],
+      [
+        "skip",
+        4,
+        "reduced_grok_v1",
+        2
+      ],
+      [
+        "skip",
+        0,
+        "geo_v1",
+        36
+      ],
+      [
+        "skip",
+        7,
+        "geo_v1",
+        1
+      ],
+      [
+        "skip",
+        2,
+        "geo_v1",
+        1
+      ],
+      [
+        "skip",
+        3,
+        "geo_v1",
+        11
+      ],
+      [
+        "skip",
+        10,
+        "geo_v1",
+        2
+      ],
+      [
+        "analyze",
+        0,
+        "geo_v1",
+        1
+      ],
+      [
+        "skip",
+        5,
+        "geo_v1",
+        4
+      ],
+      [
+        "skip",
+        6,
+        "geo_v1",
+        2
+      ],
+      [
+        "skip",
+        3,
+        "reduced_grok_v1",
+        27
+      ],
+      [
+        "skip",
+        0,
+        "reduced_grok_v1",
+        2048
+      ],
+      [
+        "analyze",
+        0,
+        "reduced_grok_v1",
+        3458
+      ],
+      [
+        "skip",
+        2,
+        "reduced_grok_v1",
+        6
+      ],
+      [
+        "skip",
+        6,
+        "reduced_grok_v1",
+        1
+      ],
+      [
+        "analyze",
+        5,
+        "reduced_grok_v1",
+        47
+      ],
+      [
+        "skip",
+        5,
+        "reduced_grok_v1",
+        13
+      ],
+      [
+        "analyze",
+        8,
+        "reduced_grok_v1",
+        8
+      ]
+    ],
+    "macro_latest_signal": [
+      [
+        "2026-08-04 05:02:53.549",
+        null,
+        187
+      ]
+    ],
+    "macro_errors_sample": [
+      [
+        "https://www.fxstreet.com/rss/analysis",
+        "unknown"
+      ],
+      [
+        "https://www.fxstreet.com/rss/news",
+        "unknown"
+      ],
+      [
+        "https://www.fxstreet.com/rss/analysis",
+        "unknown"
+      ]
+    ],
+    "duplicate_urls": [
+      [
+        0,
+        0
+      ]
+    ],
+    "staging_pending_dates": [
+      [
+        "2026-09-23 17:07:11",
+        "2026-09-25 13:54:51",
+        "2026-09-25 15:00:02.472396",
+        "2026-09-25 15:00:02.472396",
+        121
+      ]
+    ]
+  },
+  "followup": {
+    "top_concentration": [
+      [
+        "boursorama",
+        "GOOGL",
+        150
+      ],
+      [
+        "finnhub",
+        "NVDA",
+        125
+      ],
+      [
+        "finnhub",
+        "AAPL",
+        112
+      ],
+      [
+        "finnhub",
+        "AMD",
+        101
+      ],
+      [
+        "finnhub",
+        "AMZN",
+        101
+      ],
+      [
+        "finnhub",
+        "LLY",
+        77
+      ],
+      [
+        "finnhub",
+        "META",
+        75
+      ],
+      [
+        "finnhub",
+        "MSFT",
+        75
+      ],
+      [
+        "finnhub",
+        "MCD",
+        70
+      ],
+      [
+        "finnhub",
+        "ORCL",
+        69
+      ],
+      [
+        "finnhub",
+        "PLTR",
+        69
+      ],
+      [
+        "finnhub",
+        "AVGO",
+        69
+      ]
+    ],
+    "publication_to_analysis": [
+      [
+        "boursorama",
+        2.33,
+        61.32
+      ],
+      [
+        "ibkr",
+        0.1,
+        18.37
+      ],
+      [
+        "finnhub",
+        18.77,
+        40.73
+      ]
+    ],
+    "duplicates_title": [
+      [
+        "ibkr",
+        21,
+        23
+      ],
+      [
+        "boursorama",
+        2,
+        2
+      ],
+      [
+        "finnhub",
+        20,
+        23
+      ]
+    ],
+    "irrelevant_nonzero": [
+      [
+        "boursorama",
+        2170,
+        0,
+        866
+      ],
+      [
+        "ibkr",
+        566,
+        0,
+        678
+      ],
+      [
+        "finnhub",
+        3899,
+        0,
+        3702
+      ]
+    ],
+    "recent_residual_macro": [
+      [
+        "2026-02-16 08:46:01.404",
+        "2026-09-25 13:21:25",
+        "2026-09-25 17:03:32.314833",
+        3,
+        "https://www.amf-france.org/fr/flux-rss/display/29"
+      ],
+      [
+        "2026-04-23 07:39:13.143",
+        "2026-09-23 23:50:00",
+        "2026-09-25 16:53:11.985843",
+        3,
+        "https://www.boj.or.jp/en/rss/whatsnew.xml"
+      ]
+    ],
+    "macro_feed_counts": [
+      [
+        "https://www.bfmtv.com/rss/economie/",
+        1821,
+        320
+      ],
+      [
+        "https://www.clubic.com/feed/news.rss",
+        1168,
+        26
+      ],
+      [
+        "https://www.fxstreet.com/rss/news",
+        790,
+        771
+      ],
+      [
+        "https://fr.investing.com/rss/news.rss",
+        591,
+        71
+      ],
+      [
+        "https://www.numerama.com/feed/",
+        566,
+        48
+      ],
+      [
+        "https://www.journaldunet.com/rss/index.xml",
+        465,
+        2
+      ],
+      [
+        "https://www.lemonde.fr/economie/rss_full.xml",
+        463,
+        75
+      ],
+      [
+        "https://www.easybourse.com/feeds/media/",
+        167,
+        12
+      ],
+      [
+        "https://fr.investing.com/rss/news_1.rss",
+        103,
+        0
+      ],
+      [
+        "https://www.boj.or.jp/en/rss/whatsnew.xml",
+        68,
+        7
+      ],
+      [
+        "https://www.fxstreet.com/rss/analysis",
+        36,
+        9
+      ],
+      [
+        "https://www.lemonde.fr/economie-mondiale/rss_full.xml",
+        33,
+        1
+      ],
+      [
+        "https://www.snb.ch/public/en/rss/news",
+        26,
+        1
+      ],
+      [
+        "https://feed.prismamediadigital.com/v1/cap/rss?sources=capital,polemik,xerfi,capital-avec-agence-france-presse,capital-avec-aof,capital-avec-reuters&categories=entreprises-marches",
+        25,
+        1
+      ],
+      [
+        "https://www.ecb.europa.eu/rss/press.html",
+        24,
+        0
+      ],
+      [
+        "https://www.bankofengland.co.uk/rss/publications",
+        17,
+        1
+      ],
+      [
+        "https://www.bankofengland.co.uk/rss/news",
+        15,
+        1
+      ],
+      [
+        "https://www.federalreserve.gov/feeds/press_all.xml",
+        8,
+        1
+      ],
+      [
+        "https://www.federalreserve.gov/feeds/speeches.xml",
+        7,
+        1
+      ],
+      [
+        "https://www.federalreserve.gov/feeds/press_monetary.xml",
+        2,
+        0
+      ]
+    ]
+  },
+  "external_http_probes": [
+    {
+      "source": "eodhd_demo_AAPL",
+      "checked_at": "2026-09-27T15:36:16.045714+00:00",
+      "status": 200,
+      "bytes": 1516226,
+      "content_type": "application/json",
+      "kind": "list",
+      "n": 287,
+      "median_content_chars": 4186,
+      "dates": [
+        "2026-09-20T09:59:02+00:00",
+        "2026-09-27T11:00:01+00:00"
+      ]
+    },
+    {
+      "source": "sec_AAPL_submissions",
+      "checked_at": "2026-09-27T15:36:16.047464+00:00",
+      "status": 200,
+      "bytes": 163991,
+      "content_type": "application/json",
+      "company": "Apple Inc.",
+      "n": 1000,
+      "latest_date": "2026-09-24"
+    },
+    {
+      "source": "fastretailing_ir",
+      "checked_at": "2026-09-27T15:36:16.048566+00:00",
+      "status": 200,
+      "bytes": 57647,
+      "content_type": "text/xml",
+      "n": 20,
+      "dates": [
+        "Fri, 18 Sep 2026 13:00:00 +0900",
+        "Wed, 02 Sep 2026 15:40:00 +0900",
+        "Wed, 02 Sep 2026 15:30:00 +0900"
+      ]
+    },
+    {
+      "source": "globenewswire_catalog",
+      "checked_at": "2026-09-27T15:36:16.049658+00:00",
+      "status": 200,
+      "bytes": 316717,
+      "content_type": "text/html; charset=utf-8",
+      "relevant_rss_urls": []
+    }
+  ],
+  "xai_error": {
+    "execution_id": 22482,
+    "failed_calls": 34,
+    "calls": 34,
+    "error": "Forbidden: available credits exhausted or monthly spending limit reached"
+  },
+  "collector": {
+    "host_cron_UTC": "0 9,12,15 * * 1-5",
+    "n8n_cron_Paris": "0 0 10,13,16 * * 1-5",
+    "segments": [
+      "CORE_MANUAL",
+      "CORE_AUTO"
+    ],
+    "days": 2,
+    "max_per_symbol": 12,
+    "symbol_count_last_run": 68,
+    "live_sha256": "178ed26cd291f399fcd9ffa134cbfa27ac53c6e940d55b3028aadfa942075728"
+  },
+  "external_sample": {
+    "source": "EODHD demo AAPL",
+    "common_window": "2026-09-20 through 2026-09-25 12:00 UTC",
+    "rows": 251,
+    "yahoo_rows": 242,
+    "current_rows": 132,
+    "current_finnhub_proxy_urls": 112,
+    "novel_event_gain": "Not measured: URLs are not comparable across Finnhub redirects and origin publishers."
+  },
+  "broker_precheck": {
+    "authenticated": true,
+    "dry_run": false,
+    "account_alignment": false,
+    "selected_gateway_is_paper": true,
+    "pending_approvals": 0
+  },
+  "local_probe_files_sha256": {
+    "execution_probe.py": "fe75606260e6c41c0e705e33f2aad49b0235f3eb6ef23bf8d1c2dddef9e23788",
+    "finnhub_collector_live.py": "93b67f34ad633bc74534501ee9c9a558e4386009268f54905856f3170cddda74",
+    "followup.py": "f68f69db617eff0cc8f9fd6b687066da7a38c1b427342c86c42c7cdb2903e26b",
+    "http_probe.py": "64c9b415b7e537d72f766eaec8311bc2a841ee0dde6f87eb92435cb5dcfb4c83",
+    "metrics.py": "f230d6d7ccad6291462987e819fb7fdb6cf9816fb396a05417f2620f0f68ad5a",
+    "probe.py": "220eccceaf0be595e160e5a340e0ce4d01a4794602491549f7d09529699fa457"
+  }
+}

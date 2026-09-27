@@ -17,7 +17,7 @@ function safeUrl(u) {
 
 function inferSource(u) {
   try {
-    const h = new URL(u).hostname.toLowerCase();
+    const h = (String(u).match(/^https?:\/\/([^/?#]+)/i)?.[1] || '').toLowerCase();
     if (h.includes('amf-france')) return 'AMF France';
     if (h.includes('boursorama')) return 'Boursorama';
     if (h.includes('investir') || h.includes('lesechos')) return 'Investir/Les Echos';
@@ -53,7 +53,7 @@ return rows.map(r => {
       run_id: feedCtx.run_id || '',
       fetchedAt,
       publishedAt,
-      source: inferSource(canonicalUrl),
+      source: (feedCtx.source && feedCtx.source !== 'unknown') ? feedCtx.source : inferSource(canonicalUrl),
       url: canonicalUrl,
       canonicalUrl,
       title,

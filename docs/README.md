@@ -1,6 +1,6 @@
 # Documentation Trader_IA
 
-Index mis à jour le 2026-09-25 (modèles AG1 et références de déploiement). Les documents datés dans `audits/`
+Index mis à jour le 2026-09-27 (flux news gratuits et DeepSeek Flash). Les documents datés dans `audits/`
 et `operations/` conservent volontairement les faits observés à leur date ; les
 documents ci-dessous décrivent l'état courant.
 
@@ -22,6 +22,8 @@ documents ci-dessous décrivent l'état courant.
 | Exécution et approbation IBKR | `operations/ibkr_execution.md`, `operations/order_approval_deploy_notes.md` |
 
 ## Derniers changements live
+
+- News : Grok remplacé par DeepSeek Flash, RSS officiels DSY/Fast Retailing, horaires et supervision corrigés : [déploiement du 27 septembre](operations/20260927_news_free_flash_remediation.md).
 
 - AG1 V4 : Opus 5.5 via Messages API adaptative et GPT-6 Sol via Responses API,
   replay isolé et publication vérifiés :

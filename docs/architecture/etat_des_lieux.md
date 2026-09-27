@@ -1,5 +1,7 @@
 # État des lieux fonctionnel — Trader_IA
 
+> News, mise à jour live du 27/09/2026 : macro via DeepSeek Flash ; flux gratuits DSY/Fast Retailing et Finnhub HELD+CORE ; ordonnancement avant AG1. [Déploiement, validation et limites](../operations/20260927_news_free_flash_remediation.md). Les mentions historiques de Grok et des anciens horaires ci-dessous sont remplacées par cette note.
+
 **Dernière consolidation du socle live : 2026-08-06.**
 **Mise à jour ciblée AG1 : 2026-09-25**, modèles et transport validés live ;
 voir [la note de migration](../operations/20260925_ag1_opus55_gpt6sol_migration.md).

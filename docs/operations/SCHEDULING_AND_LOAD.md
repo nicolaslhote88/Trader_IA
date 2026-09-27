@@ -1,6 +1,6 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-09-14.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-09-27.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
@@ -29,13 +29,13 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 | AG2 Universe Health Quarantine | `0 20 * * 1-5` | L-V | ~8 min | 12 | ag2_v3 (écrivain) |
 | AG3-V2 Fundamental Held+Core | `0 0 * * *` | 7j/7 | ~18 min | 28 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
 | AG3-V2 Fundamental Watchlist | `0 1,4 * * *` | 7j/7 | ~17 min | 20 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
-| AG4-V3 News Watcher | `45 6,10,18 * * 1-5` | L-V | ~89 min | 92 | ag4_v3 (écrit) / ag2_v3 (lit brièvement au start) |
-| AG4_Spé-V2 News symbole | `0 5 8,11,14,17 * * 1-5` | L-V | ~24 min | 34 | ag4_spe (écrit) / ag2_v3 (lit au start) |
+| AG4-V3 News Watcher | `45 6,10,14 * * 1-5` | L-V | ~89 min | 92 | ag4_v3 (écrit) / ag2_v3 (lit brièvement au start) |
+| AG4_Spé-V2 News symbole | `0 5 8,11,14,15 * * 1-5` | L-V | ~24 min | 34 | ag4_spe (écrit) / ag2_v3 (lit au start) |
 | AG1 V4 Consensus PM | `0 10 17 * * 1-5` | L-V, une fois/jour | ~6 min | 12 historique | ag1_v4 (écrit), ag2/3/4 (lit). Après AG2 16:35, avant clôture Euronext usuelle 17:30. |
 | AG1-PF MTM | `0 15 9-16 * * 1-5` + `0 40 17 * * 1-5` + `0 15 23 * * 1-5` | L-V | <1 min | 3 | ag1_v4 ; relevé après PM et relevé de fin de journée, même si NAV stable. |
 | AG4_Spé-Finnhub Global News | `0 0 10,13,16 * * 1-5` | L-V | ~20 min | 30 | ag4_spe |
 | AG4_Spé-IBKR Portfolio News | `0 0 10,13,16 * * 1-5` | L-V | ~9 min | 13 | ag4_spe |
-| AG4_Spé Health Alert | `0 30 16 * * 1-5` | L-V | <1 min | 2 | ag4_spe |
+| AG4_Spé Health Alert | `0 55 16 * * 1-5` | L-V | <1 min | 2 | ag4_spe |
 | YF-ENRICH Daily Refresh | `15 6 * * *` | 7j/7 | ~14 min | 14 | yf_enrichment |
 | AG5 Macro & Flows V2 | `20 7 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
 | AG6 FX Relative Valuation V2 | `40 7 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
@@ -49,6 +49,17 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 `Finalize Run`; un lot complet `SUCCESS` ou `PARTIAL` avance et relit son
 curseur dans la transaction. Toute incohérence devient
 `AG2_CURSOR_GUARD_FAILED`. Le run manuel Held+Core `20812` a vérifié `0 → 18`.
+
+
+## Ajustement news du 27 septembre 2026
+
+- Collecte Finnhub + RSS officiels DSY/Fast Retailing : **09:35, 12:35, 15:35 Paris** L–V. Le cron hôte `35 * * * 1-5` appelle un wrapper qui contrôle `Europe/Paris`, donc suit le changement d’heure. Verrou `flock`, collecteurs séquentiels, transactions brèves et retry DuckDB.
+- Analyse du staging : **10:00, 13:00, 16:00 Paris**, inchangée. Fenêtre de collecte de 25 min, contre l’ancien décalage où la collecte arrivait après l’analyse.
+- Dernier Boursorama : **15:05** au lieu de 17:05. Les dernières écritures sont attendues avant 16h selon les durées historiques ; collecteur 15:35 susceptible de retry sur le bref flush final.
+- Dernier macro : **14:45** au lieu de 18:45 ; budget 145 min avant AG1 17:10. La durée historique de 89 min vient de l’ancien pipeline ; durée DeepSeek en cycle complet à mesurer.
+- Santé de tous les flux : **16:55**. AG1, PF, AG2 et les gardes restent inchangés.
+
+[Validation, versions et rollback](20260927_news_free_flash_remediation.md). Premier cycle automatique après publication : lundi 28 septembre, encore à observer.
 
 ## Ajustement du 14 septembre 2026
 

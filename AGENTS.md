@@ -81,13 +81,19 @@ leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vé
   - `AG3-V2 — Fundamental Watchlist Nightly` (`AG3V2WATCHNIGHT20260622`, cron **0 2 * * * UTC quotidien**, segment WATCHLIST ≈196, batch 60 → cycle ~4j, SLA <5j).
   Builder `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/build_split_workflows.py` (part du live export ; `build_workflow.py` est **périmé**=GoogleSheets). **Gate STALE_FUNDA** dans AG1V4 node `R8 — Data Prep for Matrix` : au-delà de `MAX_FUNDA_AGE_HOURS` (env `AG1_ACTIONS_MAX_FUNDA_AGE_HOURS`, défaut 168h) le fondamental est **neutralisé** (Score/Risk→50, Upside/Target→0, `Funda_Usable=False`) + flag `STALE_FUNDA` ; **PAS** un reject dur du risk manager (un funda périmé ne gèle pas le trading). Détails/rollback : `docs/operations/20260622_ag3_split_stale_funda_deploy_notes.md`. **IBKR ne peut pas alimenter les fondamentaux** (Client Portal API : tags fondamentaux dépréciés + notes analystes indisponibles).
 - **AG4-V3 : dual-branch.** Node `20CFG - Analysis Mode` (`analysisMode`, défaut `reduced`) → Switch `20H_MODE`.
-  `reduced` = Actions via Grok grok-4.3 ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
+  `reduced` = Actions via DeepSeek `deepseek-v4-flash` (27/09/2026) ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
 - **⚠️ IBKR mode RÉEL (live).** Compte **`U25651155`**, `dry_run=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`. Ordres réels.
 - **Forex : entièrement désactivé** (workflows FX `active=0`, `fx_orders_enabled=false`).
 - **Login IBKR : navigateur manuel + 2FA.** Le `/health` du 2026-08-06 indique
   `assisted_login.enabled=false` et `auto_reauth_enabled=true` : le broker
   maintient/réinitialise la session en journée, mais ne possède pas de flux de
   credentials assisté actif. Fallback : tunnel navigateur vers le Gateway.
+
+## News — remédiation gratuite LIVE 2026-09-27
+- Macro AG4-V3 réduit : **DeepSeek `deepseek-v4-flash`**, chaîne structurée ; Grok retiré. Une erreur LLM interrompt le workflow au lieu d’être classée Noise. Provenance RSS corrigée, réanalyse des anciennes sorties et des URL réutilisées.
+- Flux officiels gratuits **Dassault Systèmes (DSY.PA)** et **Fast Retailing (9983.T)** → `news_finnhub_staging` avec `source='issuer_rss'` → analyse Finnhub existante → AG1. SEC non activée (HTTP 403 constaté au déploiement).
+- Finnhub : HELD+CORE, clé article **par symbole**, quotas gratuits inchangés, 12 tickers locaux non mappés signalés sans appels 403 répétés. Collecte 09:35/12:35/15:35 Paris ; analyse 10/13/16. Macro 06:45/10:45/**14:45**, Boursorama 08:05/11:05/14:05/**15:05**, santé **16:55**.
+- Deux flux FXStreet désactivés (403). Aucun nouveau flux payant. Replay isolé validé ; cycle complet du 28 septembre à observer. Détails : `docs/operations/20260927_news_free_flash_remediation.md`. Les horaires historiques ci-dessous sont remplacés par cette note et `SCHEDULING_AND_LOAD.md`.
 
 ## 📰 Pipeline NEWS single-stock (AG4_Spé V2/V3 → AG1 V4) — MAJ 2026-08-06
 Base **`ag4_spe_v2.duckdb`** (`news_history` + vue **`news_analyzed`** = summary∧is_relevant). Détails : `docs/audits/20260617_ag4_spe_v2_analysis.md`, `…_remediation_plan.md`, `docs/specs/ag4_spe_v3_ibkr_news.md`, `docs/specs/ag1_v4_d2_news_digest.md`.

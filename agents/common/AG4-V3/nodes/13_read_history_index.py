@@ -60,7 +60,7 @@ with db_con(db_path) as con:
           COALESCE(sectors_bearish, losers) AS sectors_bearish,
           COALESCE(currencies_bullish, '') AS currencies_bullish,
           COALESCE(currencies_bearish, '') AS currencies_bearish,
-          theme, regime, analyzed_at
+          theme, regime, analyzed_at, tagger_version
         FROM news_history
         WHERE COALESCE(last_seen_at, first_seen_at, published_at, analyzed_at, updated_at, created_at)
               >= CURRENT_TIMESTAMP - INTERVAL '{LOOKBACK_DAYS} days'
@@ -95,6 +95,7 @@ for idx, row in enumerate(rows, start=1):
         "Theme": row[22] or "Resultats/Micro",
         "Regime": row[23] or "Neutral",
         "analyzedAt": to_iso(row[24]),
+        "tagger_version": row[25] or "",
         "row_number": idx,
     }
 

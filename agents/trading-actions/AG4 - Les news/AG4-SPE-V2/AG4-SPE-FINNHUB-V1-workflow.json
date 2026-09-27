@@ -1,12 +1,9 @@
 [
   {
-    "updatedAt": "2026-06-24T16:03:44.757Z",
-    "createdAt": "2026-06-18T08:58:41.305Z",
     "id": "AG4SPEFINNHUBV1",
     "name": "AG4_Spé-Finnhub-V1 — Global News",
-    "description": null,
-    "active": true,
-    "isArchived": false,
+    "active": 1,
+    "versionId": "6d30f5d2-3ecf-4acf-b257-190877d5e910",
     "nodes": [
       {
         "parameters": {
@@ -36,20 +33,20 @@
         "typeVersion": 1,
         "position": [
           0,
-          180
+          192
         ]
       },
       {
         "parameters": {
           "language": "pythonNative",
-          "pythonCode": "import duckdb\nimport json\nimport time\nfrom datetime import datetime, timezone\n\nDB = \"/files/duckdb/ag4_spe_v2.duckdb\"\nRUN_ID = \"AG4FINNHUB_\" + datetime.now(timezone.utc).strftime(\"%Y%m%d%H%M%S\")\n\ndef connect_w(path, tries=6, delay=0.4):\n    last = None\n    for i in range(tries):\n        try:\n            return duckdb.connect(path)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and i < tries - 1:\n                time.sleep(delay * (2 ** i)); continue\n            raise\n    raise last\n\ncon = connect_w(DB)\nfor ddl in [\"ALTER TABLE news_history ADD COLUMN IF NOT EXISTS provider VARCHAR\",\n            \"ALTER TABLE news_history ADD COLUMN IF NOT EXISTS news_article_id VARCHAR\"]:\n    try: con.execute(ddl)\n    except Exception: pass\ntry:\n    con.execute(\"DELETE FROM news_finnhub_staging WHERE news_id IN (SELECT news_id FROM news_history)\")\nexcept Exception:\n    pass\n\nrows = []\ntry:\n    rows = con.execute(\"SELECT news_id, symbol, company_name, provider, news_article_id, url, title, published_at, snippet, first_seen_at FROM news_finnhub_staging WHERE COALESCE(status,'PENDING')='PENDING' ORDER BY published_at DESC LIMIT 400\").fetchall()\nexcept Exception:\n    rows = []\n\nout = []\nfor r in rows:\n    news_id, sym, name, provider, art, url, title, pub, snippet, fsa = r\n    title = str(title or \"\").strip()\n    snippet = str(snippet or \"\").strip() or title\n    pubs = str(pub or \"\")\n    payload = {\"source\": \"finnhub\", \"title\": title, \"date\": pubs, \"provider\": provider, \"snippet\": snippet, \"content\": snippet}\n    out.append({\"json\": {\n        \"run_id\": RUN_ID, \"db_path\": DB,\n        \"newsId\": news_id, \"symbol\": sym, \"company_name\": name or sym, \"companyName\": name or sym, \"isin\": None,\n        \"source\": \"finnhub\", \"provider\": provider, \"newsArticleId\": art, \"reason\": \"finnhub\",\n        \"url\": url, \"articleUrl\": url, \"articleCanonicalUrl\": url, \"canonicalUrl\": url,\n        \"title\": title, \"articleTitle\": title, \"publishedAt\": pubs, \"snippet\": snippet, \"text\": snippet,\n        \"firstSeenAt\": str(fsa or datetime.now(timezone.utc).isoformat()),\n        \"_reason\": \"finnhub\", \"_runAI\": True, \"_articlesLoopReset\": False,\n        \"llmInput\": json.dumps(payload),\n    }})\ntry: con.execute(\"CHECKPOINT\")\nexcept Exception: pass\ncon.close()\nreturn out\n"
+          "pythonCode": "import duckdb\nimport json\nimport time\nfrom datetime import datetime, timezone\n\nDB = \"/files/duckdb/ag4_spe_v2.duckdb\"\nRUN_ID = \"AG4FREE_\" + datetime.now(timezone.utc).strftime(\"%Y%m%d%H%M%S\")\n\ndef connect_ro():\n    for attempt in range(8):\n        try:\n            return duckdb.connect(DB, read_only=True)\n        except Exception as e:\n            if \"lock\" not in str(e).lower() or attempt == 7:\n                raise\n            time.sleep(2)\n\ncon = connect_ro()\ntry:\n    rows = con.execute(\"\"\"\n      SELECT s.news_id, s.symbol, s.company_name, s.provider, s.news_article_id,\n             s.url, s.title, CAST(s.published_at AS VARCHAR), s.snippet,\n             CAST(s.first_seen_at AS VARCHAR), s.source, s.published_at_raw\n      FROM news_finnhub_staging s\n      WHERE COALESCE(s.status,'PENDING')='PENDING'\n        AND s.published_at >= now()-INTERVAL '14 days' AND s.published_at <= now()\n        AND NOT EXISTS (SELECT 1 FROM news_history h WHERE h.news_id=s.news_id\n          OR (h.source=s.source AND h.news_article_id=s.news_article_id AND h.symbol=s.symbol))\n      ORDER BY CASE WHEN s.source='issuer_rss' THEN 0 ELSE 1 END,\n               s.published_at DESC, s.symbol, s.news_id LIMIT 400\n    \"\"\").fetchall()\nfinally:\n    con.close()\nout = []\nfor r in rows:\n    news_id, sym, name, provider, art, url, title, pub, snippet, fsa, source, raw = r\n    title = str(title or \"\").strip()\n    snippet = str(snippet or \"\").strip() or title\n    if not title or not url:\n        continue\n    contract = {\"provider_published_at\": pub, \"timestamp_quality\": \"PROVIDER_REPORTED\", \"raw\": raw}\n    out.append({\"json\": {\n        \"run_id\": RUN_ID, \"db_path\": DB, \"newsId\": news_id, \"symbol\": sym,\n        \"company_name\": name or sym, \"companyName\": name or sym, \"isin\": None,\n        \"source\": source, \"provider\": provider, \"newsArticleId\": art, \"reason\": source,\n        \"url\": url, \"articleUrl\": url, \"articleCanonicalUrl\": url, \"canonicalUrl\": url,\n        \"title\": title, \"articleTitle\": title, \"publishedAt\": pub, \"snippet\": snippet, \"text\": snippet,\n        \"providerTimeContract\": contract, \"firstSeenAt\": fsa,\n        \"_reason\": source, \"_runAI\": True, \"_articlesLoopReset\": False,\n        \"llmInput\": json.dumps({\"source\": source, \"title\": title, \"date\": pub,\n                                \"provider\": provider, \"snippet\": snippet, \"content\": snippet}),\n    }})\nreturn out\n"
         },
         "id": "ibkr-code3",
         "name": "Load+Normalize Finnhub Staging",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          460,
+          464,
           0
         ]
       },
@@ -80,7 +77,7 @@
         "type": "n8n-nodes-base.if",
         "typeVersion": 2.3,
         "position": [
-          700,
+          704,
           0
         ],
         "id": "ibkr-s18",
@@ -95,7 +92,7 @@
         "type": "n8n-nodes-base.merge",
         "typeVersion": 3.2,
         "position": [
-          1180,
+          1184,
           0
         ],
         "id": "ibkr-s19m",
@@ -103,12 +100,12 @@
       },
       {
         "parameters": {
-          "jsCode": "function safeParse(value) {\n  try {\n    if (typeof value === \"object\" && value !== null) return value;\n    return JSON.parse(value);\n  } catch {\n    return {};\n  }\n}\n\nfunction clampScore(v, lo, hi, dflt) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return dflt;\n  return Math.max(lo, Math.min(hi, Math.round(n)));\n}\n\nfunction cleanSentiment(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Bullish\", \"Bearish\", \"Neutral\"].includes(s)) return s;\n  return \"Neutral\";\n}\n\nfunction cleanHorizon(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Intraday\", \"Days\", \"Weeks\", \"Months\"].includes(s)) return s;\n  return \"Days\";\n}\n\nfunction cleanUrgency(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Low\", \"Medium\", \"High\"].includes(s)) return s;\n  return \"Low\";\n}\n\nfunction cleanSignal(v) {\n  const s = String(v || \"\").trim();\n  if ([\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"].includes(s)) return s;\n  return \"WATCH\";\n}\n\nfunction cleanDrivers(v) {\n  if (!Array.isArray(v)) return \"\";\n  const arr = v\n    .map((x) => String(x || \"\").trim())\n    .filter(Boolean)\n    .slice(0, 5);\n  return arr.join(\" | \");\n}\n\nfunction toBool(v, d = false) {\n  if (typeof v === \"boolean\") return v;\n  if (v == null) return d;\n  const s = String(v).trim().toLowerCase();\n  if ([\"1\", \"true\", \"yes\", \"y\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\"].includes(s)) return false;\n  return d;\n}\n\nconst _process = ($j0) => {\n  const j = $j0 || {};\n// Basic LLM Chain + Structured Output Parser returns { output: <parsed object> }.\n// Keep the legacy OpenAI response envelope as a rollback-compatible fallback.\nconst raw = (j.output && !Array.isArray(j.output))\n  ? j.output\n  : (j.output?.[0]?.content?.[0]?.text || j.content || j.text || \"{}\");\nconst ai = safeParse(raw);\nconst nowIso = new Date().toISOString();\n\nconst isRelevant = typeof ai.isRelevant === \"boolean\" ? ai.isRelevant : true;\nconst impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;\nconst sentiment = isRelevant ? cleanSentiment(ai.sentiment) : \"Neutral\";\nconst category = isRelevant ? String(ai.category || \"Noise\").trim() : \"Noise\";\nconst suggestedSignal = isRelevant ? cleanSignal(ai.suggestedSignal) : \"WATCH\";\nconst urgency = isRelevant ? cleanUrgency(ai.urgency) : \"Low\";\nconst confidence = clampScore(ai.confidence, 0, 100, isRelevant ? 50 : 0);\nconst horizon = cleanHorizon(ai.horizon);\nconst keyDrivers = cleanDrivers(ai.keyDrivers);\nconst needsFollowUp = toBool(ai.needsFollowUp, false);\n\n  return {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || null,\n      snippet: j.snippet || \"\",\n      text: j.text || \"\",\n      summary: String(ai.summary || \"\").trim(),\n      category,\n      impactScore,\n      sentiment,\n      confidence,\n      horizon,\n      urgency,\n      suggestedSignal,\n      keyDrivers,\n      needsFollowUp,\n      isRelevant,\n      relevanceReason: String(ai.relevanceReason || \"\").trim(),\n      action: \"analyze\",\n      reason: j._reason || \"new_item\",\n      status: \"ANALYZED\",\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n      provider: j.provider || null,\n      newsArticleId: j.newsArticleId || null,\n      ibkrSentiment: (j.ibkrSentiment === undefined ? null : j.ibkrSentiment),\n    },\n  };\n};\nreturn $input.all().map((it) => _process(it.json));\n"
+          "jsCode": "function safeParse(value) {\n  try {\n    if (typeof value === \"object\" && value !== null) return value;\n    return JSON.parse(value);\n  } catch {\n    return {};\n  }\n}\n\nfunction clampScore(v, lo, hi, dflt) {\n  const n = Number(v);\n  if (!Number.isFinite(n)) return dflt;\n  return Math.max(lo, Math.min(hi, Math.round(n)));\n}\n\nfunction cleanSentiment(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Bullish\", \"Bearish\", \"Neutral\"].includes(s)) return s;\n  return \"Neutral\";\n}\n\nfunction cleanHorizon(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Intraday\", \"Days\", \"Weeks\", \"Months\"].includes(s)) return s;\n  return \"Days\";\n}\n\nfunction cleanUrgency(v) {\n  const s = String(v || \"\").trim();\n  if ([\"Low\", \"Medium\", \"High\"].includes(s)) return s;\n  return \"Low\";\n}\n\nfunction cleanSignal(v) {\n  const s = String(v || \"\").trim();\n  if ([\"BUY\", \"SELL\", \"NEUTRAL\", \"WATCH\"].includes(s)) return s;\n  return \"WATCH\";\n}\n\nfunction cleanDrivers(v) {\n  if (!Array.isArray(v)) return \"\";\n  const arr = v\n    .map((x) => String(x || \"\").trim())\n    .filter(Boolean)\n    .slice(0, 5);\n  return arr.join(\" | \");\n}\n\nfunction toBool(v, d = false) {\n  if (typeof v === \"boolean\") return v;\n  if (v == null) return d;\n  const s = String(v).trim().toLowerCase();\n  if ([\"1\", \"true\", \"yes\", \"y\"].includes(s)) return true;\n  if ([\"0\", \"false\", \"no\", \"n\"].includes(s)) return false;\n  return d;\n}\n\nconst _process = ($j0) => {\n  const j = $j0 || {};\n// Basic LLM Chain + Structured Output Parser returns { output: <parsed object> }.\n// Keep the legacy OpenAI response envelope as a rollback-compatible fallback.\nconst raw = (j.output && !Array.isArray(j.output))\n  ? j.output\n  : (j.output?.[0]?.content?.[0]?.text || j.content || j.text || \"{}\");\nconst ai = safeParse(raw);\nif (j.error || !ai || typeof ai.isRelevant !== 'boolean' || !Number.isFinite(ai.impactScore) ||\n    !Number.isFinite(ai.confidence) || typeof ai.summary !== 'string' || !ai.summary.trim()) {\n  throw new Error('AG4_STOCK_INVALID_LLM_OUTPUT: analyse absente ou invalide');\n}\nconst nowIso = new Date().toISOString();\n\nconst isRelevant = typeof ai.isRelevant === \"boolean\" ? ai.isRelevant : true;\nconst impactScore = isRelevant ? clampScore(ai.impactScore, -10, 10, 0) : 0;\nconst sentiment = isRelevant ? cleanSentiment(ai.sentiment) : \"Neutral\";\nconst category = isRelevant ? String(ai.category || \"Noise\").trim() : \"Noise\";\nconst suggestedSignal = isRelevant ? cleanSignal(ai.suggestedSignal) : \"WATCH\";\nconst urgency = isRelevant ? cleanUrgency(ai.urgency) : \"Low\";\nconst confidence = clampScore(ai.confidence, 0, 100, isRelevant ? 50 : 0);\nconst horizon = cleanHorizon(ai.horizon);\nconst keyDrivers = cleanDrivers(ai.keyDrivers);\nconst needsFollowUp = toBool(ai.needsFollowUp, false);\n\n  return {\n    json: {\n      run_id: j.run_id || \"\",\n      db_path: j.db_path || \"/files/duckdb/ag4_spe_v2.duckdb\",\n      newsId: j.newsId || null,\n      symbol: j.symbol || \"UNKNOWN\",\n      companyName: j.companyName || j.symbol || \"\",\n      source: j.source || \"boursorama\",\n      boursoramaRef: j.boursoramaRef || \"\",\n      listingUrl: j.actualitesUrl || \"\",\n      url: j.articleUrl || j.url || \"\",\n      canonicalUrl: j.articleCanonicalUrl || j.canonicalUrl || j.articleUrl || j.url || \"\",\n      title: j.articleTitle || j.title || j.articleTitleGuess || \"\",\n      publishedAt: j.publishedAt || null,\n      snippet: j.snippet || \"\",\n      text: j.text || \"\",\n      summary: String(ai.summary || \"\").trim(),\n      category,\n      impactScore,\n      sentiment,\n      confidence,\n      horizon,\n      urgency,\n      suggestedSignal,\n      keyDrivers,\n      needsFollowUp,\n      isRelevant,\n      relevanceReason: String(ai.relevanceReason || \"\").trim(),\n      action: \"analyze\",\n      reason: j._reason || \"new_item\",\n      status: \"ANALYZED\",\n      firstSeenAt: j.firstSeenAt || j.seenNowAt || nowIso,\n      analyzedAt: nowIso,\n      fetchedAt: nowIso,\n      _articlesLoopReset: false,\n      provider: j.provider || null,\n      providerTimeContract: j.providerTimeContract || null,\n      newsArticleId: j.newsArticleId || null,\n      ibkrSentiment: (j.ibkrSentiment === undefined ? null : j.ibkrSentiment),\n    },\n  };\n};\nreturn $input.all().map((it) => _process(it.json));\n"
         },
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          1420,
+          1424,
           0
         ],
         "id": "ibkr-s20",
@@ -117,14 +114,14 @@
       {
         "parameters": {
           "language": "pythonNative",
-          "pythonCode": "import duckdb\nimport time\n\ndef connect_w(path, tries=6, delay=0.4):\n    last = None\n    for i in range(tries):\n        try:\n            return duckdb.connect(path)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and i < tries - 1:\n                time.sleep(delay * (2 ** i)); continue\n            raise\n    raise last\n\ndef tb(v, d=False):\n    if isinstance(v, bool): return v\n    if v is None: return d\n    return str(v).strip().lower() in (\"1\", \"true\", \"yes\", \"y\")\n\nitems = _items or []\nif not items:\n    return []\nDB = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or \"/files/duckdb/ag4_spe_v2.duckdb\")\ncols = [\"news_id\",\"run_id\",\"symbol\",\"company_name\",\"source\",\"url\",\"canonical_url\",\"title\",\n        \"published_at\",\"published_at_raw\",\"snippet\",\"text\",\"summary\",\"category\",\"impact_score\",\n        \"sentiment\",\"confidence_score\",\"horizon\",\"urgency\",\"suggested_signal\",\"key_drivers\",\n        \"needs_follow_up\",\"is_relevant\",\"relevance_reason\",\"action\",\"reason\",\"status\",\n        \"first_seen_at\",\"last_seen_at\",\"analyzed_at\",\"fetched_at\",\"provider\",\"news_article_id\",\n        \"ibkr_sentiment\"]\nph = \",\".join([\"?\"] * len(cols))\nsql = \"INSERT OR REPLACE INTO news_history (\" + \",\".join(cols) + \",updated_at) VALUES (\" + ph + \",CURRENT_TIMESTAMP)\"\ncon = connect_w(DB)\nn = 0\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    con.execute(sql, [\n        j.get(\"newsId\"), j.get(\"run_id\"), j.get(\"symbol\"), j.get(\"companyName\") or j.get(\"symbol\"),\n        j.get(\"source\") or \"ibkr\", j.get(\"url\"), j.get(\"canonicalUrl\") or j.get(\"url\"), j.get(\"title\"),\n        j.get(\"publishedAt\"), j.get(\"publishedAt\"), j.get(\"snippet\"), j.get(\"text\"),\n        j.get(\"summary\"), j.get(\"category\"), j.get(\"impactScore\"), j.get(\"sentiment\"),\n        j.get(\"confidence\"), j.get(\"horizon\"), j.get(\"urgency\"), j.get(\"suggestedSignal\"),\n        j.get(\"keyDrivers\"), tb(j.get(\"needsFollowUp\")), tb(j.get(\"isRelevant\"), True),\n        j.get(\"relevanceReason\"), j.get(\"action\") or \"analyze\", j.get(\"reason\") or \"ibkr_portfolio\",\n        j.get(\"status\") or \"ANALYZED\", j.get(\"firstSeenAt\"), j.get(\"firstSeenAt\"),\n        j.get(\"analyzedAt\"), j.get(\"fetchedAt\"), j.get(\"provider\"), j.get(\"newsArticleId\"),\n        j.get(\"ibkrSentiment\"),\n    ])\n    n += 1\ntry: con.execute(\"CHECKPOINT\")\nexcept Exception: pass\ncon.close()\nreturn [{\"json\": {\"written\": n, \"db_path\": DB}}]\n"
+          "pythonCode": "import json\nimport duckdb\nimport time\n\ndef connect_w(path, tries=6, delay=0.4):\n    last = None\n    for i in range(tries):\n        try:\n            return duckdb.connect(path)\n        except Exception as e:\n            last = e\n            if \"lock\" in str(e).lower() and i < tries - 1:\n                time.sleep(delay * (2 ** i)); continue\n            raise\n    raise last\n\ndef tb(v, d=False):\n    if isinstance(v, bool): return v\n    if v is None: return d\n    return str(v).strip().lower() in (\"1\", \"true\", \"yes\", \"y\")\n\nitems = _items or []\nif not items:\n    return []\nDB = str((items[0].get(\"json\", {}) or {}).get(\"db_path\") or \"/files/duckdb/ag4_spe_v2.duckdb\")\ncols = [\"news_id\",\"run_id\",\"symbol\",\"company_name\",\"source\",\"url\",\"canonical_url\",\"title\",\n        \"published_at\",\"published_at_raw\",\"snippet\",\"text\",\"summary\",\"category\",\"impact_score\",\n        \"sentiment\",\"confidence_score\",\"horizon\",\"urgency\",\"suggested_signal\",\"key_drivers\",\n        \"needs_follow_up\",\"is_relevant\",\"relevance_reason\",\"action\",\"reason\",\"status\",\n        \"first_seen_at\",\"last_seen_at\",\"analyzed_at\",\"fetched_at\",\"provider\",\"news_article_id\",\n        \"ibkr_sentiment\"]\nph = \",\".join([\"?\"] * len(cols))\nsql = \"INSERT OR REPLACE INTO news_history (\" + \",\".join(cols) + \",updated_at) VALUES (\" + ph + \",CURRENT_TIMESTAMP)\"\ncon = connect_w(DB)\nn = 0\nfor it in items:\n    j = it.get(\"json\", {}) or {}\n    con.execute(sql, [\n        j.get(\"newsId\"), j.get(\"run_id\"), j.get(\"symbol\"), j.get(\"companyName\") or j.get(\"symbol\"),\n        j.get(\"source\") or \"ibkr\", j.get(\"url\"), j.get(\"canonicalUrl\") or j.get(\"url\"), j.get(\"title\"),\n        j.get(\"publishedAt\"), json.dumps(j.get(\"providerTimeContract\") or {}), j.get(\"snippet\"), j.get(\"text\"),\n        j.get(\"summary\"), j.get(\"category\"), j.get(\"impactScore\"), j.get(\"sentiment\"),\n        j.get(\"confidence\"), j.get(\"horizon\"), j.get(\"urgency\"), j.get(\"suggestedSignal\"),\n        j.get(\"keyDrivers\"), tb(j.get(\"needsFollowUp\")), tb(j.get(\"isRelevant\"), True),\n        j.get(\"relevanceReason\"), j.get(\"action\") or \"analyze\", j.get(\"reason\") or \"ibkr_portfolio\",\n        j.get(\"status\") or \"ANALYZED\", j.get(\"firstSeenAt\"), j.get(\"firstSeenAt\"),\n        j.get(\"analyzedAt\"), j.get(\"fetchedAt\"), j.get(\"provider\"), j.get(\"newsArticleId\"),\n        j.get(\"ibkrSentiment\"),\n    ])\n    n += 1\ncon.close()\nreturn [{\"json\": {\"written\": n, \"db_path\": DB}}]\n"
         },
         "id": "ibkr-write",
         "name": "Write Finnhub DuckDB",
         "type": "n8n-nodes-base.code",
         "typeVersion": 2,
         "position": [
-          1660,
+          1664,
           0
         ]
       },
@@ -144,12 +141,11 @@
         "type": "@n8n/n8n-nodes-langchain.chainLlm",
         "typeVersion": 1.5,
         "position": [
-          940,
-          -80
+          912,
+          144
         ],
         "id": "ibkr-s19",
-        "name": "S19 - Analyze with DeepSeek",
-        "onError": "continueRegularOutput"
+        "name": "S19 - Analyze with DeepSeek"
       },
       {
         "parameters": {
@@ -159,8 +155,8 @@
         "type": "@n8n/n8n-nodes-langchain.lmChatDeepSeek",
         "typeVersion": 1,
         "position": [
-          828,
-          144
+          896,
+          352
         ],
         "id": "4d2f3579-114d-4861-956c-64bc6cd134ac",
         "name": "S19A - DeepSeek Chat Model",
@@ -179,8 +175,8 @@
         "type": "@n8n/n8n-nodes-langchain.outputParserStructured",
         "typeVersion": 1.3,
         "position": [
-          1052,
-          144
+          1072,
+          336
         ],
         "id": "b7cf0c18-cc5b-51e2-a374-8c1fd2227346",
         "name": "S19B - Structured Output DeepSeek"
@@ -294,41 +290,9 @@
       }
     },
     "settings": {
-      "executionOrder": "v1"
+      "executionOrder": "v1",
+      "timezone": "Europe/Paris"
     },
-    "staticData": {
-      "node:Schedule IBKR News": {
-        "recurrenceRules": []
-      },
-      "node:Schedule Finnhub News": {
-        "recurrenceRules": []
-      }
-    },
-    "meta": null,
-    "pinData": {},
-    "versionId": "57f83d19-70ec-5c1a-8e05-96c1385f69e8",
-    "activeVersionId": null,
-    "versionCounter": 72,
-    "triggerCount": 1,
-    "tags": [],
-    "shared": [
-      {
-        "updatedAt": "2026-06-24T15:00:11.371Z",
-        "createdAt": "2026-06-24T15:00:11.371Z",
-        "role": "workflow:owner",
-        "workflowId": "AG4SPEFINNHUBV1",
-        "projectId": "ksaxzZwZY6PsA6jp",
-        "project": {
-          "updatedAt": "2025-08-19T20:06:03.793Z",
-          "createdAt": "2025-08-19T20:05:08.903Z",
-          "id": "ksaxzZwZY6PsA6jp",
-          "name": "Nicolas L'HOTE <nicolas.lhote.88@gmail.com>",
-          "type": "personal",
-          "icon": null,
-          "description": null,
-          "creatorId": "81c13a48-6847-445c-927f-81c1c25a72f4"
-        }
-      }
-    ]
+    "activeVersionId": "6d30f5d2-3ecf-4acf-b257-190877d5e910"
   }
 ]

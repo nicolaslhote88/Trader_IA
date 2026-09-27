@@ -55,7 +55,8 @@ function toBool(v, d = false) {
   return d;
 }
 
-const j = $json || {};
+const _process = ($j0) => {
+  const j = $j0 || {};
 // Basic LLM Chain + Structured Output Parser returns { output: <parsed object> }.
 // Keep the legacy OpenAI response envelope as a rollback-compatible fallback.
 const raw = (j.output && !Array.isArray(j.output))
@@ -79,8 +80,7 @@ const horizon = cleanHorizon(ai.horizon);
 const keyDrivers = cleanDrivers(ai.keyDrivers);
 const needsFollowUp = toBool(ai.needsFollowUp, false);
 
-return [
-  {
+  return {
     json: {
       run_id: j.run_id || "",
       db_path: j.db_path || "/files/duckdb/ag4_spe_v2.duckdb",
@@ -115,6 +115,11 @@ return [
       analyzedAt: nowIso,
       fetchedAt: nowIso,
       _articlesLoopReset: false,
+      provider: j.provider || null,
+      providerTimeContract: j.providerTimeContract || null,
+      newsArticleId: j.newsArticleId || null,
+      ibkrSentiment: (j.ibkrSentiment === undefined ? null : j.ibkrSentiment),
     },
-  },
-];
+  };
+};
+return $input.all().map((it) => _process(it.json));
