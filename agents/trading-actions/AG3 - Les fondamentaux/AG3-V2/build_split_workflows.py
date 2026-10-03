@@ -111,6 +111,8 @@ def configure(base: dict, variant: dict) -> dict:
     for k in ("updatedAt", "createdAt", "shared", "activeVersionId", "versionCounter", "triggerCount"):
         wf.pop(k, None)
     for node in wf.get("nodes", []):
+        if node.get("name") == "AG3V2.06 - Score Fundamentals":
+            node["parameters"]["jsCode"] = (ROOT / "nodes/02_score_fundamentals.js").read_text(encoding="utf-8")
         if node.get("type") == "n8n-nodes-base.scheduleTrigger":
             node["parameters"] = {
                 "rule": {"interval": [{"field": "cronExpression", "expression": variant["cron"]}]}

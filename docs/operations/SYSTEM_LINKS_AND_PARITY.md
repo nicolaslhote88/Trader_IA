@@ -92,3 +92,9 @@ accès au contrat IBKR live. Seul le gate dur de qualité des données est dupli
 3. Vérifier la cohérence : un même symbole doit donner le même grade/décision dans le dashboard et dans le run (`core.model_proposals` / `opportunity_pack`).
 4. Committer ensemble le workflow AG1, `services/dashboard/app.py` et la
    documentation de parité lorsque la modification touche une logique partagée.
+
+## Fiche fondamentale commune — 2026-10-03
+
+`services/dashboard/fundamental_context.py` est la source de la fiche `AG3_EVIDENCE_V1` affichée dans la vue détaillée et embarquée dans le nœud AG1 `20L — Fundamental Evidence`. Régénérer ce nœud avec `outils/scripts/build_ag3_fundamental_update.py` après tout changement du contrat. Il ajoute `opportunity_pack.rows[].fundamentals` et `fundamental_legend`, sans modifier les scores/gates de la matrice. Les corrections de score AG3 sont lues depuis la même base par R8 et le dashboard ; aucune deuxième formule AG3 n'est introduite.
+
+Les comparaisons 30/90 jours de score exigent la même `strategy_version`. La date de collecte n'est pas une date de publication comptable. Les objectifs analystes ne sont ni des probabilités ni des bornes de prix garanties. Voir le [déploiement](20261003_ag3_fundamental_evidence_deployment.md).

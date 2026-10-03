@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+from fundamental_detail import render_fundamental_detail, load_detail
 
 # ============================================================
 # CONFIGURATION
@@ -6025,24 +6026,6 @@ def _safe_series(df: pd.DataFrame, candidates: list[str], default: float = 0.0) 
 
 def _clamp_pct(v: float) -> float:
     return max(0.0, min(100.0, float(v)))
-
-
-def _estimate_scenario_probabilities(score: float, risk: float, upside_pct: float) -> dict[str, int]:
-    """Heuristique locale (sans IA) pour afficher une probabilité relative des scénarios."""
-    s = max(0.0, min(100.0, float(score)))
-    r = max(0.0, min(100.0, float(risk)))
-    u = float(upside_pct)
-
-    bull_raw = max(5.0, 0.8 * s - 0.55 * r + max(u, 0.0) * 0.9 + 25.0)
-    bear_raw = max(5.0, 0.95 * r - 0.45 * s + max(-u, 0.0) * 1.1 + 18.0)
-    base_raw = max(5.0, 100.0 - abs(s - 60.0) - abs(u) * 0.45 + 10.0)
-
-    total = bull_raw + bear_raw + base_raw
-    bull = int(round((bull_raw / total) * 100))
-    bear = int(round((bear_raw / total) * 100))
-    base = 100 - bull - bear
-
-    return {"baissier": bear, "central": base, "haussier": bull}
 
 
 def _normalize_macro_news_df(df_macro: pd.DataFrame) -> pd.DataFrame:
@@ -18048,6 +18031,7 @@ elif page == "Analyse Fondamentale V2":
         load_ag3_page_data.clear()
         load_ag3_run_quality_history.clear()
         load_ag3_symbol_history.clear()
+        load_detail.clear()
         st.rerun()
 
     ag3_page_data = load_ag3_page_data(
@@ -18275,260 +18259,7 @@ elif page == "Analyse Fondamentale V2":
             selected_symbol = labels_map[selected_label]
             row = by_symbol.loc[selected_symbol]
 
-            score_v = safe_float(row.get("score", row.get("funda_conf", 0)))
-            risk_v = safe_float(row.get("risk_score", 0))
-            quality_v = safe_float(row.get("quality_score", 0))
-            growth_v = safe_float(row.get("growth_score", 0))
-            val_v = safe_float(row.get("valuation_score", 0))
-            health_v = safe_float(row.get("health_score", 0))
-            cons_v = safe_float(row.get("consensus_score", 0))
-            cov_v = _clamp_pct(safe_float(row.get("data_coverage_pct", 0)))
-            upside_v = safe_float(row.get("upside_pct", 0))
-            analysts_v = safe_float(row.get("analyst_count", 0))
-
-            st.subheader(f"🔬 {selected_symbol} — {row.get('name', '')}")
-            mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-            mc1.metric("Triage", f"{score_v:.0f}/100", delta=_funda_eval("score", score_v)[0])
-            mc2.metric("Risque", f"{risk_v:.0f}/100", delta=_funda_eval("risk_score", risk_v)[0])
-            mc3.metric("Horizon", str(row.get("horizon", "WATCH")))
-            mc4.metric("Potentiel", f"{upside_v:.1f}%")
-            mc5.metric("Analystes", f"{analysts_v:.0f}")
-            mc6.metric("Couverture", f"{cov_v:.1f}%")
-
-            st.divider()
-
-            gauges = [
-                ("score", score_v),
-                ("risk_score", risk_v),
-                ("quality_score", quality_v),
-                ("growth_score", growth_v),
-                ("valuation_score", val_v),
-                ("health_score", health_v),
-                ("consensus_score", cons_v),
-            ]
-            cols = st.columns(3)
-            for idx, (k, v) in enumerate(gauges):
-                if idx > 0 and idx % 3 == 0:
-                    cols = st.columns(3)
-                with cols[idx % 3]:
-                    title = FUNDAMENTAL_META.get(k, {}).get("label", k)
-                    fig = _make_funda_gauge(v, title=title, inverse=(k == "risk_score"))
-                    st.plotly_chart(fig, use_container_width=True, key=f"gauge_{selected_symbol}_{k}")
-
-            st.divider()
-
-            # Table d'interprétation (bon/mauvais + sens de l'indicateur)
-            interp_rows = []
-            for key, val in [
-                ("score", score_v),
-                ("risk_score", risk_v),
-                ("quality_score", quality_v),
-                ("growth_score", growth_v),
-                ("valuation_score", val_v),
-                ("health_score", health_v),
-                ("consensus_score", cons_v),
-                ("data_coverage_pct", cov_v),
-            ]:
-                meta = FUNDAMENTAL_META.get(key, {})
-                verdict, _ = _funda_eval(key, val)
-                interp_rows.append(
-                    {
-                        "Indicateur": meta.get("label", key),
-                        "Valeur": f"{val:.1f}/100",
-                        "Lecture": verdict,
-                        "Ce que cela veut dire": meta.get("desc", ""),
-                    }
-                )
-
-            st.markdown("#### Interprétation des indicateurs")
-            render_interactive_table(
-                pd.DataFrame(interp_rows),
-                key_suffix="funda_v2_interp",
-                enable_controls=False,
-                height=320,
-            )
-
-            # Evolution historique du symbole (chargement lazy par symbole)
-            hs1, hs2 = st.columns([1.1, 1.1])
-            symbol_hist_days = int(hs1.selectbox("Fenetre historique symbole (jours)", [7, 30, 90], index=1, key="ag3_symbol_hist_days"))
-            symbol_hist_limit = int(
-                hs2.number_input(
-                    "Limite lignes symbole",
-                    min_value=200,
-                    max_value=100000,
-                    value=int(min(max(HISTORY_LIMIT_DEFAULT, 200), 100000)),
-                    step=200,
-                    key="ag3_symbol_hist_limit",
-                )
-            )
-            h = load_ag3_symbol_history(
-                AG3_DUCKDB_PATH,
-                ag3_db_sig,
-                selected_symbol,
-                symbol_hist_days,
-                symbol_hist_limit,
-            )
-            if h is not None and not h.empty:
-                ts_col = _first_existing_column(h, ["updated_at", "created_at", "fetched_at"])
-                if ts_col:
-                    h["ts"] = pd.to_datetime(h[ts_col], errors="coerce")
-                    h = h.dropna(subset=["ts"]).sort_values("ts")
-                    if not h.empty:
-                        h_score = _safe_series(h, ["score", "funda_conf"])
-                        h_risk = _safe_series(h, ["risk_score"])
-                        fig_hist = go.Figure()
-                        fig_hist.add_trace(
-                            go.Scatter(
-                                x=h["ts"],
-                                y=h_score,
-                                mode="lines+markers",
-                                name="Triage",
-                                line=dict(color="#28a745", width=2),
-                            )
-                        )
-                        fig_hist.add_trace(
-                            go.Scatter(
-                                x=h["ts"],
-                                y=h_risk,
-                                mode="lines+markers",
-                                name="Risque",
-                                line=dict(color="#dc3545", width=2),
-                            )
-                        )
-                        fig_hist.update_layout(
-                            title=f"Évolution historique — {selected_symbol}",
-                            height=320,
-                            margin=dict(t=40, b=20, l=20, r=20),
-                            yaxis=dict(title="Score /100"),
-                        )
-                        st.plotly_chart(fig_hist, use_container_width=True)
-
-            # Consensus + scénarios
-            c_left, c_right = st.columns([1, 1])
-            with c_left:
-                st.markdown("#### Consensus")
-                c_row = pd.DataFrame()
-                if (
-                    df_funda_consensus is not None
-                    and not df_funda_consensus.empty
-                    and "symbol" in df_funda_consensus.columns
-                ):
-                    c_row = df_funda_consensus[df_funda_consensus["symbol"] == selected_symbol].head(1)
-
-                if not c_row.empty:
-                    cr = c_row.iloc[0]
-                    st.markdown(f"**Recommandation**: {cr.get('recommendation', '—')}")
-                    st.markdown(f"**Objectif moyen**: {safe_float(cr.get('target_mean_price', 0)):.2f}")
-                    st.markdown(f"**Objectif haut**: {safe_float(cr.get('target_high_price', 0)):.2f}")
-                    st.markdown(f"**Objectif bas**: {safe_float(cr.get('target_low_price', 0)):.2f}")
-                    st.markdown(f"**Potentiel**: {safe_float(cr.get('upside_pct', 0)):.1f}%")
-                    st.markdown(f"**Analystes**: {safe_float(cr.get('analyst_count', 0)):.0f}")
-                else:
-                    st.caption("Pas de ligne consensus disponible.")
-
-            with c_right:
-                st.markdown("#### Scénarios de valorisation")
-                scenarios = extract_valuation_scenarios(str(row.get("valuation", "")))
-                current_px = safe_float(row.get("current_price", 0))
-                if scenarios and current_px > 0:
-                    hist_px = fetch_yfinance_history(selected_symbol, interval="1d", lookback_days=365)
-                    if not hist_px.empty and "close" in hist_px.columns:
-                        hist_px = hist_px.sort_values("time")
-                        anchor_dt = hist_px["time"].iloc[-1].to_pydatetime()
-                        anchor_px = safe_float(hist_px["close"].iloc[-1])
-                    else:
-                        anchor_dt = datetime.now()
-                        anchor_px = current_px
-
-                    fut = anchor_dt + timedelta(days=365)
-                    probs = _estimate_scenario_probabilities(score_v, risk_v, upside_v)
-                    bear_target = safe_float(scenarios.get("Bear", anchor_px * 0.85))
-                    base_target = safe_float(scenarios.get("Base", anchor_px))
-                    bull_target = safe_float(scenarios.get("Bull", anchor_px * 1.15))
-
-                    fig_sc = go.Figure()
-                    if not hist_px.empty and "close" in hist_px.columns:
-                        fig_sc.add_trace(
-                            go.Scatter(
-                                x=hist_px["time"],
-                                y=hist_px["close"],
-                                mode="lines",
-                                name="Cours réel (1 an)",
-                                line=dict(color="#ffffff", width=2),
-                            )
-                        )
-                    fig_sc.add_trace(
-                        go.Scatter(
-                            x=[anchor_dt, fut],
-                            y=[anchor_px, bear_target],
-                            mode="lines+markers+text",
-                            name=f"Baissier ({probs['baissier']}%)",
-                            text=[None, f"{bear_target:.1f}"],
-                            textposition="top right",
-                            line=dict(color="#dc3545", dash="dash"),
-                        )
-                    )
-                    fig_sc.add_trace(
-                        go.Scatter(
-                            x=[anchor_dt, fut],
-                            y=[anchor_px, base_target],
-                            mode="lines+markers+text",
-                            name=f"Central ({probs['central']}%)",
-                            text=[None, f"{base_target:.1f}"],
-                            textposition="top right",
-                            line=dict(color="#ffc107", dash="dash"),
-                        )
-                    )
-                    fig_sc.add_trace(
-                        go.Scatter(
-                            x=[anchor_dt, fut],
-                            y=[anchor_px, bull_target],
-                            mode="lines+markers+text",
-                            name=f"Haussier ({probs['haussier']}%)",
-                            text=[None, f"{bull_target:.1f}"],
-                            textposition="top right",
-                            line=dict(color="#28a745", dash="dash"),
-                        )
-                    )
-                    fig_sc.update_layout(
-                        height=320,
-                        margin=dict(t=20, b=20, l=20, r=20),
-                        title="Cours réel (1 an) + projections (12 mois)",
-                    )
-                    st.plotly_chart(fig_sc, use_container_width=True)
-                    st.caption("Probabilités indicatives calculées par heuristique locale (pas un modèle IA prédictif).")
-                else:
-                    st.caption("Scénarios baissier/central/haussier non disponibles pour ce symbole.")
-
-            # Métriques fondamentales brutes (latest)
-            if df_funda_metrics is not None and not df_funda_metrics.empty and "symbol" in df_funda_metrics.columns:
-                m = df_funda_metrics[df_funda_metrics["symbol"] == selected_symbol].copy()
-                if not m.empty:
-                    m["value_num"] = pd.to_numeric(m.get("value_num", pd.Series(index=m.index)), errors="coerce")
-                    m["Valeur"] = m["value_num"]
-                    if "value_text" in m.columns:
-                        m["Valeur"] = m["Valeur"].fillna(m["value_text"])
-
-                    show_cols = []
-                    for col in ["section", "metric", "Valeur", "unit", "notes", "as_of_date", "extracted_at"]:
-                        if col in m.columns:
-                            show_cols.append(col)
-                    if show_cols:
-                        st.markdown("#### Métriques fondamentales (latest)")
-                        render_interactive_table(
-                            m[show_cols].rename(
-                                columns={
-                                    "section": "Section",
-                                    "metric": "Indicateur",
-                                    "unit": "Unité",
-                                    "notes": "Notes",
-                                    "as_of_date": "Date référence",
-                                    "extracted_at": "Date extraction",
-                                }
-                            ),
-                            key_suffix=f"funda_metrics_{selected_symbol}",
-                            height=300,
-                        )
+            render_fundamental_detail(selected_symbol, row, AG3_DUCKDB_PATH, ag3_db_sig, fetch_yfinance_history)
 
     # ================================================================
     # TAB 3: HISTORIQUE RUNS

@@ -46,6 +46,7 @@ MODEL_BRANCHES = {
 
 
 CODE_MAP = {
+    "20L — Fundamental Evidence": ("pythonCode", ROOT / "nodes/pre_agent/fundamental_evidence.code.py"),
     "2B - Init Run Context": ("jsCode", ROOT / "nodes/pre_agent/2B_init_run_context.code.js"),
     "4B – Build Portfolio Context": ("pythonCode", ROOT / "nodes/pre_agent/4B_build_portfolio_context.code.py"),
     "4C — Enrich Portfolio with Market Prices": ("pythonCode", ROOT / "nodes/pre_agent/4C_enrich_portfolio_with_market_prices.code.py"),

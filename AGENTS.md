@@ -48,6 +48,12 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## Fondamental AG3 — LIVE 2026-10-03
+- Calcul `ag3_v2_units_nulls_20261003` : absences préservées, ratios Yahoo convertis sans seuil de 150 %, objectifs analystes sans cibles de repli inventées. Les 527 derniers relevés ont été réparés avec leurs dates conservées.
+- Dashboard détaillé et AG1 partagent `AG3_EVIDENCE_V1` ; nœud `20L — Fundamental Evidence` avant Merge7. Source commune : `services/dashboard/fundamental_context.py`, génération : `outils/scripts/build_ag3_fundamental_update.py`.
+- Probabilités artificielles retirées. Modèle prédictif non validé : historique comptable daté et prix ajustés encore nécessaires. Aucun poids, gate, cron ni garde broker modifié.
+- Preuves, versions et rollback : `docs/operations/20261003_ag3_fundamental_evidence_deployment.md`. Prochains crons AG3/AG1 à observer.
+
 ## Modèles AG1 — LIVE 2026-09-25
 - Claude Opus 5.5 utilise Messages API via HTTP (thinking adaptive + JSON structuré), car le nœud Anthropic de n8n 2.3.5 est incompatible. GPT-6 Sol utilise le nœud OpenAI ; replay validé avec Responses API/medium explicites. Une sauvegarde ultérieure retire ces deux options : version `447203d7-c110-473e-a5cc-1500107d20e5` reflétée localement, réglages OpenAI à revalider. Clés historiques de stockage conservées.
 - Replay isolé validé, publication vérifiée ; prochain cron à observer. Preuves et rollback : `docs/operations/20260925_ag1_opus55_gpt6sol_migration.md`.

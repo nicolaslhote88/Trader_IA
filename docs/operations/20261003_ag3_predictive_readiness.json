@@ -1,0 +1,39 @@
+{
+  "status": "NOT_READY_FOR_VALIDATED_PROBABILITIES",
+  "mode": "READ_ONLY_NO_MODEL_NO_ORDER",
+  "target": {
+    "event": "90-day total-return outperformance versus point-in-time sector benchmark",
+    "horizon_days": 90,
+    "currency_policy": "same currency for equity and benchmark"
+  },
+  "available": {
+    "first_observation": "2026-02-16 20:59:43.326000",
+    "last_observation": "2026-10-03 02:12:29.984000",
+    "calendar_days": 228,
+    "snapshots": 21709,
+    "symbols": 527,
+    "metric_rows": 693453,
+    "metric_rows_with_period": 0,
+    "nonoverlapping_90d_windows_upper_bound": 2,
+    "nonoverlapping_365d_windows_upper_bound": 0
+  },
+  "blocking_requirements": [
+    "Point-in-time accounting periods/publication dates and revision provenance",
+    "Split/dividend-adjusted prices and matching sector benchmark history",
+    "Several disjoint market periods for train/calibration/test, including delisted names"
+  ],
+  "evaluation_contract": {
+    "baseline": "training-period event frequency and regularized logistic regression",
+    "challenger": "tabular gradient boosting",
+    "split": "all symbols grouped by date; purge label windows crossing boundaries; separate calibration period",
+    "metrics": [
+      "Brier score",
+      "log loss",
+      "reliability curves with sample counts",
+      "sector and period robustness"
+    ],
+    "promotion": "only after out-of-time improvement and shadow monitoring; no effect on AG1 gates before promotion"
+  },
+  "training_performed": false,
+  "probabilities_published": false
+}
