@@ -33,7 +33,7 @@ Références : [SEC](https://www.sec.gov/search-filings/edgar-application-progra
 
 ## Stockage et exploitation
 
-- Image : `trader-ag3-predictive:20261004`, réseau Docker `web`, API interne 8084.
+- Image : `trader-ag3-predictive:20261004-history`, réseau Docker `web`, API interne 8084.
 - Code VPS : `/opt/trader-ia/services/ag3-predictive`.
 - Données : `/local-files/ag3-predictive` ; SQLite WAL dédié, archives gzip adressées
   par SHA256, journal des accès et des statuts. Aucun write dans une DuckDB live.
@@ -134,3 +134,41 @@ python -m unittest discover -s services/yfinance-api/tests -v
 Installer les dépendances du service et, pour les tests Yahoo, `httpx` et `yfinance`.
 Les tests portent sur les dates, révisions, périodes, absences, calibration/splits,
 rechargement des ajustements et séparation du contrat Yahoo existant.
+
+## Fiche historique candidate pour AG1
+
+`GET /evidence/{symbol}?as_of=2026-10-02T15:10:07Z` expose
+`AG3_HISTORICAL_EVIDENCE_V1`. Sans `as_of`, la fiche utilise l'heure actuelle.
+Une date sans fuseau ou future est rejetée. Trois exercices annuels comparables
+au maximum, ratios de même devise/période, publication qualifiée obligatoire,
+révisions futures et comptes ESEF non datés exclus. Les montants sont exprimés
+en millions de la devise comptable, les deltas de ratios en points de pourcentage.
+Le FCF est un proxy cash-flow opérationnel moins capex, seulement si les deux
+faits sont disponibles. Les passifs ne sont jamais renommés « dette financière ».
+
+La réponse détaillée garde la référence de dépôt, le concept et le SHA256 brut
+pour chaque métrique. La version compacte pour les LLM conserve les dépôts et
+la disponibilité la plus tardive ; les preuves complètes restent dans `cards.json`.
+Les comparatifs utilisent les révisions connues à la date de décision, ce qui
+peut différer des montants publiés pour la première fois plusieurs années avant.
+
+Le dashboard affiche « Fiche historique destinée à AG1 — simulation uniquement ».
+Aucun nœud du workflow AG1 live n'appelle cette route. La transformation pure
+`enrich_context` prépare seulement une copie du contexte pour le replay.
+Les scores, gates et probabilités restent inchangés.
+
+Outils du dépôt : `prepare_ag1_history_replay.py`, `build_ag1_history_shadow.py`,
+`compare_ag1_history_replays.cjs` dans `outils/scripts/`. Le préparateur exige un
+contexte capturé avec `run.timestampUtc`, vérifie que seules les données historiques
+ont changé et produit deux entrées ainsi qu'un manifeste. Le builder extrait
+uniquement les trois branches LLM de l'export **publié** ; pas de broker, writer
+ou déclencheur planifié. Les résultats doivent provenir d'une instance n8n isolée,
+sans montage DuckDB métier, puis le comparateur rejoue les règles publiées de
+consensus et safety hors réseau avec l'horloge figée.
+
+Une différence de proposition ne démontre pas un meilleur rendement. Le protocole
+initial A1/B1/B2/A2 mesure aussi la variabilité sans modification des entrées.
+Les historiques LLM peuvent contenir des connaissances acquises après la date
+rejouée : cette expérience ne constitue pas un backtest financier point-in-time.
+Voir `docs/operations/20261004_ag1_historical_evidence_shadow.md` pour les mesures,
+limites et conditions nécessaires avant tout raccordement aux décisions réelles.

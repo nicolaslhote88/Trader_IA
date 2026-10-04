@@ -19,6 +19,7 @@ def load_research(symbol):
 
 
 def render_predictive_detail(symbol):
+    render_historical_candidate(symbol)
     with st.expander('Comptes historiques et modèle prédictif en évaluation',expanded=False):
         detail,status=load_research(symbol)
         if detail is None:
@@ -56,3 +57,44 @@ def render_predictive_detail(symbol):
             st.info('Aucune probabilité disponible pour ce titre : couverture, identité, marché ou historique insuffisant.')
         if status.get('runs'):
             st.caption('Dernière collecte : '+status['runs'][0]['status']+' — '+status['runs'][0]['started_at'])
+
+
+@st.cache_data(ttl=60,show_spinner=False)
+def load_historical_candidate(symbol):
+    base=os.getenv('AG3_RESEARCH_URL','http://ag3-predictive:8084').rstrip('/')
+    try:
+        response=requests.get(base+'/evidence/'+symbol,timeout=4)
+        response.raise_for_status()
+        return response.json()['card']
+    except (requests.RequestException,ValueError,KeyError):
+        return None
+
+
+def render_historical_candidate(symbol):
+    with st.expander('Fiche historique destinée à AG1 — simulation uniquement',expanded=False):
+        card=load_historical_candidate(symbol)
+        if card is None:
+            st.info('Fiche historique indisponible.')
+            return
+        st.caption('Cette fiche est évaluée séparément. AG1 ne la reçoit pas dans ses décisions réelles.')
+        st.write('État :',card['status'])
+        st.caption('Informations disponibles au '+card['as_of']+' ; périodes annuelles et publications distinctes.')
+        if not card['periods']:
+            st.info('Aucun compte avec date de publication qualifiée : aucune tendance inventée.')
+            return
+        rows=[]
+        for p in card['periods']:
+            r=p['ratios_pct'];a=p['amounts_million']
+            rows.append({'Période':p['period_end'],'Disponible au':p['available_at'],'Devise comptable':p['reporting_currency'],
+                'Marge nette (%)':r['net_margin'],'Marge opérationnelle (%)':r['operating_margin'],
+                'Cash-flow opérationnel (millions)':a.get('operating_cashflow'),'FCF approché (millions)':p['fcf_proxy_million'],
+                'Capitaux propres / actifs (%)':r['equity_assets'],'Passifs / actifs (%)':r['liabilities_assets'],
+                'Trésorerie / actifs (%)':r['cash_assets']})
+        st.dataframe(pd.DataFrame(rows),hide_index=True)
+        if card['changes']:
+            delta=card['changes']
+            st.caption('Comparaison '+delta['from_period']+' → '+delta['to_period']+' : variations des ratios en points de pourcentage.')
+            st.json(delta,expanded=False)
+        st.caption('Les passifs ne sont pas la dette financière. FCF approché = cash-flow opérationnel − investissements publiés. Aucune prévision de cours.')
+        if card['flags']:
+            st.warning('Qualité : '+', '.join(card['flags']))

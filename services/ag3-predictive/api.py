@@ -1,6 +1,7 @@
 import json
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from store import ROOT, initialize, status, db, now
+from historical_evidence import load_cards, timestamp, LEGEND
 
 app=FastAPI(title='AG3 predictive research',version='1.0.0')
 
@@ -20,6 +21,18 @@ def health():
 @app.get('/status')
 def get_status():
     return status()
+
+
+@app.get('/evidence/{symbol}')
+def evidence(symbol: str, as_of: str = ''):
+    cutoff=as_of or now()
+    try:
+        if timestamp(cutoff)>timestamp(now()):
+            raise ValueError('FUTURE_AS_OF')
+    except (ValueError,TypeError):
+        raise HTTPException(status_code=422,detail='Explicit past/present timestamp with timezone required')
+    symbol=symbol.upper()
+    return {'card':load_cards([symbol],cutoff)[symbol],'legend':LEGEND,'live_decision_enabled':False}
 
 
 @app.get('/research/{symbol}')

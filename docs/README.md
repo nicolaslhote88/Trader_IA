@@ -23,6 +23,8 @@ documents ci-dessous décrivent l'état courant.
 
 ## Derniers changements live
 
+- Fiche historique datée candidate pour AG1 : [comparaison isolée du 4 octobre](operations/20261004_ag1_historical_evidence_shadow.md). Visible au dashboard ; aucun avantage stable démontré, aucune consommation par les décisions live.
+
 - Collectes historiques AG3 et modèle en shadow, réutilisant Yahoo : [déploiement du 4 octobre](operations/20261004_ag3_predictive_pipeline_deployment.md). Aucune influence sur les décisions ; limites de couverture et résultats du test explicites.
 
 - Fondamental : unités et absences corrigées, 527 derniers relevés recalculés, dashboard détaillé et fiche factuelle AG1 : [déploiement du 3 octobre](operations/20261003_ag3_fundamental_evidence_deployment.md). À cette date, prédictif non entraîné ; état remplacé par la note du 4 octobre.

@@ -1,0 +1,1097 @@
+{
+  "contract": "AG1_HISTORY_AB_RESULTS_V1",
+  "generated_at": "2026-10-04T06:39:39.222Z",
+  "manifest": {
+    "contract": "AG1_HISTORY_AB_REPLAY_V1",
+    "live_decision_enabled": false,
+    "run_id": "RUN_20261002_171007_22711",
+    "as_of": "2026-10-02T15:10:07.448Z",
+    "baseline_sha256": "d03ea60c2102e1b2bd02626cdd126c359f11e2a705ad76a026a476a00794fa54",
+    "enriched_sha256": "555cfce41f68e54902e8786ef7216e1b302583a18f902083dda60f4514110e43",
+    "non_history_inputs_unchanged": true,
+    "symbols": 18,
+    "dated_symbols": [
+      "AMZN",
+      "AVGO",
+      "AZN",
+      "BRK-B",
+      "GOOGL",
+      "JPM",
+      "KO",
+      "LLY",
+      "TXN",
+      "UNH",
+      "UNP"
+    ],
+    "unavailable_symbols": [
+      "0700.HK",
+      "ELIS.PA",
+      "MAU.PA",
+      "NRO.PA",
+      "PDD",
+      "PRX.AS",
+      "TKO.PA"
+    ],
+    "added_characters": 36590,
+    "historical_baseline_note": "Frozen captured AG1 run; does not retroactively include features deployed after that run.",
+    "performance_validation": "NOT_ESTABLISHED; decision sensitivity replay, not a return backtest"
+  },
+  "design": "One frozen historical context; A1 B1 B2 A2; three published AG1 models; unchanged prompts; frozen consensus/safety clock.",
+  "limitations": [
+    "One context and two repetitions per arm cannot establish statistical significance.",
+    "No realized or simulated return benefit established; subsequent prices unavailable for intended horizons.",
+    "Historical LLM replay may contain training knowledge beyond the context date; not a point-in-time financial backtest.",
+    "HOLD, WATCH and omitted proposals count as passive for trade_intent_changes; verbosity is not a trading change.",
+    "Captured October 2 baseline predates the October 3 fundamental evidence card; no later snapshot injected."
+  ],
+  "live_decision_enabled": false,
+  "orders_sent": 0,
+  "comparisons": {
+    "baseline_variability": {
+      "models": [
+        {
+          "model": "gpt-6-sol",
+          "symbols": 8,
+          "action_changes": 5,
+          "action_or_weight_changes": 5,
+          "trade_intent_changes": 0,
+          "trade_intent_or_weight_changes": 0,
+          "changes": [
+            {
+              "symbol": "ELIS.PA",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "TXN",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "UNP",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            }
+          ]
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "symbols": 8,
+          "action_changes": 8,
+          "action_or_weight_changes": 8,
+          "trade_intent_changes": 2,
+          "trade_intent_or_weight_changes": 2,
+          "changes": [
+            {
+              "symbol": "ELIS.PA",
+              "before": "HOLD",
+              "after": "NO_PROPOSAL",
+              "weight_before": 10.01,
+              "weight_after": null
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "HOLD",
+              "after": "NO_PROPOSAL",
+              "weight_before": 6.14,
+              "weight_after": null
+            },
+            {
+              "symbol": "KO",
+              "before": "HOLD",
+              "after": "NO_PROPOSAL",
+              "weight_before": 9.93,
+              "weight_after": null
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "INCREASE",
+              "after": "NO_PROPOSAL",
+              "weight_before": 20.05,
+              "weight_after": null
+            },
+            {
+              "symbol": "NRO.PA",
+              "before": "NO_PROPOSAL",
+              "after": "OPEN",
+              "weight_before": null,
+              "weight_after": 10.2
+            },
+            {
+              "symbol": "PRX.AS",
+              "before": "HOLD",
+              "after": "NO_PROPOSAL",
+              "weight_before": 10.18,
+              "weight_after": null
+            },
+            {
+              "symbol": "TXN",
+              "before": "HOLD",
+              "after": "NO_PROPOSAL",
+              "weight_before": 13.01,
+              "weight_after": null
+            },
+            {
+              "symbol": "UNP",
+              "before": "HOLD",
+              "after": "NO_PROPOSAL",
+              "weight_before": 12.24,
+              "weight_after": null
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-5-5",
+          "symbols": 9,
+          "action_changes": 0,
+          "action_or_weight_changes": 0,
+          "trade_intent_changes": 0,
+          "trade_intent_or_weight_changes": 0,
+          "changes": []
+        }
+      ],
+      "consensus": {
+        "symbols": 2,
+        "action_changes": 1,
+        "action_or_weight_changes": 1,
+        "trade_intent_changes": 1,
+        "trade_intent_or_weight_changes": 1,
+        "changes": [
+          {
+            "symbol": "NRO.PA",
+            "before": "NO_PROPOSAL",
+            "after": "OPEN",
+            "weight_before": null,
+            "weight_after": 10.1
+          }
+        ]
+      },
+      "hypothetical_order_counts": [
+        1,
+        2
+      ]
+    },
+    "enriched_variability": {
+      "models": [
+        {
+          "model": "gpt-6-sol",
+          "symbols": 8,
+          "action_changes": 0,
+          "action_or_weight_changes": 1,
+          "trade_intent_changes": 0,
+          "trade_intent_or_weight_changes": 1,
+          "changes": [
+            {
+              "symbol": "AZN",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 11.2,
+              "weight_after": 12.57
+            }
+          ]
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "symbols": 8,
+          "action_changes": 1,
+          "action_or_weight_changes": 7,
+          "trade_intent_changes": 1,
+          "trade_intent_or_weight_changes": 1,
+          "changes": [
+            {
+              "symbol": "ELIS.PA",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 10.01
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 6.14
+            },
+            {
+              "symbol": "KO",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 9.93
+            },
+            {
+              "symbol": "NRO.PA",
+              "before": "OPEN",
+              "after": "NO_PROPOSAL",
+              "weight_before": 10.0505,
+              "weight_after": null
+            },
+            {
+              "symbol": "PRX.AS",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 10.18
+            },
+            {
+              "symbol": "TXN",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 13.01
+            },
+            {
+              "symbol": "UNP",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 12.24
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-5-5",
+          "symbols": 9,
+          "action_changes": 1,
+          "action_or_weight_changes": 8,
+          "trade_intent_changes": 1,
+          "trade_intent_or_weight_changes": 3,
+          "changes": [
+            {
+              "symbol": "AZN",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 11.2,
+              "weight_after": 11.5
+            },
+            {
+              "symbol": "ELIS.PA",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10,
+              "weight_after": 10.01
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 6.1,
+              "weight_after": 6.14
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10,
+              "weight_after": 9.96
+            },
+            {
+              "symbol": "NRO.PA",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 10.1,
+              "weight_after": 10.5
+            },
+            {
+              "symbol": "PRX.AS",
+              "before": "CLOSE",
+              "after": "HOLD",
+              "weight_before": 0,
+              "weight_after": 10.18
+            },
+            {
+              "symbol": "TXN",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 13,
+              "weight_after": 13.01
+            },
+            {
+              "symbol": "UNP",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 12.2,
+              "weight_after": 12.24
+            }
+          ]
+        }
+      ],
+      "consensus": {
+        "symbols": 2,
+        "action_changes": 1,
+        "action_or_weight_changes": 2,
+        "trade_intent_changes": 1,
+        "trade_intent_or_weight_changes": 2,
+        "changes": [
+          {
+            "symbol": "AZN",
+            "before": "OPEN",
+            "after": "OPEN",
+            "weight_before": 11.2,
+            "weight_after": 11.5
+          },
+          {
+            "symbol": "NRO.PA",
+            "before": "OPEN",
+            "after": "NO_PROPOSAL",
+            "weight_before": 10.0505,
+            "weight_after": null
+          }
+        ]
+      },
+      "hypothetical_order_counts": [
+        2,
+        1
+      ]
+    },
+    "paired_1": {
+      "models": [
+        {
+          "model": "gpt-6-sol",
+          "symbols": 8,
+          "action_changes": 5,
+          "action_or_weight_changes": 6,
+          "trade_intent_changes": 0,
+          "trade_intent_or_weight_changes": 1,
+          "changes": [
+            {
+              "symbol": "AZN",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 11.1728,
+              "weight_after": 11.2
+            },
+            {
+              "symbol": "ELIS.PA",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "TXN",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            },
+            {
+              "symbol": "UNP",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": null
+            }
+          ]
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "symbols": 8,
+          "action_changes": 1,
+          "action_or_weight_changes": 8,
+          "trade_intent_changes": 1,
+          "trade_intent_or_weight_changes": 2,
+          "changes": [
+            {
+              "symbol": "ELIS.PA",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10.01,
+              "weight_after": null
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 6.14,
+              "weight_after": null
+            },
+            {
+              "symbol": "KO",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 9.93,
+              "weight_after": null
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "INCREASE",
+              "after": "INCREASE",
+              "weight_before": 20.05,
+              "weight_after": 20.0346
+            },
+            {
+              "symbol": "NRO.PA",
+              "before": "NO_PROPOSAL",
+              "after": "OPEN",
+              "weight_before": null,
+              "weight_after": 10.0505
+            },
+            {
+              "symbol": "PRX.AS",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10.18,
+              "weight_after": null
+            },
+            {
+              "symbol": "TXN",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 13.01,
+              "weight_after": null
+            },
+            {
+              "symbol": "UNP",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 12.24,
+              "weight_after": null
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-5-5",
+          "symbols": 9,
+          "action_changes": 1,
+          "action_or_weight_changes": 1,
+          "trade_intent_changes": 1,
+          "trade_intent_or_weight_changes": 1,
+          "changes": [
+            {
+              "symbol": "PRX.AS",
+              "before": "HOLD",
+              "after": "CLOSE",
+              "weight_before": 10.2,
+              "weight_after": 0
+            }
+          ]
+        }
+      ],
+      "consensus": {
+        "symbols": 2,
+        "action_changes": 1,
+        "action_or_weight_changes": 2,
+        "trade_intent_changes": 1,
+        "trade_intent_or_weight_changes": 2,
+        "changes": [
+          {
+            "symbol": "AZN",
+            "before": "OPEN",
+            "after": "OPEN",
+            "weight_before": 11.1728,
+            "weight_after": 11.2
+          },
+          {
+            "symbol": "NRO.PA",
+            "before": "NO_PROPOSAL",
+            "after": "OPEN",
+            "weight_before": null,
+            "weight_after": 10.0505
+          }
+        ]
+      },
+      "hypothetical_order_counts": [
+        1,
+        2
+      ]
+    },
+    "paired_2": {
+      "models": [
+        {
+          "model": "gpt-6-sol",
+          "symbols": 8,
+          "action_changes": 0,
+          "action_or_weight_changes": 1,
+          "trade_intent_changes": 0,
+          "trade_intent_or_weight_changes": 1,
+          "changes": [
+            {
+              "symbol": "AZN",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 11.1728,
+              "weight_after": 12.57
+            }
+          ]
+        },
+        {
+          "model": "deepseek-v4-pro",
+          "symbols": 8,
+          "action_changes": 8,
+          "action_or_weight_changes": 8,
+          "trade_intent_changes": 2,
+          "trade_intent_or_weight_changes": 2,
+          "changes": [
+            {
+              "symbol": "ELIS.PA",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 10.01
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 6.14
+            },
+            {
+              "symbol": "KO",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 9.93
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "NO_PROPOSAL",
+              "after": "INCREASE",
+              "weight_before": null,
+              "weight_after": 20.0346
+            },
+            {
+              "symbol": "NRO.PA",
+              "before": "OPEN",
+              "after": "NO_PROPOSAL",
+              "weight_before": 10.2,
+              "weight_after": null
+            },
+            {
+              "symbol": "PRX.AS",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 10.18
+            },
+            {
+              "symbol": "TXN",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 13.01
+            },
+            {
+              "symbol": "UNP",
+              "before": "NO_PROPOSAL",
+              "after": "HOLD",
+              "weight_before": null,
+              "weight_after": 12.24
+            }
+          ]
+        },
+        {
+          "model": "claude-opus-5-5",
+          "symbols": 9,
+          "action_changes": 0,
+          "action_or_weight_changes": 8,
+          "trade_intent_changes": 0,
+          "trade_intent_or_weight_changes": 2,
+          "changes": [
+            {
+              "symbol": "AZN",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 11.2,
+              "weight_after": 11.5
+            },
+            {
+              "symbol": "ELIS.PA",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10,
+              "weight_after": 10.01
+            },
+            {
+              "symbol": "GOOGL",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 6.1,
+              "weight_after": 6.14
+            },
+            {
+              "symbol": "MAU.PA",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10,
+              "weight_after": 9.96
+            },
+            {
+              "symbol": "NRO.PA",
+              "before": "OPEN",
+              "after": "OPEN",
+              "weight_before": 10.1,
+              "weight_after": 10.5
+            },
+            {
+              "symbol": "PRX.AS",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 10.2,
+              "weight_after": 10.18
+            },
+            {
+              "symbol": "TXN",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 13,
+              "weight_after": 13.01
+            },
+            {
+              "symbol": "UNP",
+              "before": "HOLD",
+              "after": "HOLD",
+              "weight_before": 12.2,
+              "weight_after": 12.24
+            }
+          ]
+        }
+      ],
+      "consensus": {
+        "symbols": 2,
+        "action_changes": 1,
+        "action_or_weight_changes": 2,
+        "trade_intent_changes": 1,
+        "trade_intent_or_weight_changes": 2,
+        "changes": [
+          {
+            "symbol": "AZN",
+            "before": "OPEN",
+            "after": "OPEN",
+            "weight_before": 11.1728,
+            "weight_after": 11.5
+          },
+          {
+            "symbol": "NRO.PA",
+            "before": "OPEN",
+            "after": "NO_PROPOSAL",
+            "weight_before": 10.1,
+            "weight_after": null
+          }
+        ]
+      },
+      "hypothetical_order_counts": [
+        2,
+        1
+      ]
+    }
+  },
+  "decision": "REMAIN_SHADOW_NO_STABLE_DECISION_BENEFIT_DEMONSTRATED",
+  "runs": {
+    "baseline1": {
+      "summary": {
+        "label": "baseline1",
+        "exit_code": 0,
+        "elapsed_seconds": 176.1,
+        "extractors": {
+          "Information Extractor": {
+            "status": "OK_OBJECT",
+            "model": "gpt-6-sol",
+            "actions": 3
+          },
+          "Information Extractor1": {
+            "status": "OK_OBJECT",
+            "model": "deepseek-v4-pro",
+            "actions": 7
+          },
+          "Information Extractor2": {
+            "status": "OK_OBJECT",
+            "model": "claude-opus-5-5",
+            "actions": 9
+          }
+        },
+        "execution_error": null
+      },
+      "usage": {
+        "gpt_estimated": {
+          "completionTokens": 0,
+          "promptTokens": 35429,
+          "totalTokens": 35429
+        },
+        "deepseek_reported": {
+          "completionTokens": 9369,
+          "promptTokens": 39373,
+          "totalTokens": 48742
+        },
+        "claude_reported": {
+          "input_tokens": 62613,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 3634,
+          "output_tokens_details": {
+            "thinking_tokens": 1507
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        }
+      },
+      "hypothetical_orders": [
+        {
+          "symbol": "AZN",
+          "side": "BUY",
+          "quantity": 8,
+          "limitPrice": 156.93
+        }
+      ],
+      "consensus": [
+        {
+          "symbol": "AZN",
+          "action": "OPEN",
+          "confidence": 68,
+          "targetWeightPct": 11.1728,
+          "targetQty": 8
+        }
+      ],
+      "safety_warnings": []
+    },
+    "enriched1": {
+      "summary": {
+        "label": "enriched1",
+        "exit_code": 0,
+        "elapsed_seconds": 169.5,
+        "extractors": {
+          "Information Extractor": {
+            "status": "OK_OBJECT",
+            "model": "gpt-6-sol",
+            "actions": 8
+          },
+          "Information Extractor1": {
+            "status": "OK_OBJECT",
+            "model": "deepseek-v4-pro",
+            "actions": 8
+          },
+          "Information Extractor2": {
+            "status": "OK_OBJECT",
+            "model": "claude-opus-5-5",
+            "actions": 9
+          }
+        },
+        "execution_error": null
+      },
+      "usage": {
+        "gpt_estimated": {
+          "completionTokens": 0,
+          "promptTokens": 46571,
+          "totalTokens": 46571
+        },
+        "deepseek_reported": {
+          "completionTokens": 9250,
+          "promptTokens": 51556,
+          "totalTokens": 60806
+        },
+        "claude_reported": {
+          "input_tokens": 78831,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 4066,
+          "output_tokens_details": {
+            "thinking_tokens": 2118
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        }
+      },
+      "hypothetical_orders": [
+        {
+          "symbol": "AZN",
+          "side": "BUY",
+          "quantity": 8,
+          "limitPrice": 156.93
+        },
+        {
+          "symbol": "NRO.PA",
+          "side": "BUY",
+          "quantity": 28,
+          "limitPrice": 35.8
+        }
+      ],
+      "consensus": [
+        {
+          "symbol": "AZN",
+          "action": "OPEN",
+          "confidence": 70,
+          "targetWeightPct": 11.2,
+          "targetQty": 8
+        },
+        {
+          "symbol": "NRO.PA",
+          "action": "OPEN",
+          "confidence": 64,
+          "targetWeightPct": 10.0505,
+          "targetQty": 28
+        }
+      ],
+      "safety_warnings": []
+    },
+    "enriched2": {
+      "summary": {
+        "label": "enriched2",
+        "exit_code": 0,
+        "elapsed_seconds": 161.5,
+        "extractors": {
+          "Information Extractor": {
+            "status": "OK_OBJECT",
+            "model": "gpt-6-sol",
+            "actions": 8
+          },
+          "Information Extractor1": {
+            "status": "OK_OBJECT",
+            "model": "deepseek-v4-pro",
+            "actions": 7
+          },
+          "Information Extractor2": {
+            "status": "OK_OBJECT",
+            "model": "claude-opus-5-5",
+            "actions": 9
+          }
+        },
+        "execution_error": null
+      },
+      "usage": {
+        "gpt_estimated": {
+          "completionTokens": 0,
+          "promptTokens": 46571,
+          "totalTokens": 46571
+        },
+        "deepseek_reported": {
+          "completionTokens": 9179,
+          "promptTokens": 51556,
+          "totalTokens": 60735
+        },
+        "claude_reported": {
+          "input_tokens": 78831,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 3667,
+          "output_tokens_details": {
+            "thinking_tokens": 1757
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        }
+      },
+      "hypothetical_orders": [
+        {
+          "symbol": "AZN",
+          "side": "BUY",
+          "quantity": 8,
+          "limitPrice": 156.93
+        }
+      ],
+      "consensus": [
+        {
+          "symbol": "AZN",
+          "action": "OPEN",
+          "confidence": 70,
+          "targetWeightPct": 11.5,
+          "targetQty": 8
+        }
+      ],
+      "safety_warnings": []
+    },
+    "baseline2": {
+      "summary": {
+        "label": "baseline2",
+        "exit_code": 0,
+        "elapsed_seconds": 182.1,
+        "extractors": {
+          "Information Extractor": {
+            "status": "OK_OBJECT",
+            "model": "gpt-6-sol",
+            "actions": 8
+          },
+          "Information Extractor1": {
+            "status": "OK_OBJECT",
+            "model": "deepseek-v4-pro",
+            "actions": 1
+          },
+          "Information Extractor2": {
+            "status": "OK_OBJECT",
+            "model": "claude-opus-5-5",
+            "actions": 9
+          }
+        },
+        "execution_error": null
+      },
+      "usage": {
+        "gpt_estimated": {
+          "completionTokens": 0,
+          "promptTokens": 35429,
+          "totalTokens": 35429
+        },
+        "deepseek_reported": {
+          "completionTokens": 10075,
+          "promptTokens": 39373,
+          "totalTokens": 49448
+        },
+        "claude_reported": {
+          "input_tokens": 62613,
+          "cache_creation_input_tokens": 0,
+          "cache_read_input_tokens": 0,
+          "cache_creation": {
+            "ephemeral_5m_input_tokens": 0,
+            "ephemeral_1h_input_tokens": 0
+          },
+          "output_tokens": 3830,
+          "output_tokens_details": {
+            "thinking_tokens": 1719
+          },
+          "service_tier": "standard",
+          "inference_geo": "global"
+        }
+      },
+      "hypothetical_orders": [
+        {
+          "symbol": "AZN",
+          "side": "BUY",
+          "quantity": 8,
+          "limitPrice": 156.93
+        },
+        {
+          "symbol": "NRO.PA",
+          "side": "BUY",
+          "quantity": 28,
+          "limitPrice": 35.8
+        }
+      ],
+      "consensus": [
+        {
+          "symbol": "AZN",
+          "action": "OPEN",
+          "confidence": 68,
+          "targetWeightPct": 11.1728,
+          "targetQty": 8
+        },
+        {
+          "symbol": "NRO.PA",
+          "action": "OPEN",
+          "confidence": 64,
+          "targetWeightPct": 10.1,
+          "targetQty": 28
+        }
+      ],
+      "safety_warnings": []
+    }
+  },
+  "validation": {
+    "new_tests_passed": 8,
+    "existing_predictive_tests_passed": 10,
+    "api_shadow_passed": true,
+    "live_dashboard_apptest": {
+      "metrics": 13,
+      "charts": 2,
+      "tables": 9,
+      "exceptions": 0
+    },
+    "production_proof": {
+      "checked_at": "2026-10-04T06:41:41.779202+00:00",
+      "ag1_active_version": [
+        1,
+        "87de669d-ae38-4c50-9247-492bbf11f0a3",
+        "87de669d-ae38-4c50-9247-492bbf11f0a3"
+      ],
+      "last_three_runs_unchanged": true,
+      "broker_authenticated": true,
+      "broker_account_aligned": true,
+      "pending_approvals": 0,
+      "yahoo_health": true,
+      "research_health": true,
+      "dashboard_health": "ok",
+      "source_sha256": {
+        "services/ag3-predictive/historical_evidence.py": "8c536bd229aea40d982624624689d77b7891bcaf9ee5e83a2e38bca6063c3078",
+        "services/ag3-predictive/api.py": "f9e12e80d26498cf059e20114dca5eb21e2230b6bd943ee3499f484e48ac0f9a",
+        "services/ag3-predictive/compose.yml": "5b09cb6b39ba8e3d13c88ce32183fe1366f25942fa8c43df856a269015bce287",
+        "services/dashboard/predictive_detail.py": "193d0eb72d6153e5dd4b732efee7d6838ddeef0d7f393a4e29863e6a549be63c"
+      },
+      "isolated_credentials_removed": true
+    }
+  },
+  "accounting_examples": {
+    "AZN": {
+      "as_of": "2026-10-02T15:10:07.448000+00:00",
+      "changes": {
+        "from_period": "2024-12-31",
+        "to_period": "2025-12-31",
+        "ratios_pp": {
+          "net_margin": 4.4,
+          "operating_margin": 4.898,
+          "ocf_margin": 2.878,
+          "equity_assets": 3.459,
+          "liabilities_assets": -3.422,
+          "cash_assets": -0.269
+        },
+        "fcf_proxy_delta_million": null
+      },
+      "latest_publication": "2026-02-24T21:27:20+00:00"
+    },
+    "TXN": {
+      "as_of": "2026-10-02T15:10:07.448000+00:00",
+      "changes": {
+        "from_period": "2024-12-31",
+        "to_period": "2025-12-31",
+        "ratios_pp": {
+          "net_margin": -2.399,
+          "operating_margin": -0.877,
+          "ocf_margin": 0.06,
+          "equity_assets": -0.55,
+          "liabilities_assets": 0.55,
+          "cash_assets": 0.313
+        },
+        "fcf_proxy_delta_million": 1105.0
+      },
+      "latest_publication": "2026-07-24T13:43:54+00:00"
+    }
+  },
+  "artifacts_sha256": {
+    "published.json": "410c6fa5cfbcb9e9f37bcffc97a98193f9bee47b79e901a251aeb352e1854131",
+    "paired/cards.json": "f6d2b118c92230da3b0c43bbd021dc1251525858cf1ce1518bce163ab2db4f8e",
+    "comparison.json": "834df7e52a21bc4a0a1f60ab3a848c48c42062a5cb8b7b82dd35f06dfe5c2e51"
+  }
+}

@@ -48,6 +48,11 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## Fiche historique AG1 — SHADOW 2026-10-04
+- `AG3_HISTORICAL_EVIDENCE_V1` : marges, cash-flow et ratios de bilan datés, API recherche `/evidence/{symbol}` ; affichage dashboard explicitement en simulation. Aucun raccordement au workflow AG1 réel.
+- Comparaison A1/B1/B2/A2 sur contexte du 2 octobre : 12 sorties LLM valides, 11/18 titres couverts ; AZN retenue 4/4, NRO.PA 1/2 dans chaque variante. Aucun avantage décisionnel stable ni rendement supérieur démontré ; pas de promotion.
+- Sources, limites, protocole et rollback : `docs/operations/20261004_ag1_historical_evidence_shadow.md`. Version AG1 publiée inchangée. Une campagne prospective reste nécessaire ; aucun cron LLM ajouté.
+
 ## Recherche prédictive AG3 — LIVE 2026-10-04
 - Service séparé `ag3-predictive`, stockage `/local-files/ag3-predictive` (SQLite + archives). Yahoo existant 2.2.0 enrichi par `/research/history` ; SEC/ESEF/BCE/ALFRED collectés. Cron 04:45 Paris, verrou exclusif, aucun write DuckDB métier.
 - Premier modèle US / rendement total à 90 jours contre SPY : expérimental, non validé, aucun effet sur AG1 ou les ordres. Les probabilités ne battent pas la référence 50 % dans le premier test. ESEF sans dates de publication prouvées exclu du modèle ; Japon/Corée encore sans clés et sans validation du backfill.
