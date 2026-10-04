@@ -695,6 +695,45 @@
         "mode": "runOnceForAllItems",
         "pythonCode": "\"\"\"Shared, read-only AG3 evidence contract; embedded verbatim in the n8n digest.\n\nScores are screening heuristics. Unknown source periods/publication dates remain\nunknown. A collection timestamp must never masquerade as an accounting date.\n\"\"\"\nimport json\nimport math\nimport duckdb\nfrom datetime import datetime, timezone, timedelta\n\nFUNDAMENTAL_SCHEMA = \"AG3_EVIDENCE_V1\"\nFUNDAMENTAL_METHOD = \"ag3_v2_units_nulls_20261003\"\nFUNDAMENTAL_METRICS = {\n    \"revenue_growth_pct\": (\"growth_json\", \"revenueGrowth\", 100, \"%\"),\n    \"earnings_growth_pct\": (\"growth_json\", \"earningsGrowth\", 100, \"%\"),\n    \"operating_margin_pct\": (\"profitability_json\", \"operatingMargins\", 100, \"%\"),\n    \"net_margin_pct\": (\"profitability_json\", \"profitMargins\", 100, \"%\"),\n    \"roe_pct\": (\"profitability_json\", \"returnOnEquity\", 100, \"%\"),\n    \"forward_pe\": (\"valuation_json\", \"forwardPE\", 1, \"x\"),\n    \"trailing_pe\": (\"valuation_json\", \"trailingPE\", 1, \"x\"),\n    \"debt_equity_pct\": (\"financial_health_json\", \"debtToEquity\", 1, \"%\"),\n    \"current_ratio\": (\"financial_health_json\", \"currentRatio\", 1, \"x\"),\n}\nFUNDAMENTAL_LEGEND = {\n    \"schema\": FUNDAMENTAL_SCHEMA,\n    \"use\": \"Evidence for reasoning; scores are not probabilities. Do not double-count the fundamental contribution already included in the matrix.\",\n    \"risk\": \"Fundamental balance-sheet/profitability screening, not probability of price loss.\",\n    \"targets\": \"Analyst opinions, not predictive quantiles or guaranteed bounds; horizon indicative 12 months, not tactical take-profit instructions.\",\n    \"dates\": \"observed_at is collection time. Accounting periods and publication dates are unknown unless explicitly provided.\",\n    \"units\": {k: v[3] for k, v in FUNDAMENTAL_METRICS.items()},\n    \"changes\": \"Target revisions compare collected snapshots; score deltas require identical method versions. Missing baselines remain null.\",\n    \"predictive\": \"NOT_VALIDATED; no predictive probabilities supplied.\",\n}\n\n\ndef fctx_num(value):\n    if value is None or isinstance(value, bool):\n        return None\n    try:\n        result = float(value)\n        return result if math.isfinite(result) else None\n    except (ValueError, TypeError):\n        return None\n\n\ndef fctx_dt(value):\n    if value is None:\n        return None\n    try:\n        result = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace(\"Z\", \"+00:00\"))\n        return result.replace(tzinfo=timezone.utc) if result.tzinfo is None else result.astimezone(timezone.utc)\n    except (TypeError, ValueError):\n        return None\n\n\ndef fctx_json(value):\n    if isinstance(value, dict):\n        return value\n    try:\n        result = json.loads(value or \"{}\")\n        return result if isinstance(result, dict) else {}\n    except (ValueError, TypeError):\n        return {}\n\n\ndef fctx_card(row, snapshot, consensus, history, peers, now=None):\n    now = fctx_dt(now) or datetime.now(timezone.utc)\n    observed = fctx_dt(row.get(\"fetched_at\") or row.get(\"updated_at\"))\n    age = (now - observed).total_seconds() / 3600 if observed else None\n    same_snapshot = bool(snapshot) and snapshot.get(\"run_id\") == row.get(\"run_id\")\n    if not same_snapshot:\n        snapshot = {}\n    blocks = {key: fctx_json(snapshot.get(key)) for key in\n              [\"profile_json\", \"price_json\", \"valuation_json\", \"growth_json\", \"profitability_json\", \"financial_health_json\"]}\n    metrics = {}\n    for key, (block, field, scale, unit) in FUNDAMENTAL_METRICS.items():\n        value = fctx_num(blocks[block].get(field))\n        metrics[key] = round(value * scale, 3) if value is not None else None\n    fcf = fctx_num(blocks[\"profitability_json\"].get(\"freeCashflow\"))\n    cap = fctx_num(blocks[\"price_json\"].get(\"marketCap\"))\n    metrics[\"fcf_yield_pct\"] = round(100 * fcf / cap, 3) if fcf is not None and cap and cap > 0 else None\n    scores = {name: fctx_num(row.get(name + \"_score\")) for name in [\"quality\", \"growth\", \"valuation\", \"health\", \"consensus\"]}\n    flags = []\n    if row.get(\"status\") != \"OK\":\n        flags.append(\"SOURCE_ERROR\")\n    if age is None or age > 168 or age < -1:\n        flags.append(\"STALE_OR_INVALID_DATE\")\n    if not same_snapshot:\n        flags.append(\"SNAPSHOT_UNAVAILABLE\")\n    if row.get(\"strategy_version\") != FUNDAMENTAL_METHOD:\n        flags.append(\"LEGACY_SCORE_METHOD\")\n    missing = [key for key, value in metrics.items() if value is None]\n    if missing:\n        flags.append(\"MISSING_METRICS\")\n    coverage = round(100 * (len(metrics) - len(missing)) / len(metrics), 1)\n    if coverage < 60:\n        flags.append(\"LOW_METRIC_COVERAGE\")\n    # All comparisons use observations no later than the subject's observation.\n    changes = {}\n    for days in [30, 90]:\n        cutoff = observed - timedelta(days=days) if observed else None\n        candidates = [x for x in history if cutoff and fctx_dt(x.get(\"updated_at\")) and\n                      cutoff - timedelta(days=15) <= fctx_dt(x[\"updated_at\"]) <= cutoff]\n        base = max(candidates, key=lambda x: fctx_dt(x[\"updated_at\"])) if candidates else None\n        change = None\n        if base:\n            prev = fctx_num(base.get(\"target_price\")); current = fctx_num(row.get(\"target_price\"))\n            same_method = base.get(\"strategy_version\") == row.get(\"strategy_version\")\n            old_score = fctx_num(base.get(\"score\")); score = fctx_num(row.get(\"score\"))\n            change = {\"baseline_at\": str(base[\"updated_at\"]),\n                      \"target_revision_pct\": round(100 * (current / prev - 1), 2) if prev and prev > 0 and current and current > 0 else None,\n                      \"score_delta\": round(score - old_score, 2) if same_method and score is not None and old_score is not None else None,\n                      \"same_method\": same_method}\n        changes[str(days) + \"d\"] = change\n    targets = {}\n    if consensus and consensus.get(\"run_id\") == row.get(\"run_id\"):\n        for name in [\"low\", \"mean\", \"high\"]:\n            value = fctx_num(consensus.get(\"target_\" + name + \"_price\"))\n            targets[name] = value if value and value > 0 else None\n    analysts = fctx_num(row.get(\"analyst_count\"))\n    if not analysts or analysts < 3:\n        flags.append(\"THIN_OR_MISSING_CONSENSUS\")\n    valid_peers = [x for x in peers if x.get(\"symbol\") != row.get(\"symbol\") and x.get(\"sector\") == row.get(\"sector\") and\n                   x.get(\"strategy_version\") == row.get(\"strategy_version\") and x.get(\"status\") == \"OK\" and\n                   (fctx_num(x.get(\"data_coverage_pct\")) or 0) >= 60 and fctx_dt(x.get(\"fetched_at\")) and\n                   0 <= (now - fctx_dt(x[\"fetched_at\"])).total_seconds() <= 168 * 3600 and fctx_num(x.get(\"score\")) is not None]\n    score = fctx_num(row.get(\"score\"))\n    peer_info = {\"n\": len(valid_peers), \"triage_percentile\": None}\n    if len(valid_peers) >= 8 and score is not None and \"STALE_OR_INVALID_DATE\" not in flags:\n        peer_info[\"triage_percentile\"] = round(100 * sum(float(x[\"score\"]) <= score for x in valid_peers) / len(valid_peers), 1)\n    strengths = [k for k, v in scores.items() if v is not None and v >= 70]\n    weaknesses = [k for k, v in scores.items() if v is not None and v < 40]\n    return {\n        \"schema\": FUNDAMENTAL_SCHEMA, \"method\": row.get(\"strategy_version\"),\n        \"observed_at\": observed.isoformat() if observed else None,\n        \"age_h\": round(age, 1) if age is not None else None,\n        \"accounting_period\": None, \"published_at\": None,\n        \"source\": \"yfinance_api\", \"source_url\": row.get(\"source_url\"),\n        \"currency\": blocks[\"profile_json\"].get(\"currency\") or None,\n        \"scores\": scores, \"metrics\": metrics, \"metric_coverage_pct\": coverage,\n        \"missing\": missing, \"flags\": flags, \"strong_dimensions\": strengths,\n        \"weak_dimensions\": weaknesses, \"changes\": changes, \"sector_reference\": peer_info,\n        \"analyst_targets\": targets, \"analysts\": analysts,\n        \"predictive_status\": \"NOT_VALIDATED\",\n    }\n\n\ndef load_fundamental_context(db_path, symbols=None, now=None):\n    \"\"\"Bounded read-only queries, same-run joins, no artificial defaults for facts.\"\"\"\n    symbols = sorted(set(str(s).strip().upper() for s in (symbols or []) if str(s).strip()))\n    con = duckdb.connect(db_path, read_only=True)\n    try:\n        def rows(sql, params=None):\n            cursor = con.execute(sql, params or [])\n            names = [x[0] for x in cursor.description]\n            return [dict(zip(names, values)) for values in cursor.fetchall()]\n        latest = rows(\"SELECT * FROM v_latest_triage\")\n        selected = [x for x in latest if not symbols or x[\"symbol\"] in symbols]\n        if not selected:\n            return {}\n        wanted = [x[\"symbol\"] for x in selected]\n        where = \",\".join(\"?\" for _ in wanted)\n        snapshots = rows(\"SELECT * FROM fundamentals_snapshot WHERE symbol IN (\" + where + \") QUALIFY row_number() OVER(PARTITION BY symbol ORDER BY fetched_at DESC)=1\", wanted)\n        consensus = rows(\"SELECT * FROM v_latest_consensus WHERE symbol IN (\" + where + \")\", wanted)\n        history = rows(\"SELECT symbol, CAST(updated_at AS VARCHAR) AS updated_at, score, target_price, strategy_version FROM fundamentals_triage_history WHERE symbol IN (\" + where + \") AND updated_at >= CURRENT_TIMESTAMP - INTERVAL '120 days'\", wanted)\n        smap = {x[\"symbol\"]: x for x in snapshots}; cmap = {x[\"symbol\"]: x for x in consensus}\n        hmap = {}\n        for item in history:\n            hmap.setdefault(item[\"symbol\"], []).append(item)\n        return {x[\"symbol\"]: fctx_card(x, smap.get(x[\"symbol\"], {}), cmap.get(x[\"symbol\"], {}), hmap.get(x[\"symbol\"], []), latest, now) for x in selected}\n    finally:\n        con.close()\n\n\nitems = _items or []\nfor item in items:\n    body = item.get(\"json\", {})\n    pack = body.get(\"opportunity_pack\")\n    if not isinstance(pack, dict):\n        continue\n    selected = pack.get(\"rows\") or []\n    symbols = [row.get(\"symbol\") for row in selected if row.get(\"symbol\")]\n    cards = load_fundamental_context(\"/files/duckdb/ag3_v2.duckdb\", symbols) if symbols else {}\n    for row in selected:\n        row[\"fundamentals\"] = cards.get(str(row.get(\"symbol\") or \"\").upper(), {\"schema\": FUNDAMENTAL_SCHEMA, \"flags\": [\"MISSING_FUNDA\"], \"predictive_status\": \"NOT_VALIDATED\"})\n    pack[\"fundamental_legend\"] = FUNDAMENTAL_LEGEND\nreturn items\n"
       }
+    },
+    {
+      "id": "ag1-history-fetch-20261004",
+      "name": "AG1.HISTORY — Fetch Dated Accounts",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        2984,
+        11600
+      ],
+      "onError": "continueRegularOutput",
+      "parameters": {
+        "method": "POST",
+        "url": "http://ag3-predictive:8084/ag1/historical-evidence",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ {symbols: [...new Set([...($json.opportunity_pack?.rows || []), ...($json.portfolio_pack?.positions || [])].map(r => String(r.symbol || '').toUpperCase()).filter(Boolean))], as_of: $json.run?.timestampUtc} }}",
+        "options": {
+          "timeout": 8000,
+          "response": {
+            "response": {
+              "responseFormat": "json"
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "ag1-history-attach-20261004",
+      "name": "AG1.HISTORY — Attach Dated Accounts",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3184,
+        11600
+      ],
+      "parameters": {
+        "jsCode": "// Attach only the historical facts; original prices, gates and configuration remain authoritative.\nconst source = $('AG1.V4 — Liquidity Preflight').first().json;\nconst result = JSON.parse(JSON.stringify(source));\nconst response = $input.first().json || {};\nconst schema = 'AG3_HISTORICAL_EVIDENCE_V1';\nconst asOf = result.run?.timestampUtc;\nconst cutoff = Date.parse(asOf);\nconst rows = result.opportunity_pack?.rows || [];\nconst held = result.portfolio_pack?.positions || [];\nconst symbols = [...new Set([...rows,...held].map(r=>String(r.symbol||'').toUpperCase()).filter(Boolean))];\nconst validTime = value => typeof value === 'string' && /(?:Z|[+-]\\d{2}:\\d{2})$/.test(value) && Number.isFinite(Date.parse(value));\nlet status = 'AVAILABLE';\nconst validCard = (c,s) => c && c.schema===schema && c.symbol===s && validTime(c.as_of) && Date.parse(c.as_of)===cutoff &&\n    c.advisory_only===true && c.predictive_probabilities_supplied===false &&\n    ['DATED_ACCOUNTS','STALE_ANNUAL_ACCOUNTS','NO_DATED_ACCOUNTS'].includes(c.status) && Array.isArray(c.periods) && c.periods.length<=3 &&\n    c.periods.every(p=>validTime(p.available_at) && Date.parse(p.available_at)<=cutoff &&\n        /^\\d{4}-\\d{2}-\\d{2}$/.test(p.period_end) && Date.parse(p.period_end)<=cutoff &&\n        typeof p.reporting_currency==='string' && p.ratios_pct && p.amounts_million && Array.isArray(p.filings));\nif (!validTime(asOf) || response.schema!==schema || Date.parse(response.as_of)!==cutoff ||\n    response.advisory_only!==true || response.predictive_probabilities_supplied!==false || !response.cards ||\n    !symbols.every(s=>validCard(response.cards[s],s))) status='UNAVAILABLE_OR_INVALID';\nconst cards={};\nfor(const s of symbols) cards[s]=status==='AVAILABLE'?response.cards[s]:{\n    schema,symbol:s,as_of:asOf||null,status:'SOURCE_UNAVAILABLE',periods:[],changes:null,\n    flags:['HISTORY_FETCH_FAILED_OR_INVALID'],advisory_only:true,predictive_probabilities_supplied:false};\nconst pack=result.opportunity_pack || (result.opportunity_pack={});\nfor(const row of rows){\n    if(!row.fundamentals || typeof row.fundamentals!=='object')row.fundamentals={};\n    row.fundamentals.historical_accounts=cards[String(row.symbol||'').toUpperCase()];\n}\npack.held_historical_accounts=Object.fromEntries(held.filter(r=>r.symbol).map(r=>[r.symbol,cards[String(r.symbol).toUpperCase()]]));\npack.historical_accounts_legend=status==='AVAILABLE'?response.legend:{schema,use:'Historical source unavailable. Do not infer historical trends from missing data.'};\npack.historical_accounts_delivery={schema,status,as_of:asOf||null,advisory_only:true,\n    covered:symbols.filter(s=>cards[s].status==='DATED_ACCOUNTS').length,total:symbols.length,\n    generated_at:status==='AVAILABLE'?response.generated_at:null,\n    performance_benefit:'NOT_DEMONSTRATED',predictive_probabilities_supplied:false};\nreturn [{json:result}];\n"
+      }
     }
   ],
   "connections": {
@@ -920,22 +959,7 @@
       "main": [
         [
           {
-            "node": "AG1.V4 — Merge Model Proposals",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Agent #1 - Portfolio manager",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Agent #1 - Portfolio manager1",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "Agent #1 - Portfolio manager2",
+            "node": "AG1.HISTORY — Fetch Dated Accounts",
             "type": "main",
             "index": 0
           }
@@ -1106,6 +1130,43 @@
           }
         ]
       ]
+    },
+    "AG1.HISTORY — Fetch Dated Accounts": {
+      "main": [
+        [
+          {
+            "node": "AG1.HISTORY — Attach Dated Accounts",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AG1.HISTORY — Attach Dated Accounts": {
+      "main": [
+        [
+          {
+            "node": "AG1.V4 — Merge Model Proposals",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent #1 - Portfolio manager",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent #1 - Portfolio manager1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent #1 - Portfolio manager2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "settings": {
@@ -1113,7 +1174,7 @@
     "availableInMCP": false,
     "timezone": "Europe/Paris"
   },
-  "active": true,
-  "versionId": "87de669d-ae38-4c50-9247-492bbf11f0a3",
-  "activeVersionId": "87de669d-ae38-4c50-9247-492bbf11f0a3"
+  "active": 1,
+  "versionId": "736b0a41-2f55-4153-aa97-3babbcbcab43",
+  "activeVersionId": "736b0a41-2f55-4153-aa97-3babbcbcab43"
 }

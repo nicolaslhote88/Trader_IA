@@ -117,7 +117,7 @@ Artefacts : `features_labels.csv.gz`, `model_artifacts.joblib`, `model_report.js
 `predictions.json`. Le rapport contient empreintes du code, du jeu et de l’artefact.
 Les fichiers joblib sont produits localement ; ne charger aucun artefact externe non fiable.
 
-**Promotion toujours interdite dans cette version** : `decision_enabled=false`,
+**Promotion du modèle prédictif toujours interdite dans cette version** : `decision_enabled=false`,
 `validated=false`, pas de raccordement AG1. Restent à résoudre le biais de survivance,
 les titres radiés, les références sectorielles datées, la robustesse hors États-Unis et
 les résultats prospectifs en shadow. De bonnes métriques rétrospectives ne lèvent pas
@@ -135,7 +135,7 @@ Installer les dépendances du service et, pour les tests Yahoo, `httpx` et `yfin
 Les tests portent sur les dates, révisions, périodes, absences, calibration/splits,
 rechargement des ajustements et séparation du contrat Yahoo existant.
 
-## Fiche historique candidate pour AG1
+## Fiche historique intégrée à AG1
 
 `GET /evidence/{symbol}?as_of=2026-10-02T15:10:07Z` expose
 `AG3_HISTORICAL_EVIDENCE_V1`. Sans `as_of`, la fiche utilise l'heure actuelle.
@@ -152,10 +152,16 @@ la disponibilité la plus tardive ; les preuves complètes restent dans `cards.j
 Les comparatifs utilisent les révisions connues à la date de décision, ce qui
 peut différer des montants publiés pour la première fois plusieurs années avant.
 
-Le dashboard affiche « Fiche historique destinée à AG1 — simulation uniquement ».
-Aucun nœud du workflow AG1 live n'appelle cette route. La transformation pure
-`enrich_context` prépare seulement une copie du contexte pour le replay.
-Les scores, gates et probabilités restent inchangés.
+Depuis le 4 octobre 2026, AG1 appelle `POST /ag1/historical-evidence` après le
+preflight et transmet les fiches aux trois modèles comme faits consultatifs.
+Le corps contient `symbols` (100 maximum) et `as_of` avec fuseau. L'attachement
+valide les dates et le contrat ; erreur ou timeout de 8 secondes produit un statut
+indisponible explicite. Les scores, gates et probabilités restent inchangés.
+Le dashboard affiche « Fiche historique datée pour AG1 » et son intégration réelle.
+`AG3_HISTORY_LIVE_ENABLED=1` reflète la publication pour la santé et l'affichage ;
+ce drapeau ne désactive pas la route batch. Pour détacher les faits des décisions,
+restaurer le workflow précédent selon la procédure de retour arrière.
+La transformation pure `enrich_context` reste un outil de préparation du replay.
 
 Outils du dépôt : `prepare_ag1_history_replay.py`, `build_ag1_history_shadow.py`,
 `compare_ag1_history_replays.cjs` dans `outils/scripts/`. Le préparateur exige un
@@ -171,4 +177,7 @@ initial A1/B1/B2/A2 mesure aussi la variabilité sans modification des entrées.
 Les historiques LLM peuvent contenir des connaissances acquises après la date
 rejouée : cette expérience ne constitue pas un backtest financier point-in-time.
 Voir `docs/operations/20261004_ag1_historical_evidence_shadow.md` pour les mesures,
-limites et conditions nécessaires avant tout raccordement aux décisions réelles.
+limites de la simulation initiale. Nicolas a ensuite autorisé la promotion des
+faits historiques malgré le gain non démontré. Publication, preuves et rollback :
+`docs/operations/20261004_ag1_historical_evidence_live.md`.
+Builder du raccordement : `outils/scripts/build_ag1_history_live.py`.

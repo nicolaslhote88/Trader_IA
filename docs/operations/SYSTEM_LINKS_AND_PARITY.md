@@ -104,11 +104,16 @@ Les comparaisons 30/90 jours de score exigent la même `strategy_version`. La da
 `services/dashboard/predictive_detail.py` lit le service `ag3-predictive` en lecture seule. Les comptes historiques et probabilités affichées sont expérimentaux, hors scoring/gates. AG1 ne consomme pas ces probabilités. Les contrats `fundamental_context.py`, R8 et Calcul Matrice restent inchangés. Voir `20261004_ag3_predictive_pipeline_deployment.md` avant toute future promotion.
 
 
-## Fiche historique AG1 en simulation — 4 octobre 2026
+## Fiche historique AG1 live — 4 octobre 2026
 
-`services/ag3-predictive/historical_evidence.py` produit la fiche datée candidate,
-consommée seulement dans les replays isolés et affichée via `/evidence/{symbol}`.
-Elle ne modifie pas `AG3_EVIDENCE_V1`, le nœud live 20L, les scores ou les gates.
-Le dashboard indique explicitement cette absence de consommation live. Le test
-A1/B1/B2/A2 n'a pas établi de changement décisionnel stable ; aucune promotion.
-Voir [le protocole et les résultats](20261004_ag1_historical_evidence_shadow.md).
+`services/ag3-predictive/historical_evidence.py` produit les mêmes faits datés
+pour `/evidence/{symbol}` (dashboard) et `/ag1/historical-evidence` (AG1, lot compact).
+Deux nœuds après Liquidity Preflight enrichissent les trois entrées LLM et le contexte
+du consensus. Le nœud 20L et `AG3_EVIDENCE_V1` sont conservés ; les historiques sont
+ajoutés sous `fundamentals.historical_accounts`, avec les positions détenues et une
+légende de dates/unités. Les scores, prix, gates et règles de quantités ne changent pas.
+
+Une défaillance HTTP/contrat produit `UNAVAILABLE_OR_INVALID` et des fiches sans faits,
+jamais des chiffres de remplacement. Le dashboard indique le raccordement réel.
+Les probabilités statistiques restent hors AG1. Promotion autorisée par Nicolas
+malgré le résultat non concluant du test ; [preuves et rollback](20261004_ag1_historical_evidence_live.md).

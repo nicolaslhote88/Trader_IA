@@ -48,10 +48,10 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
-## Fiche historique AG1 — SHADOW 2026-10-04
-- `AG3_HISTORICAL_EVIDENCE_V1` : marges, cash-flow et ratios de bilan datés, API recherche `/evidence/{symbol}` ; affichage dashboard explicitement en simulation. Aucun raccordement au workflow AG1 réel.
-- Comparaison A1/B1/B2/A2 sur contexte du 2 octobre : 12 sorties LLM valides, 11/18 titres couverts ; AZN retenue 4/4, NRO.PA 1/2 dans chaque variante. Aucun avantage décisionnel stable ni rendement supérieur démontré ; pas de promotion.
-- Sources, limites, protocole et rollback : `docs/operations/20261004_ag1_historical_evidence_shadow.md`. Version AG1 publiée inchangée. Une campagne prospective reste nécessaire ; aucun cron LLM ajouté.
+## Fiche historique AG1 — LIVE 2026-10-04
+- Promotion explicitement demandée par Nicolas malgré un apport de performance non démontré. `AG3_HISTORICAL_EVIDENCE_V1` est transmise après Liquidity Preflight aux trois modèles et au consensus : `AG1.HISTORY — Fetch Dated Accounts` → `… Attach Dated Accounts`.
+- Source : `ag3-predictive` POST `/ag1/historical-evidence`, faits datés uniquement, aucun score/gate modifié et aucune probabilité prédictive ajoutée. Timeout 8 s ; service invalide/indisponible = état explicite sans faits, poursuite avec les autres données.
+- AG1 actif, version publiée `736b0a41-2f55-4153-aa97-3babbcbcab43`. Replay exact des deux nœuds + trois LLM validé ; ledger et 179 autres workflows inchangés. Premier cron enrichi à observer le 5 octobre 17:10 Paris. [Preuves/rollback](docs/operations/20261004_ag1_historical_evidence_live.md).
 
 ## Recherche prédictive AG3 — LIVE 2026-10-04
 - Service séparé `ag3-predictive`, stockage `/local-files/ag3-predictive` (SQLite + archives). Yahoo existant 2.2.0 enrichi par `/research/history` ; SEC/ESEF/BCE/ALFRED collectés. Cron 04:45 Paris, verrou exclusif, aucun write DuckDB métier.

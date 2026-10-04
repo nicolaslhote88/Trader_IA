@@ -21,7 +21,8 @@ décodeur qui valide le schéma métier complet avant l’extracteur. Le mode
 `adaptive` remplace le nœud Anthropic incompatible de n8n 2.3.5. GPT-6 Sol
 a été validé avec Responses API et effort `medium` explicites. La dernière
 sauvegarde live retire ces deux options OpenAI : elle est conservée telle quelle
-dans cet export, mais n’a pas encore été rejouée (voir la note du 2026-09-25).
+dans cet export. Cette configuration a depuis été rejouée avec succès lors du
+raccordement historique du 2026-10-04 (voir sa note de déploiement).
 La transformation est centralisée dans `migrate_models_20260925.py`.
 
 La branche DeepSeek utilise une `Basic LLM Chain` avec parseur structure et
@@ -47,5 +48,18 @@ variables `AG1_V4_*`.
 
 ## Import n8n
 
-Importer `AG1_workflow_v4_consensus.json`. Le workflow est exporte inactif par
-defaut pour eviter une activation involontaire pendant le deploiement.
+`AG1_workflow_v4_consensus.json` reflète le graphe publié, avec son état actif.
+Un import n8n désactive le workflow : republier explicitement après validation,
+puis vérifier `active=1` et la version publiée après redémarrage des runners.
+
+## Faits historiques — live le 4 octobre 2026
+
+Deux nœuds après `AG1.V4 — Liquidity Preflight` récupèrent et attachent les
+comptes historiques datés avant les trois modèles et le merge de contexte.
+Builder ciblé : `outils/scripts/build_ag1_history_live.py` à la racine du dépôt.
+Source JS : `nodes/agent_input/historical_evidence_attach.code.js`.
+Les nœuds modèles existants sont préservés et ont été rejoués dans cette version.
+Les probabilités prédictives ne sont pas transmises. Voir la note
+`docs/operations/20261004_ag1_historical_evidence_live.md` pour les preuves,
+la version publiée et le retour arrière. Le builder historique général ci-dessus
+ne remplace pas ce patch ciblé sur un export publié récent.

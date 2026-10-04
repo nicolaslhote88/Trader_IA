@@ -271,10 +271,11 @@ idempotence des approbations expirées et divergence dashboard.
 - Déploiements 06/2026 : notes `20260619_*` (hybride AG2, quarantaine, split rotation), `20260622_*` (AG3 split + STALE_FUNDA), `20260624_*` (expansion +100, Finnhub, durcissement AG2HC, auth quotidienne assistée).
 
 
-### Fiche comptable historique candidate (4 octobre 2026)
+### Fiche comptable historique live (4 octobre 2026)
 
-Le service de recherche expose `/evidence/{symbol}` et `AG3_HISTORICAL_EVIDENCE_V1`.
-Le dashboard affiche cette fiche, mais le workflow AG1 live ne la lit pas.
-La comparaison isolée A1/B1/B2/A2 (12 réponses des trois modèles actuels, contexte
-réel figé du 2 octobre) n'établit pas d'avantage stable par rapport à la variabilité
-du système. [Mesures et limites](../operations/20261004_ag1_historical_evidence_shadow.md).
+`AG3_HISTORICAL_EVIDENCE_V1` est consommée comme contexte factuel par les trois
+modèles AG1 après le préflight. Le service de recherche expose la route de lot
+`/ag1/historical-evidence` ; le dashboard consulte `/evidence/{symbol}`.
+La publication a été autorisée explicitement après la comparaison A1/B1/B2/A2,
+qui n'avait pas établi d'avantage stable. Scores/gates inchangés, probabilités
+prédictives toujours hors décision. [Déploiement, preuves et rollback](../operations/20261004_ag1_historical_evidence_live.md).

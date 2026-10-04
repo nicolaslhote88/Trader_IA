@@ -1,13 +1,14 @@
 services:
   ag3-predictive:
     build: .
-    image: trader-ag3-predictive:20261004-history
+    image: trader-ag3-predictive:20261004-history-live
     container_name: ag3-predictive
     restart: unless-stopped
     mem_limit: 1200m
     cpus: 1.0
     environment:
       AG3_DATA_DIR: /data
+      AG3_HISTORY_LIVE_ENABLED: ${AG3_HISTORY_LIVE_ENABLED:-0}
       YAHOO_URL: http://yfinance-api:8080
       UNIVERSE_DB: /source/ag2_v3.duckdb
     env_file: .env

@@ -23,7 +23,7 @@ documents ci-dessous décrivent l'état courant.
 
 ## Derniers changements live
 
-- Fiche historique datée candidate pour AG1 : [comparaison isolée du 4 octobre](operations/20261004_ag1_historical_evidence_shadow.md). Visible au dashboard ; aucun avantage stable démontré, aucune consommation par les décisions live.
+- Fiche historique datée raccordée aux trois modèles AG1 sur demande explicite : [déploiement réel du 4 octobre](operations/20261004_ag1_historical_evidence_live.md). Version publiée vérifiée ; premier cron enrichi à observer. Les résultats de simulation restent documentés sans revendication de performance.
 
 - Collectes historiques AG3 et modèle en shadow, réutilisant Yahoo : [déploiement du 4 octobre](operations/20261004_ag3_predictive_pipeline_deployment.md). Aucune influence sur les décisions ; limites de couverture et résultats du test explicites.
 

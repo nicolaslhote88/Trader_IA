@@ -1,0 +1,144 @@
+{
+  "authorization": "User explicitly requested live deployment despite inconclusive performance evidence on 2026-10-04",
+  "replay": {
+    "ok": true,
+    "original_inputs_unchanged": true,
+    "three_models_receive_same_enriched_input": true,
+    "exact_new_nodes_replayed": true,
+    "failure_path_replayed": true,
+    "delivery": {
+      "schema": "AG3_HISTORICAL_EVIDENCE_V1",
+      "status": "AVAILABLE",
+      "as_of": "2026-10-02T15:10:07.448Z",
+      "advisory_only": true,
+      "covered": 11,
+      "total": 18,
+      "generated_at": "2026-10-04T06:57:49.966158+00:00",
+      "performance_benefit": "NOT_DEMONSTRATED",
+      "predictive_probabilities_supplied": false
+    },
+    "models": [
+      {
+        "model": "gpt-6-sol",
+        "status": "OK_OBJECT",
+        "actions": 8
+      },
+      {
+        "model": "deepseek-v4-pro",
+        "status": "OK_OBJECT",
+        "actions": 1
+      },
+      {
+        "model": "claude-opus-5-5",
+        "status": "OK_OBJECT",
+        "actions": 8
+      }
+    ],
+    "orders_sent": 0,
+    "candidate_sha256": "a7da2d163c36ca1e5baabbcb3530b7603605b9eee96dd375844aead420839ac4"
+  },
+  "publication": {
+    "workflow": {
+      "id": "AG1V4CONSENSUS",
+      "active": 1,
+      "versionId": "736b0a41-2f55-4153-aa97-3babbcbcab43",
+      "activeVersionId": "736b0a41-2f55-4153-aa97-3babbcbcab43"
+    },
+    "publishedGraphEqualsCandidate": true,
+    "otherWorkflowsUnchanged": 179,
+    "businessUnchanged": {
+      "runs": [
+        783,
+        10373942580764498752
+      ],
+      "orders": [
+        173,
+        2394118589388786553
+      ],
+      "fills": [
+        124,
+        14295127880850510742
+      ],
+      "positions_snapshot": [
+        7585,
+        3331593401108622838
+      ],
+      "portfolio_snapshot": [
+        783,
+        17864066969054172387
+      ]
+    },
+    "brokerAuthenticated": true,
+    "accountAligned": true,
+    "pendingApprovals": 0
+  },
+  "final_checks": {
+    "verified_at": "2026-10-04T07:07:08.987034+00:00",
+    "historical_evidence_live_enabled": true,
+    "predictive_decisions_enabled": false,
+    "health_ok": true,
+    "pending_approvals": 0,
+    "containers": {
+      "root-n8n-1": {
+        "running": true,
+        "started_at": "2026-10-04T07:02:12.134560851Z",
+        "image_id": "sha256:02304133181c544618231b43979feb5285c0d7a2587707a0a5c21fa2518a4f34",
+        "health": null
+      },
+      "root-task-runners-3": {
+        "running": true,
+        "started_at": "2026-10-04T07:02:12.815845799Z",
+        "image_id": "sha256:eb337ee0b696cfae7437d428110af530d5b00deda24367138fd2e8356b54c371",
+        "health": null
+      },
+      "root-task-runners-4": {
+        "running": true,
+        "started_at": "2026-10-04T07:02:13.608636491Z",
+        "image_id": "sha256:eb337ee0b696cfae7437d428110af530d5b00deda24367138fd2e8356b54c371",
+        "health": null
+      },
+      "root-task-runners-5": {
+        "running": true,
+        "started_at": "2026-10-04T07:02:14.603199876Z",
+        "image_id": "sha256:eb337ee0b696cfae7437d428110af530d5b00deda24367138fd2e8356b54c371",
+        "health": null
+      },
+      "ag3-predictive": {
+        "running": true,
+        "started_at": "2026-10-04T07:03:55.294791204Z",
+        "image_id": "sha256:f50e7b07ccdae38dd2ca783b8296a3100bcd864618b893586c16ac131c54e5b6",
+        "health": "healthy"
+      },
+      "root-trading-dashboard-1": {
+        "running": true,
+        "started_at": "2026-10-04T07:04:05.872246592Z",
+        "image_id": "sha256:7bf61a5ec2a4631b240bc8cf83404e2dd37fb06a4b4bbd34b2c36906a5fb4aee",
+        "health": null
+      }
+    },
+    "source_sha256": {
+      "services/ag3-predictive/api.py": "af03a13a1c5ceaea0173d775e8c85e783e5b4cbe0423c6026d9184cf53ffc623",
+      "services/ag3-predictive/historical_evidence.py": "2e3b0f877543104f6f362563506f217d15cb87e6e3295350dd6d175b29e55f6d",
+      "services/ag3-predictive/compose.yml": "1a57908f6927d3dc77acb8b24ae687cc980d4a1e10583c30c7d776b2ea010c75",
+      "services/dashboard/predictive_detail.py": "a8b2cd3b5be7f3ce2f13fe789cb38ac6172306d346f91d2a6b5f006d01a94de8"
+    },
+    "registered_runners": [
+      "Registered runner \"launcher-javascript\" (90f1e5530289e3a8) ",
+      "Registered runner \"launcher-python\" (3a8d4aa7adbfa586) ",
+      "Registered runner \"launcher-javascript\" (035f3fff521b3401) ",
+      "Registered runner \"launcher-python\" (15fa65ec845a6ec5) ",
+      "Registered runner \"launcher-javascript\" (7e6d44b6eb6f8ca0) ",
+      "Registered runner \"launcher-python\" (41288f69fc3edaf2) "
+    ],
+    "temporary_credentials_removed": true,
+    "next_scheduled_ag1": "2026-10-05T17:10:00+02:00",
+    "next_scheduled_execution_observed": false
+  },
+  "local_deployed_sources_identical": true,
+  "validation": {
+    "python_tests_passed": 21,
+    "javascript_cases_passed": 7,
+    "live_dashboard_apptest": true,
+    "broker_orders_sent_by_agent": 0
+  }
+}

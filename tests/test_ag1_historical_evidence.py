@@ -58,7 +58,7 @@ class HistoricalEvidenceTests(unittest.TestCase):
         enriched=enrich_context(context,cards)
         self.assertEqual(context,before)
         self.assertEqual(enriched['opportunity_pack']['rows'][0]['fundamentals']['metrics'],{'net_margin_pct':3})
-        self.assertFalse(enriched['opportunity_pack']['held_historical_accounts']['Y']['decision_enabled'])
+        self.assertTrue(enriched['opportunity_pack']['held_historical_accounts']['Y']['advisory_only'])
         self.assertEqual(enrich_context(enriched,cards),enriched)
 
     def test_no_comparison_over_missing_year(self):

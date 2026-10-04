@@ -65,18 +65,22 @@ def load_historical_candidate(symbol):
     try:
         response=requests.get(base+'/evidence/'+symbol,timeout=4)
         response.raise_for_status()
-        return response.json()['card']
+        payload=response.json()
+        return dict(payload['card'], live_decision_enabled=payload.get('live_decision_enabled',False))
     except (requests.RequestException,ValueError,KeyError):
         return None
 
 
 def render_historical_candidate(symbol):
-    with st.expander('Fiche historique destinée à AG1 — simulation uniquement',expanded=False):
+    with st.expander('Fiche historique datée pour AG1',expanded=False):
         card=load_historical_candidate(symbol)
         if card is None:
             st.info('Fiche historique indisponible.')
             return
-        st.caption('Cette fiche est évaluée séparément. AG1 ne la reçoit pas dans ses décisions réelles.')
+        if card.get('live_decision_enabled'):
+            st.caption('Intégrée aux entrées des trois modèles AG1 comme contexte factuel consultatif. Gain de performance non démontré.')
+        else:
+            st.caption('Fiche disponible ; raccordement aux décisions AG1 non activé.')
         st.write('État :',card['status'])
         st.caption('Informations disponibles au '+card['as_of']+' ; périodes annuelles et publications distinctes.')
         if not card['periods']:

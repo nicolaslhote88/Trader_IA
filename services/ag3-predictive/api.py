@@ -1,9 +1,15 @@
 import json
+import os
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel, Field
 from store import ROOT, initialize, status, db, now
-from historical_evidence import load_cards, timestamp, LEGEND
+from historical_evidence import load_cards, timestamp, LEGEND, compact, SCHEMA
 
-app=FastAPI(title='AG3 predictive research',version='1.0.0')
+app=FastAPI(title='AG3 predictive research',version='1.1.0')
+
+
+def history_enabled():
+    return os.getenv('AG3_HISTORY_LIVE_ENABLED','0')=='1'
 
 
 @app.on_event('startup')
@@ -15,7 +21,8 @@ def startup():
 def health():
     with db(True) as c:
         c.execute('SELECT 1').fetchone()
-    return {'ok':True,'mode':'SHADOW','decision_enabled':False}
+    return {'ok':True,'mode':'SHADOW','decision_enabled':False,
+            'historical_evidence_live_enabled':history_enabled()}
 
 
 @app.get('/status')
@@ -32,7 +39,28 @@ def evidence(symbol: str, as_of: str = ''):
     except (ValueError,TypeError):
         raise HTTPException(status_code=422,detail='Explicit past/present timestamp with timezone required')
     symbol=symbol.upper()
-    return {'card':load_cards([symbol],cutoff)[symbol],'legend':LEGEND,'live_decision_enabled':False}
+    return {'card':load_cards([symbol],cutoff)[symbol],'legend':LEGEND,'live_decision_enabled':history_enabled()}
+
+
+class EvidenceRequest(BaseModel):
+    symbols: list[str] = Field(max_length=100)
+    as_of: str
+
+
+@app.post('/ag1/historical-evidence')
+def historical_batch(request: EvidenceRequest):
+    try:
+        cutoff=timestamp(request.as_of)
+        if cutoff>timestamp(now()):
+            raise ValueError('FUTURE_AS_OF')
+    except (ValueError,TypeError):
+        raise HTTPException(status_code=422,detail='Past/present timestamp with timezone required')
+    if any(not s.strip() or len(s)>32 for s in request.symbols):
+        raise HTTPException(status_code=422,detail='Invalid symbol')
+    cards=load_cards(request.symbols,cutoff.isoformat())
+    return {'schema':SCHEMA,'as_of':cutoff.isoformat(),'generated_at':now(),
+            'cards':{s:compact(c) for s,c in cards.items()},'legend':LEGEND,
+            'advisory_only':True,'predictive_probabilities_supplied':False}
 
 
 @app.get('/research/{symbol}')

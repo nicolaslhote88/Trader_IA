@@ -1,5 +1,7 @@
 # AG1 — fiche comptable historique et comparaison isolée
 
+**État historique de la simulation.** Nicolas a ensuite explicitement demandé la promotion : voir le [déploiement réel](20261004_ag1_historical_evidence_live.md). Les mesures ci-dessous ne changent pas.
+
 Intervention du 4 octobre 2026, autorisée pour enrichir les faits destinés à AG1 puis
 mesurer leur apport en simulation avant toute intégration aux décisions.
 

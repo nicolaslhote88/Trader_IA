@@ -36,7 +36,7 @@ def card(symbol, facts, as_of, sector=None):
             continue
     result = {'schema': SCHEMA, 'symbol': symbol, 'as_of': cutoff.isoformat(),
               'status': 'NO_DATED_ACCOUNTS', 'periods': [], 'changes': None,
-              'flags': [], 'decision_enabled': False}
+              'flags': [], 'advisory_only': True, 'predictive_probabilities_supplied': False}
     revenue = [f for f in eligible if f['metric'] == 'revenue']
     if not revenue:
         return result
