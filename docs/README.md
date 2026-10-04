@@ -1,6 +1,6 @@
 # Documentation Trader_IA
 
-Index mis à jour le 2026-10-03 (fondamental AG3 et fiche AG1). Les documents datés dans `audits/`
+Index mis à jour le 2026-10-04 (collectes historiques et recherche prédictive AG3). Les documents datés dans `audits/`
 et `operations/` conservent volontairement les faits observés à leur date ; les
 documents ci-dessous décrivent l'état courant.
 
@@ -23,7 +23,9 @@ documents ci-dessous décrivent l'état courant.
 
 ## Derniers changements live
 
-- Fondamental : unités et absences corrigées, 527 derniers relevés recalculés, dashboard détaillé et fiche factuelle AG1 : [déploiement du 3 octobre](operations/20261003_ag3_fundamental_evidence_deployment.md). Prédictif évalué non prêt, aucune probabilité publiée.
+- Collectes historiques AG3 et modèle en shadow, réutilisant Yahoo : [déploiement du 4 octobre](operations/20261004_ag3_predictive_pipeline_deployment.md). Aucune influence sur les décisions ; limites de couverture et résultats du test explicites.
+
+- Fondamental : unités et absences corrigées, 527 derniers relevés recalculés, dashboard détaillé et fiche factuelle AG1 : [déploiement du 3 octobre](operations/20261003_ag3_fundamental_evidence_deployment.md). À cette date, prédictif non entraîné ; état remplacé par la note du 4 octobre.
 
 - News : Grok remplacé par DeepSeek Flash, RSS officiels DSY/Fast Retailing, horaires et supervision corrigés : [déploiement du 27 septembre](operations/20260927_news_free_flash_remediation.md).
 

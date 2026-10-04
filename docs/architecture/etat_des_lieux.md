@@ -1,5 +1,7 @@
 # État des lieux fonctionnel — Trader_IA
 
+> Recherche prédictive AG3 du 04/10/2026 : collectes historiques séparées via Yahoo existant, SEC/ESEF/BCE/ALFRED ; modèle US à 90 jours et affichage en shadow uniquement. Aucune promotion ni modification AG1. [Déploiement et limites](../operations/20261004_ag3_predictive_pipeline_deployment.md).
+
 > News, mise à jour live du 27/09/2026 : macro via DeepSeek Flash ; flux gratuits DSY/Fast Retailing et Finnhub HELD+CORE ; ordonnancement avant AG1. [Déploiement, validation et limites](../operations/20260927_news_free_flash_remediation.md). Les mentions historiques de Grok et des anciens horaires ci-dessous sont remplacées par cette note.
 
 **Dernière consolidation du socle live : 2026-08-06.**

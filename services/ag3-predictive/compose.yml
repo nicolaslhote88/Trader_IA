@@ -1,0 +1,26 @@
+services:
+  ag3-predictive:
+    build: .
+    image: trader-ag3-predictive:20261004
+    container_name: ag3-predictive
+    restart: unless-stopped
+    mem_limit: 1200m
+    cpus: 1.0
+    environment:
+      AG3_DATA_DIR: /data
+      YAHOO_URL: http://yfinance-api:8080
+      UNIVERSE_DB: /source/ag2_v3.duckdb
+    env_file: .env
+    volumes:
+      - /local-files/ag3-predictive:/data
+      - /local-files/duckdb:/source:ro
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8084/health',timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+networks:
+  web:
+    external: true

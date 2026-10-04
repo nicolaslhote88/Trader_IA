@@ -20,7 +20,7 @@ import yfinance as yf
 # =========================
 # Config (ENV)
 # =========================
-APP_VERSION = "2.1.0"
+APP_VERSION = "2.2.0"
 
 TZ = os.getenv("TZ", "UTC")
 
@@ -2082,3 +2082,8 @@ def get_fundamentals(symbol: str = Query(...)):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8080)
+
+
+# Research histories share this gateway and its Yahoo rate limiter.
+from research_history import register as register_research_history
+register_research_history(app, yf, _json_cache_path, _read_json_cache, _write_json_cache, _global_rate_limit_sleep)

@@ -1,6 +1,6 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-09-27.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-10-04.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
@@ -50,6 +50,14 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 curseur dans la transaction. Toute incohérence devient
 `AG2_CURSOR_GUARD_FAILED`. Le run manuel Held+Core `20812` a vérifié `0 → 18`.
 
+
+## Recherche prédictive AG3 du 4 octobre 2026
+
+- Collecte/évaluation séparée : **04:45 Europe/Paris tous les jours**. Wrapper hôte à `45 * * * *`, filtre de l’heure Paris dans le runner (DST suivi).
+- Après AG3 Watchlist 04:00 ; avant YF-ENRICH 06:15. Réutilisation du service Yahoo et de sa temporisation, traitement séquentiel. Chargement initial plus volumineux que les mises à jour incrémentales.
+- Base propre `/local-files/ag3-predictive/research.sqlite`, archives propres ; lecture courte de l’univers DuckDB au démarrage, pas de writer supplémentaire dans une base métier.
+- Verrou `flock` non bloquant, limite conteneur 1 CPU / 1 200 Mo. Aucun changement des autres crons. Le filtre horaire et le refus des exécutions concurrentes sont testés ; premier vrai cycle programmé encore à observer.
+- [Preuves, résultats et rollback](20261004_ag3_predictive_pipeline_deployment.md).
 
 ## Ajustement news du 27 septembre 2026
 

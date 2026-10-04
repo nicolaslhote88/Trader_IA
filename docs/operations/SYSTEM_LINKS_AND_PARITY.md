@@ -98,3 +98,7 @@ accès au contrat IBKR live. Seul le gate dur de qualité des données est dupli
 `services/dashboard/fundamental_context.py` est la source de la fiche `AG3_EVIDENCE_V1` affichée dans la vue détaillée et embarquée dans le nœud AG1 `20L — Fundamental Evidence`. Régénérer ce nœud avec `outils/scripts/build_ag3_fundamental_update.py` après tout changement du contrat. Il ajoute `opportunity_pack.rows[].fundamentals` et `fundamental_legend`, sans modifier les scores/gates de la matrice. Les corrections de score AG3 sont lues depuis la même base par R8 et le dashboard ; aucune deuxième formule AG3 n'est introduite.
 
 Les comparaisons 30/90 jours de score exigent la même `strategy_version`. La date de collecte n'est pas une date de publication comptable. Les objectifs analystes ne sont ni des probabilités ni des bornes de prix garanties. Voir le [déploiement](20261003_ag3_fundamental_evidence_deployment.md).
+
+## Recherche prédictive isolée — 2026-10-04
+
+`services/dashboard/predictive_detail.py` lit le service `ag3-predictive` en lecture seule. Les comptes historiques et probabilités affichées sont expérimentaux, hors scoring/gates. AG1 ne consomme pas ces probabilités. Les contrats `fundamental_context.py`, R8 et Calcul Matrice restent inchangés. Voir `20261004_ag3_predictive_pipeline_deployment.md` avant toute future promotion.

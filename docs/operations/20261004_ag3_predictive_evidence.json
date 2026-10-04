@@ -1,0 +1,652 @@
+{
+  "verified_at": "2026-10-04T06:05:55.188466+00:00",
+  "research": {
+    "contract": "AG3_RESEARCH_STATUS_V1",
+    "mode": "SHADOW",
+    "decision_enabled": false,
+    "generated_at": "2026-10-04T06:05:55.372788+00:00",
+    "counts": {
+      "instruments": 364,
+      "filings": 3627,
+      "facts": 50377,
+      "prices": 1414553,
+      "macro": 1611,
+      "fx": 4290
+    },
+    "coverage": [
+      {
+        "pipe": "alfred",
+        "status": "OK",
+        "n": 3
+      },
+      {
+        "pipe": "ecb",
+        "status": "OK",
+        "n": 1
+      },
+      {
+        "pipe": "edinet",
+        "status": "MISSING_KEY",
+        "n": 1
+      },
+      {
+        "pipe": "esef",
+        "status": "COLLECTED_UNDATED",
+        "n": 146
+      },
+      {
+        "pipe": "esef",
+        "status": "NO_CATALOG_FILINGS",
+        "n": 20
+      },
+      {
+        "pipe": "esef",
+        "status": "NO_USABLE_FACTS",
+        "n": 3
+      },
+      {
+        "pipe": "esef",
+        "status": "NO_VERIFIED_LEI",
+        "n": 99
+      },
+      {
+        "pipe": "esef_index",
+        "status": "OK",
+        "n": 1
+      },
+      {
+        "pipe": "opendart",
+        "status": "MISSING_KEY",
+        "n": 1
+      },
+      {
+        "pipe": "prices",
+        "status": "ERROR",
+        "n": 3
+      },
+      {
+        "pipe": "prices",
+        "status": "OK",
+        "n": 360
+      },
+      {
+        "pipe": "scope",
+        "status": "ETF_SEPARATE_MODEL_REQUIRED",
+        "n": 2
+      },
+      {
+        "pipe": "sec",
+        "status": "IDENTITY_UNVERIFIED",
+        "n": 1
+      },
+      {
+        "pipe": "sec",
+        "status": "NO_MAPPING",
+        "n": 304
+      },
+      {
+        "pipe": "sec",
+        "status": "OK",
+        "n": 57
+      },
+      {
+        "pipe": "sec_index",
+        "status": "PARTIAL",
+        "n": 1
+      }
+    ],
+    "gaps": [
+      {
+        "symbol": "*",
+        "pipe": "edinet",
+        "status": "MISSING_KEY",
+        "detail": "EDINET_API_KEY required; no account created automatically",
+        "updated_at": "2026-10-04T06:03:45.917888+00:00"
+      },
+      {
+        "symbol": "*",
+        "pipe": "opendart",
+        "status": "MISSING_KEY",
+        "detail": "DART_API_KEY required; no account created automatically",
+        "updated_at": "2026-10-04T06:03:45.900538+00:00"
+      },
+      {
+        "symbol": "ABB",
+        "pipe": "prices",
+        "status": "ERROR",
+        "detail": "yahoo:HTTP_502",
+        "updated_at": "2026-10-04T06:00:43.805346+00:00"
+      },
+      {
+        "symbol": "PVL.PA",
+        "pipe": "prices",
+        "status": "ERROR",
+        "detail": "yahoo:HTTP_502",
+        "updated_at": "2026-10-04T06:02:40.067996+00:00"
+      },
+      {
+        "symbol": "ROG.SW",
+        "pipe": "prices",
+        "status": "ERROR",
+        "detail": "yahoo:HTTP_502",
+        "updated_at": "2026-10-04T06:02:51.743984+00:00"
+      },
+      {
+        "symbol": "XOM",
+        "pipe": "sec",
+        "status": "IDENTITY_UNVERIFIED",
+        "detail": "SEC profile has no ticker: EXXON MOBIL CORP",
+        "updated_at": "2026-10-04T06:00:33.923351+00:00"
+      },
+      {
+        "symbol": "*",
+        "pipe": "sec_index",
+        "status": "PARTIAL",
+        "detail": "sec:HTTP_403; validated per-company seeds available",
+        "updated_at": "2026-10-04T05:59:40.226962+00:00"
+      }
+    ],
+    "runs": [
+      {
+        "run_id": "20261004T055940Z",
+        "started_at": "2026-10-04T05:59:40.062999+00:00",
+        "ended_at": "2026-10-04T06:05:28.554215+00:00",
+        "status": "PARTIAL"
+      },
+      {
+        "run_id": "20261004T052740Z",
+        "started_at": "2026-10-04T05:27:40.508559+00:00",
+        "ended_at": "2026-10-04T05:53:54.034608+00:00",
+        "status": "PARTIAL"
+      }
+    ],
+    "model": {
+      "source_sha256": "8ab659439a07bed490c783fc603cc5f40d02790c60b2edf53721511e455868b8",
+      "sklearn_version": "1.7.2",
+      "contract": "AG3_PREDICTIVE_EXPERIMENT_V1",
+      "generated_at": "2026-10-04T06:05:27.740217+00:00",
+      "mode": "SHADOW",
+      "decision_enabled": false,
+      "validated": false,
+      "target": "90_calendar_day_total_return_outperformance_vs_SPY_USD",
+      "horizon_days": 90,
+      "scope": "US-domiciled SEC issuers, USD quotation, current universe",
+      "features": [
+        "margin",
+        "roa",
+        "equity_assets",
+        "cash_assets",
+        "liabilities_assets",
+        "ocf_assets",
+        "capex_assets",
+        "annual_revenue_growth"
+      ],
+      "rows": 7406,
+      "symbols": 44,
+      "limitations": [
+        "Current-universe survivorship bias; delisted returns not covered",
+        "Broad-market benchmark SPY, not a point-in-time sector benchmark",
+        "Annual consolidated accounting only; valuation and macro not yet model features",
+        "No prospective shadow outcomes yet; probabilities not validated for decisions"
+      ],
+      "dataset_sha256": "509b44f8446316dceac7b6b365d7e9e9f350f8b44c7f16960d8ae93998479f58",
+      "status": "EXPERIMENT_EVALUATED_NOT_PROMOTED",
+      "metrics": {
+        "frequency": {
+          "n": 1760,
+          "dates": 40,
+          "brier": 0.25865547987175413,
+          "log_loss": 0.7105842123998036,
+          "reliability": [
+            {
+              "lower": 0.5,
+              "n": 1760,
+              "predicted": 0.5657444005270093,
+              "observed": 0.4670454545454546
+            }
+          ]
+        },
+        "constant_50pct": {
+          "n": 1760,
+          "dates": 40,
+          "brier": 0.25,
+          "log_loss": 0.6931471805599451,
+          "reliability": [
+            {
+              "lower": 0.5,
+              "n": 1760,
+              "predicted": 0.5,
+              "observed": 0.4670454545454546
+            }
+          ]
+        },
+        "logistic": {
+          "n": 1760,
+          "dates": 40,
+          "brier": 0.25041947728172653,
+          "log_loss": 0.6939966410396068,
+          "reliability": [
+            {
+              "lower": 0.4,
+              "n": 824,
+              "predicted": 0.4714976391643167,
+              "observed": 0.46116504854368934
+            },
+            {
+              "lower": 0.5,
+              "n": 936,
+              "predicted": 0.5111522765653141,
+              "observed": 0.47222222222222227
+            }
+          ],
+          "brier_minus_50pct_block_bootstrap_95pct": [
+            -0.0010205423308838133,
+            0.001931052712722243
+          ],
+          "by_year": {
+            "2023": {
+              "n": 440,
+              "dates": 10,
+              "brier": 0.25305676707458347,
+              "log_loss": 0.6993068554413682,
+              "reliability": [
+                {
+                  "lower": 0.4,
+                  "n": 228,
+                  "predicted": 0.47430426485939864,
+                  "observed": 0.5350877192982456
+                },
+                {
+                  "lower": 0.5,
+                  "n": 212,
+                  "predicted": 0.511897944637284,
+                  "observed": 0.5188679245283018
+                }
+              ]
+            },
+            "2024": {
+              "n": 528,
+              "dates": 12,
+              "brier": 0.2485292414035324,
+              "log_loss": 0.6902053274572122,
+              "reliability": [
+                {
+                  "lower": 0.4,
+                  "n": 242,
+                  "predicted": 0.4725167716296415,
+                  "observed": 0.4380165289256199
+                },
+                {
+                  "lower": 0.5,
+                  "n": 286,
+                  "predicted": 0.5112555616158535,
+                  "observed": 0.5454545454545454
+                }
+              ]
+            },
+            "2025": {
+              "n": 528,
+              "dates": 12,
+              "brier": 0.2504871990761418,
+              "log_loss": 0.6941231036148494,
+              "reliability": [
+                {
+                  "lower": 0.4,
+                  "n": 240,
+                  "predicted": 0.4694762561674015,
+                  "observed": 0.42916666666666675
+                },
+                {
+                  "lower": 0.5,
+                  "n": 288,
+                  "predicted": 0.510568373428301,
+                  "observed": 0.41666666666666663
+                }
+              ]
+            },
+            "2026": {
+              "n": 264,
+              "dates": 6,
+              "brier": 0.24966902246118897,
+              "log_loss": 0.6924759857176417,
+              "reliability": [
+                {
+                  "lower": 0.4,
+                  "n": 114,
+                  "predicted": 0.467976509376355,
+                  "observed": 0.4298245614035088
+                },
+                {
+                  "lower": 0.5,
+                  "n": 150,
+                  "predicted": 0.5110225628836325,
+                  "observed": 0.3733333333333333
+                }
+              ]
+            }
+          }
+        },
+        "gradient_boosting": {
+          "n": 1760,
+          "dates": 40,
+          "brier": 0.25138674600275146,
+          "log_loss": 0.695943656072157,
+          "reliability": [
+            {
+              "lower": 0.3,
+              "n": 6,
+              "predicted": 0.3931540029848818,
+              "observed": 0.3333333333333333
+            },
+            {
+              "lower": 0.4,
+              "n": 1157,
+              "predicted": 0.4662286414294045,
+              "observed": 0.487467588591184
+            },
+            {
+              "lower": 0.5,
+              "n": 597,
+              "predicted": 0.525944935097478,
+              "observed": 0.42881072026800665
+            }
+          ],
+          "brier_minus_50pct_block_bootstrap_95pct": [
+            -0.0008189470234071885,
+            0.003376344102521845
+          ],
+          "by_year": {
+            "2023": {
+              "n": 440,
+              "dates": 10,
+              "brier": 0.255840845329145,
+              "log_loss": 0.7049241864177993,
+              "reliability": [
+                {
+                  "lower": 0.3,
+                  "n": 5,
+                  "predicted": 0.3931540029848818,
+                  "observed": 0.39999999999999997
+                },
+                {
+                  "lower": 0.4,
+                  "n": 296,
+                  "predicted": 0.4668114559422266,
+                  "observed": 0.5304054054054054
+                },
+                {
+                  "lower": 0.5,
+                  "n": 139,
+                  "predicted": 0.5306718004708071,
+                  "observed": 0.5251798561151079
+                }
+              ]
+            },
+            "2024": {
+              "n": 528,
+              "dates": 12,
+              "brier": 0.2497636132226413,
+              "log_loss": 0.6926737871380467,
+              "reliability": [
+                {
+                  "lower": 0.3,
+                  "n": 1,
+                  "predicted": 0.39315400298488185,
+                  "observed": 0.0
+                },
+                {
+                  "lower": 0.4,
+                  "n": 325,
+                  "predicted": 0.47162972350326154,
+                  "observed": 0.5169230769230768
+                },
+                {
+                  "lower": 0.5,
+                  "n": 202,
+                  "predicted": 0.5284003578633242,
+                  "observed": 0.4653465346534653
+                }
+              ]
+            },
+            "2025": {
+              "n": 528,
+              "dates": 12,
+              "brier": 0.2523160268256956,
+              "log_loss": 0.6977995498121962,
+              "reliability": [
+                {
+                  "lower": 0.4,
+                  "n": 364,
+                  "predicted": 0.46248007042464795,
+                  "observed": 0.48076923076923067
+                },
+                {
+                  "lower": 0.5,
+                  "n": 164,
+                  "predicted": 0.5208807321111842,
+                  "observed": 0.2926829268292682
+                }
+              ]
+            },
+            "2026": {
+              "n": 264,
+              "dates": 6,
+              "brier": 0.2453509510397609,
+              "log_loss": 0.6838040558842288,
+              "reliability": [
+                {
+                  "lower": 0.4,
+                  "n": 172,
+                  "predicted": 0.4629531476848261,
+                  "observed": 0.3720930232558138
+                },
+                {
+                  "lower": 0.5,
+                  "n": 92,
+                  "predicted": 0.5224394960122432,
+                  "observed": 0.4456521739130432
+                }
+              ]
+            }
+          }
+        }
+      },
+      "splits": {
+        "train": {
+          "n": 3795,
+          "first": "2010-01-29 00:00:00+00:00",
+          "last": "2019-07-31 00:00:00+00:00",
+          "max_label_end": "2019-10-29 00:00:00+00:00"
+        },
+        "calibration": {
+          "n": 1643,
+          "first": "2019-11-29 00:00:00+00:00",
+          "last": "2022-12-30 00:00:00+00:00",
+          "max_label_end": "2023-03-30 00:00:00+00:00"
+        },
+        "test": {
+          "n": 1760,
+          "first": "2023-03-31 00:00:00+00:00",
+          "last": "2026-06-30 00:00:00+00:00",
+          "max_label_end": "2026-09-28 00:00:00+00:00"
+        }
+      },
+      "challenger_beats_frequency": true,
+      "challenger_beats_50pct": false,
+      "challenger_beats_logistic": false,
+      "artifact_sha256": "820bf422dc7e3ee0cdde294f67d4493fb5391a1b0fcceac115dad16bda60161e"
+    }
+  },
+  "health": {
+    "yahoo": {
+      "ok": true,
+      "ts": "2026-10-04T06:01:22.280565+00:00",
+      "version": "2.2.0",
+      "dataDir": "/data",
+      "cacheDir": "/data/cache",
+      "config": {
+        "YF_INIT_LOOKBACK_DAYS": 400,
+        "YF_OVERLAP_BARS": 3,
+        "COOLDOWN_BASE_SEC": 300,
+        "COOLDOWN_MAX_SEC": 3600,
+        "COOLDOWN_RATELIMIT_SEC": 1800,
+        "MIN_SECONDS_BETWEEN_CALLS": 1.0
+      },
+      "cache_ttl": {
+        "1m": 900,
+        "2m": 1800,
+        "5m": 1800,
+        "15m": 2100,
+        "30m": 2400,
+        "60m": 3900,
+        "1h": 3900,
+        "90m": 5700,
+        "1d": 14400,
+        "5d": 86400,
+        "1wk": 172800,
+        "1mo": 604800,
+        "3mo": 604800
+      }
+    },
+    "research": {
+      "ok": true,
+      "mode": "SHADOW",
+      "decision_enabled": false
+    },
+    "dashboard": "ok",
+    "broker": {
+      "authenticated": true,
+      "dry_run": false,
+      "account_aligned": true
+    },
+    "pending_approvals": {
+      "count": 0
+    },
+    "legacy_history": {
+      "ok": true,
+      "rows": 19,
+      "keys": [
+        "ok",
+        "stale",
+        "symbol",
+        "resolvedSymbol",
+        "interval",
+        "lookback_days",
+        "source",
+        "fetchedAt",
+        "error",
+        "count",
+        "dataAsOf",
+        "last",
+        "bars",
+        "closedOnly",
+        "validatedOnly",
+        "droppedOpen",
+        "droppedInvalid",
+        "marketTimezone",
+        "regularMarketClose"
+      ]
+    },
+    "research_history_0": {
+      "ok": true,
+      "contract": "YF_RESEARCH_HISTORY_V1",
+      "currency": "USD",
+      "cache_hit": false,
+      "yfinance_version": "1.3.0",
+      "rows": 4213
+    },
+    "research_history_1": {
+      "ok": true,
+      "contract": "YF_RESEARCH_HISTORY_V1",
+      "currency": "USD",
+      "cache_hit": true,
+      "yfinance_version": "1.3.0",
+      "rows": 4213
+    }
+  },
+  "containers": {
+    "yfinance-api": {
+      "image_id": "sha256:ee4c2793daf617e9ce76a7ada2f3eb98264c43c65fb6032e865f2fafb55a2229",
+      "started_at": "2026-10-04T05:59:20.429309711Z",
+      "status": "running",
+      "health": null,
+      "memory_limit": 0,
+      "nano_cpus": 0
+    },
+    "ag3-predictive": {
+      "image_id": "sha256:41a94bc94a1a21ecc8bec26076fdde3ddf9323514acbfc43a664cc1039afaedb",
+      "started_at": "2026-10-04T05:59:29.032079983Z",
+      "status": "running",
+      "health": "healthy",
+      "memory_limit": 1258291200,
+      "nano_cpus": 1000000000
+    },
+    "root-trading-dashboard-1": {
+      "image_id": "sha256:7bf61a5ec2a4631b240bc8cf83404e2dd37fb06a4b4bbd34b2c36906a5fb4aee",
+      "started_at": "2026-10-04T05:31:17.051018542Z",
+      "status": "running",
+      "health": null,
+      "memory_limit": 0,
+      "nano_cpus": 0
+    }
+  },
+  "workflows": [
+    [
+      "AG1V4CONSENSUS",
+      1,
+      "87de669d-ae38-4c50-9247-492bbf11f0a3",
+      "87de669d-ae38-4c50-9247-492bbf11f0a3"
+    ],
+    [
+      "AG3V2HELDCORE20260622",
+      1,
+      "c74b3727-5636-49d1-a663-d22d72b5b1ff",
+      "c74b3727-5636-49d1-a663-d22d72b5b1ff"
+    ],
+    [
+      "AG3V2WATCHNIGHT20260622",
+      1,
+      "c2d6bcea-4d6a-48a0-acac-47b72a493e0a",
+      "c2d6bcea-4d6a-48a0-acac-47b72a493e0a"
+    ]
+  ],
+  "cron": [
+    "45 * * * * /opt/trader-ia/services/ag3-predictive/run_scheduled.sh >> /local-files/ag3-predictive/scheduler.log 2>&1 # AG3 predictive research"
+  ],
+  "previous_cron_lines_preserved": true,
+  "deployed_source_sha256": {
+    "services/ag3-predictive/regional.py": "a18424704142caeffa0ca3417dcba0f48a79b31c22974a3ab332455ab1e8f2de",
+    "services/ag3-predictive/requirements.txt": "c7efefa8833ac61502e9c8e1c686635a61a5c75e3facc1b9c4e8972d5e4e92b2",
+    "services/ag3-predictive/identity_seeds.json": "fafbb4b22ea8f9f528113716781b4da556cdc47bc0e53bda5f968b44da882be5",
+    "services/ag3-predictive/Dockerfile": "6f3df5b29c70b1b1d73dd57d34ffc4418961a5efa6973a8d25ce38fd08d64962",
+    "services/ag3-predictive/run_scheduled.sh": "6b587190501d510a9ba25de47a3e81cb9d35a98ba8c72b12c2f933ff7711f8c4",
+    "services/ag3-predictive/runner.py": "5e3aaff09fc90f87a428b2f0ac9c6e3108069929c525736f94da2f0c87886689",
+    "services/ag3-predictive/store.py": "b781046717d0418c2b6229d99270aaa62597f27a9247a5835c13fa395faf3797",
+    "services/ag3-predictive/model.py": "e686d2bc5e44e79f0e32b19c5a3aca177dcbd2b7c04e6cdeb6bdb782da85dbf7",
+    "services/ag3-predictive/normalization.py": "0a5d284abd779a0ac6100fb0a83e2682eea4a5edc51c501f6542912026b2b952",
+    "services/ag3-predictive/compose.yml": "00111e213cb32aaeef8255f59e086a6f67764ca6af7978c5b011a0e1272aede2",
+    "services/ag3-predictive/collectors.py": "cbe3d3140b0bd0198750000446427c6d5a9e439afe93efb9483927957d9cf87b",
+    "services/ag3-predictive/http_client.py": "068925cf6d042a27c1e9122fd26c1cd0e28db9921579af8774bc86d592e638fc",
+    "services/ag3-predictive/api.py": "357c6a2a0f0ccf216896b0e961809668e3ff345781783fb49676d52eab6a111c",
+    "services/yfinance-api/main.py": "5d8cc9537714fed6ac6829ece7ba6e2b3f15743e8748f0b59fe337878c2b651f",
+    "services/yfinance-api/research_history.py": "bb48c38276cbbc3b0bfab896c6d3d0c4f9e67c4e6b29aa1d9cd3806a848ea7ea",
+    "services/yfinance-api/Dockerfile": "267b06f0703644399ab8e162d8341070e9180f32885f5ed396abfecc8596f04a",
+    "services/dashboard/app.py": "2e6995ef97b7ef1360deca33b700a73c0c584563b5ef07bfd9eb6aa88046949d",
+    "services/dashboard/predictive_detail.py": "7f86bc056d2dc3c5022ed458f91834eb6f50bc2c129dac7ddefd25b4ed45619f"
+  },
+  "validation": {
+    "targeted_tests_passed": 10,
+    "existing_yahoo_tests_passed": 7,
+    "isolated_model_replay": "passed; 7406 observations, 44 symbols; same metrics on final code",
+    "next_scheduled_cycle": "not yet observed",
+    "no_order_submitted": true,
+    "n8n_workflows_modified": false,
+    "dashboard_apptest": {
+      "exceptions": 0,
+      "metrics": 13,
+      "charts": 2,
+      "tables": 8
+    }
+  },
+  "local_deployed_source_parity": true
+}

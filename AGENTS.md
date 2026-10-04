@@ -48,6 +48,11 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## Recherche prédictive AG3 — LIVE 2026-10-04
+- Service séparé `ag3-predictive`, stockage `/local-files/ag3-predictive` (SQLite + archives). Yahoo existant 2.2.0 enrichi par `/research/history` ; SEC/ESEF/BCE/ALFRED collectés. Cron 04:45 Paris, verrou exclusif, aucun write DuckDB métier.
+- Premier modèle US / rendement total à 90 jours contre SPY : expérimental, non validé, aucun effet sur AG1 ou les ordres. Les probabilités ne battent pas la référence 50 % dans le premier test. ESEF sans dates de publication prouvées exclu du modèle ; Japon/Corée encore sans clés et sans validation du backfill.
+- États, preuves et rollback : `docs/operations/20261004_ag3_predictive_pipeline_deployment.md`. `/health` ne prouve pas le succès des collectes : lire `/status`. Premier cron à observer.
+
 ## Fondamental AG3 — LIVE 2026-10-03
 - Calcul `ag3_v2_units_nulls_20261003` : absences préservées, ratios Yahoo convertis sans seuil de 150 %, objectifs analystes sans cibles de repli inventées. Les 527 derniers relevés ont été réparés avec leurs dates conservées.
 - Dashboard détaillé et AG1 partagent `AG3_EVIDENCE_V1` ; nœud `20L — Fundamental Evidence` avant Merge7. Source commune : `services/dashboard/fundamental_context.py`, génération : `outils/scripts/build_ag3_fundamental_update.py`.

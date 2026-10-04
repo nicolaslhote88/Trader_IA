@@ -20,6 +20,7 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from fundamental_detail import render_fundamental_detail, load_detail
+from predictive_detail import render_predictive_detail
 
 # ============================================================
 # CONFIGURATION
@@ -18260,6 +18261,7 @@ elif page == "Analyse Fondamentale V2":
             row = by_symbol.loc[selected_symbol]
 
             render_fundamental_detail(selected_symbol, row, AG3_DUCKDB_PATH, ag3_db_sig, fetch_yfinance_history)
+            render_predictive_detail(selected_symbol)
 
     # ================================================================
     # TAB 3: HISTORIQUE RUNS
