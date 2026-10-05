@@ -575,6 +575,28 @@ def load_active_segments(con):
     return segments
 
 
+
+def load_current_held_symbols():
+    # This reader never writes the ledger and does not trigger broker actions.
+    con = None
+    try:
+        con = duckdb.connect("/files/duckdb/ag1_v4_consensus.duckdb", read_only=True)
+        snapshot = con.execute(
+            "SELECT run_id FROM core.portfolio_snapshot "
+            "WHERE ts >= CURRENT_TIMESTAMP - INTERVAL '96 hours' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        if snapshot is None:
+            return None
+        return {str(row[0]).strip().upper() for row in con.execute(
+            "SELECT symbol FROM core.positions_snapshot WHERE run_id=? AND qty>0", [snapshot[0]]
+        ).fetchall()}
+    except Exception:
+        return None  # Existing HELD segments remain the conservative fallback.
+    finally:
+        if con is not None:
+            con.close()
+
+
 def apply_rotation_mode(process_queue, quarantine_symbols, segments, rotation_mode, batch_size):
     mode = str(rotation_mode or "ACTIONS_ONLY").strip().upper()
     by_symbol = {}
@@ -656,6 +678,8 @@ config = {
     "universe_scope": first_json.get("universe_scope") or ["EQUITY", "ETF", "CRYPTO"],
 }
 
+current_held = load_current_held_symbols()
+
 with db_con() as con:
     for stmt in SCHEMA_STMTS:
         con.execute(stmt)
@@ -715,6 +739,11 @@ with db_con() as con:
     raw_total = len(process_queue)
     quarantine_symbols = load_active_quarantine(con)
     segments = load_active_segments(con)
+    if current_held is not None:
+        for values in segments.values():
+            values.discard("HELD")
+        for symbol in current_held:
+            segments.setdefault(symbol, set()).add("HELD")
     always_batch, rotation_queue, rotation_meta = apply_rotation_mode(
         process_queue,
         quarantine_symbols,
@@ -763,6 +792,7 @@ for i, entry in enumerate(batch):
                 "ok": True,
                 "symbol": symbol_internal,
                 "symbol_internal": symbol_internal,
+                "is_held": "HELD" in segments.get(symbol_internal, set()),
                 "symbol_yahoo": symbol_yahoo,
                 "asset_class": str(entry.get("asset_class") or "EQUITY").upper(),
                 "exchange": str(entry.get("exchange") or ""),
@@ -791,6 +821,7 @@ for i, entry in enumerate(batch):
                     "quarantine_excluded": quarantine_excluded,
                     "rotation_size": len(rotation_batch),
                     "always_included": len(always_batch),
+                    "held_source": "PORTFOLIO_SNAPSHOT" if current_held is not None else "SEGMENTS_FALLBACK",
                     "rotation_total": rotation_total,
                     "next_index": next_idx,
                     "state_key": config["batch_state_key"],

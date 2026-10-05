@@ -25,13 +25,13 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 | Workflow | Cron (Paris) | Fréq. | Durée moy. | Max | Base principale (rôle) |
 |---|---|---|---|---|---|
 | AG2-V3 Technical Watchlist | `0 22,2 * * *` | 7j/7 | ~41 min | 59 | ag2_v3 (écrivain) |
-| AG2-V3 Technical Held+Core | `0 9,13 * * 1-5` + `35 16 * * 1-5` | L-V | 10–16 min récemment | 27 historique | ag2_v3 (écrivain) |
+| AG2-V3 Technical Held+Core | `0 9,13 * * 1-5` + `41 16 * * 1-5` | L-V | 10–16 min récemment | 27 historique | ag2_v3 (écrivain) |
 | AG2 Universe Health Quarantine | `0 20 * * 1-5` | L-V | ~8 min | 12 | ag2_v3 (écrivain) |
 | AG3-V2 Fundamental Held+Core | `0 0 * * *` | 7j/7 | ~18 min | 28 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
 | AG3-V2 Fundamental Watchlist | `0 1,4 * * *` | 7j/7 | ~17 min | 20 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
 | AG4-V3 News Watcher | `45 6,10,14 * * 1-5` | L-V | ~89 min | 92 | ag4_v3 (écrit) / ag2_v3 (lit brièvement au start) |
 | AG4_Spé-V2 News symbole | `0 5 8,11,14,15 * * 1-5` | L-V | ~24 min | 34 | ag4_spe (écrit) / ag2_v3 (lit au start) |
-| AG1 V4 Consensus PM | `0 10 17 * * 1-5` | L-V, une fois/jour | ~6 min | 12 historique | ag1_v4 (écrit), ag2/3/4 (lit). Après AG2 16:35, avant clôture Euronext usuelle 17:30. |
+| AG1 V4 Consensus PM | `0 10 17 * * 1-5` | L-V, une fois/jour | ~6 min | 12 historique | ag1_v4 (écrit), ag2/3/4 (lit). Après AG2 16:41, avant clôture Euronext usuelle 17:30. |
 | AG1-PF MTM | `0 15 9-16 * * 1-5` + `0 40 17 * * 1-5` + `0 15 23 * * 1-5` | L-V | <1 min | 3 | ag1_v4 ; relevé après PM et relevé de fin de journée, même si NAV stable. |
 | AG4_Spé-Finnhub Global News | `0 0 10,13,16 * * 1-5` | L-V | ~20 min | 30 | ag4_spe |
 | AG4_Spé-IBKR Portfolio News | `0 0 10,13,16 * * 1-5` | L-V | ~9 min | 13 | ag4_spe |
@@ -123,3 +123,7 @@ permissions avant swap. Ne pas remplacer ces reconstructions offline par un
 
 ## Reste à durcir (proposé, non déployé)
 **Retry-hardening** : porter le budget de reconnexion DuckDB des `db_con` (tous les nodes) de ~15 s à ~2-3 min (backoff), pour absorber tout chevauchement transitoire résiduel sans faire échouer le run. Robustesse générale, mais touche de nombreux nodes.
+
+## Ajustement AG2 du 5 octobre 2026
+
+Held+Core : dernier départ **16:41 Paris**, après la disponibilité de la première H1 US à 16:40 (fin de bougie + 10 min). AG1 reste 17:10 : budget 29 min, maximum historique 27 min. La revue IA des positions détenues accroît le nombre d’appels ; premier cycle réel `22751` : 27 titres, 12 appels, **11 min 43 s**, sans erreur (5 octobre). Les mentions 16:35 dans l’historique ci-dessus sont remplacées. [Déploiement et limites](20261005_ag2_held_review_deployment.md).

@@ -1,6 +1,6 @@
 # Documentation Trader_IA
 
-Index mis à jour le 2026-10-04 (collectes historiques et recherche prédictive AG3). Les documents datés dans `audits/`
+Index mis à jour le 2026-10-05 (revues IA des positions détenues AG2). Les documents datés dans `audits/`
 et `operations/` conservent volontairement les faits observés à leur date ; les
 documents ci-dessous décrivent l'état courant.
 
@@ -22,6 +22,8 @@ documents ci-dessous décrivent l'état courant.
 | Exécution et approbation IBKR | `operations/ibkr_execution.md`, `operations/order_approval_deploy_notes.md` |
 
 ## Derniers changements live
+
+- AG2 : revue des positions détenues même H1 neutre, fraîcheur de séance, D1 US corrigée, dernier créneau 16:41 et affichage Non analysé/devise native : [déploiement du 5 octobre](operations/20261005_ag2_held_review_deployment.md).
 
 - Fiche historique datée raccordée aux trois modèles AG1 sur demande explicite : [déploiement réel du 4 octobre](operations/20261004_ag1_historical_evidence_live.md). Version publiée vérifiée ; premier cron enrichi à observer. Les résultats de simulation restent documentés sans revendication de performance.
 

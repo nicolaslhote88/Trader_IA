@@ -93,6 +93,11 @@ return [
       ...item,
       ai_context: {
         schema_version: "ag2_ai_context_v3",
+        review_purpose: item.is_held ? "HELD_POSITION_REVIEW" : "ENTRY_SETUP",
+        is_held: item.is_held === true,
+        review_instruction: item.is_held
+          ? "Review the technical condition of this held position, including neutral H1. APPROVE/WATCH/REJECT assess setup quality, not an instruction to close a position. Do not invent a directional trade when neutral."
+          : null,
         symbol: item.symbol_internal || item.symbol,
         symbol_yahoo: item.symbol_yahoo || item.symbol,
         asset_class: item.asset_class || "EQUITY",

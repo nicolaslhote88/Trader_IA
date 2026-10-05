@@ -445,7 +445,7 @@ def compute_indicators(bars, interval, exchange="", asset_class=""):
     )
 
 
-def check_freshness(last_bar_time, interval, now=None):
+def check_freshness(last_bar_time, interval, now=None, session_reference=None):
     if not last_bar_time:
         return False, None, "NO_TIMESTAMP"
     if now is None:
@@ -480,6 +480,17 @@ def check_freshness(last_bar_time, interval, now=None):
             ai_fresh_max_age_h = 3
         if age_hours > hard_max_age_h:
             return False, age_hours, "STALE"
+        if session_reference and session_reference.get("method") == "REGULAR_SESSION_V1":
+            try:
+                ref = datetime.fromisoformat(session_reference["latestExpectedBarTime"].replace("Z", "+00:00"))
+                generated = datetime.fromisoformat(session_reference["asOf"].replace("Z", "+00:00"))
+                if ref.tzinfo is not None and generated.tzinfo is not None and 0 <= (now-generated).total_seconds() <= 300 and ref <= now:
+                    lag_hours = max(0.0, (ref-t).total_seconds()/3600)
+                    if lag_hours <= 3:
+                        return True, age_hours, "SESSION_FRESH"
+                    return False, age_hours, "SOFT_STALE"
+            except (ValueError, TypeError, KeyError):
+                pass
         if age_hours > ai_fresh_max_age_h:
             return False, age_hours, "SOFT_STALE"
     else:
@@ -488,7 +499,7 @@ def check_freshness(last_bar_time, interval, now=None):
     return True, age_hours, "FRESH"
 
 
-def pre_filter(h1_result, d1_result):
+def pre_filter(h1_result, d1_result, is_held=False):
     h1_status = (h1_result or {}).get("status")
     d1_status = (d1_result or {}).get("status")
     if h1_status != "OK":
@@ -506,6 +517,8 @@ def pre_filter(h1_result, d1_result):
     d1_sma200 = d1_ind.get("sma200")
     d1_close = d1_ind.get("last_close")
 
+    if is_held:
+        return True, "HELD_PERIODIC_REVIEW"
     if not h1_action:
         return False, "NO_H1_SIGNAL"
     if h1_action == "SELL":
@@ -545,7 +558,7 @@ def compute_sig_hash(symbol_key, h1_sig, h1_ind, d1_ind):
     return fnv1a("|".join(parts))
 
 
-def check_dedup(symbol_key, sig_hash, h1_action, con):
+def check_dedup(symbol_key, sig_hash, h1_action, con, is_held=False):
     ttl_buy = 240
     ttl_sell = 60
     row = con.execute(
@@ -562,7 +575,7 @@ def check_dedup(symbol_key, sig_hash, h1_action, con):
         cached_decision = ""
     if cached_decision == "REJECT":
         return True, "REJECT_NOT_REUSED"
-    ttl = ttl or (ttl_sell if h1_action == "SELL" else ttl_buy)
+    ttl = 240 if is_held else (ttl or (ttl_sell if h1_action == "SELL" else ttl_buy))
 
     if old_hash != sig_hash:
         return True, "SIGNATURE_CHANGED"
@@ -675,7 +688,7 @@ for it in items:
         d1_result = compute_indicators(d1_resp.get("bars", []), d1_interval, exchange, asset_class)
 
         now_utc = datetime.now(timezone.utc)
-        h1_fresh, h1_age_h, h1_freshness = check_freshness(h1_result.get("last_bar_time"), h1_interval, now_utc)
+        h1_fresh, h1_age_h, h1_freshness = check_freshness(h1_result.get("last_bar_time"), h1_interval, now_utc, h1_resp.get("aiSessionReference"))
         d1_fresh, d1_age_h, d1_freshness = check_freshness(d1_result.get("last_bar_time"), d1_interval, now_utc)
 
         if not h1_fresh and h1_freshness == "STALE":
@@ -702,7 +715,8 @@ for it in items:
         h1_sig = h1_result.get("signal", {}) or {}
         d1_sig = d1_result.get("signal", {}) or {}
 
-        pass_ai, filter_reason = pre_filter(h1_result, d1_result)
+        is_held = d.get("is_held") is True
+        pass_ai, filter_reason = pre_filter(h1_result, d1_result, is_held)
         if pass_ai and (not h1_fresh or not d1_fresh):
             pass_ai = False
             filter_reason = "H1_OR_D1_OUTSIDE_AI_FRESHNESS_WINDOW"
@@ -712,13 +726,15 @@ for it in items:
 
         dedup_key = symbol_internal
         sig_hash = compute_sig_hash(dedup_key, h1_sig, h1_ind, d1_ind)
+        if is_held:
+            sig_hash = fnv1a(sig_hash + "|held_review_v1|" + str(h1_result.get("last_bar_time")) + "|" + str(d1_result.get("last_bar_time")))
 
         call_ai = False
         dedup_reason = "FILTERED_OUT"
 
         with db_con() as con:
             if pass_ai:
-                call_ai, dedup_reason = check_dedup(dedup_key, sig_hash, (h1_sig.get("action") or ""), con)
+                call_ai, dedup_reason = check_dedup(dedup_key, sig_hash, (h1_sig.get("action") or ""), con, is_held)
 
             signal_id = run_id + "|" + symbol_internal
             row = {
@@ -789,6 +805,7 @@ for it in items:
             con.execute("INSERT OR REPLACE INTO technical_signals (" + ", ".join(cols) + ") VALUES (" + placeholders + ")", list(row.values()))
 
         out = dict(row)
+        out["is_held"] = is_held
         h1_bars = h1_resp.get("bars", []) or []
         d1_bars = d1_resp.get("bars", []) or []
         out["h1_bars_60"] = h1_bars[-60:] if len(h1_bars) > 60 else h1_bars

@@ -349,7 +349,14 @@ with db_con() as con:
             reasoning = "[AUTO] APPROVE sans stop-loss => invalide. " + (reasoning or "")
 
         # Enforce the RR rules from the prompt in deterministic code.
-        if h1_action == "SELL":
+        if d.get("is_held") is True and h1_action == "NEUTRAL":
+            # A neutral held-position review is observation, never an entry approval.
+            if decision != "REJECT" and not missing_fields:
+                decision = "WATCH"
+            else:
+                decision = "REJECT"
+            validated = False
+        elif h1_action == "SELL":
             anomalies_list.append("AI_SELL_REJECTED_LONG_ONLY")
             decision = "REJECT"
             validated = False
@@ -434,10 +441,11 @@ with db_con() as con:
                         "bb_status": bb_status,
                         "rsi_status": rsi_status,
                         "alignment": alignment,
+                        **{k: v for k, v in upd.items() if k.startswith("ai_")},
                     },
                     ensure_ascii=False,
                 )
-                cache_ttl = 60 if str(d.get("h1_action") or "").upper() == "SELL" else 240
+                cache_ttl = 240 if d.get("is_held") is True else (60 if str(d.get("h1_action") or "").upper() == "SELL" else 240)
                 con.execute(
                     """
                     INSERT INTO ai_dedup_cache (

@@ -48,6 +48,12 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## AG2 — correction des revues HELD, LIVE 2026-10-05
+- HELD lu depuis le dernier snapshot portefeuille (≤96 h), repli segments ; H1 NEUTRAL n'exclut plus les détenus de la revue IA. Cache 4 h et invalidation par bougie, REJECT non réutilisé.
+- Fraîcheur H1 relative aux séances régulières/week-ends ; limites dures 96 h inchangées. Jours fériés non exemptés, approche conservatrice. Date D1 US corrigée ; bougie du jour exclue avant clôture +10 min.
+- Dernier Held+Core **16:41 Paris** (remplace 16:35), AG1 17:10 inchangé. Dashboard : SKIP = Non analysé, devise native.
+- Preuves, périmètre et rollback : `docs/operations/20261005_ag2_held_review_deployment.md`.
+
 ## Fiche historique AG1 — LIVE 2026-10-04
 - Promotion explicitement demandée par Nicolas malgré un apport de performance non démontré. `AG3_HISTORICAL_EVIDENCE_V1` est transmise après Liquidity Preflight aux trois modèles et au consensus : `AG1.HISTORY — Fetch Dated Accounts` → `… Attach Dated Accounts`.
 - Source : `ag3-predictive` POST `/ag1/historical-evidence`, faits datés uniquement, aucun score/gate modifié et aucune probabilité prédictive ajoutée. Timeout 8 s ; service invalide/indisponible = état explicite sans faits, poursuite avec les autres données.

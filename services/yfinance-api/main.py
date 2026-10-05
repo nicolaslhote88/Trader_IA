@@ -20,7 +20,7 @@ import yfinance as yf
 # =========================
 # Config (ENV)
 # =========================
-APP_VERSION = "2.2.0"
+APP_VERSION = "2.2.1"
 
 TZ = os.getenv("TZ", "UTC")
 
@@ -695,12 +695,59 @@ def _bar_is_closed(
     if value == "1d":
         tz_name, close_at, close_next_day = _market_profile(exchange, symbol, asset_class)
         local_ts = ts.to_pydatetime().astimezone(ZoneInfo(tz_name))
-        close_date = local_ts.date() + (timedelta(days=1) if close_next_day else timedelta(0))
+        # Naive Yahoo daily dates were normalized to UTC midnight. They are
+        # session labels, not instants on the preceding New York calendar day.
+        session_date = ts.date() if ts.hour == 0 and ts.minute == 0 else local_ts.date()
+        close_date = session_date + (timedelta(days=1) if close_next_day else timedelta(0))
         close_local = datetime.combine(close_date, close_at, ZoneInfo(tz_name))
         return now_utc >= close_local.astimezone(timezone.utc) + grace
     # AG2 only requests 1h and 1d. Unknown intervals are fail-closed when the
     # caller explicitly asks for closed bars.
     return False
+
+
+
+def _ai_session_reference(interval, exchange, symbol, asset_class, now_utc):
+    """Latest eligible regular-session bar; holidays conservatively remain gaps."""
+    duration = _interval_seconds(interval)
+    if duration is None:
+        return None
+    tz_name, close_at, continuous = _market_profile(exchange, symbol, asset_class)
+    if continuous:
+        return None  # Existing wall-clock freshness remains authoritative.
+    opens = {
+        "America/New_York": clock_time(9, 30),
+        "Australia/Sydney": clock_time(10), "Europe/Madrid": clock_time(9),
+        "Europe/Amsterdam": clock_time(9), "Europe/Paris": clock_time(9),
+        "Asia/Hong_Kong": clock_time(9, 30), "Asia/Seoul": clock_time(9),
+        "Asia/Singapore": clock_time(9), "Europe/Zurich": clock_time(9),
+        "Asia/Tokyo": clock_time(9), "Europe/Berlin": clock_time(9),
+    }
+    if tz_name not in opens:
+        return None
+    zone = ZoneInfo(tz_name)
+    today = now_utc.astimezone(zone).date()
+    latest = None
+    for back in range(7):
+        day = today - timedelta(days=back)
+        if day.weekday() >= 5:
+            continue
+        start = datetime.combine(day, opens[tz_name], zone)
+        close = datetime.combine(day, close_at, zone)
+        while start < close:
+            stamp = start.astimezone(timezone.utc)
+            if stamp + timedelta(seconds=duration, minutes=10) <= now_utc:
+                latest = max(latest, stamp) if latest else stamp
+            start += timedelta(seconds=duration)
+        if latest is not None:
+            break
+    return {
+        "method": "REGULAR_SESSION_V1",
+        "asOf": now_utc.isoformat(),
+        "latestExpectedBarTime": latest.isoformat() if latest else None,
+        "timezone": tz_name,
+        "holidayPolicy": "CONSERVATIVE_NO_HOLIDAY_EXEMPTION",
+    }
 
 
 def _df_to_validated_bars(
@@ -1218,6 +1265,9 @@ def history(
             "droppedInvalid": quality["droppedInvalid"],
             "marketTimezone": market_tz,
             "regularMarketClose": market_close.isoformat(timespec="minutes"),
+            "aiSessionReference": _ai_session_reference(
+                interval, exchange, resolved_symbol, asset_class, now_utc
+            ),
         }
 
     # === DECISION: Should we fetch fresh data? ===

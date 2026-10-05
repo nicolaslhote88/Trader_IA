@@ -27,7 +27,7 @@ VARIANTS = [
         "name": "AG2-V3 — Technical Held+Core",
         "file": "AG2-V3-Technical-Held-Core.workflow.json",
         "cron": "0 9,13 * * 1-5",
-        "extra_crons": ["35 16 * * 1-5"],
+        "extra_crons": ["41 16 * * 1-5"],
         "rotation_mode": "HELD_CORE",
         "batch_size": 18,
         "batch_state_key": "last_index_actions_held_core",
@@ -98,6 +98,9 @@ def configure_deepseek_validator(wf, variant):
         user_prompt = old_node["parameters"]["text"]
         parser_node = next(node for node in wf["nodes"] if node.get("name") == parser_name)
         output_schema = parser_node["parameters"]["inputSchema"]
+
+    if "REVUE POSITION DETENUE" not in system_prompt:
+        system_prompt += "\n\n" + (Path(__file__).parent / "nodes/held_review_prompt.txt").read_text(encoding="utf8").strip()
 
     old_name = old_node["name"]
     old_position = old_node.get("position", [-16, 7536])

@@ -17807,7 +17807,10 @@ elif page == "Analyse Technique V2":
                     mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
 
                     close_price = safe_float(row.get("last_close", 0))
-                    mc1.metric("Close", f"{close_price:.2f} €" if close_price > 0 else "—")
+                    price_currency = str(row.get("currency") or "").strip().upper()
+                    if price_currency in ("NAN", "NONE"):
+                        price_currency = ""
+                    mc1.metric("Close", f"{close_price:.2f} {price_currency}".strip() if close_price > 0 else "—")
 
                     h1_act = str(row.get("h1_action", "")).upper()
                     h1_sc = safe_float(row.get("h1_score", 0))
@@ -17818,7 +17821,7 @@ elif page == "Analyse Technique V2":
                     mc3.metric("D1", f"{d1_act}", delta=f"Score: {d1_sc:.0f}")
 
                     ai_dec = str(row.get("ai_decision", "—"))
-                    mc4.metric("Décision IA", ai_dec if ai_dec.strip() else "—")
+                    mc4.metric("Décision IA", "Non analysé" if ai_dec.upper() == "SKIP" else (ai_dec if ai_dec.strip() else "—"))
 
                     ai_qual = safe_float(row.get("ai_quality", 0))
                     mc5.metric("Qualité IA", f"{ai_qual:.0f}/10" if ai_qual > 0 else "—")
@@ -17917,7 +17920,23 @@ elif page == "Analyse Technique V2":
                     # ---- Row 5: AI Analysis Card ----
                     ai_decision = str(row.get("ai_decision", "")).strip()
 
-                    if ai_decision and ai_decision.lower() not in ("", "nan", "none"):
+                    if ai_decision.upper() == "SKIP":
+                        st.markdown("#### Analyse IA")
+                        causes = {
+                            "NEUTRAL": "Signal H1 neutre : le filtre de sélection n'a pas demandé de revue.",
+                            "H1_OR_D1_OUTSIDE_AI_FRESHNESS_WINDOW": "Dernières bougies hors de la fenêtre de fraîcheur nécessaire à l'analyse IA.",
+                            "CLOSED_BARS_UNVERIFIED": "La clôture des bougies n'a pas pu être vérifiée.",
+                            "NO_H1_DATA": "Données H1 indisponibles ou invalides.",
+                            "NO_OR_STALE_D1_DATA": "Données D1 indisponibles, invalides ou périmées.",
+                            "HELD_PERIODIC_REVIEW": "Revue de position détenue attendue ; aucun avis réutilisable.",
+                        }
+                        cause = str(row.get("filter_reason") or "")
+                        st.info("Non analysé — " + causes.get(cause, "Aucun avis IA utilisable pour ce relevé."))
+                        st.caption("SKIP n'est ni une note de qualité, ni un rejet du titre. Les indicateurs techniques restent affichés.")
+                        detail = str(row.get("ai_reasoning") or "")
+                        if detail and detail.lower() not in ("nan", "none"):
+                            st.caption(detail)
+                    elif ai_decision and ai_decision.lower() not in ("", "nan", "none"):
                         st.markdown("#### Analyse IA")
 
                         with st.container(border=True):

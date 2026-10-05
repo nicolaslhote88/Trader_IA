@@ -117,3 +117,7 @@ Une défaillance HTTP/contrat produit `UNAVAILABLE_OR_INVALID` et des fiches san
 jamais des chiffres de remplacement. Le dashboard indique le raccordement réel.
 Les probabilités statistiques restent hors AG1. Promotion autorisée par Nicolas
 malgré le résultat non concluant du test ; [preuves et rollback](20261004_ag1_historical_evidence_live.md).
+
+## AG2 HELD — 2026-10-05
+
+Les positions détenues sont éligibles à une revue IA même H1 NEUTRAL (WATCH d’observation, sans validation d’entrée). Les statuts de validité H1/D1 et limites dures 96 h restent identiques ; seuls le déclenchement IA, la fraîcheur de séance et le cache évoluent. SKIP reste neutre dans AG1 et est désormais nommé « Non analysé » dans le détail technique. Aucun poids ni gate de la matrice/dashboard n’est modifié. [Preuves et limites](20261005_ag2_held_review_deployment.md).
