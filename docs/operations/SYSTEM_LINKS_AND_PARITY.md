@@ -1,6 +1,6 @@
 # Liens entre systèmes & parité à maintenir
 
-**MAJ 2026-09-14.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
+**MAJ 2026-10-06.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
 
 ## ⚠️ Règle d'or
 Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne lit PAS la sortie du run — il recalcule à partir des bases DuckDB `ag2_v3` / `ag3_v2` / `ag4_*`). Donc :
@@ -22,6 +22,21 @@ et la parité sur plusieurs confiances. [Contrat complet](20260914_performance_c
 contrôle, conserve les positions détenues et expose les lots. Les sorties
 proposées ne financent pas les achats. Ces contrôles d’exécution ne sont pas
 répliqués dans la matrice du dashboard.
+
+**Correction du 6 octobre 2026 :** les entonnoirs System Health et Analyse
+technique calculaient encore l’âge réel depuis `workflow_date`. Ils utilisent
+maintenant `h1_date` et `d1_date`, comme R8 et la matrice :
+`max(âge stocké, now − date de la bougie)`. Une exécution récente ne rajeunit pas
+une bougie ancienne. Repli sur la date du signal seulement pour les lignes legacy
+sans date de bougie ; seuils 96 h inchangés. L’audit initial trouvait 217 valeurs
+affichées pré-tradables contre 23 avec les dates effectives.
+Voir [l’audit et la mesure après correction](../audits/20261006_tradability_audit.md).
+
+Depuis le 6 octobre, le fournisseur OHLCV peut compléter un D1 Yahoo manquant
+par une bougie IBKR complète et validée. `d1_source` porte alors
+`+ibkr_cpapi_daily` ; le `conid` et le contrôle d’historique commun sont tracés
+dans le cache/rapport API. Les gates AG2/AG1 et les âges restent inchangés.
+Le préflight des ordres reste un contrôle séparé.
 
 ## Carte des duplications
 

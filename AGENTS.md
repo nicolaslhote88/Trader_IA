@@ -48,6 +48,13 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## Tradabilité — LIVE 2026-10-06
+- Couverture AG2 : ancien ID Watchlist `AG2V3WATCHNIGHT20260619`, mode `COVERAGE`, 80 symboles par lot à 02:00/05:00/10:10/18:15/22:20 Paris, tous les jours. Priorité à la dernière tentative la plus ancienne sur tout HELD/CORE/WATCHLIST hors quarantaine. Held+Core inchangé.
+- Yahoo : backfill des caches trop courts et alias de données PVL.PA→ALPVL.PA, LHYFE.PA→ALHYF.PA, sans changement d’identité interne/broker. Les bougies invalides restent exclues.
+- Secours D1 : API Yahoo 2.2.5 ajoute les seules séances récentes manquantes depuis IBKR, avec identité/devise, OHLCV, clôture et historique commun contrôlés. Cache et provenance distincts ; aucune interpolation. Broker : route historique iserver corrigée, gardes inchangés.
+- Dashboard : âge réel H1/D1 calculé depuis les bougies, comme R8 ; `workflow_date` ne rajeunit plus les données. Aucun seuil, score, verdict IA ou garde broker assoupli.
+- [Audit](docs/audits/20261006_tradability_audit.md) · [Preuves, versions, limites et rollback](docs/operations/20261006_tradability_deployment.md).
+
 ## AG2 — correction des revues HELD, LIVE 2026-10-05
 - HELD lu depuis le dernier snapshot portefeuille (≤96 h), repli segments ; H1 NEUTRAL n'exclut plus les détenus de la revue IA. Cache 4 h et invalidation par bougie, REJECT non réutilisé.
 - Fraîcheur H1 relative aux séances régulières/week-ends ; limites dures 96 h inchangées. Jours fériés non exemptés, approche conservatrice. Date D1 US corrigée ; bougie du jour exclue avant clôture +10 min.

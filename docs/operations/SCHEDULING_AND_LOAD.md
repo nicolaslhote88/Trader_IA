@@ -1,6 +1,6 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-10-04.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-10-06.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
@@ -24,7 +24,7 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 
 | Workflow | Cron (Paris) | Fréq. | Durée moy. | Max | Base principale (rôle) |
 |---|---|---|---|---|---|
-| AG2-V3 Technical Watchlist | `0 22,2 * * *` | 7j/7 | ~41 min | 59 | ag2_v3 (écrivain) |
+| AG2-V3 Technical Universe Coverage | `0 2,5 * * *` + `10 10 * * *` + `15 18 * * *` + `20 22 * * *` | 7j/7, 5 × 80 | 35–60 min estimées ; premiers lots à mesurer | non mesuré | ag2_v3 (écrivain) |
 | AG2-V3 Technical Held+Core | `0 9,13 * * 1-5` + `41 16 * * 1-5` | L-V | 10–16 min récemment | 27 historique | ag2_v3 (écrivain) |
 | AG2 Universe Health Quarantine | `0 20 * * 1-5` | L-V | ~8 min | 12 | ag2_v3 (écrivain) |
 | AG3-V2 Fundamental Held+Core | `0 0 * * *` | 7j/7 | ~18 min | 28 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
@@ -127,3 +127,31 @@ permissions avant swap. Ne pas remplacer ces reconstructions offline par un
 ## Ajustement AG2 du 5 octobre 2026
 
 Held+Core : dernier départ **16:41 Paris**, après la disponibilité de la première H1 US à 16:40 (fin de bougie + 10 min). AG1 reste 17:10 : budget 29 min, maximum historique 27 min. La revue IA des positions détenues accroît le nombre d’appels ; premier cycle réel `22751` : 27 titres, 12 appels, **11 min 43 s**, sans erreur (5 octobre). Les mentions 16:35 dans l’historique ci-dessus sont remplacées. [Déploiement et limites](20261005_ag2_held_review_deployment.md).
+
+## Couverture de tradabilité du 6 octobre 2026
+
+L’ancien workflow Watchlist conserve l’ID `AG2V3WATCHNIGHT20260619`, sous le nom
+**Technical Universe Coverage**. Il traite les 80 symboles les moins récemment
+tentés parmi HELD/CORE/WATCHLIST hors quarantaine : **02:00, 05:00, 10:10, 18:15,
+22:20 Paris**, tous les jours. Capacité nominale 400/j pour 364 symboles éligibles,
+complétée par Held+Core inchangé. L’absence de signal passe en premier ; un échec
+de qualité persistant reçoit aussi une date de tentative et ne monopolise pas la
+rotation. Le curseur positionnel ne pilote plus ce mode.
+
+Les exécutions récentes de 40 symboles ont duré environ 17 min (22775/22780) ;
+35 min par lot de 80 était l’extrapolation avant secours IBKR ; réserver jusqu’à
+60 min avec ce secours est une **estimation**, pas une mesure en production.
+La maintenance de rattrapage utilise les mêmes calculs mais évite le transport
+n8n par symbole : sa durée ne prédit pas celle d’un cron complet. Les appels IA
+restent conditionnels, avec cache existant ; la facture quotidienne est à mesurer.
+
+Les nouveaux départs évitent les autres écrivains AG2 (09:00/13:00/16:41),
+AG2UHQ 20:00, et le PM 17:10. Marges nominales : 05:00→YF 06:15 = 75 min ;
+18:15→UHQ 20:00 = 105 min ; 22:20→AG3 00:00 = 100 min ; 02:00→AG3 04:00 = 120 min.
+Le partage de Yahoo avec AG3 Predictive 04:45 reste soumis à la temporisation API.
+Des lecteurs peuvent se chevaucher avec les écritures brèves AG2 : retries existants,
+pas de promesse d’absence totale de contention. Surveiller les premières durées,
+les erreurs de lock et les retards avant d’étendre le périmètre.
+
+[Audit](../audits/20261006_tradability_audit.md) ·
+[Publication, preuves et retour arrière](20261006_tradability_deployment.md).

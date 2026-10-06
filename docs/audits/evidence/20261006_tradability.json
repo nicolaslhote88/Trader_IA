@@ -1,0 +1,962 @@
+{
+  "measured_at_utc": "2026-10-06T07:24:28.717748+00:00",
+  "baseline_at_utc": "2026-10-06T05:57:40.642257+00:00",
+  "definition": "Existing AG1 R8 technical readiness, quote/liquidity and non-REJECT criteria; pretradable is not a buy decision or execution guarantee.",
+  "before": {
+    "non_quarantine": 364,
+    "segmented": 364,
+    "tech": 39,
+    "quote_liquidity": 35,
+    "pretradable": 23
+  },
+  "after": {
+    "non_quarantine": 364,
+    "segmented": 364,
+    "tech": 324,
+    "quote_liquidity": 302,
+    "pretradable": 272
+  },
+  "pretradable_gain": 249,
+  "pretradable_fraction": 0.7472527472527473,
+  "exclusive_remaining": {
+    "technical_data": 40,
+    "quote_liquidity_after_technical": 22,
+    "ai_reject_after_liquidity": 30
+  },
+  "nonexclusive_remaining": {
+    "D1_STALE": 37,
+    "STALE_D1": 39,
+    "LIQUIDITY": 33,
+    "H1_NO_DATA": 3,
+    "STALE_H1": 6,
+    "QUOTE": 3,
+    "REJECT": 30,
+    "H1_STALE": 3,
+    "H1_INSUFFICIENT_DATA": 1,
+    "D1_INSUFFICIENT_DATA": 1,
+    "D1_NO_DATA": 2
+  },
+  "remaining_public_symbols": [
+    {
+      "symbol": "74SW.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "AB.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "AKW.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALCIS.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALPRG.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "AVT.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "CO.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "CRI.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "EIFF.PA",
+      "reasons": [
+        "H1_NO_DATA",
+        "D1_STALE",
+        "STALE_H1",
+        "STALE_D1",
+        "QUOTE"
+      ]
+    },
+    {
+      "symbol": "EQS.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "LOUP.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "MTU.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "PVL.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "SAN.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "SCHP.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "SDG.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "SWP.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "TTE.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "VMX.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "PRC.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "NVDA",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "MSFT",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "GOOGL",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "META",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "WMT",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "V",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "ABEO.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ABLD.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ACAN.PA",
+      "reasons": [
+        "H1_STALE",
+        "D1_STALE",
+        "STALE_H1",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALCLA.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALDV.PA",
+      "reasons": [
+        "H1_STALE",
+        "D1_STALE",
+        "STALE_H1",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALPJT.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALPM.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALTOU.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALTPC.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALU10.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ARVEN.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "BSD.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "COH.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "CRBP2.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "DPT.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "EEM.PA",
+      "reasons": [
+        "H1_STALE",
+        "D1_STALE",
+        "STALE_H1",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "FINM.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "FIPP.PA",
+      "reasons": [
+        "H1_INSUFFICIENT_DATA",
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "FPG.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "INF.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "LACR.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "LHYFE.PA",
+      "reasons": [
+        "D1_INSUFFICIENT_DATA"
+      ]
+    },
+    {
+      "symbol": "LPE.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "MDM.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "NACON.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "NAE.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "POMRY.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "POXEL.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "PROAC.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALGAE.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALHF.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALINN.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALJXR.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ALLDL.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "ALMIB.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "EGR.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "ELEC.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "GUI.PA",
+      "reasons": [
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "THEP.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1",
+        "LIQUIDITY"
+      ]
+    },
+    {
+      "symbol": "VANTI.PA",
+      "reasons": [
+        "D1_STALE",
+        "STALE_D1"
+      ]
+    },
+    {
+      "symbol": "UNH",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "KO",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "CVX",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "CRM",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "MCD",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "CAT",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "DIS",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "NKE",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "TXN",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "SAP",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "ROG.SW",
+      "reasons": [
+        "H1_NO_DATA",
+        "D1_NO_DATA",
+        "STALE_H1",
+        "STALE_D1",
+        "QUOTE"
+      ]
+    },
+    {
+      "symbol": "ABB",
+      "reasons": [
+        "H1_NO_DATA",
+        "D1_NO_DATA",
+        "STALE_H1",
+        "STALE_D1",
+        "QUOTE"
+      ]
+    },
+    {
+      "symbol": "SHEL",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "HSBC",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "UL",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "NVO",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "TM",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "8035.T",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "6501.T",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "8058.T",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "MQG.AX",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "0700.HK",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "INFY",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "HDB",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "FMX",
+      "reasons": [
+        "REJECT"
+      ]
+    },
+    {
+      "symbol": "VEEV",
+      "reasons": [
+        "REJECT"
+      ]
+    }
+  ],
+  "universe_preservation": {
+    "universe": {
+      "before": 566,
+      "after": 566,
+      "equal_ignoring_updated_at": true
+    },
+    "universe_segments": {
+      "before": 365,
+      "after": 365,
+      "equal_ignoring_updated_at": true
+    },
+    "universe_quarantine": {
+      "before": 488,
+      "after": 488,
+      "equal_ignoring_updated_at": true
+    }
+  },
+  "tests": {
+    "total": 61,
+    "suites": [
+      {
+        "suite": "api",
+        "passed": 28
+      },
+      {
+        "suite": "broker",
+        "passed": 7
+      },
+      {
+        "suite": "dashboard",
+        "passed": 6
+      },
+      {
+        "suite": "test_compute_closed_bars.py",
+        "passed": 8
+      },
+      {
+        "suite": "test_held_review.py",
+        "passed": 3
+      },
+      {
+        "suite": "test_finalize.py",
+        "passed": 5
+      },
+      {
+        "suite": "test_workflow_contract.py",
+        "passed": 2
+      },
+      {
+        "suite": "test_coverage_rotation.py",
+        "passed": 2
+      }
+    ]
+  },
+  "parity": {
+    "count": 272,
+    "compared": 566,
+    "mismatches": [],
+    "r8_scope_compared": 364,
+    "r8_tech_mismatches": []
+  },
+  "rotation_shadow": {
+    "sandbox": "actual_task_runner",
+    "passes": [
+      {
+        "batch": 0,
+        "unique_new": 80,
+        "total_seen": 80
+      },
+      {
+        "batch": 1,
+        "unique_new": 80,
+        "total_seen": 160
+      },
+      {
+        "batch": 2,
+        "unique_new": 80,
+        "total_seen": 240
+      },
+      {
+        "batch": 3,
+        "unique_new": 80,
+        "total_seen": 320
+      },
+      {
+        "batch": 4,
+        "unique_new": 44,
+        "total_seen": 364
+      }
+    ],
+    "covered": 364
+  },
+  "maintenance_runs": [
+    {
+      "apply": false,
+      "run_id": "AG2V3_20261006062212045979_0",
+      "count": 3,
+      "ai_calls": 1,
+      "seconds": 30.24,
+      "final": {
+        "run_id": "AG2V3_20261006062212045979_0",
+        "status": "SUCCESS",
+        "symbols_ok": 3,
+        "symbols_error": 0,
+        "ai_calls": 1,
+        "batch_start": 0,
+        "batch_size": 3,
+        "batch_state_key": "last_index_actions_watchlist",
+        "batch_next_index": 0,
+        "cursor_advanced": true
+      }
+    },
+    {
+      "apply": true,
+      "run_id": "AG2V3_20261006062435214699_0",
+      "count": 364,
+      "ai_calls": 32,
+      "seconds": 1119.17,
+      "final": {
+        "run_id": "AG2V3_20261006062435214699_0",
+        "status": "SUCCESS",
+        "symbols_ok": 364,
+        "symbols_error": 0,
+        "ai_calls": 32,
+        "batch_start": 0,
+        "batch_size": 364,
+        "batch_state_key": "last_index_actions_watchlist",
+        "batch_next_index": 0,
+        "cursor_advanced": true
+      }
+    },
+    {
+      "apply": false,
+      "run_id": "AG2V3_20261006065703983278_0",
+      "count": 3,
+      "ai_calls": 1,
+      "seconds": 22.36,
+      "final": {
+        "run_id": "AG2V3_20261006065703983278_0",
+        "status": "SUCCESS",
+        "symbols_ok": 3,
+        "symbols_error": 0,
+        "ai_calls": 1,
+        "batch_start": 0,
+        "batch_size": 3,
+        "batch_state_key": "last_index_actions_watchlist",
+        "batch_next_index": 0,
+        "cursor_advanced": true
+      }
+    },
+    {
+      "apply": true,
+      "run_id": "AG2V3_20261006071338288544_0",
+      "count": 260,
+      "ai_calls": 0,
+      "seconds": 598.52,
+      "final": {
+        "run_id": "AG2V3_20261006071338288544_0",
+        "status": "SUCCESS",
+        "symbols_ok": 260,
+        "symbols_error": 0,
+        "ai_calls": 0,
+        "batch_start": 0,
+        "batch_size": 260,
+        "batch_state_key": "last_index_actions_watchlist",
+        "batch_next_index": 0,
+        "cursor_advanced": true
+      }
+    },
+    {
+      "apply": true,
+      "run_id": "AG2V3_20261006072344307624_0",
+      "count": 7,
+      "ai_calls": 0,
+      "seconds": 25.18,
+      "final": {
+        "run_id": "AG2V3_20261006072344307624_0",
+        "status": "SUCCESS",
+        "symbols_ok": 7,
+        "symbols_error": 0,
+        "ai_calls": 0,
+        "batch_start": 0,
+        "batch_size": 7,
+        "batch_state_key": "last_index_actions_watchlist",
+        "batch_next_index": 0,
+        "cursor_advanced": true
+      }
+    }
+  ],
+  "fallback": {
+    "counts": {
+      "UNAVAILABLE": 34,
+      "FILLED": 218,
+      "NO_CLOSED_SESSION": 3,
+      "NOT_NEEDED": 1,
+      "null": 2,
+      "OUT_OF_SCOPE": 2
+    },
+    "errors": {
+      "ValueError: CONTRACT_UNRESOLVED": 8,
+      "ValueError: PRICE_SERIES_MISMATCH": 25,
+      "ValueError: HISTORY_UNAVAILABLE": 1
+    }
+  },
+  "publication": {
+    "workflows": {
+      "AG2V3HELDCORE20260619": {
+        "name": "AG2-V3 — Technical Held+Core",
+        "active": 1,
+        "versionId": "efc4de0b-c49b-4a5c-b047-bab6f28bb131",
+        "activeVersionId": "efc4de0b-c49b-4a5c-b047-bab6f28bb131"
+      },
+      "AG2V3WATCHNIGHT20260619": {
+        "name": "AG2-V3 — Technical Universe Coverage",
+        "active": 1,
+        "versionId": "792b6f83-496b-4a97-875a-4790699f5509",
+        "activeVersionId": "792b6f83-496b-4a97-875a-4790699f5509"
+      }
+    },
+    "other_changed": [],
+    "other_unchanged": 178,
+    "active_executions": []
+  },
+  "scheduled_held_core": {
+    "id": 22789,
+    "workflowId": "AG2V3HELDCORE20260619",
+    "status": "success",
+    "startedAt": "2026-10-06 07:00:00.382",
+    "stoppedAt": "2026-10-06 07:13:27.770",
+    "explicit_node_parameters_match": true,
+    "connections_match": true,
+    "runtime_defaults_added": true
+  },
+  "source_parity": {
+    "equal": true,
+    "files": [
+      {
+        "local": "services/yfinance-api/main.py",
+        "live": "/docker/root/yfinance-api/main.py",
+        "sha256": "f2cbffcf8120a47b2370fc7d341e8d5cbdde90c6c0a8f433708422308562f1fe"
+      },
+      {
+        "local": "services/yfinance-api/daily_fallback.py",
+        "live": "/docker/root/yfinance-api/daily_fallback.py",
+        "sha256": "6074c75225150aa32d004b1d6989e39769ed6cbc11e1773352ddea803281f421"
+      },
+      {
+        "local": "services/yfinance-api/Dockerfile",
+        "live": "/docker/root/yfinance-api/Dockerfile",
+        "sha256": "eedcc01d66e12b1672398bbd26a7fb59e9f6e525b2aac123f701af71b8a62593"
+      },
+      {
+        "local": "services/ibkr-broker/app.py",
+        "live": "/opt/trader-ia/services/ibkr-broker/app.py",
+        "sha256": "bcd755f8004fc035492c4b6da0b04b422104fa8b5423863b16f914d4ab2496bd"
+      },
+      {
+        "local": "services/ibkr-broker/cpapi_client.py",
+        "live": "/opt/trader-ia/services/ibkr-broker/cpapi_client.py",
+        "sha256": "a6d4b9c4748e9bb21da1b6a32d5b473d6a6eed60cc3bb66eb4d0a7022b62c644"
+      },
+      {
+        "local": "services/dashboard/app.py",
+        "live": "/opt/trader-ia/releases/ag5-ag8-global-context-20260805/services/dashboard/app.py",
+        "sha256": "f1e3fbdb7573403e2243a029f88e90d1423bfa70a241f814c7fa8d0fe48c4188"
+      },
+      {
+        "local": "services/dashboard/app_modules/ag2_funnel.py",
+        "live": "/opt/trader-ia/releases/ag5-ag8-global-context-20260805/services/dashboard/app_modules/ag2_funnel.py",
+        "sha256": "dfb4dc9e6970388d55712119a2e437eeff072d2d8eec4faf81e9ed68257709d9"
+      }
+    ]
+  },
+  "health": {
+    "api_ok": true,
+    "api_version": "2.2.5",
+    "dashboard_ok": true,
+    "broker_authenticated": true,
+    "account_aligned": true,
+    "fx_enabled": false,
+    "pending_approvals": 0
+  },
+  "order_safety": {
+    "orders_unchanged": true,
+    "fills_unchanged": true,
+    "broker_environment_unchanged": true,
+    "execution_guards_unchanged": true
+  },
+  "cleanup": {
+    "at": "2026-10-06T07:28:25.688675+00:00",
+    "removed_containers": [
+      {
+        "name": "tradability-broker-shadow-20261006",
+        "id": "915a23b8aacff8166356caeaf3a91c600979f5373e4b14166fd64b8e40f222bc"
+      },
+      {
+        "name": "ag2-coverage-replay-20261006",
+        "id": "b925fb373e960b2056e2bbf489781a2618d75c8ec3ef1557c0de2d40742e05c8"
+      }
+    ],
+    "private_profile_removed": true
+  },
+  "pending_observation": "First scheduled Coverage run at 2026-10-06 10:10 Europe/Paris and full daily cycle; nominal capacity 400/day, duration and future AI cost not yet established."
+}
