@@ -16,11 +16,12 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import yfinance as yf
+from daily_fallback import fill_daily_gaps
 
 # =========================
 # Config (ENV)
 # =========================
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.2.4"
 
 TZ = os.getenv("TZ", "UTC")
 
@@ -139,10 +140,17 @@ FX_CURRENCY_CODES = {
 }
 
 
+# Same shares/ISIN after Euronext Growth transfers; keep the internal/broker
+# identifiers stable. Provenance: docs/operations/20261006_tradability_deployment.md.
+EQUITY_DATA_ALIASES = {"PVL.PA": "ALPVL.PA", "LHYFE.PA": "ALHYF.PA"}
+
+
 def _normalize_symbol_alias(symbol: str, max_len: int = 32) -> str:
     raw = _safe_str(symbol, max_len=max_len).upper()
     if not raw:
         return ""
+    if raw in EQUITY_DATA_ALIASES:
+        return EQUITY_DATA_ALIASES[raw]
     if raw.endswith(FX_SUFFIX):
         return raw
 
@@ -1229,7 +1237,7 @@ def history(
     cached_ok = cached_df is not None and not cached_df.empty
     cache_stale = _is_cache_stale(cached_df, interval) if cached_ok else True
 
-    def _respond_from_df(df: pd.DataFrame, stale_flag: bool, err: Optional[str], source_override: str):
+    def _respond_from_df(df: pd.DataFrame, stale_flag: bool, err: Optional[str], source_override: str, use_fallback: bool = True):
         if df is None or df.empty:
             dfw = pd.DataFrame(columns=["Datetime", "Open", "High", "Low", "Close", "Volume"])
         else:
@@ -1243,18 +1251,30 @@ def history(
             dfw, max_bars, interval, exchange, resolved_symbol, asset_class,
             closed_only, validated_only, now_utc,
         )
-        last = bars[-1] if bars else None
         market_tz, market_close, _ = _market_profile(exchange, resolved_symbol, asset_class)
+        fallback = None
+        if use_fallback and interval == "1d" and closed_only and validated_only:
+            bars, fallback = fill_daily_gaps(
+                bars, symbol=resolved_symbol, asset_class=asset_class,
+                market_timezone=market_tz, market_close=market_close, now=now_utc,
+                data_dir=DATA_DIR, max_bars=max_bars,
+                base_url=os.getenv("YF_DAILY_FALLBACK_BROKER_URL", ""),
+            )
+            if fallback["added"]:
+                source_override += "+ibkr_cpapi_daily"
+        last = bars[-1] if bars else None
+        enough = not min_bars or len(bars) >= int(min_bars)
+        count_error = f"NOT_ENOUGH_BARS count={len(bars)} min={min_bars}" if not enough else None
         return {
-            "ok": True,
-            "stale": bool(stale_flag),
+            "ok": bool(enough or allow_stale),
+            "stale": bool(stale_flag or not enough),
             "symbol": requested_symbol,
             "resolvedSymbol": resolved_symbol,
             "interval": interval,
             "lookback_days": effective_lookback,
             "source": source_override,
             "fetchedAt": fetched_at,
-            "error": err,
+            "error": err or count_error,
             "count": len(bars),
             "dataAsOf": (last["t"] if last else None),
             "last": last,
@@ -1263,6 +1283,7 @@ def history(
             "validatedOnly": bool(validated_only),
             "droppedOpen": quality["droppedOpen"],
             "droppedInvalid": quality["droppedInvalid"],
+            "dailyFallback": fallback,
             "marketTimezone": market_tz,
             "regularMarketClose": market_close.isoformat(timespec="minutes"),
             "aiSessionReference": _ai_session_reference(
@@ -1270,8 +1291,15 @@ def history(
             ),
         }
 
+    # A recent last bar does not prove that the cache contains enough history.
+    # Backfill a short cache from the requested start, at most once per day.
+    cached_response = _respond_from_df(cached_df, cache_stale, None, "cache", use_fallback=False) if cached_ok else None
+    history_short = bool(min_bars and cached_response and cached_response["count"] < int(min_bars))
+    last_backfill = float((cached_meta or {}).get("lastBackfillTs", 0) or 0)
+    backfill_due = history_short and time.time() - last_backfill >= 86400
+
     # === DECISION: Should we fetch fresh data? ===
-    need_fetch = force_refresh or not cached_ok or cache_stale
+    need_fetch = force_refresh or not cached_ok or cache_stale or backfill_due
 
     # If cache is fresh and we don't force refresh, return cache immediately
     if not need_fetch:
@@ -1311,7 +1339,7 @@ def history(
         _global_rate_limit_sleep()
 
         # Incremental window: if we have cache, only fetch from last bar
-        if cached_ok:
+        if cached_ok and not backfill_due:
             last_dt = cached_df["Datetime"].max()
             overlap = max(0, int(YF_OVERLAP_BARS or 0))
             if interval in ("1d", "5d", "1wk", "1mo", "3mo"):
@@ -1335,6 +1363,8 @@ def history(
             # Update cache metadata to avoid re-fetching too soon
             meta = cached_meta or {}
             meta["lastCheckAt"] = _utcnow().isoformat()
+            if backfill_due:
+                meta["lastBackfillTs"] = time.time()
             _, meta_path = _cache_paths(resolved_symbol, interval)
             _atomic_write(meta_path, json.dumps(meta, ensure_ascii=False))
             # Mark success (empty is not an error outside market hours)
@@ -1378,6 +1408,7 @@ def history(
             "updatedAt": _utcnow().isoformat(),
             "lookbackDaysStored": int(keep_days + 5),
             "rows": int(len(df_all)),
+            "lastBackfillTs": time.time() if backfill_due else last_backfill,
             "lastTs": (last_ts.isoformat().replace("+00:00", "Z") if pd.notna(last_ts) else None),
             "source": "yahoo_finance_yfinance",
         }
@@ -1385,23 +1416,6 @@ def history(
 
         # Build response
         resp = _respond_from_df(df_all, False, None, "yahoo_finance_yfinance")
-
-        # min_bars check
-        if min_bars and resp["count"] < int(min_bars):
-            if allow_stale and cached_ok:
-                return _respond_from_df(
-                    cached_df, True,
-                    f"NOT_ENOUGH_BARS_UPSTREAM count={resp['count']} min={min_bars}",
-                    "cache"
-                )
-            return {
-                "ok": False, "stale": None, "symbol": requested_symbol, "resolvedSymbol": resolved_symbol, "interval": interval,
-                "lookback_days": effective_lookback, "source": "yahoo_finance_yfinance",
-                "fetchedAt": fetched_at,
-                "error": f"NOT_ENOUGH_BARS count={resp['count']} min={min_bars}",
-                "count": resp["count"], "dataAsOf": resp["dataAsOf"],
-                "last": resp["last"], "bars": resp["bars"],
-            }
 
         # Success: clear cooldown
         _clear_cooldown(sym_state, resolved_symbol, interval)
@@ -1447,7 +1461,7 @@ def get_info(symbol: str = Query(...)):
     symbol = _safe_str(symbol, max_len=32).upper()
     try:
         _global_rate_limit_sleep()
-        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
+        tick = with_retries(lambda: yf.Ticker(_normalize_symbol_alias(symbol)), max_retries=3, backoff_factor=1.5)
         isin = _safe_str(with_retries(lambda: getattr(tick, "isin", ""), max_retries=3, backoff_factor=1.5), max_len=64)
         info_raw = with_retries(lambda: tick.info, max_retries=3, backoff_factor=1.5)
         info = info_raw if isinstance(info_raw, dict) else {}
@@ -1623,7 +1637,7 @@ def get_options(
 
     try:
         _global_rate_limit_sleep()
-        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
+        tick = with_retries(lambda: yf.Ticker(_normalize_symbol_alias(symbol)), max_retries=3, backoff_factor=1.5)
         expirations = with_retries(lambda: list(tick.options or []), max_retries=3, backoff_factor=1.5)
         selected_exp, exp_warning = _choose_expiration(
             expirations=expirations,
@@ -1806,7 +1820,7 @@ def get_calendar(
 
     try:
         _global_rate_limit_sleep()
-        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
+        tick = with_retries(lambda: yf.Ticker(_normalize_symbol_alias(symbol)), max_retries=3, backoff_factor=1.5)
 
         calendar_raw: Any = {}
         try:
@@ -1943,7 +1957,7 @@ def get_fundamentals(symbol: str = Query(...)):
 
     try:
         _global_rate_limit_sleep()
-        tick = with_retries(lambda: yf.Ticker(symbol), max_retries=3, backoff_factor=1.5)
+        tick = with_retries(lambda: yf.Ticker(_normalize_symbol_alias(symbol)), max_retries=3, backoff_factor=1.5)
 
         info = {}
         try:

@@ -1312,6 +1312,7 @@ async def resolve_equity_contracts(
             results.append({
                 "symbol": symbol,
                 "conid": conid,
+                "contract_symbol": str(info.get("symbol") or "").strip().upper() or None,
                 "currency": str(rules.get("cashCcy") or info.get("currency") or "").strip().upper() or None,
                 "exchange": str(info.get("exchange") or exchange or "SMART").strip().upper() or "SMART",
                 "increment": rules.get("increment"),

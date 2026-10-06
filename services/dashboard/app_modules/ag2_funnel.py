@@ -31,7 +31,11 @@ def _effective_age_hours(
     now_utc: pd.Timestamp,
 ) -> pd.Series:
     stored = pd.to_numeric(_series(df, stored_column, pd.NA), errors="coerce")
-    real = (now_utc - workflow_ts).dt.total_seconds() / 3600.0
+    # AG1 R8 uses the bar timestamp, never the date the workflow happened to run.
+    bar_column = "h1_date" if stored_column == "data_age_h1_hours" else "d1_date"
+    bar_ts = pd.to_datetime(_series(df, bar_column, pd.NaT), errors="coerce", utc=True)
+    # Legacy rows without a bar timestamp retain a conservative signal-date fallback.
+    real = (now_utc - bar_ts.fillna(workflow_ts)).dt.total_seconds() / 3600.0
     return pd.concat([stored, real], axis=1).max(axis=1, skipna=True)
 
 

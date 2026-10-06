@@ -9,6 +9,7 @@ services:
       - YF_DATA_DIR=/data
       - YF_INIT_LOOKBACK_DAYS=400
       - YF_OVERLAP_BARS=3
+      - YF_DAILY_FALLBACK_BROKER_URL=http://ibkr-broker:8080
       - YF_COOLDOWN_BASE_SEC=300
       - YF_COOLDOWN_MAX_SEC=3600
       - YF_COOLDOWN_RATELIMIT_SEC=1800

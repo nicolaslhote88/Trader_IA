@@ -631,6 +631,17 @@ def apply_rotation_mode(process_queue, quarantine_symbols, segments, rotation_mo
             "segment_symbols_total": len(held_symbols | core_symbols),
         }
 
+    if mode == "COVERAGE":
+        # Refresh the full segmented, non-quarantined universe, including CORE.
+        active_symbols = {s for s, segs in segments.items() if segs & {"HELD", "CORE_AUTO", "CORE_MANUAL", "WATCHLIST"}}
+        rotation = [by_symbol[s] for s in ordered_symbols if s in active_symbols and not_quarantined(s)]
+        return [], rotation, {
+            "rotation_mode": mode,
+            "held_total": 0,
+            "segment_rotation_total": len(rotation),
+            "segment_symbols_total": len(active_symbols),
+        }
+
     if mode == "WATCHLIST":
         watch_symbols = {s for s, segs in segments.items() if "WATCHLIST" in segs}
         rotation = [by_symbol[s] for s in ordered_symbols if s in watch_symbols and not_quarantined(s)]
@@ -760,6 +771,15 @@ with db_con() as con:
     row = con.execute("SELECT value FROM batch_state WHERE key = ?", [config["batch_state_key"]]).fetchone()
     idx = int(row[0]) if row else 0
     rotation_total = len(rotation_queue)
+    if config["rotation_mode"] == "COVERAGE":
+        # A positional cursor changes meaning when CORE/WATCHLIST membership changes.
+        # Oldest attempted signal first gives missing/stale symbols priority without
+        # repeatedly favouring failed symbols or skipping a newly classified name.
+        last_seen = dict(con.execute(
+            "SELECT symbol, max(epoch(workflow_date)) FROM technical_signals GROUP BY symbol"
+        ).fetchall())
+        rotation_queue.sort(key=lambda entry: (last_seen.get(_entry_symbol(entry)) or 0, _entry_symbol(entry)))
+        idx = 0
     total = len(always_batch) + rotation_total
     if idx >= rotation_total:
         idx = 0
@@ -767,6 +787,8 @@ with db_con() as con:
     rotation_batch = rotation_queue[idx : idx + batch_size]
     batch = always_batch + rotation_batch
     next_idx = 0 if (rotation_total == 0 or idx + batch_size >= rotation_total) else idx + batch_size
+    if config["rotation_mode"] == "COVERAGE":
+        next_idx = 0  # Selection is driven by persisted attempt dates, not an offset.
 
     now = datetime.now(timezone.utc)
     ts = now.strftime("%Y%m%d%H%M%S%f")

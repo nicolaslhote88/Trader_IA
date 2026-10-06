@@ -14395,6 +14395,8 @@ elif page == "System Health (Monitoring)":
             tech_cols = [
                 "symbol",
                 "last_tech_date",
+                "h1_date",
+                "d1_date",
                 "data_age_h1_hours",
                 "data_age_d1_hours",
                 "h1_status",
@@ -14497,12 +14499,14 @@ elif page == "System Health (Monitoring)":
         health_df.get("data_age_d1_hours", pd.Series(float("nan"), index=health_df.index)),
         errors="coerce",
     )
-    # Repli sur l'âge du signal si les colonnes d'âge marché ne sont pas disponibles.
-    signal_age_h = pd.to_numeric(health_df["tech_age_days"], errors="coerce") * 24.0
-    # Guard against a frozen data_age masking a stale bar: take the worse of the
-    # stored market-data age and the real age from the last signal/bar date.
-    health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, signal_age_h], axis=1).max(axis=1)
-    health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, signal_age_h], axis=1).max(axis=1)
+    # Same bar dates and effective ages as R8 and the multi-agent matrix.
+    bar_h1 = pd.to_datetime(health_df.get("h1_date", pd.Series(pd.NaT, index=health_df.index)), errors="coerce", utc=True)
+    bar_d1 = pd.to_datetime(health_df.get("d1_date", pd.Series(pd.NaT, index=health_df.index)), errors="coerce", utc=True)
+    signal_ts = pd.to_datetime(health_df["last_tech_date"], errors="coerce", utc=True)
+    real_h1 = (now_utc - bar_h1.fillna(signal_ts)).dt.total_seconds() / 3600.0
+    real_d1 = (now_utc - bar_d1.fillna(signal_ts)).dt.total_seconds() / 3600.0
+    health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, real_h1], axis=1).max(axis=1)
+    health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, real_d1], axis=1).max(axis=1)
     health_df["yf_age_hours"] = pd.to_numeric(health_df["yf_age_days"], errors="coerce") * 24.0
     closed_contract = _bool_series(health_df, "h1_closed_only", default=False) & _bool_series(
         health_df, "d1_closed_only", default=False
@@ -14887,9 +14891,9 @@ elif page == "System Health (Monitoring)":
             "Technique dans les seuils → Quote + spread exploitables",
             funnel_masks[4],
             funnel_masks[5],
-            "Quote YF inutilisable ou spread non observé.",
-            "Priorité : diagnostiquer spread_pct absent ; si quote OK mais spread absent, ajouter une source IBKR market-data ou assouplir le pré-gate UI et laisser IBKR trancher au moment de l'ordre.",
-            "Très élevé : c'est le plus gros levier visible dans l'entonnoir.",
+            "Quote YF inutilisable, ou absence simultanée de spread et de volume suffisant.",
+            "Rétablir les quotes valides ; contrôler le volume lorsque le spread est absent. Le préflight IBKR reste requis.",
+            "À mesurer sur les pertes exclusives ci-dessous.",
             False,
         ),
         (

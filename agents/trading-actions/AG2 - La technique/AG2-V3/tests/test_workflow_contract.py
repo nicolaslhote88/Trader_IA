@@ -22,6 +22,11 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertEqual(cron, trigger["parameters"]["rule"]["interval"][0]["expression"])
         if mode == "HELD_CORE":
             self.assertIn("41 16 * * 1-5", [r["expression"] for r in trigger["parameters"]["rule"]["interval"]])
+        if mode == "COVERAGE":
+            self.assertCountEqual(
+                ["0 2,5 * * *", "10 10 * * *", "15 18 * * *", "20 22 * * *"],
+                [r["expression"] for r in trigger["parameters"]["rule"]["interval"]],
+            )
         init = node(workflow, "Init Config + Batch")["parameters"]["jsCode"]
         self.assertIn(f'const DEFAULT_ROTATION_MODE = "{mode}";', init)
         self.assertIn(f"const DEFAULT_BATCH_SIZE = {size};", init)
@@ -98,7 +103,7 @@ class WorkflowContractTests(unittest.TestCase):
         filename = "AG2-V3-Technical-Watchlist-Nightly.workflow.json"
         self.assert_variant(
             filename,
-            "0 22,2 * * *", "WATCHLIST", 40,
+            "0 2,5 * * *", "COVERAGE", 80,
             "last_index_actions_watchlist",
         )
         workflow = load(filename)

@@ -231,7 +231,7 @@ class CPAPIClient:
             "bar": bar,
             "outsideRth": str(outside_rth).lower(),
         }
-        r = await self._get("/v1/api/hmds/history", params=params)
+        r = await self._get("/v1/api/iserver/marketdata/history", params=params)
         if isinstance(r, dict):
             return r.get("data", [])
         return r if isinstance(r, list) else []

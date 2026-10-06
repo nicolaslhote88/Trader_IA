@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements.txt requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
-COPY main.py research_history.py ./
+COPY main.py research_history.py daily_fallback.py ./
 
 EXPOSE 8080
 
