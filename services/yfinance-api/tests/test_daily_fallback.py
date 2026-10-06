@@ -55,6 +55,36 @@ class DailyFallbackTests(unittest.TestCase):
             result, audit = fill_daily_gaps(original, **args)
             return original, result, audit, request.call_args_list
 
+    def test_empty_initial_chart_frame_gets_one_bounded_retry(self):
+        original = [bar(1), bar(2)]
+        replies = [
+            {
+                "results": [
+                    {"contract_symbol": "BNP", "currency": "EUR", "conid": 123}
+                ],
+                "errors": [],
+            },
+            {"conid": 123, "data": []},
+            {"conid": 123, "data": [ibkr(1), ibkr(2), ibkr(5)]},
+        ]
+        with tempfile.TemporaryDirectory() as folder, patch(
+            "daily_fallback._get", side_effect=replies
+        ) as request, patch("daily_fallback.time.sleep"):
+            result, audit = fill_daily_gaps(
+                original,
+                symbol="BNP.PA",
+                asset_class="EQUITY",
+                market_timezone="Europe/Paris",
+                market_close=time(17, 30),
+                now=datetime(2026, 10, 6, 6, tzinfo=timezone.utc),
+                data_dir=folder,
+                max_bars=400,
+                base_url="http://broker",
+            )
+        self.assertEqual(3, request.call_count)
+        self.assertEqual("FILLED", audit["status"])
+        self.assertEqual(3, len(result))
+
     def test_adds_observed_closed_bar_without_overwriting_yahoo(self):
         old, new, audit, calls = self.invoke()
         self.assertEqual(old, new[:2])

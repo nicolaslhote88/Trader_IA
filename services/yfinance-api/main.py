@@ -21,7 +21,7 @@ from daily_fallback import fill_daily_gaps
 # =========================
 # Config (ENV)
 # =========================
-APP_VERSION = "2.2.4"
+APP_VERSION = "2.2.5"
 
 TZ = os.getenv("TZ", "UTC")
 

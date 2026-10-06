@@ -124,6 +124,20 @@ def fill_daily_gaps(
                         "outside_rth": "false",
                     },
                 )
+                # CPAPI can return an empty first frame while opening a chart.
+                # One bounded retry is allowed; an explicit error is never hidden.
+                if not history.get("data") and not history.get("error"):
+                    time.sleep(0.5)
+                    history = _get(
+                        base_url,
+                        "/marketdata/history",
+                        {
+                            "conid": conid,
+                            "period": "1w",
+                            "bar": "1d",
+                            "outside_rth": "false",
+                        },
+                    )
                 if (
                     history.get("error")
                     or not history.get("data")
