@@ -94,6 +94,13 @@ class Ag2OperationalFunnelTests(unittest.TestCase):
         self.assertEqual(120.0, scoped.iloc[0]["ag2_h1_age_hours_effective"])
         self.assertEqual(120.0, scoped.iloc[0]["ag2_d1_age_hours_effective"])
 
+    def test_recent_execution_does_not_refresh_an_old_daily_bar(self):
+        signal = _signal("AAA", age_hours=1)
+        signal.update(h1_date=NOW-pd.Timedelta(hours=2), d1_date=NOW-pd.Timedelta(hours=110))
+        scoped, metrics = build_ag2_operational_scope(pd.DataFrame([signal]), self.universe.iloc[:1], now_utc=NOW)
+        self.assertEqual(0, metrics["tech_ready"])
+        self.assertEqual(110, scoped.iloc[0]["ag2_d1_age_hours_effective"])
+
     def test_old_approve_outside_rotation_never_enters_funnel_end(self):
         _, metrics = build_ag2_operational_scope(self.signals, self.universe, now_utc=NOW)
 

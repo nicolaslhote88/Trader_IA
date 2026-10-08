@@ -1,0 +1,2 @@
+REVUE POSITION DETENUE
+Si is_held=true et review_purpose=HELD_POSITION_REVIEW, analyse aussi un H1 NEUTRAL. Pour NEUTRAL et donnees obligatoires presentes : decision WATCH, validated=false, alignment MIXED ; evalue la qualite factuelle, explique tendance D1, momentum H1 et risques sans inventer de stop ni de R/R. Les regles BUY/SELL et donnees manquantes restent inchangees. APPROVE/WATCH/REJECT qualifient le setup d'entree/renfort ; REJECT ne signifie jamais vendre une position.

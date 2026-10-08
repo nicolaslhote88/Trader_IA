@@ -1,5 +1,9 @@
 # État des lieux fonctionnel — Trader_IA
 
+> Recherche prédictive AG3 du 04/10/2026 : collectes historiques séparées via Yahoo existant, SEC/ESEF/BCE/ALFRED ; modèle US à 90 jours et affichage en shadow uniquement. Aucune promotion ni modification AG1. [Déploiement et limites](../operations/20261004_ag3_predictive_pipeline_deployment.md).
+
+> News, mise à jour live du 27/09/2026 : macro via DeepSeek Flash ; flux gratuits DSY/Fast Retailing et Finnhub HELD+CORE ; ordonnancement avant AG1. [Déploiement, validation et limites](../operations/20260927_news_free_flash_remediation.md). Les mentions historiques de Grok et des anciens horaires ci-dessous sont remplacées par cette note.
+
 **Dernière consolidation du socle live : 2026-08-06.**
 **Mise à jour ciblée AG1 : 2026-09-25**, modèles et transport validés live ;
 voir [la note de migration](../operations/20260925_ag1_opus55_gpt6sol_migration.md).
@@ -265,3 +269,13 @@ idempotence des approbations expirées et divergence dashboard.
 - Audits : `20260702_audit_complet_projet.md` (ce jour), `20260622_ag3_v2_analysis.md`, `20260619_ag2_v3_analyse_pertinence_efficience.md`, `20260617_ag4_spe_v2_analysis.md`, `20260617_ag4_v3_news_watcher_audit.md`.
 - Specs : `ag1_v4_consensus_actions.md`, `ag1_v4_d2_news_digest.md`, `ag4_spe_v3_ibkr_news.md`, `ag1_v4_order_approval_notification_v1.md`.
 - Déploiements 06/2026 : notes `20260619_*` (hybride AG2, quarantaine, split rotation), `20260622_*` (AG3 split + STALE_FUNDA), `20260624_*` (expansion +100, Finnhub, durcissement AG2HC, auth quotidienne assistée).
+
+
+### Fiche comptable historique live (4 octobre 2026)
+
+`AG3_HISTORICAL_EVIDENCE_V1` est consommée comme contexte factuel par les trois
+modèles AG1 après le préflight. Le service de recherche expose la route de lot
+`/ag1/historical-evidence` ; le dashboard consulte `/evidence/{symbol}`.
+La publication a été autorisée explicitement après la comparaison A1/B1/B2/A2,
+qui n'avait pas établi d'avantage stable. Scores/gates inchangés, probabilités
+prédictives toujours hors décision. [Déploiement, preuves et rollback](../operations/20261004_ag1_historical_evidence_live.md).

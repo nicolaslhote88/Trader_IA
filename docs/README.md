@@ -1,6 +1,6 @@
 # Documentation Trader_IA
 
-Index mis à jour le 2026-09-25 (modèles AG1 et références de déploiement). Les documents datés dans `audits/`
+Index mis à jour le 2026-10-06 (audit et correction de la couverture de tradabilité). Les documents datés dans `audits/`
 et `operations/` conservent volontairement les faits observés à leur date ; les
 documents ci-dessous décrivent l'état courant.
 
@@ -22,6 +22,18 @@ documents ci-dessous décrivent l'état courant.
 | Exécution et approbation IBKR | `operations/ibkr_execution.md`, `operations/order_approval_deploy_notes.md` |
 
 ## Derniers changements live
+
+- Tradabilité : couverture AG2 quotidienne de tout l’univers hors quarantaine, réparation des historiques courts, alias de données vérifiés et fraîcheur dashboard alignée sur R8 : [audit du 6 octobre](audits/20261006_tradability_audit.md) · [déploiement et preuves](operations/20261006_tradability_deployment.md).
+
+- AG2 : revue des positions détenues même H1 neutre, fraîcheur de séance, D1 US corrigée, dernier créneau 16:41 et affichage Non analysé/devise native : [déploiement du 5 octobre](operations/20261005_ag2_held_review_deployment.md).
+
+- Fiche historique datée raccordée aux trois modèles AG1 sur demande explicite : [déploiement réel du 4 octobre](operations/20261004_ag1_historical_evidence_live.md). Version publiée vérifiée ; premier cron enrichi à observer. Les résultats de simulation restent documentés sans revendication de performance.
+
+- Collectes historiques AG3 et modèle en shadow, réutilisant Yahoo : [déploiement du 4 octobre](operations/20261004_ag3_predictive_pipeline_deployment.md). Aucune influence sur les décisions ; limites de couverture et résultats du test explicites.
+
+- Fondamental : unités et absences corrigées, 527 derniers relevés recalculés, dashboard détaillé et fiche factuelle AG1 : [déploiement du 3 octobre](operations/20261003_ag3_fundamental_evidence_deployment.md). À cette date, prédictif non entraîné ; état remplacé par la note du 4 octobre.
+
+- News : Grok remplacé par DeepSeek Flash, RSS officiels DSY/Fast Retailing, horaires et supervision corrigés : [déploiement du 27 septembre](operations/20260927_news_free_flash_remediation.md).
 
 - AG1 V4 : Opus 5.5 via Messages API adaptative et GPT-6 Sol via Responses API,
   replay isolé et publication vérifiés :

@@ -4,7 +4,7 @@
 
 Les trois artefacts publiables sont générés depuis `nodes/` par les builders :
 
-- `AG2-V3-Technical-Held-Core.workflow.json` — segments HELD + CORE, 09/13/15 h Paris,
+- `AG2-V3-Technical-Held-Core.workflow.json` — segments HELD + CORE, 09:00 / 13:00 / 16:41 Paris,
   validation IA `deepseek-v4-flash` ;
 - `AG2-V3-Technical-Watchlist-Nightly.workflow.json` — WATCHLIST, 22/02 h Paris,
   validation IA `deepseek-v4-flash` ;
@@ -46,6 +46,15 @@ signal par AG1. Une barre close âgée de plus de 3 h pendant la fenêtre UTC
 historique devient `SOFT_STALE` : le LLM n'est pas rappelé, mais le résultat
 d'indicateurs conserve `status=OK`. Seul un âge effectif supérieur à 96 h
 produit le statut dur `STALE`, conformément à R8 et au dashboard.
+
+Depuis le 5 octobre 2026, une référence H1 de séance régulière fraîche remplace
+la fenêtre UTC pour les places reconnues : week-ends et fuseaux sont pris en
+compte, jours fériés non exemptés (conservateur). La limite dure reste 96 h.
+HELD provient du dernier snapshot portefeuille frais, avec repli sur les segments.
+Les détenus H1 NEUTRAL sont aussi revus (WATCH d'observation), cache 4 h maximum,
+invalidation par bougie ; REJECT reste non réutilisé. Les champs complets de
+l'analyse sont conservés dans le cache. Le dashboard distingue Non analysé/SKIP
+et affiche la devise native. Voir `docs/operations/20261005_ag2_held_review_deployment.md`.
 
 La réparation auditée `outils/scripts/repair_ag2_soft_stale_status.py` a remis
 à `OK` 165 dernières lignes qui respectaient déjà le contrat close + âge ≤96 h.

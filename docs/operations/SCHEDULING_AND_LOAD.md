@@ -1,6 +1,6 @@
 # Ordonnancement & charge système — workflows n8n Trader_IA
 
-**MAJ 2026-09-14.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
+**MAJ 2026-10-06.** Vue d'ensemble de tous les workflows actifs : crons, durées moyennes observées, bases DuckDB touchées, et stratégie de déconfliction.
 Frise visuelle : [`system_load_gantt.html`](system_load_gantt.html) (à ouvrir dans un navigateur).
 Pour les **liens logiques inter-systèmes** (dashboard↔AG1, parité scoring/gates) : voir [`SYSTEM_LINKS_AND_PARITY.md`](SYSTEM_LINKS_AND_PARITY.md).
 
@@ -24,18 +24,18 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 
 | Workflow | Cron (Paris) | Fréq. | Durée moy. | Max | Base principale (rôle) |
 |---|---|---|---|---|---|
-| AG2-V3 Technical Watchlist | `0 22,2 * * *` | 7j/7 | ~41 min | 59 | ag2_v3 (écrivain) |
-| AG2-V3 Technical Held+Core | `0 9,13 * * 1-5` + `35 16 * * 1-5` | L-V | 10–16 min récemment | 27 historique | ag2_v3 (écrivain) |
+| AG2-V3 Technical Universe Coverage | `0 2,5 * * *` + `10 10 * * *` + `15 18 * * *` + `20 22 * * *` | 7j/7, 5 × 80 | 35–60 min estimées ; premiers lots à mesurer | non mesuré | ag2_v3 (écrivain) |
+| AG2-V3 Technical Held+Core | `0 9,13 * * 1-5` + `41 16 * * 1-5` | L-V | 10–16 min récemment | 27 historique | ag2_v3 (écrivain) |
 | AG2 Universe Health Quarantine | `0 20 * * 1-5` | L-V | ~8 min | 12 | ag2_v3 (écrivain) |
 | AG3-V2 Fundamental Held+Core | `0 0 * * *` | 7j/7 | ~18 min | 28 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
 | AG3-V2 Fundamental Watchlist | `0 1,4 * * *` | 7j/7 | ~17 min | 20 | ag3_v2 (écrit) / ag2_v3 (lit au start) |
-| AG4-V3 News Watcher | `45 6,10,18 * * 1-5` | L-V | ~89 min | 92 | ag4_v3 (écrit) / ag2_v3 (lit brièvement au start) |
-| AG4_Spé-V2 News symbole | `0 5 8,11,14,17 * * 1-5` | L-V | ~24 min | 34 | ag4_spe (écrit) / ag2_v3 (lit au start) |
-| AG1 V4 Consensus PM | `0 10 17 * * 1-5` | L-V, une fois/jour | ~6 min | 12 historique | ag1_v4 (écrit), ag2/3/4 (lit). Après AG2 16:35, avant clôture Euronext usuelle 17:30. |
+| AG4-V3 News Watcher | `45 6,10,14 * * 1-5` | L-V | ~89 min | 92 | ag4_v3 (écrit) / ag2_v3 (lit brièvement au start) |
+| AG4_Spé-V2 News symbole | `0 5 8,11,14,15 * * 1-5` | L-V | ~24 min | 34 | ag4_spe (écrit) / ag2_v3 (lit au start) |
+| AG1 V4 Consensus PM | `0 10 17 * * 1-5` | L-V, une fois/jour | ~6 min | 12 historique | ag1_v4 (écrit), ag2/3/4 (lit). Après AG2 16:41, avant clôture Euronext usuelle 17:30. |
 | AG1-PF MTM | `0 15 9-16 * * 1-5` + `0 40 17 * * 1-5` + `0 15 23 * * 1-5` | L-V | <1 min | 3 | ag1_v4 ; relevé après PM et relevé de fin de journée, même si NAV stable. |
 | AG4_Spé-Finnhub Global News | `0 0 10,13,16 * * 1-5` | L-V | ~20 min | 30 | ag4_spe |
 | AG4_Spé-IBKR Portfolio News | `0 0 10,13,16 * * 1-5` | L-V | ~9 min | 13 | ag4_spe |
-| AG4_Spé Health Alert | `0 30 16 * * 1-5` | L-V | <1 min | 2 | ag4_spe |
+| AG4_Spé Health Alert | `0 55 16 * * 1-5` | L-V | <1 min | 2 | ag4_spe |
 | YF-ENRICH Daily Refresh | `15 6 * * *` | 7j/7 | ~14 min | 14 | yf_enrichment |
 | AG5 Macro & Flows V2 | `20 7 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
 | AG6 FX Relative Valuation V2 | `40 7 * * 1-5` | L-V | <1 min | — | macro_data (writer via API) |
@@ -49,6 +49,25 @@ producteurs macro partagent `macro_data.duckdb`; la synthèse écrit
 `Finalize Run`; un lot complet `SUCCESS` ou `PARTIAL` avance et relit son
 curseur dans la transaction. Toute incohérence devient
 `AG2_CURSOR_GUARD_FAILED`. Le run manuel Held+Core `20812` a vérifié `0 → 18`.
+
+
+## Recherche prédictive AG3 du 4 octobre 2026
+
+- Collecte/évaluation séparée : **04:45 Europe/Paris tous les jours**. Wrapper hôte à `45 * * * *`, filtre de l’heure Paris dans le runner (DST suivi).
+- Après AG3 Watchlist 04:00 ; avant YF-ENRICH 06:15. Réutilisation du service Yahoo et de sa temporisation, traitement séquentiel. Chargement initial plus volumineux que les mises à jour incrémentales.
+- Base propre `/local-files/ag3-predictive/research.sqlite`, archives propres ; lecture courte de l’univers DuckDB au démarrage, pas de writer supplémentaire dans une base métier.
+- Verrou `flock` non bloquant, limite conteneur 1 CPU / 1 200 Mo. Aucun changement des autres crons. Le filtre horaire et le refus des exécutions concurrentes sont testés ; premier vrai cycle programmé encore à observer.
+- [Preuves, résultats et rollback](20261004_ag3_predictive_pipeline_deployment.md).
+
+## Ajustement news du 27 septembre 2026
+
+- Collecte Finnhub + RSS officiels DSY/Fast Retailing : **09:35, 12:35, 15:35 Paris** L–V. Le cron hôte `35 * * * 1-5` appelle un wrapper qui contrôle `Europe/Paris`, donc suit le changement d’heure. Verrou `flock`, collecteurs séquentiels, transactions brèves et retry DuckDB.
+- Analyse du staging : **10:00, 13:00, 16:00 Paris**, inchangée. Fenêtre de collecte de 25 min, contre l’ancien décalage où la collecte arrivait après l’analyse.
+- Dernier Boursorama : **15:05** au lieu de 17:05. Les dernières écritures sont attendues avant 16h selon les durées historiques ; collecteur 15:35 susceptible de retry sur le bref flush final.
+- Dernier macro : **14:45** au lieu de 18:45 ; budget 145 min avant AG1 17:10. La durée historique de 89 min vient de l’ancien pipeline ; durée DeepSeek en cycle complet à mesurer.
+- Santé de tous les flux : **16:55**. AG1, PF, AG2 et les gardes restent inchangés.
+
+[Validation, versions et rollback](20260927_news_free_flash_remediation.md). Premier cycle automatique après publication : lundi 28 septembre, encore à observer.
 
 ## Ajustement du 14 septembre 2026
 
@@ -104,3 +123,35 @@ permissions avant swap. Ne pas remplacer ces reconstructions offline par un
 
 ## Reste à durcir (proposé, non déployé)
 **Retry-hardening** : porter le budget de reconnexion DuckDB des `db_con` (tous les nodes) de ~15 s à ~2-3 min (backoff), pour absorber tout chevauchement transitoire résiduel sans faire échouer le run. Robustesse générale, mais touche de nombreux nodes.
+
+## Ajustement AG2 du 5 octobre 2026
+
+Held+Core : dernier départ **16:41 Paris**, après la disponibilité de la première H1 US à 16:40 (fin de bougie + 10 min). AG1 reste 17:10 : budget 29 min, maximum historique 27 min. La revue IA des positions détenues accroît le nombre d’appels ; premier cycle réel `22751` : 27 titres, 12 appels, **11 min 43 s**, sans erreur (5 octobre). Les mentions 16:35 dans l’historique ci-dessus sont remplacées. [Déploiement et limites](20261005_ag2_held_review_deployment.md).
+
+## Couverture de tradabilité du 6 octobre 2026
+
+L’ancien workflow Watchlist conserve l’ID `AG2V3WATCHNIGHT20260619`, sous le nom
+**Technical Universe Coverage**. Il traite les 80 symboles les moins récemment
+tentés parmi HELD/CORE/WATCHLIST hors quarantaine : **02:00, 05:00, 10:10, 18:15,
+22:20 Paris**, tous les jours. Capacité nominale 400/j pour 364 symboles éligibles,
+complétée par Held+Core inchangé. L’absence de signal passe en premier ; un échec
+de qualité persistant reçoit aussi une date de tentative et ne monopolise pas la
+rotation. Le curseur positionnel ne pilote plus ce mode.
+
+Les exécutions récentes de 40 symboles ont duré environ 17 min (22775/22780) ;
+35 min par lot de 80 était l’extrapolation avant secours IBKR ; réserver jusqu’à
+60 min avec ce secours est une **estimation**, pas une mesure en production.
+La maintenance de rattrapage utilise les mêmes calculs mais évite le transport
+n8n par symbole : sa durée ne prédit pas celle d’un cron complet. Les appels IA
+restent conditionnels, avec cache existant ; la facture quotidienne est à mesurer.
+
+Les nouveaux départs évitent les autres écrivains AG2 (09:00/13:00/16:41),
+AG2UHQ 20:00, et le PM 17:10. Marges nominales : 05:00→YF 06:15 = 75 min ;
+18:15→UHQ 20:00 = 105 min ; 22:20→AG3 00:00 = 100 min ; 02:00→AG3 04:00 = 120 min.
+Le partage de Yahoo avec AG3 Predictive 04:45 reste soumis à la temporisation API.
+Des lecteurs peuvent se chevaucher avec les écritures brèves AG2 : retries existants,
+pas de promesse d’absence totale de contention. Surveiller les premières durées,
+les erreurs de lock et les retards avant d’étendre le périmètre.
+
+[Audit](../audits/20261006_tradability_audit.md) ·
+[Publication, preuves et retour arrière](20261006_tradability_deployment.md).

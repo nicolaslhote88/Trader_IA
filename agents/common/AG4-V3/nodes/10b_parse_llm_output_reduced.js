@@ -1,4 +1,4 @@
-// 20H2R - Parse Grok output (branche REDUITE actions) + flatten final row
+// 20H2R - Parse DeepSeek output (branche REDUITE actions) + flatten final row
 function safeJsonParse(str) {
   try {
     if (typeof str === 'object' && str !== null) return str;
@@ -108,7 +108,7 @@ function deriveSource(existing, url) {
   const cur = String(existing || '').trim();
   if (cur && cur.toLowerCase() !== 'unknown') return cur;
   try {
-    const h = new URL(String(url || '')).hostname.toLowerCase().replace(/^www\./, '');
+    const h = (String(url || '').match(/^https?:\/\/([^/?#]+)/i)?.[1] || '').toLowerCase().replace(/^www\./, '');
     if (!h) return 'unknown';
     if (h.includes('boursorama')) return 'Boursorama';
     if (h.includes('investir') || h.includes('lesechos')) return 'Investir/Les Echos';
@@ -123,12 +123,15 @@ function deriveSource(existing, url) {
 }
 
 const j = $json || {};
-// Reponse Grok (chat.completions OpenAI-compatible) ou contenu deja extrait.
-const llmRaw = j.choices?.[0]?.message?.content
-  || j.output?.[0]?.content?.[0]?.text
-  || j.content
-  || '{}';
+// Reponse DeepSeek (chat.completions OpenAI-compatible) ou contenu deja extrait.
+const llmRaw = j.output;
 const ai = safeJsonParse(llmRaw);
+if (j.error || !ai || typeof ai.isActionable !== 'boolean' ||
+    !Number.isFinite(ai.impact_score) || !Number.isFinite(ai.confidence) ||
+    !Array.isArray(ai.sectors_bullish) || !Array.isArray(ai.sectors_bearish) ||
+    typeof ai.notes !== 'string') {
+  throw new Error('AG4_MACRO_INVALID_LLM_OUTPUT: analyse absente ou invalide');
+}
 const now = new Date().toISOString();
 
 const allowedSectors = buildAllowedSectors(j.universeSectors);
@@ -184,7 +187,7 @@ return [{
     impact_asset_class: isActionable ? 'Equity' : 'None',
     impact_magnitude: impactMagnitude,
     impact_fx_pairs: '',
-    tagger_version: 'reduced_grok_v1',
+    tagger_version: 'reduced_deepseek_flash_v2',
     _taxonomyViolations: [],
     analyzedAt: now,
     _action: 'analyze',

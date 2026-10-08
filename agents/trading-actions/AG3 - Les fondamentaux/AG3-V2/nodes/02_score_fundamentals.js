@@ -5,6 +5,7 @@ function sha1(x) {
 }
 
 function num(v) {
+  if (v === null || v === undefined || typeof v === "boolean" || (typeof v === "string" && v.trim() === "")) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
@@ -22,8 +23,8 @@ function clamp(v, lo = 0, hi = 100) {
 function pct(v) {
   const n = num(v);
   if (n === null) return null;
-  if (Math.abs(n) <= 1.5) return n * 100;
-  return n;
+  // Yahoo margin/return/growth fields are decimal ratios, including values > 1.5.
+  return n * 100;
 }
 
 function scoreHigher(v, floor, ceil) {
@@ -213,7 +214,7 @@ return $input.all().map((item) => {
   const bear = [];
   if (qualityScore < 45) bear.push("Weak quality metrics (margins/returns).");
   if (growthScore < 45) bear.push("Growth profile is soft or negative.");
-  if (valuationScore < 40) bear.push("Valuation is stretched vs peers/risk.");
+  if (valuationScore < 40) bear.push("Valuation is stretched against fixed screening thresholds (not sector peers).");
   if (debtToEquity !== null && debtToEquity > 220) bear.push("High leverage raises balance-sheet risk.");
   if (consensusScore < 45) bear.push("Sell-side sentiment is not supportive.");
   if (coverage !== null && coverage < 35) bear.push("Low data coverage lowers confidence.");
@@ -223,9 +224,10 @@ return $input.all().map((item) => {
   if (triageScore >= 72 && riskScore <= 45) horizon = "LONG_TERM";
   else if (triageScore >= 58 && riskScore <= 62) horizon = "SWING";
 
-  const basePx = targetMean !== null ? targetMean : currentPrice;
-  const bullPx = targetHigh !== null ? targetHigh : (basePx !== null ? basePx * 1.15 : null);
-  const bearPx = targetLow !== null ? targetLow : (basePx !== null ? basePx * 0.85 : null);
+  // Analyst targets only: never invent +/-15% targets when coverage is absent.
+  const basePx = targetMean !== null && targetMean > 0 ? targetMean : null;
+  const bullPx = targetHigh !== null && targetHigh > 0 ? targetHigh : null;
+  const bearPx = targetLow !== null && targetLow > 0 ? targetLow : null;
   const valuationText = `Bear: ~${priceFmt(bearPx)} | Base: ~${priceFmt(basePx)} | Bull: ~${priceFmt(bullPx)} ${currency}`.trim();
 
   const why = `Quality ${qualityScore}/100, Growth ${growthScore}/100, Valuation ${valuationScore}/100, Financial health ${healthScore}/100, Consensus ${consensusScore}/100. Bull case: ${bull.length ? bull.join(" ") : "No strong fundamental edge detected."}`;
@@ -278,7 +280,7 @@ return $input.all().map((item) => {
     risks: text(risks, 3000),
     nextSteps: text(nextSteps, 1500),
     data_coverage_pct: coverage,
-    strategy_version: String(j.strategy_version || "ag3_v2_fundamentals"),
+    strategy_version: "ag3_v2_units_nulls_20261003",
     config_version: String(j.config_version || "ag3_v2_default"),
   };
 
@@ -361,7 +363,7 @@ return $input.all().map((item) => {
     metricRow("growth", "revenue_growth_pct", rg, "%"),
     metricRow("growth", "earnings_growth_pct", eg, "%"),
     metricRow("growth", "earnings_q_growth_pct", eqg, "%"),
-    metricRow("health", "debt_to_equity", debtToEquity, "x"),
+    metricRow("health", "debt_to_equity", debtToEquity, "%"),
     metricRow("health", "current_ratio", currentRatio, "x"),
     metricRow("health", "quick_ratio", quickRatio, "x"),
     metricRow("health", "fcf_yield_pct", fcfYield, "%"),

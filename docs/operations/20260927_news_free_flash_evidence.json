@@ -1,0 +1,106 @@
+{
+  "published": [
+    {
+      "id": "rP2cyaIKt8tiVjYX5AH1e",
+      "version": "7de5783c-9bf0-45b8-8ff9-b939f4389132",
+      "active": true
+    },
+    {
+      "id": "AG4SPEFINNHUBV1",
+      "version": "6d30f5d2-3ecf-4acf-b257-190877d5e910",
+      "active": true
+    },
+    {
+      "id": "hSqxVSb8YAO9Nc6A",
+      "version": "2652228e-d057-468a-a254-d1fbd6c6b359",
+      "active": true
+    },
+    {
+      "id": "H0cfY1coMx8dvMuXScMc_",
+      "version": "d08c6f67-4f36-4d86-ae7c-5db5e433ff9a",
+      "active": true
+    },
+    {
+      "id": "uXW5M4vc1imTExB4",
+      "version": "3a2ffd1f-f3dc-40f8-9050-defc4e8aedc4",
+      "active": true
+    }
+  ],
+  "ledger_unchanged": true,
+  "ledger": {
+    "runs": [
+      732,
+      4789575762981266359
+    ],
+    "orders": [
+      164,
+      13046577194513719217
+    ],
+    "fills": [
+      116,
+      10324047215258591513
+    ],
+    "positions_snapshot": [
+      7199,
+      15172140500174519267
+    ],
+    "portfolio_snapshot": [
+      732,
+      2802113079616378659
+    ],
+    "cash_ledger": [
+      1,
+      6036396559417606472
+    ],
+    "position_lots": [
+      60,
+      9297943575445525573
+    ]
+  },
+  "unrelated_workflows_unchanged": 175,
+  "active_executions": 0,
+  "shadow_macro_real_items": 6,
+  "shadow_positive_scenario_score": 8,
+  "shadow_issuer_items": 2,
+  "js_assertions": 19,
+  "python_collector_tests": 3,
+  "real_runner_read_tests": 9,
+  "real_runner_write_tests": 3,
+  "next_cycle_observed": false,
+  "production_collection": {
+    "at_utc": "2026-09-27T16:19:10Z",
+    "finnhub": {
+      "status": "SUCCESS",
+      "symbols": 75,
+      "received": 380,
+      "inserted": 343,
+      "unsupported_symbols": [
+        "6861.T",
+        "ABCA.PA",
+        "DSY.PA",
+        "GTT.PA",
+        "IPN.PA",
+        "MAU.PA",
+        "MC.PA",
+        "PLNW.PA",
+        "RMS.PA",
+        "TKO.PA",
+        "TTE.PA",
+        "VK.PA"
+      ]
+    },
+    "issuer_rss": {
+      "status": "SUCCESS",
+      "received": 2,
+      "inserted": 2
+    }
+  },
+  "sources_enabled_macro": 20,
+  "n8n_health": "ok",
+  "pending_approvals": 0,
+  "sources_paid_added": 0,
+  "static_data_preserved": 5,
+  "ledger_after_production_collection": "UNCHANGED",
+  "shadow_credentials_removed": true,
+  "final_health_runner_replay": true
+}

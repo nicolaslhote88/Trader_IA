@@ -27,7 +27,7 @@ VARIANTS = [
         "name": "AG2-V3 — Technical Held+Core",
         "file": "AG2-V3-Technical-Held-Core.workflow.json",
         "cron": "0 9,13 * * 1-5",
-        "extra_crons": ["35 16 * * 1-5"],
+        "extra_crons": ["41 16 * * 1-5"],
         "rotation_mode": "HELD_CORE",
         "batch_size": 18,
         "batch_state_key": "last_index_actions_held_core",
@@ -37,11 +37,12 @@ VARIANTS = [
     },
     {
         "id": "AG2V3WATCHNIGHT20260619",
-        "name": "AG2-V3 — Technical Watchlist Nightly",
+        "name": "AG2-V3 — Technical Universe Coverage",
         "file": "AG2-V3-Technical-Watchlist-Nightly.workflow.json",
-        "cron": "0 22,2 * * *",
-        "rotation_mode": "WATCHLIST",
-        "batch_size": 40,
+        "cron": "0 2,5 * * *",
+        "extra_crons": ["20 22 * * *", "10 10 * * *", "15 18 * * *"],
+        "rotation_mode": "COVERAGE",
+        "batch_size": 80,
         "batch_state_key": "last_index_actions_watchlist",
         "ai_provider": "deepseek-v4-flash",
         "ai_model_position": [-16, 7728],
@@ -98,6 +99,9 @@ def configure_deepseek_validator(wf, variant):
         user_prompt = old_node["parameters"]["text"]
         parser_node = next(node for node in wf["nodes"] if node.get("name") == parser_name)
         output_schema = parser_node["parameters"]["inputSchema"]
+
+    if "REVUE POSITION DETENUE" not in system_prompt:
+        system_prompt += "\n\n" + (Path(__file__).parent / "nodes/held_review_prompt.txt").read_text(encoding="utf8").strip()
 
     old_name = old_node["name"]
     old_position = old_node.get("position", [-16, 7536])

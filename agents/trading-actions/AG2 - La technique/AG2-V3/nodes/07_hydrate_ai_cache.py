@@ -42,8 +42,8 @@ for it in items:
     ai_data = {
         "ai_decision": "SKIP",
         "ai_validated": False,
-        "ai_quality": 0,
-        "ai_reasoning": "[CACHE] No AI call (TTL/filtered) and no cache record.",
+        "ai_quality": None,
+        "ai_reasoning": "[NOT_ANALYZED] " + str(d.get("filter_reason") or d.get("dedup_reason") or "NO_CACHE"),
         "ai_chart_pattern": "None",
         "ai_stop_loss": None,
         "ai_stop_basis": "NONE",
@@ -62,19 +62,19 @@ for it in items:
     try:
         with db_con() as con:
             row = con.execute(
-                "SELECT sig_json, last_ai_run_id, last_ai_output_ref, date_diff('minute', CAST(last_ai_at AS TIMESTAMP), CAST(now() AS TIMESTAMP)), ttl_minutes FROM ai_dedup_cache WHERE symbol=? AND interval_key='combined'",
+                "SELECT sig_json, last_ai_run_id, last_ai_output_ref, date_diff('minute', CAST(last_ai_at AS TIMESTAMP), CAST(now() AS TIMESTAMP)), ttl_minutes, sig_hash FROM ai_dedup_cache WHERE symbol=? AND interval_key='combined'",
                 [symbol],
             ).fetchone()
 
             if row:
-                sig_json, last_ai_run_id, last_ai_output_ref, cache_age_min, ttl_minutes = row
+                sig_json, last_ai_run_id, last_ai_output_ref, cache_age_min, ttl_minutes, cached_hash = row
                 try:
                     sj = json.loads(sig_json or "{}")
                 except Exception:
                     sj = {}
 
                 decision = str(sj.get("decision", "WATCH") or "WATCH").strip().upper()
-                quality = int(sj.get("quality", 5) or 5)
+                quality = int(sj["quality"]) if sj.get("quality") is not None else 0
                 try:
                     age_min = float(cache_age_min) if cache_age_min is not None else None
                 except Exception:
@@ -84,11 +84,14 @@ for it in items:
                 except Exception:
                     ttl = 0.0
                 cap = 10080.0 if ttl <= 0 else (ttl if ttl < 10080.0 else 10080.0)
-                fresh = age_min is not None and age_min <= cap
-                if fresh and decision != "REJECT":
+                fresh = age_min is not None and 0 <= age_min <= cap
+                if fresh and decision != "REJECT" and (not d.get("is_held") or cached_hash == d.get("sig_hash")):
+                    for field in ("ai_validated", "ai_reasoning", "ai_chart_pattern", "ai_stop_loss", "ai_stop_basis", "ai_bias_sma200", "ai_regime_d1", "ai_alignment", "ai_missing", "ai_anomalies", "ai_rr_theoretical"):
+                        if field in sj:
+                            ai_data[field] = sj[field]
                     ai_data["ai_decision"] = decision
                     ai_data["ai_quality"] = quality
-                    ai_data["ai_reasoning"] = f"[CACHE] Reused AI decision from {last_ai_run_id} (age {age_min:.0f}min)."
+                    ai_data["ai_reasoning"] = f"[CACHE] Reused AI decision from {last_ai_run_id} (age {age_min:.0f}min). " + str(sj.get("ai_reasoning") or "")
                     ai_data["ai_output_ref"] = last_ai_output_ref or ""
                     ai_data["ai_model"] = "gpt-5-mini"
                     ai_data["ai_bb_status"] = str(sj.get("bb_status", "UNKNOWN") or "UNKNOWN").strip().upper()

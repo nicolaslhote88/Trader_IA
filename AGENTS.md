@@ -48,6 +48,35 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## Tradabilité — LIVE 2026-10-06
+- Couverture AG2 : ancien ID Watchlist `AG2V3WATCHNIGHT20260619`, mode `COVERAGE`, 80 symboles par lot à 02:00/05:00/10:10/18:15/22:20 Paris, tous les jours. Priorité à la dernière tentative la plus ancienne sur tout HELD/CORE/WATCHLIST hors quarantaine. Held+Core inchangé.
+- Yahoo : backfill des caches trop courts et alias de données PVL.PA→ALPVL.PA, LHYFE.PA→ALHYF.PA, sans changement d’identité interne/broker. Les bougies invalides restent exclues.
+- Secours D1 : API Yahoo 2.2.5 ajoute les seules séances récentes manquantes depuis IBKR, avec identité/devise, OHLCV, clôture et historique commun contrôlés. Cache et provenance distincts ; aucune interpolation. Broker : route historique iserver corrigée, gardes inchangés.
+- Dashboard : âge réel H1/D1 calculé depuis les bougies, comme R8 ; `workflow_date` ne rajeunit plus les données. Aucun seuil, score, verdict IA ou garde broker assoupli.
+- [Audit](docs/audits/20261006_tradability_audit.md) · [Preuves, versions, limites et rollback](docs/operations/20261006_tradability_deployment.md).
+
+## AG2 — correction des revues HELD, LIVE 2026-10-05
+- HELD lu depuis le dernier snapshot portefeuille (≤96 h), repli segments ; H1 NEUTRAL n'exclut plus les détenus de la revue IA. Cache 4 h et invalidation par bougie, REJECT non réutilisé.
+- Fraîcheur H1 relative aux séances régulières/week-ends ; limites dures 96 h inchangées. Jours fériés non exemptés, approche conservatrice. Date D1 US corrigée ; bougie du jour exclue avant clôture +10 min.
+- Dernier Held+Core **16:41 Paris** (remplace 16:35), AG1 17:10 inchangé. Dashboard : SKIP = Non analysé, devise native.
+- Preuves, périmètre et rollback : `docs/operations/20261005_ag2_held_review_deployment.md`.
+
+## Fiche historique AG1 — LIVE 2026-10-04
+- Promotion explicitement demandée par Nicolas malgré un apport de performance non démontré. `AG3_HISTORICAL_EVIDENCE_V1` est transmise après Liquidity Preflight aux trois modèles et au consensus : `AG1.HISTORY — Fetch Dated Accounts` → `… Attach Dated Accounts`.
+- Source : `ag3-predictive` POST `/ag1/historical-evidence`, faits datés uniquement, aucun score/gate modifié et aucune probabilité prédictive ajoutée. Timeout 8 s ; service invalide/indisponible = état explicite sans faits, poursuite avec les autres données.
+- AG1 actif, version publiée `736b0a41-2f55-4153-aa97-3babbcbcab43`. Replay exact des deux nœuds + trois LLM validé ; ledger et 179 autres workflows inchangés. Premier cron enrichi à observer le 5 octobre 17:10 Paris. [Preuves/rollback](docs/operations/20261004_ag1_historical_evidence_live.md).
+
+## Recherche prédictive AG3 — LIVE 2026-10-04
+- Service séparé `ag3-predictive`, stockage `/local-files/ag3-predictive` (SQLite + archives). Yahoo existant 2.2.0 enrichi par `/research/history` ; SEC/ESEF/BCE/ALFRED collectés. Cron 04:45 Paris, verrou exclusif, aucun write DuckDB métier.
+- Premier modèle US / rendement total à 90 jours contre SPY : expérimental, non validé, aucun effet sur AG1 ou les ordres. Les probabilités ne battent pas la référence 50 % dans le premier test. ESEF sans dates de publication prouvées exclu du modèle ; Japon/Corée encore sans clés et sans validation du backfill.
+- États, preuves et rollback : `docs/operations/20261004_ag3_predictive_pipeline_deployment.md`. `/health` ne prouve pas le succès des collectes : lire `/status`. Premier cron à observer.
+
+## Fondamental AG3 — LIVE 2026-10-03
+- Calcul `ag3_v2_units_nulls_20261003` : absences préservées, ratios Yahoo convertis sans seuil de 150 %, objectifs analystes sans cibles de repli inventées. Les 527 derniers relevés ont été réparés avec leurs dates conservées.
+- Dashboard détaillé et AG1 partagent `AG3_EVIDENCE_V1` ; nœud `20L — Fundamental Evidence` avant Merge7. Source commune : `services/dashboard/fundamental_context.py`, génération : `outils/scripts/build_ag3_fundamental_update.py`.
+- Probabilités artificielles retirées. Modèle prédictif non validé : historique comptable daté et prix ajustés encore nécessaires. Aucun poids, gate, cron ni garde broker modifié.
+- Preuves, versions et rollback : `docs/operations/20261003_ag3_fundamental_evidence_deployment.md`. Prochains crons AG3/AG1 à observer.
+
 ## Modèles AG1 — LIVE 2026-09-25
 - Claude Opus 5.5 utilise Messages API via HTTP (thinking adaptive + JSON structuré), car le nœud Anthropic de n8n 2.3.5 est incompatible. GPT-6 Sol utilise le nœud OpenAI ; replay validé avec Responses API/medium explicites. Une sauvegarde ultérieure retire ces deux options : version `447203d7-c110-473e-a5cc-1500107d20e5` reflétée localement, réglages OpenAI à revalider. Clés historiques de stockage conservées.
 - Replay isolé validé, publication vérifiée ; prochain cron à observer. Preuves et rollback : `docs/operations/20260925_ag1_opus55_gpt6sol_migration.md`.
@@ -81,13 +110,19 @@ leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vé
   - `AG3-V2 — Fundamental Watchlist Nightly` (`AG3V2WATCHNIGHT20260622`, cron **0 2 * * * UTC quotidien**, segment WATCHLIST ≈196, batch 60 → cycle ~4j, SLA <5j).
   Builder `agents/trading-actions/AG3 - Les fondamentaux/AG3-V2/build_split_workflows.py` (part du live export ; `build_workflow.py` est **périmé**=GoogleSheets). **Gate STALE_FUNDA** dans AG1V4 node `R8 — Data Prep for Matrix` : au-delà de `MAX_FUNDA_AGE_HOURS` (env `AG1_ACTIONS_MAX_FUNDA_AGE_HOURS`, défaut 168h) le fondamental est **neutralisé** (Score/Risk→50, Upside/Target→0, `Funda_Usable=False`) + flag `STALE_FUNDA` ; **PAS** un reject dur du risk manager (un funda périmé ne gèle pas le trading). Détails/rollback : `docs/operations/20260622_ag3_split_stale_funda_deploy_notes.md`. **IBKR ne peut pas alimenter les fondamentaux** (Client Portal API : tags fondamentaux dépréciés + notes analystes indisponibles).
 - **AG4-V3 : dual-branch.** Node `20CFG - Analysis Mode` (`analysisMode`, défaut `reduced`) → Switch `20H_MODE`.
-  `reduced` = Actions via Grok grok-4.3 ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
+  `reduced` = Actions via DeepSeek `deepseek-v4-flash` (27/09/2026) ; `full` = ancien (gpt-5-mini, réactive le Forex). Détails : `docs/audits/20260617_ag4_v3_news_watcher_audit.md`.
 - **⚠️ IBKR mode RÉEL (live).** Compte **`U25651155`**, `dry_run=false`, `AG1_ACTIONS_LIVE_ORDERS_ENABLED=true`. Ordres réels.
 - **Forex : entièrement désactivé** (workflows FX `active=0`, `fx_orders_enabled=false`).
 - **Login IBKR : navigateur manuel + 2FA.** Le `/health` du 2026-08-06 indique
   `assisted_login.enabled=false` et `auto_reauth_enabled=true` : le broker
   maintient/réinitialise la session en journée, mais ne possède pas de flux de
   credentials assisté actif. Fallback : tunnel navigateur vers le Gateway.
+
+## News — remédiation gratuite LIVE 2026-09-27
+- Macro AG4-V3 réduit : **DeepSeek `deepseek-v4-flash`**, chaîne structurée ; Grok retiré. Une erreur LLM interrompt le workflow au lieu d’être classée Noise. Provenance RSS corrigée, réanalyse des anciennes sorties et des URL réutilisées.
+- Flux officiels gratuits **Dassault Systèmes (DSY.PA)** et **Fast Retailing (9983.T)** → `news_finnhub_staging` avec `source='issuer_rss'` → analyse Finnhub existante → AG1. SEC non activée (HTTP 403 constaté au déploiement).
+- Finnhub : HELD+CORE, clé article **par symbole**, quotas gratuits inchangés, 12 tickers locaux non mappés signalés sans appels 403 répétés. Collecte 09:35/12:35/15:35 Paris ; analyse 10/13/16. Macro 06:45/10:45/**14:45**, Boursorama 08:05/11:05/14:05/**15:05**, santé **16:55**.
+- Deux flux FXStreet désactivés (403). Aucun nouveau flux payant. Replay isolé validé ; cycle complet du 28 septembre à observer. Détails : `docs/operations/20260927_news_free_flash_remediation.md`. Les horaires historiques ci-dessous sont remplacés par cette note et `SCHEDULING_AND_LOAD.md`.
 
 ## 📰 Pipeline NEWS single-stock (AG4_Spé V2/V3 → AG1 V4) — MAJ 2026-08-06
 Base **`ag4_spe_v2.duckdb`** (`news_history` + vue **`news_analyzed`** = summary∧is_relevant). Détails : `docs/audits/20260617_ag4_spe_v2_analysis.md`, `…_remediation_plan.md`, `docs/specs/ag4_spe_v3_ibkr_news.md`, `docs/specs/ag1_v4_d2_news_digest.md`.

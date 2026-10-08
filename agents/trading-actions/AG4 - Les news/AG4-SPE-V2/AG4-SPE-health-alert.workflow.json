@@ -1,1 +1,98 @@
-[{"updatedAt":"2026-06-18T07:40:47.000Z","createdAt":"2026-06-18T06:29:45.803Z","id":"uXW5M4vc1imTExB4","name":"AG4_Spé — Health Alert","description":null,"active":true,"isArchived":false,"nodes":[{"parameters":{"rule":{"interval":[{"field":"cronExpression","expression":"0 30 16 * * 1-5"}]}},"id":"a3sched01","name":"Schedule Health Check","type":"n8n-nodes-base.scheduleTrigger","typeVersion":1.3,"position":[0,0]},{"parameters":{"language":"pythonNative","pythonCode":"import duckdb\nfrom datetime import datetime\n\nDB = \"/files/duckdb/ag4_spe_v2.duckdb\"\ncon = duckdb.connect(DB, read_only=True)\nlast = con.execute(\"SELECT max(started_at) FROM run_log WHERE status='SUCCESS'\").fetchone()[0]\nz = con.execute(\"SELECT count(*) FROM run_log WHERE status='RUNNING' AND started_at < now()-INTERVAL '1 hour'\").fetchone()[0]\ntot = con.execute(\"SELECT count(*) FROM news_history\").fetchone()[0]\nbad = con.execute(\"SELECT count(*) FROM news_history WHERE published_at IS NOT NULL AND (published_at < now()-INTERVAL '730 days' OR published_at > now()+INTERVAL '7 days')\").fetchone()[0]\ncon.close()\n\nnow = datetime.utcnow()\nissues = []\nif last is None:\n    issues.append(\"Aucun run SUCCESS en base.\")\nelse:\n    ah = (now - last).total_seconds() / 3600.0\n    if ah > 8:\n        issues.append(\"Dernier run SUCCESS il y a %.0fh (>8h) - pipeline bloque ?\" % ah)\nif z > 0:\n    issues.append(\"%d run(s) zombies RUNNING>1h.\" % z)\nratio = (100.0 * bad / tot) if tot else 0.0\nif ratio > 5:\n    issues.append(\"%.1f%% de published_at hors plage (regression dates).\" % ratio)\n\nif not issues:\n    return []\ntext = \"<b>AG4_Spe-V2 - alerte sante</b>\\n\" + \"\\n\".join(\"- \" + i for i in issues)\nreturn [{\"json\": {\"text\": text}}]\n"},"id":"a3code001","name":"Compute Health","type":"n8n-nodes-base.code","typeVersion":2,"position":[280,0]},{"parameters":{"chatId":"-4887456379","text":"={{ $json.text }}","additionalFields":{"appendAttribution":false,"parse_mode":"HTML","disable_web_page_preview":true}},"id":"a3tg00001","name":"Telegram Alert","type":"n8n-nodes-base.telegram","typeVersion":1,"position":[560,0],"credentials":{"telegramApi":{"id":"pVqYKOVuJrq3njUz","name":"Telegram Jarvis Bot"}}}],"connections":{"Schedule Health Check":{"main":[[{"node":"Compute Health","type":"main","index":0}]]},"Compute Health":{"main":[[{"node":"Telegram Alert","type":"main","index":0}]]}},"settings":{"executionOrder":"v1"},"staticData":{"node:Schedule Health Check":{"recurrenceRules":[]}},"meta":null,"pinData":null,"versionId":"931449a8-ed8b-4fe4-9949-d6b1a318b751","activeVersionId":"931449a8-ed8b-4fe4-9949-d6b1a318b751","versionCounter":13,"triggerCount":1,"tags":[],"shared":[{"updatedAt":"2026-06-18T07:40:47.662Z","createdAt":"2026-06-18T07:40:47.662Z","role":"workflow:owner","workflowId":"uXW5M4vc1imTExB4","projectId":"ksaxzZwZY6PsA6jp","project":{"updatedAt":"2025-08-19T20:06:03.793Z","createdAt":"2025-08-19T20:05:08.903Z","id":"ksaxzZwZY6PsA6jp","name":"Nicolas L'HOTE <nicolas.lhote.88@gmail.com>","type":"personal","icon":null,"description":null,"creatorId":"81c13a48-6847-445c-927f-81c1c25a72f4"}}]}]
+[
+  {
+    "id": "uXW5M4vc1imTExB4",
+    "name": "AG4_Spé — Health Alert",
+    "active": 1,
+    "versionId": "3a2ffd1f-f3dc-40f8-9050-defc4e8aedc4",
+    "activeVersionId": "3a2ffd1f-f3dc-40f8-9050-defc4e8aedc4",
+    "nodes": [
+      {
+        "parameters": {
+          "rule": {
+            "interval": [
+              {
+                "field": "cronExpression",
+                "expression": "0 55 16 * * 1-5"
+              }
+            ]
+          }
+        },
+        "id": "a3sched01",
+        "name": "Schedule Health Check",
+        "type": "n8n-nodes-base.scheduleTrigger",
+        "typeVersion": 1.3,
+        "position": [
+          0,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "language": "pythonNative",
+          "pythonCode": "import duckdb\nimport time\n\nissues = []\ndef connect_ro(path):\n    for attempt in range(8):\n        try:\n            return duckdb.connect(path, read_only=True)\n        except Exception as e:\n            if \"lock\" not in str(e).lower() or attempt == 7:\n                raise\n            time.sleep(2)\n\nfor db, label in [(\"ag4_spe_v2\", \"Boursorama\"), (\"ag4_v3\", \"Macro DeepSeek\")]:\n    con = None\n    try:\n        con = connect_ro(\"/files/duckdb/\" + db + \".duckdb\")\n        age = con.execute(\"SELECT epoch(now()-max(started_at))/3600 FROM run_log WHERE status IN ('SUCCESS','PARTIAL')\").fetchone()[0]\n        if age is None or age > 8:\n            issues.append(label + \": aucun run termine depuis 8h.\")\n        max_age = '2 hours' if db == 'ag4_v3' else '1 hour'\n        zombies = con.execute(\"SELECT count(*) FROM run_log WHERE status='RUNNING' AND started_at < now()-CAST(? AS INTERVAL)\", [max_age]).fetchone()[0]\n        if zombies:\n            issues.append(label + \": %d run(s) inacheves >%s.\" % (zombies, max_age))\n        bad = con.execute(\"SELECT count(*) FROM news_history WHERE published_at > now()+INTERVAL '5 minutes'\").fetchone()[0]\n        if bad:\n            issues.append(label + \": %d dates futures.\" % bad)\n        if db == \"ag4_v3\":\n            last_status = con.execute(\"SELECT status FROM run_log WHERE status != 'RUNNING' ORDER BY started_at DESC LIMIT 1\").fetchone()\n            if last_status and last_status[0] in ['PARTIAL', 'FAILED', 'NO_DATA']:\n                issues.append(\"Macro : dernier run \" + last_status[0] + \", verifier les erreurs de flux/analyse.\")\n            total, unknown = con.execute(\"SELECT count(*),count(*) FILTER(WHERE source='unknown') FROM news_history WHERE first_seen_at > now()-INTERVAL '8 hours'\").fetchone()\n            if total and unknown/total > .1:\n                issues.append(\"Macro : sources unknown >10%.\")\n        else:\n            pending, oldest = con.execute(\"\"\"SELECT count(*),max(epoch(now()-s.fetched_at)/3600)\n              FROM news_finnhub_staging s WHERE s.published_at >= now()-INTERVAL '14 days'\n              AND NOT EXISTS (SELECT 1 FROM news_history h WHERE h.news_id=s.news_id\n                OR (h.source=s.source AND h.news_article_id=s.news_article_id AND h.symbol=s.symbol))\"\"\").fetchone()\n            if pending and oldest > 1.25:\n                issues.append(\"Flux gratuits : %d articles en attente, plus ancien %.1fh.\" % (pending, oldest))\n            for source in ['finnhub','issuer_rss']:\n                r = con.execute(\"SELECT epoch(now()-finished_at)/3600,status,errors FROM news_collection_runs WHERE source=? ORDER BY finished_at DESC LIMIT 1\", [source]).fetchone()\n                if not r or r[0] > 4 or r[1] != 'SUCCESS':\n                    issues.append(source + \": collecte absente/perimee ou partielle.\")\n            ibkr = con.execute(\"SELECT epoch(now()-max(fetched_at))/3600 FROM news_history WHERE source='ibkr'\").fetchone()[0]\n            if ibkr is None or ibkr > 24:\n                issues.append(\"IBKR : aucun article recent depuis 24h (absence de news ou collecte a verifier).\")\n    except Exception as e:\n        issues.append(label + \": controle indisponible (\" + type(e).__name__ + \").\")\n    finally:\n        if con is not None:\n            con.close()\nif not issues:\n    return []\ntext = \"<b>AG4 - sante de tous les flux news</b>\\n\" + \"\\n\".join(\"- \" + i for i in issues)\nreturn [{\"json\": {\"text\": text}}]\n"
+        },
+        "id": "a3code001",
+        "name": "Compute Health",
+        "type": "n8n-nodes-base.code",
+        "typeVersion": 2,
+        "position": [
+          280,
+          0
+        ]
+      },
+      {
+        "parameters": {
+          "chatId": "-4887456379",
+          "text": "={{ $json.text }}",
+          "additionalFields": {
+            "appendAttribution": false,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": true
+          }
+        },
+        "id": "a3tg00001",
+        "name": "Telegram Alert",
+        "type": "n8n-nodes-base.telegram",
+        "typeVersion": 1,
+        "position": [
+          560,
+          0
+        ],
+        "credentials": {
+          "telegramApi": {
+            "id": "pVqYKOVuJrq3njUz",
+            "name": "Telegram Jarvis Bot"
+          }
+        }
+      }
+    ],
+    "connections": {
+      "Schedule Health Check": {
+        "main": [
+          [
+            {
+              "node": "Compute Health",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      },
+      "Compute Health": {
+        "main": [
+          [
+            {
+              "node": "Telegram Alert",
+              "type": "main",
+              "index": 0
+            }
+          ]
+        ]
+      }
+    },
+    "settings": {
+      "executionOrder": "v1",
+      "timezone": "Europe/Paris"
+    }
+  }
+]

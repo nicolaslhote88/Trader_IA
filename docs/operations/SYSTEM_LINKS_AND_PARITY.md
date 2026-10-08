@@ -1,6 +1,6 @@
 # Liens entre systèmes & parité à maintenir
 
-**MAJ 2026-09-14.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
+**MAJ 2026-10-06.** Ce document recense les endroits où une même logique est **dupliquée** entre le pipeline AG1 (n8n) et le **dashboard** (`app.py`). Toute modification d'un côté DOIT être répercutée de l'autre, sinon les vues divergent silencieusement de la réalité d'exécution (c'est arrivé pour le funnel et la matrice).
 
 ## ⚠️ Règle d'or
 Le **dashboard `app.py` réimplémente le scoring et les gates d'AG1** (il ne lit PAS la sortie du run — il recalcule à partir des bases DuckDB `ag2_v3` / `ag3_v2` / `ag4_*`). Donc :
@@ -22,6 +22,21 @@ et la parité sur plusieurs confiances. [Contrat complet](20260914_performance_c
 contrôle, conserve les positions détenues et expose les lots. Les sorties
 proposées ne financent pas les achats. Ces contrôles d’exécution ne sont pas
 répliqués dans la matrice du dashboard.
+
+**Correction du 6 octobre 2026 :** les entonnoirs System Health et Analyse
+technique calculaient encore l’âge réel depuis `workflow_date`. Ils utilisent
+maintenant `h1_date` et `d1_date`, comme R8 et la matrice :
+`max(âge stocké, now − date de la bougie)`. Une exécution récente ne rajeunit pas
+une bougie ancienne. Repli sur la date du signal seulement pour les lignes legacy
+sans date de bougie ; seuils 96 h inchangés. L’audit initial trouvait 217 valeurs
+affichées pré-tradables contre 23 avec les dates effectives.
+Voir [l’audit et la mesure après correction](../audits/20261006_tradability_audit.md).
+
+Depuis le 6 octobre, le fournisseur OHLCV peut compléter un D1 Yahoo manquant
+par une bougie IBKR complète et validée. `d1_source` porte alors
+`+ibkr_cpapi_daily` ; le `conid` et le contrôle d’historique commun sont tracés
+dans le cache/rapport API. Les gates AG2/AG1 et les âges restent inchangés.
+Le préflight des ordres reste un contrôle séparé.
 
 ## Carte des duplications
 
@@ -92,3 +107,32 @@ accès au contrat IBKR live. Seul le gate dur de qualité des données est dupli
 3. Vérifier la cohérence : un même symbole doit donner le même grade/décision dans le dashboard et dans le run (`core.model_proposals` / `opportunity_pack`).
 4. Committer ensemble le workflow AG1, `services/dashboard/app.py` et la
    documentation de parité lorsque la modification touche une logique partagée.
+
+## Fiche fondamentale commune — 2026-10-03
+
+`services/dashboard/fundamental_context.py` est la source de la fiche `AG3_EVIDENCE_V1` affichée dans la vue détaillée et embarquée dans le nœud AG1 `20L — Fundamental Evidence`. Régénérer ce nœud avec `outils/scripts/build_ag3_fundamental_update.py` après tout changement du contrat. Il ajoute `opportunity_pack.rows[].fundamentals` et `fundamental_legend`, sans modifier les scores/gates de la matrice. Les corrections de score AG3 sont lues depuis la même base par R8 et le dashboard ; aucune deuxième formule AG3 n'est introduite.
+
+Les comparaisons 30/90 jours de score exigent la même `strategy_version`. La date de collecte n'est pas une date de publication comptable. Les objectifs analystes ne sont ni des probabilités ni des bornes de prix garanties. Voir le [déploiement](20261003_ag3_fundamental_evidence_deployment.md).
+
+## Recherche prédictive isolée — 2026-10-04
+
+`services/dashboard/predictive_detail.py` lit le service `ag3-predictive` en lecture seule. Les comptes historiques et probabilités affichées sont expérimentaux, hors scoring/gates. AG1 ne consomme pas ces probabilités. Les contrats `fundamental_context.py`, R8 et Calcul Matrice restent inchangés. Voir `20261004_ag3_predictive_pipeline_deployment.md` avant toute future promotion.
+
+
+## Fiche historique AG1 live — 4 octobre 2026
+
+`services/ag3-predictive/historical_evidence.py` produit les mêmes faits datés
+pour `/evidence/{symbol}` (dashboard) et `/ag1/historical-evidence` (AG1, lot compact).
+Deux nœuds après Liquidity Preflight enrichissent les trois entrées LLM et le contexte
+du consensus. Le nœud 20L et `AG3_EVIDENCE_V1` sont conservés ; les historiques sont
+ajoutés sous `fundamentals.historical_accounts`, avec les positions détenues et une
+légende de dates/unités. Les scores, prix, gates et règles de quantités ne changent pas.
+
+Une défaillance HTTP/contrat produit `UNAVAILABLE_OR_INVALID` et des fiches sans faits,
+jamais des chiffres de remplacement. Le dashboard indique le raccordement réel.
+Les probabilités statistiques restent hors AG1. Promotion autorisée par Nicolas
+malgré le résultat non concluant du test ; [preuves et rollback](20261004_ag1_historical_evidence_live.md).
+
+## AG2 HELD — 2026-10-05
+
+Les positions détenues sont éligibles à une revue IA même H1 NEUTRAL (WATCH d’observation, sans validation d’entrée). Les statuts de validité H1/D1 et limites dures 96 h restent identiques ; seuls le déclenchement IA, la fraîcheur de séance et le cache évoluent. SKIP reste neutre dans AG1 et est désormais nommé « Non analysé » dans le détail technique. Aucun poids ni gate de la matrice/dashboard n’est modifié. [Preuves et limites](20261005_ag2_held_review_deployment.md).

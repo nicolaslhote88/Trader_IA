@@ -99,7 +99,7 @@ def configure_deepseek_analyzer(workflow: dict) -> None:
                 "position": old_position,
                 "id": chain_id,
                 "name": DEEPSEEK_CHAIN_NAME,
-                "onError": analyzer.get("onError", "continueRegularOutput"),
+                "onError": "stopWorkflow",
             },
             {
                 "parameters": {"model": DEEPSEEK_MODEL, "options": {}},

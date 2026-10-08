@@ -6,6 +6,7 @@ return [
   {
     json: {
       symbol: ctx.symbol || "",
+      is_held: ctx.is_held === true,
       symbol_internal: ctx.symbol_internal || ctx.symbol || "",
       symbol_yahoo: ctx.symbol_yahoo || resp.symbol || ctx.symbol || "",
       asset_class: ctx.asset_class || "EQUITY",

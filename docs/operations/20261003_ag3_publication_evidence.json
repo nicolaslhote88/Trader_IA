@@ -1,0 +1,79 @@
+{
+  "published": [
+    {
+      "id": "AG3V2HELDCORE20260622",
+      "active": 1,
+      "versionId": "c74b3727-5636-49d1-a663-d22d72b5b1ff",
+      "activeVersionId": "c74b3727-5636-49d1-a663-d22d72b5b1ff"
+    },
+    {
+      "id": "AG3V2WATCHNIGHT20260622",
+      "active": 1,
+      "versionId": "c2d6bcea-4d6a-48a0-acac-47b72a493e0a",
+      "activeVersionId": "c2d6bcea-4d6a-48a0-acac-47b72a493e0a"
+    },
+    {
+      "id": "AG1V4CONSENSUS",
+      "active": 1,
+      "versionId": "87de669d-ae38-4c50-9247-492bbf11f0a3",
+      "activeVersionId": "87de669d-ae38-4c50-9247-492bbf11f0a3"
+    }
+  ],
+  "other_workflows_unchanged": 177,
+  "ledger_unchanged": true,
+  "business": {
+    "runs": [
+      783,
+      10373942580764498752
+    ],
+    "orders": [
+      173,
+      2394118589388786553
+    ],
+    "fills": [
+      124,
+      14295127880850510742
+    ],
+    "positions_snapshot": [
+      7585,
+      3331593401108622838
+    ],
+    "portfolio_snapshot": [
+      783,
+      17864066969054172387
+    ],
+    "cash_ledger": [
+      1,
+      6036396559417606472
+    ],
+    "position_lots": [
+      63,
+      4628927265122610624
+    ]
+  },
+  "repaired_latest": 527,
+  "health": {
+    "n8n_http": 200,
+    "dashboard_internal_health": "ok",
+    "broker_authenticated": true,
+    "account_aligned": true,
+    "pending_approvals": 0,
+    "dashboard_live_apptest": "PASS"
+  },
+  "validation": {
+    "score_snapshots": 527,
+    "baseline_mismatches": 0,
+    "changed_latest_scores": 378,
+    "js_assertions": 15,
+    "python_contract_tests": 6,
+    "matrix_symbols": 364,
+    "matrix_enter_before_after": [
+      13,
+      13
+    ],
+    "pack_symbols_unchanged": 22,
+    "runner_count": 3,
+    "technical_parity_tests": 5,
+    "hard_gate_tests": 3
+  }
+}

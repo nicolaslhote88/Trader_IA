@@ -63,6 +63,10 @@ const raw = (j.output && !Array.isArray(j.output))
   ? j.output
   : (j.output?.[0]?.content?.[0]?.text || j.content || j.text || "{}");
 const ai = safeParse(raw);
+if (j.error || !ai || typeof ai.isRelevant !== 'boolean' || !Number.isFinite(ai.impactScore) ||
+    !Number.isFinite(ai.confidence) || typeof ai.summary !== 'string' || !ai.summary.trim()) {
+  throw new Error('AG4_STOCK_INVALID_LLM_OUTPUT: analyse absente ou invalide');
+}
 const nowIso = new Date().toISOString();
 
 const isRelevant = typeof ai.isRelevant === "boolean" ? ai.isRelevant : true;

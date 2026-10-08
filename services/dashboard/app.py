@@ -19,6 +19,8 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 import streamlit.components.v1 as components
+from fundamental_detail import render_fundamental_detail, load_detail
+from predictive_detail import render_predictive_detail
 
 # ============================================================
 # CONFIGURATION
@@ -6025,24 +6027,6 @@ def _safe_series(df: pd.DataFrame, candidates: list[str], default: float = 0.0) 
 
 def _clamp_pct(v: float) -> float:
     return max(0.0, min(100.0, float(v)))
-
-
-def _estimate_scenario_probabilities(score: float, risk: float, upside_pct: float) -> dict[str, int]:
-    """Heuristique locale (sans IA) pour afficher une probabilité relative des scénarios."""
-    s = max(0.0, min(100.0, float(score)))
-    r = max(0.0, min(100.0, float(risk)))
-    u = float(upside_pct)
-
-    bull_raw = max(5.0, 0.8 * s - 0.55 * r + max(u, 0.0) * 0.9 + 25.0)
-    bear_raw = max(5.0, 0.95 * r - 0.45 * s + max(-u, 0.0) * 1.1 + 18.0)
-    base_raw = max(5.0, 100.0 - abs(s - 60.0) - abs(u) * 0.45 + 10.0)
-
-    total = bull_raw + bear_raw + base_raw
-    bull = int(round((bull_raw / total) * 100))
-    bear = int(round((bear_raw / total) * 100))
-    base = 100 - bull - bear
-
-    return {"baissier": bear, "central": base, "haussier": bull}
 
 
 def _normalize_macro_news_df(df_macro: pd.DataFrame) -> pd.DataFrame:
@@ -14411,6 +14395,8 @@ elif page == "System Health (Monitoring)":
             tech_cols = [
                 "symbol",
                 "last_tech_date",
+                "h1_date",
+                "d1_date",
                 "data_age_h1_hours",
                 "data_age_d1_hours",
                 "h1_status",
@@ -14513,12 +14499,14 @@ elif page == "System Health (Monitoring)":
         health_df.get("data_age_d1_hours", pd.Series(float("nan"), index=health_df.index)),
         errors="coerce",
     )
-    # Repli sur l'âge du signal si les colonnes d'âge marché ne sont pas disponibles.
-    signal_age_h = pd.to_numeric(health_df["tech_age_days"], errors="coerce") * 24.0
-    # Guard against a frozen data_age masking a stale bar: take the worse of the
-    # stored market-data age and the real age from the last signal/bar date.
-    health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, signal_age_h], axis=1).max(axis=1)
-    health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, signal_age_h], axis=1).max(axis=1)
+    # Same bar dates and effective ages as R8 and the multi-agent matrix.
+    bar_h1 = pd.to_datetime(health_df.get("h1_date", pd.Series(pd.NaT, index=health_df.index)), errors="coerce", utc=True)
+    bar_d1 = pd.to_datetime(health_df.get("d1_date", pd.Series(pd.NaT, index=health_df.index)), errors="coerce", utc=True)
+    signal_ts = pd.to_datetime(health_df["last_tech_date"], errors="coerce", utc=True)
+    real_h1 = (now_utc - bar_h1.fillna(signal_ts)).dt.total_seconds() / 3600.0
+    real_d1 = (now_utc - bar_d1.fillna(signal_ts)).dt.total_seconds() / 3600.0
+    health_df["h1_age_hours_effective"] = pd.concat([h1_age_h, real_h1], axis=1).max(axis=1)
+    health_df["d1_age_hours_effective"] = pd.concat([d1_age_h, real_d1], axis=1).max(axis=1)
     health_df["yf_age_hours"] = pd.to_numeric(health_df["yf_age_days"], errors="coerce") * 24.0
     closed_contract = _bool_series(health_df, "h1_closed_only", default=False) & _bool_series(
         health_df, "d1_closed_only", default=False
@@ -14903,9 +14891,9 @@ elif page == "System Health (Monitoring)":
             "Technique dans les seuils → Quote + spread exploitables",
             funnel_masks[4],
             funnel_masks[5],
-            "Quote YF inutilisable ou spread non observé.",
-            "Priorité : diagnostiquer spread_pct absent ; si quote OK mais spread absent, ajouter une source IBKR market-data ou assouplir le pré-gate UI et laisser IBKR trancher au moment de l'ordre.",
-            "Très élevé : c'est le plus gros levier visible dans l'entonnoir.",
+            "Quote YF inutilisable, ou absence simultanée de spread et de volume suffisant.",
+            "Rétablir les quotes valides ; contrôler le volume lorsque le spread est absent. Le préflight IBKR reste requis.",
+            "À mesurer sur les pertes exclusives ci-dessous.",
             False,
         ),
         (
@@ -17823,7 +17811,10 @@ elif page == "Analyse Technique V2":
                     mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
 
                     close_price = safe_float(row.get("last_close", 0))
-                    mc1.metric("Close", f"{close_price:.2f} €" if close_price > 0 else "—")
+                    price_currency = str(row.get("currency") or "").strip().upper()
+                    if price_currency in ("NAN", "NONE"):
+                        price_currency = ""
+                    mc1.metric("Close", f"{close_price:.2f} {price_currency}".strip() if close_price > 0 else "—")
 
                     h1_act = str(row.get("h1_action", "")).upper()
                     h1_sc = safe_float(row.get("h1_score", 0))
@@ -17834,7 +17825,7 @@ elif page == "Analyse Technique V2":
                     mc3.metric("D1", f"{d1_act}", delta=f"Score: {d1_sc:.0f}")
 
                     ai_dec = str(row.get("ai_decision", "—"))
-                    mc4.metric("Décision IA", ai_dec if ai_dec.strip() else "—")
+                    mc4.metric("Décision IA", "Non analysé" if ai_dec.upper() == "SKIP" else (ai_dec if ai_dec.strip() else "—"))
 
                     ai_qual = safe_float(row.get("ai_quality", 0))
                     mc5.metric("Qualité IA", f"{ai_qual:.0f}/10" if ai_qual > 0 else "—")
@@ -17933,7 +17924,23 @@ elif page == "Analyse Technique V2":
                     # ---- Row 5: AI Analysis Card ----
                     ai_decision = str(row.get("ai_decision", "")).strip()
 
-                    if ai_decision and ai_decision.lower() not in ("", "nan", "none"):
+                    if ai_decision.upper() == "SKIP":
+                        st.markdown("#### Analyse IA")
+                        causes = {
+                            "NEUTRAL": "Signal H1 neutre : le filtre de sélection n'a pas demandé de revue.",
+                            "H1_OR_D1_OUTSIDE_AI_FRESHNESS_WINDOW": "Dernières bougies hors de la fenêtre de fraîcheur nécessaire à l'analyse IA.",
+                            "CLOSED_BARS_UNVERIFIED": "La clôture des bougies n'a pas pu être vérifiée.",
+                            "NO_H1_DATA": "Données H1 indisponibles ou invalides.",
+                            "NO_OR_STALE_D1_DATA": "Données D1 indisponibles, invalides ou périmées.",
+                            "HELD_PERIODIC_REVIEW": "Revue de position détenue attendue ; aucun avis réutilisable.",
+                        }
+                        cause = str(row.get("filter_reason") or "")
+                        st.info("Non analysé — " + causes.get(cause, "Aucun avis IA utilisable pour ce relevé."))
+                        st.caption("SKIP n'est ni une note de qualité, ni un rejet du titre. Les indicateurs techniques restent affichés.")
+                        detail = str(row.get("ai_reasoning") or "")
+                        if detail and detail.lower() not in ("nan", "none"):
+                            st.caption(detail)
+                    elif ai_decision and ai_decision.lower() not in ("", "nan", "none"):
                         st.markdown("#### Analyse IA")
 
                         with st.container(border=True):
@@ -18048,6 +18055,7 @@ elif page == "Analyse Fondamentale V2":
         load_ag3_page_data.clear()
         load_ag3_run_quality_history.clear()
         load_ag3_symbol_history.clear()
+        load_detail.clear()
         st.rerun()
 
     ag3_page_data = load_ag3_page_data(
@@ -18275,260 +18283,8 @@ elif page == "Analyse Fondamentale V2":
             selected_symbol = labels_map[selected_label]
             row = by_symbol.loc[selected_symbol]
 
-            score_v = safe_float(row.get("score", row.get("funda_conf", 0)))
-            risk_v = safe_float(row.get("risk_score", 0))
-            quality_v = safe_float(row.get("quality_score", 0))
-            growth_v = safe_float(row.get("growth_score", 0))
-            val_v = safe_float(row.get("valuation_score", 0))
-            health_v = safe_float(row.get("health_score", 0))
-            cons_v = safe_float(row.get("consensus_score", 0))
-            cov_v = _clamp_pct(safe_float(row.get("data_coverage_pct", 0)))
-            upside_v = safe_float(row.get("upside_pct", 0))
-            analysts_v = safe_float(row.get("analyst_count", 0))
-
-            st.subheader(f"🔬 {selected_symbol} — {row.get('name', '')}")
-            mc1, mc2, mc3, mc4, mc5, mc6 = st.columns(6)
-            mc1.metric("Triage", f"{score_v:.0f}/100", delta=_funda_eval("score", score_v)[0])
-            mc2.metric("Risque", f"{risk_v:.0f}/100", delta=_funda_eval("risk_score", risk_v)[0])
-            mc3.metric("Horizon", str(row.get("horizon", "WATCH")))
-            mc4.metric("Potentiel", f"{upside_v:.1f}%")
-            mc5.metric("Analystes", f"{analysts_v:.0f}")
-            mc6.metric("Couverture", f"{cov_v:.1f}%")
-
-            st.divider()
-
-            gauges = [
-                ("score", score_v),
-                ("risk_score", risk_v),
-                ("quality_score", quality_v),
-                ("growth_score", growth_v),
-                ("valuation_score", val_v),
-                ("health_score", health_v),
-                ("consensus_score", cons_v),
-            ]
-            cols = st.columns(3)
-            for idx, (k, v) in enumerate(gauges):
-                if idx > 0 and idx % 3 == 0:
-                    cols = st.columns(3)
-                with cols[idx % 3]:
-                    title = FUNDAMENTAL_META.get(k, {}).get("label", k)
-                    fig = _make_funda_gauge(v, title=title, inverse=(k == "risk_score"))
-                    st.plotly_chart(fig, use_container_width=True, key=f"gauge_{selected_symbol}_{k}")
-
-            st.divider()
-
-            # Table d'interprétation (bon/mauvais + sens de l'indicateur)
-            interp_rows = []
-            for key, val in [
-                ("score", score_v),
-                ("risk_score", risk_v),
-                ("quality_score", quality_v),
-                ("growth_score", growth_v),
-                ("valuation_score", val_v),
-                ("health_score", health_v),
-                ("consensus_score", cons_v),
-                ("data_coverage_pct", cov_v),
-            ]:
-                meta = FUNDAMENTAL_META.get(key, {})
-                verdict, _ = _funda_eval(key, val)
-                interp_rows.append(
-                    {
-                        "Indicateur": meta.get("label", key),
-                        "Valeur": f"{val:.1f}/100",
-                        "Lecture": verdict,
-                        "Ce que cela veut dire": meta.get("desc", ""),
-                    }
-                )
-
-            st.markdown("#### Interprétation des indicateurs")
-            render_interactive_table(
-                pd.DataFrame(interp_rows),
-                key_suffix="funda_v2_interp",
-                enable_controls=False,
-                height=320,
-            )
-
-            # Evolution historique du symbole (chargement lazy par symbole)
-            hs1, hs2 = st.columns([1.1, 1.1])
-            symbol_hist_days = int(hs1.selectbox("Fenetre historique symbole (jours)", [7, 30, 90], index=1, key="ag3_symbol_hist_days"))
-            symbol_hist_limit = int(
-                hs2.number_input(
-                    "Limite lignes symbole",
-                    min_value=200,
-                    max_value=100000,
-                    value=int(min(max(HISTORY_LIMIT_DEFAULT, 200), 100000)),
-                    step=200,
-                    key="ag3_symbol_hist_limit",
-                )
-            )
-            h = load_ag3_symbol_history(
-                AG3_DUCKDB_PATH,
-                ag3_db_sig,
-                selected_symbol,
-                symbol_hist_days,
-                symbol_hist_limit,
-            )
-            if h is not None and not h.empty:
-                ts_col = _first_existing_column(h, ["updated_at", "created_at", "fetched_at"])
-                if ts_col:
-                    h["ts"] = pd.to_datetime(h[ts_col], errors="coerce")
-                    h = h.dropna(subset=["ts"]).sort_values("ts")
-                    if not h.empty:
-                        h_score = _safe_series(h, ["score", "funda_conf"])
-                        h_risk = _safe_series(h, ["risk_score"])
-                        fig_hist = go.Figure()
-                        fig_hist.add_trace(
-                            go.Scatter(
-                                x=h["ts"],
-                                y=h_score,
-                                mode="lines+markers",
-                                name="Triage",
-                                line=dict(color="#28a745", width=2),
-                            )
-                        )
-                        fig_hist.add_trace(
-                            go.Scatter(
-                                x=h["ts"],
-                                y=h_risk,
-                                mode="lines+markers",
-                                name="Risque",
-                                line=dict(color="#dc3545", width=2),
-                            )
-                        )
-                        fig_hist.update_layout(
-                            title=f"Évolution historique — {selected_symbol}",
-                            height=320,
-                            margin=dict(t=40, b=20, l=20, r=20),
-                            yaxis=dict(title="Score /100"),
-                        )
-                        st.plotly_chart(fig_hist, use_container_width=True)
-
-            # Consensus + scénarios
-            c_left, c_right = st.columns([1, 1])
-            with c_left:
-                st.markdown("#### Consensus")
-                c_row = pd.DataFrame()
-                if (
-                    df_funda_consensus is not None
-                    and not df_funda_consensus.empty
-                    and "symbol" in df_funda_consensus.columns
-                ):
-                    c_row = df_funda_consensus[df_funda_consensus["symbol"] == selected_symbol].head(1)
-
-                if not c_row.empty:
-                    cr = c_row.iloc[0]
-                    st.markdown(f"**Recommandation**: {cr.get('recommendation', '—')}")
-                    st.markdown(f"**Objectif moyen**: {safe_float(cr.get('target_mean_price', 0)):.2f}")
-                    st.markdown(f"**Objectif haut**: {safe_float(cr.get('target_high_price', 0)):.2f}")
-                    st.markdown(f"**Objectif bas**: {safe_float(cr.get('target_low_price', 0)):.2f}")
-                    st.markdown(f"**Potentiel**: {safe_float(cr.get('upside_pct', 0)):.1f}%")
-                    st.markdown(f"**Analystes**: {safe_float(cr.get('analyst_count', 0)):.0f}")
-                else:
-                    st.caption("Pas de ligne consensus disponible.")
-
-            with c_right:
-                st.markdown("#### Scénarios de valorisation")
-                scenarios = extract_valuation_scenarios(str(row.get("valuation", "")))
-                current_px = safe_float(row.get("current_price", 0))
-                if scenarios and current_px > 0:
-                    hist_px = fetch_yfinance_history(selected_symbol, interval="1d", lookback_days=365)
-                    if not hist_px.empty and "close" in hist_px.columns:
-                        hist_px = hist_px.sort_values("time")
-                        anchor_dt = hist_px["time"].iloc[-1].to_pydatetime()
-                        anchor_px = safe_float(hist_px["close"].iloc[-1])
-                    else:
-                        anchor_dt = datetime.now()
-                        anchor_px = current_px
-
-                    fut = anchor_dt + timedelta(days=365)
-                    probs = _estimate_scenario_probabilities(score_v, risk_v, upside_v)
-                    bear_target = safe_float(scenarios.get("Bear", anchor_px * 0.85))
-                    base_target = safe_float(scenarios.get("Base", anchor_px))
-                    bull_target = safe_float(scenarios.get("Bull", anchor_px * 1.15))
-
-                    fig_sc = go.Figure()
-                    if not hist_px.empty and "close" in hist_px.columns:
-                        fig_sc.add_trace(
-                            go.Scatter(
-                                x=hist_px["time"],
-                                y=hist_px["close"],
-                                mode="lines",
-                                name="Cours réel (1 an)",
-                                line=dict(color="#ffffff", width=2),
-                            )
-                        )
-                    fig_sc.add_trace(
-                        go.Scatter(
-                            x=[anchor_dt, fut],
-                            y=[anchor_px, bear_target],
-                            mode="lines+markers+text",
-                            name=f"Baissier ({probs['baissier']}%)",
-                            text=[None, f"{bear_target:.1f}"],
-                            textposition="top right",
-                            line=dict(color="#dc3545", dash="dash"),
-                        )
-                    )
-                    fig_sc.add_trace(
-                        go.Scatter(
-                            x=[anchor_dt, fut],
-                            y=[anchor_px, base_target],
-                            mode="lines+markers+text",
-                            name=f"Central ({probs['central']}%)",
-                            text=[None, f"{base_target:.1f}"],
-                            textposition="top right",
-                            line=dict(color="#ffc107", dash="dash"),
-                        )
-                    )
-                    fig_sc.add_trace(
-                        go.Scatter(
-                            x=[anchor_dt, fut],
-                            y=[anchor_px, bull_target],
-                            mode="lines+markers+text",
-                            name=f"Haussier ({probs['haussier']}%)",
-                            text=[None, f"{bull_target:.1f}"],
-                            textposition="top right",
-                            line=dict(color="#28a745", dash="dash"),
-                        )
-                    )
-                    fig_sc.update_layout(
-                        height=320,
-                        margin=dict(t=20, b=20, l=20, r=20),
-                        title="Cours réel (1 an) + projections (12 mois)",
-                    )
-                    st.plotly_chart(fig_sc, use_container_width=True)
-                    st.caption("Probabilités indicatives calculées par heuristique locale (pas un modèle IA prédictif).")
-                else:
-                    st.caption("Scénarios baissier/central/haussier non disponibles pour ce symbole.")
-
-            # Métriques fondamentales brutes (latest)
-            if df_funda_metrics is not None and not df_funda_metrics.empty and "symbol" in df_funda_metrics.columns:
-                m = df_funda_metrics[df_funda_metrics["symbol"] == selected_symbol].copy()
-                if not m.empty:
-                    m["value_num"] = pd.to_numeric(m.get("value_num", pd.Series(index=m.index)), errors="coerce")
-                    m["Valeur"] = m["value_num"]
-                    if "value_text" in m.columns:
-                        m["Valeur"] = m["Valeur"].fillna(m["value_text"])
-
-                    show_cols = []
-                    for col in ["section", "metric", "Valeur", "unit", "notes", "as_of_date", "extracted_at"]:
-                        if col in m.columns:
-                            show_cols.append(col)
-                    if show_cols:
-                        st.markdown("#### Métriques fondamentales (latest)")
-                        render_interactive_table(
-                            m[show_cols].rename(
-                                columns={
-                                    "section": "Section",
-                                    "metric": "Indicateur",
-                                    "unit": "Unité",
-                                    "notes": "Notes",
-                                    "as_of_date": "Date référence",
-                                    "extracted_at": "Date extraction",
-                                }
-                            ),
-                            key_suffix=f"funda_metrics_{selected_symbol}",
-                            height=300,
-                        )
+            render_fundamental_detail(selected_symbol, row, AG3_DUCKDB_PATH, ag3_db_sig, fetch_yfinance_history)
+            render_predictive_detail(selected_symbol)
 
     # ================================================================
     # TAB 3: HISTORIQUE RUNS

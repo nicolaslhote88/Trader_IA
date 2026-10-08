@@ -575,6 +575,28 @@ def load_active_segments(con):
     return segments
 
 
+
+def load_current_held_symbols():
+    # This reader never writes the ledger and does not trigger broker actions.
+    con = None
+    try:
+        con = duckdb.connect("/files/duckdb/ag1_v4_consensus.duckdb", read_only=True)
+        snapshot = con.execute(
+            "SELECT run_id FROM core.portfolio_snapshot "
+            "WHERE ts >= CURRENT_TIMESTAMP - INTERVAL '96 hours' ORDER BY ts DESC LIMIT 1"
+        ).fetchone()
+        if snapshot is None:
+            return None
+        return {str(row[0]).strip().upper() for row in con.execute(
+            "SELECT symbol FROM core.positions_snapshot WHERE run_id=? AND qty>0", [snapshot[0]]
+        ).fetchall()}
+    except Exception:
+        return None  # Existing HELD segments remain the conservative fallback.
+    finally:
+        if con is not None:
+            con.close()
+
+
 def apply_rotation_mode(process_queue, quarantine_symbols, segments, rotation_mode, batch_size):
     mode = str(rotation_mode or "ACTIONS_ONLY").strip().upper()
     by_symbol = {}
@@ -607,6 +629,17 @@ def apply_rotation_mode(process_queue, quarantine_symbols, segments, rotation_mo
             "held_total": len(always),
             "segment_rotation_total": len(rotation),
             "segment_symbols_total": len(held_symbols | core_symbols),
+        }
+
+    if mode == "COVERAGE":
+        # Refresh the full segmented, non-quarantined universe, including CORE.
+        active_symbols = {s for s, segs in segments.items() if segs & {"HELD", "CORE_AUTO", "CORE_MANUAL", "WATCHLIST"}}
+        rotation = [by_symbol[s] for s in ordered_symbols if s in active_symbols and not_quarantined(s)]
+        return [], rotation, {
+            "rotation_mode": mode,
+            "held_total": 0,
+            "segment_rotation_total": len(rotation),
+            "segment_symbols_total": len(active_symbols),
         }
 
     if mode == "WATCHLIST":
@@ -655,6 +688,8 @@ config = {
     "batch_state_key": str(first_json.get("batch_state_key") or "last_index"),
     "universe_scope": first_json.get("universe_scope") or ["EQUITY", "ETF", "CRYPTO"],
 }
+
+current_held = load_current_held_symbols()
 
 with db_con() as con:
     for stmt in SCHEMA_STMTS:
@@ -715,6 +750,11 @@ with db_con() as con:
     raw_total = len(process_queue)
     quarantine_symbols = load_active_quarantine(con)
     segments = load_active_segments(con)
+    if current_held is not None:
+        for values in segments.values():
+            values.discard("HELD")
+        for symbol in current_held:
+            segments.setdefault(symbol, set()).add("HELD")
     always_batch, rotation_queue, rotation_meta = apply_rotation_mode(
         process_queue,
         quarantine_symbols,
@@ -731,6 +771,15 @@ with db_con() as con:
     row = con.execute("SELECT value FROM batch_state WHERE key = ?", [config["batch_state_key"]]).fetchone()
     idx = int(row[0]) if row else 0
     rotation_total = len(rotation_queue)
+    if config["rotation_mode"] == "COVERAGE":
+        # A positional cursor changes meaning when CORE/WATCHLIST membership changes.
+        # Oldest attempted signal first gives missing/stale symbols priority without
+        # repeatedly favouring failed symbols or skipping a newly classified name.
+        last_seen = dict(con.execute(
+            "SELECT symbol, max(epoch(workflow_date)) FROM technical_signals GROUP BY symbol"
+        ).fetchall())
+        rotation_queue.sort(key=lambda entry: (last_seen.get(_entry_symbol(entry)) or 0, _entry_symbol(entry)))
+        idx = 0
     total = len(always_batch) + rotation_total
     if idx >= rotation_total:
         idx = 0
@@ -738,6 +787,8 @@ with db_con() as con:
     rotation_batch = rotation_queue[idx : idx + batch_size]
     batch = always_batch + rotation_batch
     next_idx = 0 if (rotation_total == 0 or idx + batch_size >= rotation_total) else idx + batch_size
+    if config["rotation_mode"] == "COVERAGE":
+        next_idx = 0  # Selection is driven by persisted attempt dates, not an offset.
 
     now = datetime.now(timezone.utc)
     ts = now.strftime("%Y%m%d%H%M%S%f")
@@ -763,6 +814,7 @@ for i, entry in enumerate(batch):
                 "ok": True,
                 "symbol": symbol_internal,
                 "symbol_internal": symbol_internal,
+                "is_held": "HELD" in segments.get(symbol_internal, set()),
                 "symbol_yahoo": symbol_yahoo,
                 "asset_class": str(entry.get("asset_class") or "EQUITY").upper(),
                 "exchange": str(entry.get("exchange") or ""),
@@ -791,6 +843,7 @@ for i, entry in enumerate(batch):
                     "quarantine_excluded": quarantine_excluded,
                     "rotation_size": len(rotation_batch),
                     "always_included": len(always_batch),
+                    "held_source": "PORTFOLIO_SNAPSHOT" if current_held is not None else "SEGMENTS_FALLBACK",
                     "rotation_total": rotation_total,
                     "next_index": next_idx,
                     "state_key": config["batch_state_key"],
