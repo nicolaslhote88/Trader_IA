@@ -19,9 +19,9 @@ MODEL_BRANCHES = {
         "agent": "Agent #1 - Portfolio manager",
         "extractor": "Information Extractor",
         "parser": "AG1.V4 — Structured Output GPT",
-        "model_node": "OpenAI Chat Model - GPT5.6sol",
-        "model_name": "OpenAI GPT-5.6 Sol",
-        "model_id": "gpt-5.6-sol",
+        "model_node": "OpenAI Chat Model - GPT6sol",
+        "model_name": "OpenAI GPT-6 Sol",
+        "model_id": "gpt-6-sol",
         "merge_input": 1,
     },
     "grok41_reasoning": {
@@ -38,8 +38,8 @@ MODEL_BRANCHES = {
         "extractor": "Information Extractor2",
         "parser": "AG1.V4 — Structured Output Claude",
         "model_node": "Anthropic Chat Model",
-        "model_name": "Anthropic Claude Opus 4.8",
-        "model_id": "claude-opus-4-8",
+        "model_name": "Anthropic Claude Opus 5.5",
+        "model_id": "claude-opus-5-5",
         "merge_input": 3,
     },
 }
@@ -67,7 +67,7 @@ CODE_MAP = {
 CLAUDE_OUTPUT_CONTRACT_SUFFIX = """
 
 CONTRAT DE SORTIE — IMPERATIF (lecture obligatoire)
-Tu es Claude Opus 4.8 : on attend une sortie strictement conforme, du premier coup.
+Tu es Claude Opus 5.5 : on attend une sortie strictement conforme, du premier coup.
 Retourne EXACTEMENT UN objet JSON unique, sans aucun texte, sans Markdown, sans ``` avant ou apres.
 L'objet contient TOUJOURS ces 6 cles, AUCUNE ne peut etre omise (meme vides) :
   "marketRegime"      : une valeur parmi RISK_ON | RISK_OFF | ROTATION | NEUTRAL
@@ -189,6 +189,8 @@ def patch_agent_prompts(workflow: Dict[str, Any]) -> None:
         node = get_node(workflow, branch["agent"])
         node["parameters"] = copy.deepcopy(source["parameters"])
         if model_key == "claude_sonnet46":
+            node["type"] = "@n8n/n8n-nodes-langchain.agent"
+            node["typeVersion"] = 3.1
             options = node["parameters"].setdefault("options", {})
             options["systemMessage"] = (str(options.get("systemMessage", "")).rstrip() + CLAUDE_OUTPUT_CONTRACT_SUFFIX).rstrip()
         if model_key == "grok41_reasoning":
@@ -321,18 +323,25 @@ def add_anthropic_model_node(workflow: Dict[str, Any]) -> None:
 
 
 def patch_model_options(workflow: Dict[str, Any]) -> None:
-    rename_node(workflow, "OpenAI Chat Model - GPT5.2", "OpenAI Chat Model - GPT5.6sol")
-    openai = get_node(workflow, "OpenAI Chat Model - GPT5.6sol")
+    rename_node(workflow, "OpenAI Chat Model - GPT5.2", "OpenAI Chat Model - GPT6sol")
+    rename_node(workflow, "OpenAI Chat Model - GPT5.6sol", "OpenAI Chat Model - GPT6sol")
+    openai = get_node(workflow, "OpenAI Chat Model - GPT6sol")
+    existing_parameters = copy.deepcopy(openai["parameters"])
     openai["parameters"] = {
         "model": {
             "__rl": True,
-            "value": "gpt-5.6-sol",
+            "value": "gpt-6-sol",
             "mode": "list",
-            "cachedResultName": "gpt-5.6-sol",
+            "cachedResultName": "gpt-6-sol",
         },
         "builtInTools": {},
+        "responsesApiEnabled": True,
         "options": {"reasoningEffort": "medium", "timeout": 1500000},
     }
+
+    # Preserve explicit operator choices on an already migrated GPT-6 node.
+    if existing_parameters.get("model", {}).get("value") == "gpt-6-sol":
+        openai["parameters"] = existing_parameters
 
     if has_node(workflow, "xAI Grok Chat Model"):
         rename_node(workflow, "xAI Grok Chat Model", "DeepSeek Chat Model")
@@ -488,6 +497,8 @@ def build(source_path: Path) -> Dict[str, Any]:
         "xAI Grok Chat Model1",
         "Google Gemini Chat Model",
     ])
+    # Recreate the transport from the canonical prompt on every build.
+    rename_node(workflow, "Anthropic Messages - Opus5.5", "Anthropic Chat Model")
     patch_model_options(workflow)
     add_input_and_parser_nodes(workflow)
     add_global_context_nodes(workflow)
@@ -498,7 +509,8 @@ def build(source_path: Path) -> Dict[str, Any]:
     patch_sticky_notes(workflow)
     patch_positions(workflow)
     patch_connections(workflow)
-    return workflow
+    from migrate_models_20260925 import migrate
+    return migrate(workflow)
 
 
 def make_shadow(active_candidate: Dict[str, Any]) -> Dict[str, Any]:

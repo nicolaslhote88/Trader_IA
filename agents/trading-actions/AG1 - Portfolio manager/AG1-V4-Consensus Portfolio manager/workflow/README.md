@@ -12,8 +12,17 @@ python "agents/trading-actions/AG1 - Portfolio manager/AG1-V4-Consensus Portfoli
 ```
 
 Le script injecte les codes extraits dans le workflow, configure les trois
-branches actives `gpt-5.6-sol` / `deepseek-v4-pro` / `claude-opus-4-8`, route
+branches actives `gpt-6-sol` / `deepseek-v4-pro` / `claude-opus-5-5`, route
 `AG1.00` en parallele, ajoute le merge 4 entrees puis le node de consensus.
+
+Depuis le 2026-09-25, Claude utilise un préparateur Code, le nœud HTTP
+`Anthropic Messages - Opus5.5` avec le credential Anthropic existant, puis un
+décodeur qui valide le schéma métier complet avant l’extracteur. Le mode
+`adaptive` remplace le nœud Anthropic incompatible de n8n 2.3.5. GPT-6 Sol
+a été validé avec Responses API et effort `medium` explicites. La dernière
+sauvegarde live retire ces deux options OpenAI : elle est conservée telle quelle
+dans cet export, mais n’a pas encore été rejouée (voir la note du 2026-09-25).
+La transformation est centralisée dans `migrate_models_20260925.py`.
 
 La branche DeepSeek utilise une `Basic LLM Chain` avec parseur structure et
 retry, car le node Agent peut convertir le schema en appel d'outil et echouer

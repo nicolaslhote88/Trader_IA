@@ -5,8 +5,8 @@ unique. Le meme brief d'entree est envoye en parallele a GPT, DeepSeek et Claude
 puis un node de consensus autorise une intention d'ordre seulement si au moins
 deux modeles sur trois votent le meme symbole et le meme intent executable.
 
-État live vérifié le 2026-08-06 : `gpt-5.6-sol`, `deepseek-v4-pro` et
-`claude-opus-4-8`. Les clés DuckDB historiques restent `chatgpt52`,
+Modèles live vérifiés le 2026-09-25 : `gpt-6-sol`, `deepseek-v4-pro` et
+`claude-opus-5-5`. Les clés DuckDB historiques restent `chatgpt52`,
 `grok41_reasoning` et `claude_sonnet46`; utiliser `model_name`/`model_id` pour
 identifier le modèle réel.
 
@@ -40,7 +40,7 @@ identifier le modèle réel.
 ## Flux
 
 `2B/4B/4C/AG4/R8/Calcul/Merge7/AG1.00`
--> fan-out GPT 5.6 Sol / DeepSeek V4 Pro / Claude Opus 4.8
+-> fan-out GPT 6 Sol / DeepSeek V4 Pro / Claude Opus 5.5
 -> extracteurs tagues par modele
 -> `AG1.V4 - Build Consensus`
 -> `7 - Validate & Enforce Safety`

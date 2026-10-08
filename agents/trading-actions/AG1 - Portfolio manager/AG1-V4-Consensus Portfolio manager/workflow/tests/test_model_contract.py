@@ -18,20 +18,21 @@ def node(workflow, name):
 class ModelContractTests(unittest.TestCase):
     def test_live_model_nodes_are_mirrored(self):
         workflow = load_workflow()
-        gpt = node(workflow, "OpenAI Chat Model - GPT5.6sol")
+        gpt = node(workflow, "OpenAI Chat Model - GPT6sol")
         deepseek = node(workflow, "DeepSeek Chat Model")
-        claude = node(workflow, "Anthropic Chat Model")
+        claude = node(workflow, "Anthropic Messages - Opus5.5")
 
-        self.assertEqual("gpt-5.6-sol", gpt["parameters"]["model"]["value"])
+        self.assertEqual("gpt-6-sol", gpt["parameters"]["model"]["value"])
         self.assertEqual("deepseek-v4-pro", deepseek["parameters"]["model"])
-        self.assertEqual("claude-opus-4-8", claude["parameters"]["model"]["value"])
+        self.assertEqual("n8n-nodes-base.httpRequest", claude["type"])
+        self.assertIn("claude-opus-5-5", node(workflow, "Agent #1 - Portfolio manager2")["parameters"]["jsCode"])
 
     def test_extractors_use_actual_models_and_stable_storage_keys(self):
         workflow = load_workflow()
         contracts = {
-            "Information Extractor": ("chatgpt52", "OpenAI GPT-5.6 Sol", "gpt-5.6-sol"),
+            "Information Extractor": ("chatgpt52", "OpenAI GPT-6 Sol", "gpt-6-sol"),
             "Information Extractor1": ("grok41_reasoning", "DeepSeek V4 Pro", "deepseek-v4-pro"),
-            "Information Extractor2": ("claude_sonnet46", "Anthropic Claude Opus 4.8", "claude-opus-4-8"),
+            "Information Extractor2": ("claude_sonnet46", "Anthropic Claude Opus 5.5", "claude-opus-5-5"),
         }
         for name, expected in contracts.items():
             code = node(workflow, name)["parameters"]["jsCode"]
@@ -62,10 +63,10 @@ class ModelContractTests(unittest.TestCase):
         )
         self.assertNotIn("AG1.V4 — Structured Output Grok", connections)
 
-    def test_other_branches_keep_agent_contract(self):
+    def test_branch_transport_contracts(self):
         workflow = load_workflow()
         self.assertEqual("@n8n/n8n-nodes-langchain.agent", node(workflow, "Agent #1 - Portfolio manager")["type"])
-        self.assertEqual("@n8n/n8n-nodes-langchain.agent", node(workflow, "Agent #1 - Portfolio manager2")["type"])
+        self.assertEqual("n8n-nodes-base.code", node(workflow, "Agent #1 - Portfolio manager2")["type"])
 
     def test_builder_is_idempotent(self):
         import build_v4_workflow
@@ -79,9 +80,9 @@ class ModelContractTests(unittest.TestCase):
         import build_v4_workflow
 
         rebuilt = build_v4_workflow.build(ROOT / "AG1_workflow_template_v4.json")
-        self.assertEqual("gpt-5.6-sol", node(rebuilt, "OpenAI Chat Model - GPT5.6sol")["parameters"]["model"]["value"])
+        self.assertEqual("gpt-6-sol", node(rebuilt, "OpenAI Chat Model - GPT6sol")["parameters"]["model"]["value"])
         self.assertEqual("deepseek-v4-pro", node(rebuilt, "DeepSeek Chat Model")["parameters"]["model"])
-        self.assertEqual("claude-opus-4-8", node(rebuilt, "Anthropic Chat Model")["parameters"]["model"]["value"])
+        self.assertIn("claude-opus-5-5", node(rebuilt, "Agent #1 - Portfolio manager2")["parameters"]["jsCode"])
         self.assertNotIn("xAI Grok Chat Model", rebuilt["connections"])
 
 

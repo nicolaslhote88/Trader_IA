@@ -13,8 +13,8 @@ Ce fichier est le point d'entrée durable du projet (la mémoire interne peut ne
 à moindre coût : (1) lire ce fichier en entier ; (2) pour l'état live réel, se connecter au VPS (§ VPS/infra) et
 lire broker `/health` + `/orders/approvals/pending` + DuckDB `core.runs`. Détail par sujet dans `docs/`.
 État vérifié sur le VPS au **2026-08-06**. Analyse fonctionnelle courante :
-`docs/architecture/etat_des_lieux.md`; index : `docs/README.md`. Branche repo :
-`codex/ag5-ag9-global-context-20260805`.
+`docs/architecture/etat_des_lieux.md`; index : `docs/README.md`. Branche de la migration modèles du 2026-09-25 :
+`codex/ag1-models-20260925`.
 
 ⚠️ **AG5–AG8 + contexte global validés live** : producteurs et synthèse actifs,
 pack AG1 `AG1_GLOBAL_CONTEXT_LLM_V2` strictement consultatif, qualité live
@@ -36,8 +36,8 @@ dure H1/D1 ≤96 h. 165 derniers statuts ont été réparés avec backup/rollbac
 le funnel est passé de 19 à 184 techniques prêtes et de ~20 à 163
 pré-tradables. Voir `docs/operations/20260806_ag2_h1_soft_stale_fix.md`.
 
-ℹ️ **Modèles live synchronisés** : AG1 V4 = `gpt-5.6-sol` /
-`deepseek-v4-pro` / `claude-opus-4-8`; AG2 et les trois AG4_Spé utilisent
+ℹ️ **Modèles live synchronisés** : AG1 V4 = `gpt-6-sol` /
+`deepseek-v4-pro` / `claude-opus-5-5` (migration du 2026-09-25); AG2 et les trois AG4_Spé utilisent
 `deepseek-v4-flash` avec parseur structuré depuis le 2026-08-10. AG1 conserve
 le modèle Pro. Migration et rollback :
 `docs/operations/20260810_deepseek_v4_flash_migration.md`.
@@ -48,6 +48,10 @@ Les correctifs historiques 2026-06/07 sont versionnés et restent détaillés da
 leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vérifier
 `git diff --check` et stager des chemins explicites.
 
+## Modèles AG1 — LIVE 2026-09-25
+- Claude Opus 5.5 utilise Messages API via HTTP (thinking adaptive + JSON structuré), car le nœud Anthropic de n8n 2.3.5 est incompatible. GPT-6 Sol utilise le nœud OpenAI ; replay validé avec Responses API/medium explicites. Une sauvegarde ultérieure retire ces deux options : version `447203d7-c110-473e-a5cc-1500107d20e5` reflétée localement, réglages OpenAI à revalider. Clés historiques de stockage conservées.
+- Replay isolé validé, publication vérifiée ; prochain cron à observer. Preuves et rollback : `docs/operations/20260925_ag1_opus55_gpt6sol_migration.md`.
+
 ## Corrections de performance — LIVE 2026-09-14
 - AG1 tourne **une fois par jour à 17:10 Paris** ; AG2 Held+Core à 09:00, 13:00, **16:35**. PF : H+15 de 09 à 16, **17:40 et 23:15**. Les anciennes mentions à deux créneaux AG1 sont historiques.
 - Contrat positions natif/EUR et âge issu des fills, confiance AG2 0–100, BUY/SELL distincts, cash confirmé, lots et seuil de perte journalière : corrigés. Benchmark EUR, dates/flux explicites ; VaR et facture IA exhaustive restent inconnues.
@@ -55,7 +59,7 @@ leurs notes d'opération. Le dépôt a déjà connu du bruit CRLF : toujours vé
 
 ## État du projet — VÉRIFIÉ sur le VPS le 2026-08-06
 - **Actions/ETF : AG1 V4 consensus** est le Portfolio Manager **actif** (consensus 2/3).
-  3 modèles : **GPT-5.6 Sol** (`gpt-5.6-sol`), **DeepSeek V4 Pro** (`deepseek-v4-pro`), **Claude Opus 4.8** (`claude-opus-4-8`).
+  3 modèles (MAJ 2026-09-25) : **GPT-6 Sol** (`gpt-6-sol`), **DeepSeek V4 Pro** (`deepseek-v4-pro`), **Claude Opus 5.5** (`claude-opus-5-5`).
   `model_keys` persistés : `chatgpt52`, **`grok41_reasoning`** (clé historique conservée après Grok→DeepSeek), **`claude_sonnet46`** (clé historique Claude). Les champs `model_name`/`model_id` portent les modèles réels. Workflow n8n `AG1V4CONSENSUS`.
   Base `ag1_v4_consensus.duckdb` (ledger v4 : `core.runs/orders/consensus_*/model_proposals/fills/*_mtm_*`). Dashboard Streamlit V4-only (8501).
   **⏰ AG1 V4 : 17:10 Paris, L–V (une fois/jour, depuis le 2026-09-14).** Après AG2 16:35, dans la séance commune US/Euronext usuelle. Ne pas confondre `6509=D` (différé) avec un statut de marché fermé. Source des horaires : `docs/operations/SCHEDULING_AND_LOAD.md`.

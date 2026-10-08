@@ -1,6 +1,6 @@
 # Documentation Trader_IA
 
-État documentaire consolidé au 2026-08-10. Les documents datés dans `audits/`
+Index mis à jour le 2026-09-25 (modèles AG1 et références de déploiement). Les documents datés dans `audits/`
 et `operations/` conservent volontairement les faits observés à leur date ; les
 documents ci-dessous décrivent l'état courant.
 
@@ -22,6 +22,10 @@ documents ci-dessous décrivent l'état courant.
 | Exécution et approbation IBKR | `operations/ibkr_execution.md`, `operations/order_approval_deploy_notes.md` |
 
 ## Derniers changements live
+
+- AG1 V4 : Opus 5.5 via Messages API adaptative et GPT-6 Sol via Responses API,
+  replay isolé et publication vérifiés :
+  [migration du 25 septembre 2026](operations/20260925_ag1_opus55_gpt6sol_migration.md).
 
 - Contrat de performance, positions, préflight, comparaison EUR et horaires US :
   [corrections du 14 septembre 2026](operations/20260914_performance_contract_remediation.md).
@@ -50,8 +54,8 @@ documents ci-dessous décrivent l'état courant.
 
 ## Statut synthétique
 
-- Actions/ETF : live réel via AG1 V4, consensus GPT-5.6 Sol / DeepSeek V4 Pro /
-  Claude Opus 4.8.
+- Actions/ETF : live réel via AG1 V4, consensus GPT-6 Sol / DeepSeek V4 Pro /
+  Claude Opus 5.5.
 - AG2 : split Held+Core/Watchlist, rotation transactionnelle active et seuil
   dur H1/D1 aligné à 96 h avec AG1/dashboard.
 - AG3 : split Held+Core/Watchlist, yfinance sans LLM.
