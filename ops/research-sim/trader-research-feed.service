@@ -1,0 +1,22 @@
+[Unit]
+Description=Trader IA - photographie des sources de recherche en lecture seule
+After=local-fs.target
+OnSuccess=trader-research-sim.service
+StartLimitIntervalSec=240
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OPENBLAS_NUM_THREADS=1
+UMask=0027
+ExecStart=/opt/trader-ia/finnhub/venv/bin/python /opt/trader-ia/research-sim/current/collect.py
+TimeoutStartSec=3min
+Restart=on-failure
+RestartSec=20s
+PrivateNetwork=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/trader-research-feed

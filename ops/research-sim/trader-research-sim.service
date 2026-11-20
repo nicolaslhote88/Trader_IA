@@ -1,0 +1,25 @@
+[Unit]
+Description=Trader IA - recherche et portefeuilles fictifs hors reseau
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=trader-research-sim
+Group=trader-research
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/trader-ia/research-sim/current/worker.py
+TimeoutStartSec=8min
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+SystemCallFilter=~@network-io
+SystemCallErrorNumber=EPERM
+ProtectSystem=strict
+ProtectHome=yes
+RootDirectory=/var/lib/trader-research-root
+MountAPIVFS=no
+BindReadOnlyPaths=/usr /lib /lib64 /etc/ld.so.cache /opt/trader-ia/research-sim /var/lib/trader-research-feed
+BindPaths=/var/lib/trader-research-sim /local-files/duckdb/research_reporting
+ReadWritePaths=/var/lib/trader-research-sim /local-files/duckdb/research_reporting

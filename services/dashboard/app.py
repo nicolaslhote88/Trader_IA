@@ -2139,6 +2139,7 @@ if str(BASE_DIR) not in sys.path:
 
 from app_modules.verified_account import render as render_verified_account
 from app_modules.economic_monitor import VIEWS as ECONOMIC_VIEWS, health as economic_health, render as render_economic_monitor
+from app_modules.research_sim import VIEWS as RESEARCH_VIEWS, health as research_health, render as render_research
 from app_modules.core import (
     calculate_sector_portfolio_tilts,
     calculate_sector_sentiment,
@@ -12373,7 +12374,10 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 
 if page == "Dashboard Trading":
     st.title("Portefeuille actions")
-    view = st.radio("Vue du portefeuille", ["Compte IBKR", *ECONOMIC_VIEWS, "Décisions des modèles et registre historique"], horizontal=True, key="portfolio_read_view")
+    view = st.radio("Vue du portefeuille", ["Compte IBKR", *ECONOMIC_VIEWS, *RESEARCH_VIEWS, "Décisions des modèles et registre historique"], horizontal=True, key="portfolio_read_view")
+    if view in RESEARCH_VIEWS:
+        render_research(view)
+        st.stop()
     if view in ECONOMIC_VIEWS:
         render_economic_monitor(view)
         st.stop()
@@ -14247,6 +14251,7 @@ elif page == "System Health (Monitoring)":
     st.title("État du système")
     render_verified_account(IBKR_BROKER_URL, compact=True)
     economic_health()
+    research_health()
     st.caption("Verdict opérationnel, couverture des données et tradabilité du portefeuille actions.")
     st.caption(
         "Vue opérationnelle : état du système, couverture durable de l'univers et pré-éligibilité des symboles "

@@ -1,0 +1,12 @@
+[Unit]
+Description=Trader IA - photographies demi-horaires et autour de la revue de Paris
+
+[Timer]
+OnCalendar=*-*-* *:09,39:00 UTC
+OnCalendar=Mon..Fri *-*-* 17:16,19:00 Europe/Paris
+AccuracySec=1s
+Persistent=true
+Unit=trader-research-feed.service
+
+[Install]
+WantedBy=timers.target
