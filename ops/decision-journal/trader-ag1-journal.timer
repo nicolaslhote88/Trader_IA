@@ -1,0 +1,10 @@
+[Unit]
+Description=Collecte passive des décisions AG1 à la minute 04 et 34
+
+[Timer]
+OnCalendar=*-*-* *:04,34:00
+Persistent=true
+AccuracySec=20s
+
+[Install]
+WantedBy=timers.target

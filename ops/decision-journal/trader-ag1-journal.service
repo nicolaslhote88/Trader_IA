@@ -1,0 +1,34 @@
+[Unit]
+Description=Journal privé en lecture seule des décisions AG1
+After=local-fs.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+StateDirectory=trader-ag1-journal
+StateDirectoryMode=0700
+UMask=0077
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONUTF8=1
+Environment=HOME=/var/lib/trader-ag1-journal
+EnvironmentFile=/opt/trader-ia/decision-journal/release.conf
+LoadCredential=lot01-reference.json:/etc/trader-ag1-journal/reference.json
+ExecStart=/opt/trader-ia/finnhub/venv/bin/python /opt/trader-ia/decision-journal/current/journal.py --state /var/lib/trader-ag1-journal --scratch /tmp --n8n /run/ag1-journal-source/database.sqlite --duck /local-files/duckdb/ag1_v4_consensus.duckdb --baseline %d/lot01-reference.json --release $JOURNAL_RELEASE
+BindReadOnlyPaths=/var/lib/docker/volumes/n8n_data/_data:/run/ag1-journal-source
+InaccessiblePaths=-/run/docker.sock -/run/containerd -/var/lib/docker -/run/ag1-journal-source/config -/run/ag1-journal-source/binaryData -/run/ag1-journal-source/nodes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+LockPersonality=yes
+Nice=15
+IOSchedulingClass=idle
+MemoryMax=550M
+TimeoutStartSec=4min
