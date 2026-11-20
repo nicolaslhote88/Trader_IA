@@ -1,14 +1,40 @@
 import sqlite3
+import json
 import tempfile
 from pathlib import Path
 import unittest
 
-from evidence import covers, protect
+from evidence import AG1, WORKFLOWS, collect_n8n, covers, protect
 from journal import Journal
 from ledger import fill_links, order_links
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_malformed_execution_does_not_hide_next_run(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path=Path(temp)/"input.sqlite"
+            db=sqlite3.connect(path)
+            db.executescript("""
+                create table workflow_entity(id,active,activeVersionId);
+                create table workflow_history(workflowId,versionId,nodes,connections);
+                create table execution_entity(id,mode,status,startedAt,stoppedAt,workflowId);
+                create table execution_data(executionId,data,workflowData);
+            """)
+            for wid in WORKFLOWS:
+                db.execute("insert into workflow_entity values(?,1,?)",(wid,wid))
+                db.execute("insert into workflow_history values(?,?,'[]','{}')",(wid,wid))
+            workflow=json.dumps(dict(id=AG1,activeVersionId=AG1,nodes=[],connections={}))
+            for eid,data in [(1,"broken"),(2,json.dumps([{"resultData":"1"},{"runData":"2"},{}]))]:
+                db.execute("insert into execution_entity values(?,'trigger','success','a','b',?)",(eid,AG1))
+                db.execute("insert into execution_data values(?,?,?)",(eid,data,workflow))
+            db.commit()
+            db.close()
+            archive=Journal(Path(temp)/"output.sqlite")
+            read=collect_n8n(path,archive.has,archive.put)
+            self.assertEqual(read,{"2"})
+            self.assertEqual(archive.get("capture_issue","1")["reason"],"JSONDecodeError")
+            archive.db.close()
+
     def test_defaults_and_graph_drift(self):
         self.assertTrue(covers({"a":[{"value":0}]},{"a":[{"value":0,"default":1}]}))
         self.assertFalse(covers({"a":0},{"a":False}))

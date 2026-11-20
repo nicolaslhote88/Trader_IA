@@ -196,13 +196,20 @@ def collect_n8n(dbpath, cached, put):
                 continue
             data = con.execute("select data, workflowData from execution_data where executionId=?", (eid,)).fetchone()
             if data and all(data):
-                meta=json.loads(data[1])
-                version=meta.get("activeVersionId") or meta.get("versionId")
-                history=con.execute("select nodes,connections from workflow_history where workflowId=? and versionId=?",(AG1,version)).fetchone()
-                trace = capture(*data, history)
+                try:
+                    meta=json.loads(data[1])
+                    version=meta.get("activeVersionId") or meta.get("versionId")
+                    history=con.execute("select nodes,connections from workflow_history where workflowId=? and versionId=?",(AG1,version)).fetchone()
+                    trace = capture(*data, history)
+                except (AttributeError, ValueError, TypeError, KeyError, IndexError, RecursionError) as exc:
+                    # A single execution with an incompatible/partial payload must not starve later captures.
+                    put("capture_issue",key,{"execution_id":key,"reason":type(exc).__name__})
+                    continue
                 trace.update({"execution_id":key, "mode":mode, "status":status, "started_utc":start, "ended_utc":end})
                 put("trace",key,trace)
                 read.add(key)
+            elif not cached("trace",key):
+                put("capture_issue",key,{"execution_id":key,"reason":"execution_data_absent"})
     finally:
         con.close()
     return read

@@ -179,6 +179,7 @@ def main():
                 j.mark("render_state",fingerprint([reception,j.counts(),args.release]))
         sheets_bytes=sum(p.stat().st_size for p in (args.state/"fiches").glob("*.html"))
         status={"collected_utc":now(),"release":args.release,"changed":j.changed,"volume_bytes":jp.stat().st_size,
+                "traces_a_verifier":[eid for eid,_ in j.records("capture_issue") if not j.has("trace",eid)],
                 "sheets_bytes":sheets_bytes,"storage_review":jp.stat().st_size>=768*1024**2 or sheets_bytes>=1536*1024**2 or shutil.disk_usage(args.state).free<2*1024**3,
                 **j.counts(),"reception":reception}
         atomic(args.state/"status.json",encode(status))

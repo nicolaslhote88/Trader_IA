@@ -88,11 +88,14 @@ def render(j,dest,reception):
     baseline=j.get("audit","reference") or {}
     cases=baseline.get("available_pack_summaries",{})
     links=[]
+    linked_events=set()
     detailed=0
     model_sessions=0
     complete_inputs=0
     for rid,d in j.records("ledger"):
         eid=str(d["run"].get("n8n_execution_id") or "")
+        if eid:
+            linked_events.add(eid)
         t=j.get("trace",eid)
         detailed+=bool(t)
         complete_inputs+=bool(t and len({p["model"] for p in t["calls"] if p.get("input",{}).get("messages")})>=3)
@@ -107,4 +110,10 @@ def render(j,dest,reception):
     body+="<h2>Séances</h2><ul>"
     for rid,name,n,t in sorted(links,reverse=True):
         body+='<li><a href="'+quote(name)+'">'+h(rid)+'</a> · '+h(n)+" ordre(s) enregistré(s) · "+("trace n8n" if t else "registre historique")+"</li>"
-    atomic(dest/"index.html",page("Journal privé des décisions AG1",body+"</ul>"))
+    body+="</ul>"
+    orphans=[(eid,e) for eid,e in j.records("event") if eid not in linked_events]
+    if orphans:
+        body+="<h2>Exécutions n8n sans séance rattachée dans le registre</h2>"
+        for eid,e in orphans:
+            body+=details("Exécution "+eid+" · "+e["status"],{"event":e,"trace":j.get("trace",eid),"anomalie":j.get("capture_issue",eid)})
+    atomic(dest/"index.html",page("Journal privé des décisions AG1",body))
