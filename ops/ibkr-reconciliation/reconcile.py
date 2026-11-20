@@ -234,6 +234,17 @@ def report(db,frozen,ref):
         for name in ["Clôture du relevé et variation de NAV","Espèces en devise et soldes réglés","Quantités de clôture par contrat",
                      "Opérations sur titres","Commissions en devise d’origine","Dépôts et retraits","Dividendes et retenues","Intérêts","Change et conversion des soldes"]:
             lines.append(line("Mai à novembre 2026",name,"ouvert","Relevé d’activité non reçu."))
+    by_month=defaultdict(list)
+    for dt in sorted(ref["nav"]):
+        if dt<asof:
+            by_month[dt[:7]].append(dt)
+    coverage={}
+    for month,dates in by_month.items():
+        covered=sum(any(a<=dt<=b for a,b in period_map) for dt in dates)
+        own=any(a[:7]==month and b[:7]==month and a<=dates[0] and b>=dates[-1] and
+                chosen_section(pp,all_rows,"ChangeInNAV","ChangeInNAV") for (a,b),pp in period_map.items())
+        coverage[month]={"dates_observees":len(dates),"dates_couvertes":covered,"pont_dans_le_mois":bool(own)}
     return {"periods":len(period_map),"imports":db.execute("select count(*) from sources where active=1").fetchone()[0],
+            "couverture":coverage,
             "events":selected,"issues":len(issues),"open_events":[dict(r,motif=why) for _,why,r in issues],
             "lines":lines,"exec_summary":summary,"exec_evidence":evidence}

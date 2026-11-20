@@ -90,7 +90,8 @@ def publish(dest,frozen,ref,out,problems,imports,release):
                    "original":v.get("origTradeID"),"codes":v.get("notes") or v.get("code")})
     csvfile(sub/"mouvements.csv",ev,["section","date","règlement","tradeID","transactionID","ibExecID","conid","type","devise","quantité","montant","produit","commission","devise_commission","taux_base","original","codes","source","ligne"])
     monthly=all_months(ref)
-    csvfile(sub/"portfolioanalyst.csv",monthly,"mois ouverture_observee date_fin nav variation rendement cumul".split())
+    for m in monthly:m.update(out["couverture"][m["mois"]])
+    csvfile(sub/"portfolioanalyst.csv",monthly,"mois ouverture_observee date_fin nav variation rendement cumul dates_couvertes dates_observees pont_dans_le_mois".split())
     counts=out["exec_summary"]
     tail=monthly[-1]
     historic=next(r for r in lines if r["rubrique"]=="Résidu historique à ventiler")
@@ -99,7 +100,7 @@ def publish(dest,frozen,ref,out,problems,imports,release):
             "mouvements_uniques":len(ev),"incidents_import":problems,"evenements_a_instruire":out["issues"],
             "executions_hors_releve":counts,"residu_historique_eur":str(frozen["residual"]),"residu_restant_eur":str(open_balance),
             "date_derniere_nav_anterieure_au_jour":tail["date_fin"],"nav":str(tail["nav"]),"twr_cumule":str(tail["cumul"]),
-            "etat_residu":historic["etat"],"generation":generation}
+            "etat_residu":historic["etat"],"couverture":out["couverture"],"generation":generation}
     put(sub/"etat.json",json.dumps(status,ensure_ascii=False,indent=2).encode())
     rel="etats/"+generation+"/"
     body="<h1>Rapprochement du compte IBKR</h1><p>"+str(out["imports"])+" import(s) actif(s) · "+str(out["periods"])+" période(s) de relevé · observation du "+escape(ref["captured"][:19].replace("T"," "))+" UTC.</p>"
@@ -116,8 +117,8 @@ def publish(dest,frozen,ref,out,problems,imports,release):
     if rev:
         body+="<p>Pour le 18 novembre, PortfolioAnalyst affichait "+fmt(rev["comparatif"])+" € dans l’audit et publie désormais "+fmt(rev["montant"])+" €. La variation mesurée entre les publications est de "+fmt(rev["ecart"])+" €. Elle est suivie séparément du résidu comptable.</p>"
     body+="<h2>Valeur et rendement publiés par PortfolioAnalyst</h2><p>Le TWR neutralise les apports et retraits. La dernière ligne s’arrête à la dernière date antérieure au jour de la collecte. La variation en euros inclut les flux éventuels.</p>"
-    body+=table(["Période","Dernière date observée","NAV de départ (€)","NAV finale (€)","Variation (€)","TWR période"],(
-        [m["mois"],m["date_fin"],fmt(m["ouverture_observee"]),fmt(m["nav"]),fmt(m["variation"]),fmt(m["rendement"]*100 if m["rendement"] is not None else None,3)+" %"] for m in monthly))
+    body+=table(["Période","Dernière date observée","NAV de départ (€)","NAV finale (€)","Variation (€)","TWR période","Dates couvertes par relevé","Pont du mois disponible"],(
+        [m["mois"],m["date_fin"],fmt(m["ouverture_observee"]),fmt(m["nav"]),fmt(m["variation"]),fmt(m["rendement"]*100 if m["rendement"] is not None else None,3)+" %",str(m["dates_couvertes"])+"/"+str(m["dates_observees"]),"Oui" if m["pont_dans_le_mois"] else "En attente"] for m in monthly))
     body+="<h2>Registre d’exécutions et collecteur IBKR</h2><p>"+str(counts.get("rapproché",0))+" identifiants concordent en contrat, sens et quantité. "+str(counts.get("ouvert",0))+" nécessitent une pièce supplémentaire. Le détail indique dans quelle source chaque identifiant apparaît.</p>"
     assumed=sum("fallback_eur_no_ccy" in (x.get("commission_source") or "") for x in ref["fills"])
     body+="<p>Le registre a supposé l’euro pour la commission de "+str(assumed)+" exécution(s). La devise de commission du relevé permettra de les reprendre individuellement.</p>"
