@@ -1,0 +1,12 @@
+[Unit]
+Description=Trader IA - suivi quotidien des experiences actions
+
+[Timer]
+OnCalendar=*-*-* 12,14,20:32:00 Europe/Paris
+OnCalendar=Mon..Fri *-*-* 17:28:00 Europe/Paris
+AccuracySec=1s
+Persistent=true
+Unit=trader-experiments-feed.service
+
+[Install]
+WantedBy=timers.target

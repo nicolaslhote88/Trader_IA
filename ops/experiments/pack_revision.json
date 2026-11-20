@@ -1,0 +1,5 @@
+{
+  "version": "events-v2.1",
+  "change": "Utiliser l’identifiant d’article Finnhub dans l’URL, refuser les rapprochements sans corroboration textuelle. Rectificatif uniquement si le titre le signale en en-tête.",
+  "inference": "Utiliser les trois bras de contrôle à sorties structurées déjà exécutés si les empreintes concordent. Réexécuter uniquement news_v2 lorsque l’entrée a changé."
+}

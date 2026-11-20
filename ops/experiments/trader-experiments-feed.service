@@ -1,0 +1,22 @@
+[Unit]
+Description=Trader IA - collecte des experiences sur sorties, actualites et votes
+After=local-fs.target
+OnSuccess=trader-experiments.service
+StartLimitIntervalSec=8min
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OPENBLAS_NUM_THREADS=1
+UMask=0027
+ExecStart=/opt/trader-ia/finnhub/venv/bin/python /opt/trader-ia/research-sim/experiments/current/collect_study.py
+TimeoutStartSec=3min
+Restart=on-failure
+RestartSec=40
+PrivateNetwork=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/trader-research-feed/experiments
