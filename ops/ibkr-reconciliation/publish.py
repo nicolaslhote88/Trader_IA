@@ -96,11 +96,14 @@ def publish(dest,frozen,ref,out,problems,imports,release):
     tail=monthly[-1]
     historic=next(r for r in lines if r["rubrique"]=="Résidu historique à ventiler")
     open_balance=historic["ecart"] if historic["ecart"] is not None else historic["montant"]
+    exact_difference=open_balance
+    if historic["etat"]=="expliqué" and abs(open_balance)<Decimal("0.005"):
+        open_balance=Decimal("0.00")
     status={"version":release,"observation":ref["captured"],"imports_actifs":out["imports"],"periodes":out["periods"],
             "mouvements_uniques":len(ev),"incidents_import":problems,"evenements_a_instruire":out["issues"],
             "executions_hors_releve":counts,"residu_historique_eur":str(frozen["residual"]),"residu_restant_eur":str(open_balance),
             "date_derniere_nav_anterieure_au_jour":tail["date_fin"],"nav":str(tail["nav"]),"twr_cumule":str(tail["cumul"]),
-            "etat_residu":historic["etat"],"couverture":out["couverture"],"generation":generation}
+            "ecart_avant_arrondi_eur":str(exact_difference),"etat_residu":historic["etat"],"couverture":out["couverture"],"generation":generation}
     put(sub/"etat.json",json.dumps(status,ensure_ascii=False,indent=2).encode())
     rel="etats/"+generation+"/"
     body="<h1>Rapprochement du compte IBKR</h1><p>"+str(out["imports"])+" import(s) actif(s) · "+str(out["periods"])+" période(s) de relevé · observation du "+escape(ref["captured"][:19].replace("T"," "))+" UTC.</p>"
@@ -112,7 +115,12 @@ def publish(dest,frozen,ref,out,problems,imports,release):
         ["Valeur du compte observée chez IBKR",fmt(frozen["instant"])],["Capital de référence",fmt(frozen["capital"])],
         ["Résultat réalisé du registre FIFO",fmt(frozen["fifo"])],["Résultat latent du grand livre IBKR",fmt(frozen["latent"])],
         ["Écart initial",fmt(frozen["residual"])],["Montant restant à ventiler",fmt(open_balance)]])
-    body+="<p>Le diagnostic combine une mesure instantanée du compte avec le réalisé interne. L’attribution requiert les rubriques du relevé et la différence de valorisation jusqu’à la clôture.</p>"
+    if out["attribution"]:
+        body+="<h2>Attribution de l’écart historique</h2>"+table(["Contribution mesurée","EUR"],(
+            [x["rubrique"],fmt(x["montant"])] for x in out["attribution"] if x["montant"]))
+        body+="<p>"+escape(out["attribution"][0]["motif"])+" Écart avant arrondi au centime : "+escape(str(exact_difference))+" EUR.</p>"
+    else:
+        body+="<p>Le diagnostic combine une mesure instantanée du compte avec le réalisé interne. La justification par les pièces reste ouverte.</p>"
     rev=next((x for x in lines if x["rubrique"]=="Révision observée de la NAV PortfolioAnalyst"),None)
     if rev:
         body+="<p>Pour le 18 novembre, PortfolioAnalyst affichait "+fmt(rev["comparatif"])+" € dans l’audit et publie désormais "+fmt(rev["montant"])+" €. La variation mesurée entre les publications est de "+fmt(rev["ecart"])+" €. Elle est suivie séparément du résidu comptable.</p>"
@@ -121,7 +129,15 @@ def publish(dest,frozen,ref,out,problems,imports,release):
         [m["mois"],m["date_fin"],fmt(m["ouverture_observee"]),fmt(m["nav"]),fmt(m["variation"]),fmt(m["rendement"]*100 if m["rendement"] is not None else None,3)+" %",str(m["dates_couvertes"])+"/"+str(m["dates_observees"]),"Oui" if m["pont_dans_le_mois"] else "En attente"] for m in monthly))
     body+="<h2>Registre d’exécutions et collecteur IBKR</h2><p>"+str(counts.get("rapproché",0))+" identifiants concordent en contrat, sens et quantité. "+str(counts.get("ouvert",0))+" nécessitent une pièce supplémentaire. Le détail indique dans quelle source chaque identifiant apparaît.</p>"
     assumed=sum("fallback_eur_no_ccy" in (x.get("commission_source") or "") for x in ref["fills"])
-    body+="<p>Le registre a supposé l’euro pour la commission de "+str(assumed)+" exécution(s). La devise de commission du relevé permettra de les reprendre individuellement.</p>"
+    body+="<p>Le registre a supposé l’euro pour la commission de "+str(assumed)+" exécution(s).</p>"
+    stocks=[r["v"] for r in out["events"] if r["kind"]=="Trade" and r["v"].get("assetCategory")=="STK"]
+    if stocks:
+        fees={f["execution_id"]:f for f in ref["fills"] if f.get("execution_id")}
+        matches=[r for r in lines if r["rubrique"].startswith("Exécution ") and r["rubrique"].endswith(" · quantité") and r["etat"]=="rapproché"]
+        mismatched=sum(1 for t in stocks if t.get("ibExecID") in fees and t.get("ibCommissionCurrency") and
+            fees[t["ibExecID"]].get("commission_ccy") and t["ibCommissionCurrency"]!=fees[t["ibExecID"]]["commission_ccy"])
+        body+=("<p><b>Contrôle sur les relevés Flex.</b> "+str(len(matches))+" exécution(s) réconciliée(s) en contrat, sens et quantité. "+
+            str(mismatched)+" exécution(s) présentent une devise de commission différente de celle du registre.</p>")
     if ref["positions"]:
         inventory=max(ref["positions"],key=lambda x:x["at"])
         body+="<details><summary>Dernières positions observées par contrat</summary><p>"+escape(inventory["at"])+"</p>"+table(

@@ -190,7 +190,11 @@ def events(records):
             continue
         if t=="Trade" and v.get("levelOfDetail","EXECUTION").upper() not in ("EXECUTION","EXECUTIONS"):
             continue
-        ids=[(t,k,v[k]) for k in IDS[t] if v.get(k) not in ("",None,"0")]
+        if (t=="StatementOfFundsLine" and not v.get("activityCode") and not v.get("transactionID")
+                and v.get("activityDescription") in ("Starting Balance","Ending Balance") and num(v.get("amount"))==0):
+            continue
+        currency=v.get("currency","") if t=="StatementOfFundsLine" else ""
+        ids=[(t,currency,k,v[k]) for k in IDS[t] if v.get(k) not in ("",None,"0")]
         if not ids:
             issues.append((t,"Identifiant source absent",r))
             continue

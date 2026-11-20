@@ -92,6 +92,8 @@ def attribution(frozen,period_map,records):
             continue
         if amounts.get("mtm") and (amounts.get("realized") or amounts.get("changeInUnrealized")):
             continue
+        if abs(num(v["endingValue"])-num(v["startingValue"])-sum(amounts.values(),ZERO))>Decimal("0.005"):
+            continue
         eligible.append((a,b,num(v["startingValue"]),num(v["endingValue"]),amounts,nav["source"]))
     # Prefer a single exact-period statement. Otherwise use consecutive, balance-continuous periods only.
     paths={}

@@ -127,6 +127,33 @@ class Tests(unittest.TestCase):
         res=report(self.db,h,r)
         self.assertTrue(any(x["rubrique"]=="Résidu historique à ventiler" and x["etat"]=="ouvert" for x in res["lines"]))
 
+    def test_inception_detail_with_both_fx_legs_and_flat_summary(self):
+        h,ref=reference()
+        h.update(capital="100",instant="115",residual="15",fifo="0",latent="0")
+        def funds(ccy,code,amt,tid,trade=""):
+            return ("StmtFunds","StatementOfFundsLine",dict(currency=ccy,activityCode=code,amount=amt,transactionID=tid,tradeID=trade,date="20261118"))
+        rows=[
+            (None,"ChangeInNAV",dict(currency="EUR",startingValue="0",endingValue="113",mtm="0",realized="0",changeInUnrealized="0",depositsWithdrawals="0")),
+            ("EquitySummaryInBase","EquitySummaryByReportDateInBase",dict(currency="EUR",reportDate="20260430",total="0",cash="0",stock="0")),
+            ("EquitySummaryInBase","EquitySummaryByReportDateInBase",dict(currency="EUR",reportDate="20261118",total="113",cash="59",stock="54")),
+            ("CashReport","CashReportCurrency",dict(currency="EUR",startingCash="0",endingCash="50")),
+            ("CashReport","CashReportCurrency",dict(currency="USD",startingCash="0",endingCash="10")),
+            ("OpenPositions","OpenPosition",dict(conid="101",assetCategory="STK",levelOfDetail="SUMMARY",reportDate="20261118",currency="USD",fxRateToBase="0.9",position="1",fifoPnlUnrealized="10",positionValue="60")),
+            ("ConversionRates","ConversionRate",dict(reportDate="20261118",fromCurrency="USD",toCurrency="EUR",rate="0.9")),
+            ("CorporateActions",None,{}),("Transfers",None,{}),
+            funds("EUR","DEP","100","dep"),funds("EUR","FOREX","-50","fx1","2"),funds("USD","FOREX","60","fx1","2"),funds("USD","BUY","-50","stock","1"),
+            trade("1",quantity="1",netCash="-50",fifoPnlRealized="0"),trade("2",assetCategory="CASH",symbol="EUR.USD",quantity="-50",proceeds="60",buySell="SELL")
+        ]
+        key,_=ingest(self.db,xml(rows=rows),HEAD)
+        r=report(self.db,h,ref)
+        self.assertEqual(r["issues"],0)
+        self.assertEqual(sum(x["montant"] for x in r["attribution"]),D("15"))
+        self.assertEqual(next(x["montant"] for x in r["attribution"] if x["rubrique"].startswith("Conversions")),D("4"))
+        activate(self.db,key,False)
+        rows[-1][2]["proceeds"]="61"
+        ingest(self.db,xml(rows=rows),HEAD)
+        self.assertFalse(report(self.db,h,ref)["attribution"])
+
     def test_account_and_atomic_import(self):
         for raw in (xml(account="OTHER"),xml(rows=[trade("T",quantity="NaN")]),b"<FlexStatement/>",b"<!DOCTYPE x><FlexStatement/>",b"<bad"):
             with self.assertRaises(ValueError):ingest(self.db,raw,HEAD)

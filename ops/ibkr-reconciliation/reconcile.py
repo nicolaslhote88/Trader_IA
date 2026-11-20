@@ -6,6 +6,7 @@ from statements import canonical,day,dump,events,load,num
 ZERO=Decimal(0)
 CENT=Decimal("0.01")
 NAV_FIELDS=set("""mtm realized changeInUnrealized costAdjustments transferredPnlAdjustments depositsWithdrawals
+changeInLiteSurchargeAccruals changeInCGTWithholdingAccruals
 internalCashTransfers assetTransfers debitCardActivity billPay dividends withholdingTax withholding871m withholdingTaxCollected
 changeInDividendAccruals interest changeInInterestAccruals advisorFees brokerFees changeInBrokerFeeAccruals clientFees
 otherFees feesReceivables commissions commissionReceivables forexCommissions transactionTax taxReceivables salesTax
@@ -33,9 +34,9 @@ def compare(scope,name,value,other,reason,unit="EUR",source="",aligned=True,roun
     if diff is not None and aligned:
         if diff==0:
             state="rapproché"
-        elif rounded and value==other.quantize(CENT,rounding=ROUND_HALF_UP):
+        elif rounded and abs(diff)<CENT/2 and value.quantize(CENT,rounding=ROUND_HALF_UP)==other.quantize(CENT,rounding=ROUND_HALF_UP):
             state="expliqué"
-            reason+=" · Arrondi du comparatif au centime."
+            reason+=" · Les deux valeurs s’arrondissent au même centime."
     return line(scope,name,state,reason,value,other,diff,unit,source)
 
 
@@ -61,14 +62,17 @@ def nav_lines(scope,start,end,selected,nav,asof):
     extra=set(v)-NAV_FIELDS-META
     both=bool(known.get("mtm") and (known.get("realized") or known.get("changeInUnrealized")))
     safe=bool(known) and not extra and not both
+    blank_bridge=(opening is not None and closing is not None and opening!=closing and not any(known.values()))
     rows=[line(scope,"Ouverture du relevé","expliqué","Solde publié par IBKR.",opening,source=src)] if opening is not None else []
     for k in sorted(known):
+        if blank_bridge and known[k]==0:continue
         rows.append(line(scope,LABELS.get(k,k),"expliqué","Contribution signée de la rubrique ChangeInNAV.",known[k],source=src))
     for name,fields in CATEGORIES.items():
         if not any(k in known for k in fields):
             rows.append(line(scope,name,"ouvert","Champ absent de ce relevé. Son montant reste indéterminé.",source=src))
     total=opening+sum(known.values(),ZERO) if safe and opening is not None else None
     reason="Clôture publiée moins ouverture et contributions signées."
+    if blank_bridge:reason+=" Toutes les contributions de cette synthèse sont à zéro. Voir les sections détaillées."
     if extra or both:
         reason+=" Présentation mixte ou champs non interprétés ("+", ".join(sorted(extra))+")."
     rows.append(compare(scope,"Équilibre du pont de NAV",closing,total,reason,source=src))
@@ -171,6 +175,7 @@ def exec_checks(ref):
 def report(db,frozen,ref):
     from bridge import attribution,period_details
     from balances import movement_checks
+    from detail_bridge import from_inception,equity_check
     periods,all_rows=load(db)
     selected,issues=events(all_rows)
     lines=[]
@@ -186,10 +191,11 @@ def report(db,frozen,ref):
         lines.extend(balance_lines(scope,end,pp,all_rows,ref))
         lines.extend(period_details(scope,start,end,pp,all_rows,selected,ref,issues))
         lines.extend(movement_checks(scope,start,end,pp,all_rows,selected,issues,period_map,ref))
+        lines.extend(equity_check(scope,start,end,pp,all_rows))
     fills=by_key(ref["fills"],"execution_id")
     for r in selected:
         v=r["v"]
-        if r["kind"]!="Trade":
+        if r["kind"]!="Trade" or v.get("assetCategory")=="CASH":
             continue
         eid=v.get("ibExecID","")
         match=fills.get(eid,[])
@@ -222,7 +228,12 @@ def report(db,frozen,ref):
     historical=line(frozen["captured"][:10],"Résidu historique à ventiler","ouvert",
             "Valeur IBKR instantanée moins capital, réalisé FIFO interne et latent IBKR. Une clôture Flex est une autre valorisation.",
             num(frozen["residual"]),source=frozen["sources"]["broker"])
-    lines.extend(attribution(frozen,period_map,all_rows) or [historical])
+    proof=attribution(frozen,period_map,all_rows)
+    if not proof:
+        for (start,end),pp in period_map.items():
+            proof=from_inception(frozen,start,end,pp,all_rows,issues)
+            if proof:break
+    lines.extend(proof or [historical])
     date_audit=frozen["captured"][:10]
     old=next((n for n in frozen["nav"] if n["date"]==date_audit and n.get("value") is not None),None)
     revised=ref["nav"].get(date_audit)
@@ -246,5 +257,5 @@ def report(db,frozen,ref):
         coverage[month]={"dates_observees":len(dates),"dates_couvertes":covered,"pont_dans_le_mois":bool(own)}
     return {"periods":len(period_map),"imports":db.execute("select count(*) from sources where active=1").fetchone()[0],
             "couverture":coverage,
-            "events":selected,"issues":len(issues),"open_events":[dict(r,motif=why) for _,why,r in issues],
+            "events":selected,"attribution":proof[:-1],"issues":len(issues),"open_events":[dict(r,motif=why) for _,why,r in issues],
             "lines":lines,"exec_summary":summary,"exec_evidence":evidence}
