@@ -51,7 +51,7 @@ def receipt_cost(receipt, fx):
     )
 
 
-def paid_results(t, d, paid, base, p, cfg, conv, cal, closes, fx, view):
+def paid_results(t, d, paid, base, p, cfg, conv, cal, closes, fx, view, mark_fx):
     from prompts import compact, clean
 
     records = []
@@ -72,7 +72,9 @@ def paid_results(t, d, paid, base, p, cfg, conv, cal, closes, fx, view):
             hash=x["input"],
             model=x["model"],
             usd=x["usd"],
-            outcome=outcome(arm, t["at"][:10], closes, base, dict(low_eur=cost, high_eur=cost)),
+            outcome=outcome(
+                arm, t["at"][:10], closes, {"closing_usd": mark_fx}, dict(low_eur=cost, high_eur=cost)
+            ),
         )
     diffs = []
     if "original" in arms:
@@ -112,7 +114,7 @@ def paid_results(t, d, paid, base, p, cfg, conv, cal, closes, fx, view):
     return dict(arms=arms, differences=diffs)
 
 
-def measure(t, feed, base, rows, p, cfg, conv, cal, closes, paid, fx, mark_fx):
+def measure(t, feed, base, rows, p, cfg, conv, cal, closes, paid, fx, mark_fx, usage):
     view = evidence(rows, t["at"], p)
     d = dossier(t, feed, base, view, p)
     variants, meta = decision_sets(t, d, p)
@@ -129,7 +131,7 @@ def measure(t, feed, base, rows, p, cfg, conv, cal, closes, paid, fx, mark_fx):
             if p["model_key"] in m and (name == "un_avis" or name in ("B", "deux_avis") and meta["triggers"])
             else []
         )
-        cost = costs_used(feed["usage"], used, t["run"], recent(base.get("closing_usd", {}), day))
+        cost = costs_used(usage, used, t["run"], recent(mark_fx, day))
         if not used:
             cost.update(low_eur=0, high_eur=0)
         a = fill_arm(t, d, actions, base, p, cfg, conv, cal, veto=name == "A_veto")
@@ -184,7 +186,7 @@ def measure(t, feed, base, rows, p, cfg, conv, cal, closes, paid, fx, mark_fx):
         after_costs=after_costs,
         news=news,
         actual_dispatch=[{"side": o.get("side"), "symbol": o.get("symbol")} for o in t["orders"]],
-        paid=paid_results(t, d, paid, base, p, cfg, conv, cal, closes, fx, view),
+        paid=paid_results(t, d, paid, base, p, cfg, conv, cal, closes, fx, view, mark_fx),
     )
 
 
@@ -261,7 +263,21 @@ def run():
             cache[ref] = (snap, anchor, art)
         snap, anchor, art = cache[ref]
         anchors[t["run"]] = anchor
-        x = measure(t, snap, anchor, art, p, cfg, conv, cal, closes, paid, fx, base.get("closing_usd", {}))
+        x = measure(
+            t,
+            snap,
+            anchor,
+            art,
+            p,
+            cfg,
+            conv,
+            cal,
+            closes,
+            paid,
+            fx,
+            base.get("closing_usd", {}),
+            latest["usage"],
+        )
         # Retain the complete matched-day file, including rejected and unexecuted instructions.
         news = x.pop("news")
         x["news_file"] = persist("pack", news)
