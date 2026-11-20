@@ -1,0 +1,38 @@
+{
+  "version": "paper-reference-v1",
+  "start": "2026-11-20",
+  "capital_eur": 10000,
+  "review_paris": "17:18",
+  "weekdays": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "horizon_days": 28,
+  "max_positions": 6,
+  "target_weight": 0.15,
+  "max_sector_weight": 0.3,
+  "cash_floor": 0.1,
+  "max_score_age_h": 168,
+  "max_tech_age_h": 96,
+  "max_quote_age_s": 60,
+  "archived_sensitivity_age_s": 300,
+  "latency_s": 2,
+  "max_spread_pct": 0.8,
+  "max_daily_volume_fraction": 0.0001,
+  "settlement_weekdays": 2,
+  "score_field": "AG3 fundamentals_triage_history.score, larger first",
+  "neutral_seed": "TRADER-IA-NEUTRE-V1",
+  "simulation_permissions": "prior same-contract stock execution from Flex, exact quote currency, long-only",
+  "missing_sector": "exclude",
+  "missing_score": "exclude all four arms",
+  "veto": "REJECT or missing/stale AG2 excluded only in veto arms",
+  "variants": [
+    "ag3",
+    "neutral",
+    "ag3_veto",
+    "neutral_veto"
+  ]
+}
