@@ -1,0 +1,11 @@
+[Unit]
+Description=Collecte Trader IA (market)
+
+[Timer]
+OnCalendar=*-*-* 07,21,23:36:00 Europe/Paris
+Unit=trader-economic@market.service
+Persistent=true
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

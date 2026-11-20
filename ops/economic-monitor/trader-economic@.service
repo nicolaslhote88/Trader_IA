@@ -1,0 +1,19 @@
+[Unit]
+Description=Mesures du compte Trader IA (%i)
+After=network-online.target
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/opt/trader-ia/finnhub/venv/bin/python /opt/trader-ia/economic-monitor/current/runner.py %i
+Environment=PYTHONDONTWRITEBYTECODE=1
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/trader-economic /local-files/duckdb/economic_reporting
+InaccessiblePaths=-/run/docker.sock -/run/containerd
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH
+Nice=12
+TimeoutStartSec=300

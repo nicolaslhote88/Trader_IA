@@ -1,0 +1,11 @@
+[Unit]
+Description=Collecte Trader IA (quotes)
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 17:08..26:00,20,40 Europe/Paris
+Unit=trader-economic@quotes.service
+Persistent=false
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

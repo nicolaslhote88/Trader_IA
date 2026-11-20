@@ -1,0 +1,11 @@
+[Unit]
+Description=Collecte Trader IA (report)
+
+[Timer]
+OnCalendar=*-*-* *:13,43:00
+Unit=trader-economic@report.service
+Persistent=true
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target
