@@ -1,0 +1,10 @@
+[Unit]
+Description=Actualiser les exécutions et le FIFO deux fois par heure
+
+[Timer]
+OnCalendar=*-*-* *:08,38:00
+Persistent=true
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

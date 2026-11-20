@@ -1,0 +1,22 @@
+[Unit]
+Description=Projection FIFO et rapprochement des exécutions IBKR
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=nobody
+Group=nogroup
+UMask=0077
+LoadCredential=evidence.json:/var/lib/trader-lot03/input.json
+ExecStart=/opt/trader-ia/finnhub/venv/bin/python /opt/trader-ia/verified-accounting/current/projection.py %d/evidence.json /local-files/duckdb/lot03_reporting/compte.json
+Environment=PYTHONDONTWRITEBYTECODE=1
+ProtectSystem=strict
+ReadWritePaths=/local-files/duckdb/lot03_reporting
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_UNIX
+Nice=15

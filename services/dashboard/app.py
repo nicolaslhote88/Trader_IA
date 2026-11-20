@@ -2137,6 +2137,7 @@ BASE_DIR = Path(__file__).resolve().parent
 if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
+from app_modules.verified_account import render as render_verified_account
 from app_modules.core import (
     calculate_sector_portfolio_tilts,
     calculate_sector_sentiment,
@@ -12371,7 +12372,11 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 
 if page == "Dashboard Trading":
     st.title("Portefeuille actions")
-    st.caption("Performance, positions, décisions multi-modèles et exposition du compte réel.")
+    view = st.radio("Vue du portefeuille", ["Compte IBKR", "Décisions des modèles et registre historique"], horizontal=True, key="portfolio_read_view")
+    if view == "Compte IBKR":
+        render_verified_account(IBKR_BROKER_URL)
+        st.stop()
+    st.caption("Décisions des modèles et calculs historiques du registre AG1. Les montants rapprochés figurent dans la vue Compte IBKR.")
     _render_fx_ibkr_session_status(_load_ibkr_currency_balances(IBKR_BROKER_URL))
 
     ag1_multi: dict[str, dict[str, object]] = {}
@@ -12499,15 +12504,15 @@ if page == "Dashboard Trading":
         v4_cols[4].metric("Runs", int(safe_float(v4_summary.get("runs_count"))))
 
         # --- Bloc 1 : decomposition P&L IBKR (source de verite, boucle exactement) ---
-        st.markdown("**Decomposition P&L — source IBKR NetLiq (boucle exactement)**")
+        st.markdown("**Calcul historique à partir de la valeur du compte**")
         v4_pnl_cols = st.columns(3)
-        v4_pnl_cols[0].metric("P&L realise net (cumule)", _fmt_currency(net_realized_v4, 2))
+        v4_pnl_cols[0].metric("Solde historique après déduction du latent", _fmt_currency(net_realized_v4, 2))
         v4_pnl_cols[1].metric("+ P&L latent", _fmt_currency(latent_pnl_v4, 2))
         v4_pnl_cols[2].metric("= P&L total net", _fmt_currency(total_net_pnl_v4, 2), f"{safe_float(v4_summary.get('roi')) * 100:,.2f}%")
         st.caption(
             f"P&L latent {latent_pnl_v4:,.2f} EUR = P&L prix {latent_prix_v4:,.2f} (perf du cours au taux courant) "
             f"+ Impact FX {latent_fx_v4:,.2f} (change EUR/USD depuis l'achat) — identique au P&L total du tableau Positions. "
-            "P&L realise net = P&L total - P&L latent (reconciliation IBKR). Total = realise net + latent."
+            "Le solde par différence peut inclure change, fiscalité et écarts de valorisation."
         )
 
         # --- Bloc 2 : ledger interne (indicatif, base differente, NON reconcilie au bloc 1) ---
@@ -12521,10 +12526,8 @@ if page == "Dashboard Trading":
             f"{cost_rows_v4}/{fills_count_v4} fills",
         )
         st.caption(
-            "Base ledger interne (position_lots / fill_costs). Depuis la migration FX du 22/07, les fills "
-            "sont normalises en EUR (devise + taux traces) : le P&L des trades fermes est un NET de frais "
-            "economique. L'ecart restant avec le realise net IBKR du bloc 1 correspond au change cash et "
-            "frais des conversions EUR/USD, non traces localement (voir cascade onglet Rendement)."
+            "Les tables position_lots et fill_costs conservent les devises et taux historiques. "
+            "La vue Compte IBKR détaille les corrections sur chaque exécution."
         )
         st.caption(
             "Source AG1 V4: "
@@ -13373,15 +13376,10 @@ if page == "Dashboard Trading":
                 _wfm = _wf["meta"]
                 _recon_ok = bool(_wfm.get("nav_reconciled_ok"))
                 st.caption(
-                    "Cascade **reconciliee sur la NAV IBKR reelle** (source de verite) puis prolongee en scenario "
-                    "**hypothetique** de sortie totale (liquidation + rapatriement EUR). Depuis la migration FX "
-                    "du 22/07, les fills sont normalises en EUR (devise + taux traces) : le realise est un NET "
-                    "de frais economique, l'impact change latent est REEL (taux du jour d'achat vs courant), et "
-                    "le seul poste estime avant la NAV est le change cash (conversions EUR/USD non tracees, "
-                    "backlog P2). "
-                    f"Frais broker cumules (info): {safe_float(_wfm.get('real_fees_total')):,.2f} EUR ; "
-                    f"impact change latent reel: {safe_float(_wfm.get('fx_latent_used')):,.2f} EUR ; "
-                    f"change cash & conversions FX (bouclage): {safe_float(_wfm.get('cash_fx_residual')):,.2f} EUR ; "
+                    "Simulation historique de sortie totale. Le solde d’équilibrage regroupe des mouvements de nature différente. "
+                    f"Frais inscrits {safe_float(_wfm.get('real_fees_total')):,.2f} EUR. "
+                    f"Change latent estimé {safe_float(_wfm.get('fx_latent_used')):,.2f} EUR. "
+                    f"Solde d’équilibrage {safe_float(_wfm.get('cash_fx_residual')):,.2f} EUR. "
                     f"NAV cascade: {safe_float(_wfm.get('nav_checkpoint')):,.2f} EUR "
                     f"(NAV IBKR: {safe_float(_wfm.get('nav_real')):,.2f} EUR — "
                     f"{'RACCORD ✓' if _recon_ok else 'ecart a verifier'}) ; "
@@ -14243,6 +14241,7 @@ if page == "Dashboard Trading":
 
 elif page == "System Health (Monitoring)":
     st.title("État du système")
+    render_verified_account(IBKR_BROKER_URL, compact=True)
     st.caption("Verdict opérationnel, couverture des données et tradabilité du portefeuille actions.")
     st.caption(
         "Vue opérationnelle : état du système, couverture durable de l'univers et pré-éligibilité des symboles "
