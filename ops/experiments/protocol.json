@@ -1,0 +1,39 @@
+{
+  "version": "sorties-news-avis-v1",
+  "decision_clock": "first common archived input; instruction at end of run, arrival +2s",
+  "window_days": 20,
+  "cash_floor": 0.1,
+  "max_line": 0.2,
+  "max_sector": 0.3,
+  "entry_weight": 0.15,
+  "max_positions": 6,
+  "band_nav": 0.03,
+  "det_score": 45,
+  "score_buy": 65,
+  "material": "binding risk or cash floor, adverse fundamental score <=45, or material issuer event during trailing 7 days",
+  "reason_order": [
+    "risque",
+    "liquidités",
+    "fondamental",
+    "remplacement"
+  ],
+  "fallback": "rule only if unavailable, invalid, missing, oversized or content differs",
+  "max_pack_bytes": 240000,
+  "model_key": "chatgpt52",
+  "second_key": "grok41_reasoning",
+  "budget_new_eur": 0,
+  "news_window": 14,
+  "r8_days": 7,
+  "top": 3,
+  "title_jaccard": 0.76,
+  "time_window_hours": 36,
+  "news_types": {
+    "Résultats": "earnings|financial results|quarterly results|quarter results|résultats|chiffre d.affaires|net (profit|income)|revenue (rose|fell|growth)|quarterly revenue",
+    "Prévisions": "profit warning|warning on profits|avertissement|révise.{0,18}(objectif|prévision)|raises guidance|cuts guidance|lowers guidance|revises guidance|earnings guidance|vise un doublement",
+    "Capital": "capital increase|augmentation de capital|share repurchase|shares repurchases|rachat d.actions|stock split|dividend declar|déclare un dividende|tender offer|offre publique",
+    "Événement": "approved for treatment|approval for|autorisation de mise|phase [23] (trial|study)|definitive agreement|binding agreement|accord définitif|acqui(sition of|res)|contrat majeur|files for bankruptcy|rappel de produits"
+  },
+  "drawdown": "minimum path return relative to initial position",
+  "replacement": "first approved buy, highest vote count then symbol, eligible prior contract and quantity step; available sale proceeds after T+2 weekdays",
+  "history": "next observed adjusted close to 20 subsequent sessions, fees per existing scenario; historical proxy always separated from strict fills"
+}

@@ -1,0 +1,27 @@
+{
+  "window": [
+    "2026-11-10",
+    "2026-11-19"
+  ],
+  "selection": "Premier md5(news_id) par paire titre/source parmi 11 symboles prédéfinis. Lecture du titre avant exécution du sélecteur. Classement de la matérialité pour cet émetteur, null si le titre ne suffit pas.",
+  "labels": {
+    "bb1038465213": 0,
+    "031859307e2d": 0,
+    "03d910a4218b": null,
+    "02c0f9071f93": 0,
+    "01f4eb5bedff": 1,
+    "6237531752b3": 0,
+    "052cb48a52e9": 0,
+    "14499e8df6c2": 1,
+    "3395fcc3095d": 0,
+    "066a5c38549e": 1,
+    "6900c57d8d56": 0,
+    "07e4f998393d": 0,
+    "03d178bf4cde": 0,
+    "a07c6771787a": null,
+    "0bbeb22b9ae4": 1,
+    "08a6d8c56562": null,
+    "011a85d97e85": 0,
+    "06e02f531bf8": 0
+  }
+}
