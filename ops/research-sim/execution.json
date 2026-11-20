@@ -1,0 +1,10 @@
+{
+  "version": "execution-v1",
+  "unknown_tax_reserve": 0.005,
+  "fx_spread_each_conversion": 0.0003,
+  "price_model": "cross observed ask on buys and bid on sells; add no second spread",
+  "cash_model": "EUR budget, sale proceeds T+2 weekdays or later at next paper review; no reuse on trade date",
+  "capacity": "minimum of available top size if provided and 0.01 percent of observed daily volume; consumed once per quote and side",
+  "permission": "successful prior purchase of same IBKR contract on an earlier date; current permission unverified",
+  "mark": "latest dated two-sided midpoint or dated native market price with dated FX; unavailable marks suppress NAV"
+}
