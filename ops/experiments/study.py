@@ -340,6 +340,7 @@ def run():
             raw=view["raw"],
         ),
         cases=cases,
+        unavailable=latest.get("unavailable", []),
         ledger_runs=base.get("ledger_runs"),
         historical_votes=diagnose(hist, p),
         billing=[receipt_cost(v, fx) for v in [*paid.get("earlier", []), paid] if v.get("records")],

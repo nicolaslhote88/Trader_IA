@@ -1,0 +1,22 @@
+{
+  "confirmed": true,
+  "objective": "Battre les témoins après frais à risque comparable",
+  "sealed_at": "2026-11-26T03:59:12.476642+00:00",
+  "capital": 10000,
+  "exposure": 0.9,
+  "sector": 0.3,
+  "max_drawdown": 0.1,
+  "relative_drawdown": 0.02,
+  "max_cost": 200,
+  "start": "2026-11-26",
+  "anchor": "2026-11-25",
+  "split": "2027-02-26",
+  "end": "2027-05-26",
+  "strategy": "5cf80b51f041989486131c72426211654174ba2081a12632f034fae0ebf2704c",
+  "graph": "a0263f41edf102031943873a6bba2a07745a383d093ae0e8982fee52f8107a5d",
+  "ag1": "4e492607-1ba2-45a5-b979-febdfc50c11b",
+  "session_clock": "XPAR",
+  "mode": "simulation",
+  "real_capital": null,
+  "method": "84c4519c7ec05caab1f1d46334c99439801bda3dc926da70997077f74c2fa227"
+}

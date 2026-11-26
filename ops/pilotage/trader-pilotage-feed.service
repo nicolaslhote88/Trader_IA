@@ -1,0 +1,20 @@
+[Unit]
+Description=Trader IA - collecte du compte et des versions publiees pour les lots 13 a 15
+OnSuccess=trader-pilotage.service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /opt/trader-ia/research-sim/pilotage/current/collect.py
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+RestrictAddressFamilies=AF_INET AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+ReadWritePaths=/var/lib/trader-research-feed/pilotage
+TimeoutStartSec=90

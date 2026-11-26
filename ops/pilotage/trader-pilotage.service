@@ -1,0 +1,25 @@
+[Unit]
+Description=Trader IA - evaluation prospective et controle du pilote
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=trader-research-sim
+Group=trader-research
+UMask=0027
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 /opt/trader-ia/research-sim/pilotage/current/campaign.py
+TimeoutStartSec=8min
+PrivateNetwork=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+SystemCallFilter=~@network-io
+SystemCallErrorNumber=EPERM
+ProtectSystem=strict
+ProtectHome=yes
+RootDirectory=/var/lib/trader-research-root
+MountAPIVFS=no
+BindReadOnlyPaths=/usr /lib /lib64 /etc/ld.so.cache /opt/trader-ia/research-sim /var/lib/trader-research-feed /var/lib/trader-research-sim /local-files/duckdb/research_reporting
+BindPaths=/var/lib/trader-research-sim/pilotage /local-files/duckdb/research_reporting/pilotage
+ReadWritePaths=/var/lib/trader-research-sim/pilotage /local-files/duckdb/research_reporting/pilotage

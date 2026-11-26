@@ -44,10 +44,13 @@ def trace_data():
         traces = docs("trace")
         ledgers = docs("ledger")
     result = []
+    unavailable = []
     for eid, (hash_, t) in traces.items():
         packs = t["stages"].get("input_pack", [])
-        run = t["context"]["runId"]
+        run = (t.get("context") or {}).get("runId")
         if not packs or run not in ledgers:
+            unavailable.append(dict(execution=eid, at=t.get("started_utc"), status=t.get("status"),
+                                    reason="dossier de décision ou registre absent", trace=hash_))
             continue
         _, l = ledgers[run]
         p = packs[0]
@@ -89,7 +92,7 @@ def trace_data():
                 verified=t.get("published_parameters_verified"),
             )
         )
-    return sorted(result, key=lambda r: r["at"])
+    return sorted(result, key=lambda r: r["at"]), unavailable
 
 
 def articles():
@@ -121,7 +124,7 @@ def articles():
 
 def main():
     sets = articles()
-    traces = trace_data()
+    traces, unavailable = trace_data()
     paths = sorted(FEED.joinpath("batches").glob("*.json*"))
     prior = load(paths[-1])
     eco = load(DB / "economic_reporting/report.json")
@@ -145,6 +148,7 @@ def main():
         at=at,
         articles=sets,
         traces=traces,
+        unavailable=unavailable,
         base_file=paths[-1].name,
         base_at=prior["at"],
         closes=closes,

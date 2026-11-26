@@ -2141,6 +2141,7 @@ from app_modules.verified_account import render as render_verified_account
 from app_modules.economic_monitor import VIEWS as ECONOMIC_VIEWS, health as economic_health, render as render_economic_monitor
 from app_modules.research_sim import VIEWS as RESEARCH_VIEWS, health as research_health, render as render_research
 from app_modules import strategy_trials
+from app_modules import forward_campaign
 from app_modules.core import (
     calculate_sector_portfolio_tilts,
     calculate_sector_sentiment,
@@ -12375,7 +12376,10 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 
 if page == "Dashboard Trading":
     st.title("Portefeuille actions")
-    view = st.radio("Vue du portefeuille", ["Compte IBKR", *ECONOMIC_VIEWS, *RESEARCH_VIEWS, strategy_trials.MENU, "Décisions des modèles et registre historique"], horizontal=True, key="portfolio_read_view")
+    view = st.radio("Vue du portefeuille", ["Compte IBKR", *ECONOMIC_VIEWS, *RESEARCH_VIEWS, strategy_trials.MENU, forward_campaign.MENU, "Décisions des modèles et registre historique"], horizontal=True, key="portfolio_read_view")
+    if view == forward_campaign.MENU:
+        forward_campaign.render()
+        st.stop()
     if view == strategy_trials.MENU:
         strategy_trials.render()
         st.stop()
@@ -14257,6 +14261,7 @@ elif page == "System Health (Monitoring)":
     economic_health()
     research_health()
     strategy_trials.health()
+    forward_campaign.health()
     st.caption("Verdict opérationnel, couverture des données et tradabilité du portefeuille actions.")
     st.caption(
         "Vue opérationnelle : état du système, couverture durable de l'univers et pré-éligibilité des symboles "
