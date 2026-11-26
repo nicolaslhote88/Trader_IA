@@ -20,6 +20,8 @@ Pour vérifier la publication, consulter `systemctl status trader-pilotage-feed.
 
 ## Pilote réel
 
+Après le 25 mai, les quatre livres de comparaison continuent dans un journal distinct. La fiche du pilote reprend uniquement des instructions du jour, avec leur limite initiale et l’âge maximal accepté dans le mandat réel. Le résultat des fenêtres du lot 13 reste calculé sur leurs dates d’origine.
+
 Les commandes opérateur sont installées sous `/opt/trader-ia/research-sim/pilotage/current`. Le dossier JSON passé en argument identifie les faits du passage et la décision de Nicolas. `control.py` permet de prévisualiser la passation et de rapprocher un dossier sans écriture. `handover.py` journalise les étapes dans `/var/lib/trader-pilotage-operations/pilot.sqlite`.
 
 1. Après qualification économique, fixer variante, empreintes de campagne et de stratégie, capital, baisse admissible en euros, budget, dates, conditions de suspension, tolérances et coefficient de taille. Attribuer les positions et la trésorerie. Recenser les ordres en vol et empêcher tout chevauchement avec AG1 dans la version de production retenue. Rapprocher le compte courant.

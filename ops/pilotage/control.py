@@ -29,12 +29,12 @@ def order_preview(tickets, mandate, ownership, account):
         if identity in used or ownership["positions"].get(sym) not in ("pilote",None):
             raise ValueError("Ordre dupliqué ou titre déjà attribué")
         used.add(identity)
-        if side not in ("BUY","SELL") or ticket.get("filled",0)<=0:
+        if side not in ("BUY","SELL") or ticket.get("requested",0)<=0:
             raise ValueError("Instruction source invalide")
         lot = Decimal(str(account["lots"][sym]))
         if lot<=0:
             raise ValueError("Pas de quantité invalide")
-        qty = ((Decimal(str(ticket["filled"]))*allocation)//lot)*lot
+        qty = ((Decimal(str(ticket["requested"]))*allocation)//lot)*lot
         if qty<=0:
             continue
         # Use a fresh, explicit cost estimate for the resized ticket: fixed fees do not scale with quantity.
@@ -43,6 +43,9 @@ def order_preview(tickets, mandate, ownership, account):
             q["ask"]<q["bid"] or q["fees_eur"]<0 or q.get("estimated_qty")!=float(qty)):
             raise ValueError("Cotation ou estimation des frais à reprendre")
         px = Decimal(str(q["ask"] if side=="BUY" else q["bid"]))
+        limit=ticket.get("limit")
+        if limit is not None and ((side=="BUY" and px>Decimal(str(limit))) or (side=="SELL" and px<Decimal(str(limit)))):
+            continue
         if side=="BUY":
             debit = qty*px*Decimal(str(q["fx"]))+Decimal(str(q["fees_eur"]))
             if debit>cash:
@@ -62,7 +65,7 @@ def main():
     args=parser.parse_args()
     d=load(args.dossier)
     if args.action=="rapprocher":
-        result=reconcile(d["initial"],d["orders"],d["fills"],d["observed"],d["tolerance"])
+        result=reconcile(d["initial"],d["orders"],d["fills"],d["observed"],d["tolerance"],d.get("fee_tolerance"))
     elif args.action=="verifier-retrait":
         result=verify_retirement(d["plan"],d["before"],d["after"])
     else:
@@ -76,9 +79,12 @@ def main():
             result={"gate":gate,"orders":[]}
             if not gate["blockers"]:
                 variant=d["mandate"]["variant"]
-                if report["formal"]["last_day"] != now.date().isoformat():
+                if report["shadow"]["day"] != now.date().isoformat():
                     raise ValueError("La dernière revue concerne une autre journée")
-                result["orders"]=order_preview(report["formal"]["tickets"][variant],d["mandate"],d["owners"],d["account"])
+                tickets=report["shadow"]["tickets"][variant]
+                if any(not 0<=(now-moment(t["at"])).total_seconds()<=d["mandate"]["max_signal_age_s"] for t in tickets):
+                    raise ValueError("Les instructions ont expiré")
+                result["orders"]=order_preview(tickets,d["mandate"],d["owners"],d["account"])
     print(json.dumps(result,ensure_ascii=False,indent=2))
 
 

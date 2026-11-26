@@ -89,7 +89,7 @@ def check():
     assert reconcile(initial,[],[],initial,"0.01")["status"]=="rapproché"
     fake=dict(results=[{"variant":"ag3","verdict":"poursuivre l’observation"}],id="audit")
     assert pilot_gate(fake,obs,datetime.now(timezone.utc))["blockers"]
-    ticket=dict(symbol="SAP",side="BUY",filled=6,at="2026-11-18")
+    ticket=dict(symbol="SAP",side="BUY",requested=6,at=datetime.now(timezone.utc).isoformat(),limit=102)
     mandate=dict(capital=2000,allocation_ratio=0.5,campaign="audit",variant="ag3")
     quotes=dict(SAP=dict(bid=100,ask=101,fx=1,fees_eur=3,estimated_qty=3,fresh=True,session_open=True))
     account=dict(cash=1000,positions={},lots={"SAP":1},quotes=quotes)
@@ -120,11 +120,11 @@ def check():
     now=datetime.now(timezone.utc)
     approved=dict(mandate,max_loss=150,operating_budget=20,review_by=(now+timedelta(days=10)).isoformat(),
                   suspend="perte de rapprochement",approved_by="recette simulée",version=version,
-                  starts=(now-timedelta(minutes=1)).isoformat(),fee_tolerance=0.1,cash_tolerance=0.01)
+                  starts=(now-timedelta(minutes=1)).isoformat(),fee_tolerance=0.1,cash_tolerance=0.01,max_signal_age_s=600)
     local=dict(obs,at=now.isoformat(),reconciled=now.isoformat(),
                broker=dict(aligned=True,paper=False,pending=0,positions={},cash_eur=1000))
     simulated=dict(formal=dict(id="audit",strategy=version,results=[dict(variant="ag3",verdict="retenir")],
-                               last_day=now.date().isoformat(),tickets={"ag3":[ticket]}))
+                               last_day="2026-11-18"),shadow=dict(day=now.date().isoformat(),tickets={"ag3":[ticket]}))
     doc=dict(mandate=approved,owners=dict(legacy_fenced=True,cash="pilote",positions={}),inflight=[],
              risk=dict(verified=True,drawdown_eur=0,capital_deployed=0,operating_cost_eur=0),account=account)
     assert apply(shadow,"ouvrir",doc,simulated,local,now)["state"]=="préparé"
@@ -151,6 +151,13 @@ def check():
     assert result["sessions"]==4 and not result["gaps"]
     assert result==campaign.score(db,test,obs,cal,data,latest,date)
     assert all(x["verdict"]!="retenir" for x in result["results"])
+    short=dict(test,split=days[1],end=days[2])
+    frozen=campaign.score(db,short,obs,cal,data,latest,date)
+    assert frozen["sessions"]==2 and frozen["last_day"]==days[1]
+    follow=campaign.shadow_after_review(db,short,cal,data,date)
+    assert follow["day"]==days[-1] and set(follow["tickets"])==set(cfg["variants"])
+    assert follow==campaign.shadow_after_review(db,short,cal,data,date)
+    assert frozen==campaign.score(db,short,obs,cal,data,latest,date)
     print(json.dumps(dict(archived_days=days,variants=4,scenarios_per_variant=3,run_hash=digest(a),
                           real_case="SAP 2026-11-18",idempotent=True,
                           commission_stress_fills=len(v["cout_double"]["new_trades"]),

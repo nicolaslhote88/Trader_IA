@@ -14,12 +14,12 @@ def pilot_gate(campaign, obs, now, mandate=None, owners=None, inflight=None, ris
         blockers.append("Mandat réel nominatif à établir après la revue économique.")
     else:
         required = ("variant","campaign","capital","max_loss","operating_budget","review_by","suspend",
-                    "approved_by","version","starts","fee_tolerance","cash_tolerance")
+                    "approved_by","version","starts","fee_tolerance","cash_tolerance","max_signal_age_s")
         if any(mandate.get(k) is None for k in required) or mandate.get("variant") not in eligible or mandate.get("campaign") != campaign["id"]:
             blockers.append("Mandat incomplet ou version non qualifiée.")
         else:
             if (not mandate["approved_by"] or not mandate["suspend"] or mandate["version"]!=campaign.get("strategy") or
-                min(mandate["capital"],mandate["max_loss"])<=0 or
+                min(mandate["capital"],mandate["max_loss"],mandate["max_signal_age_s"])<=0 or
                 min(mandate["fee_tolerance"],mandate["cash_tolerance"],mandate["operating_budget"])<0 or
                 not moment(mandate["starts"])<=now<=moment(mandate["review_by"])):
                 blockers.append("Limites, signature ou dates du mandat réel invalides.")
@@ -45,7 +45,7 @@ def pilot_gate(campaign, obs, now, mandate=None, owners=None, inflight=None, ris
                 pending=obs["broker"]["pending"], real_capital=None if not mandate else mandate.get("capital"))
 
 
-def reconcile(initial, orders, fills, observed, tolerance):
+def reconcile(initial, orders, fills, observed, tolerance, fee_tolerance=None):
     """A repeated identical fill is idempotent; conflicting or orphan executions suspend the handover.
     Amounts: executed native price times event FX; fees already converted to the account currency.
     Cash is compared to trade-date cash, with investor flows, taxes and FX cash adjustments explicit.
@@ -54,6 +54,7 @@ def reconcile(initial, orders, fills, observed, tolerance):
     positions = defaultdict(Decimal,{k:D(v) for k,v in initial["positions"].items()})
     cash = D(initial["cash"]) + D(observed.get("cash_adjustment",0))
     seen, qty, errors = {}, defaultdict(Decimal), []
+    fees=defaultdict(Decimal)
     requests = {o["id"]:o for o in orders}
     if len(requests) != len(orders):
         errors.append("identifiant d’ordre dupliqué")
@@ -73,19 +74,24 @@ def reconcile(initial, orders, fills, observed, tolerance):
             errors.append("montant, change ou sens invalide")
             continue
         qty[fill["order"]] += n
+        fees[fill["order"]] += D(fill["fee_eur"])
         signed = n if order["side"]=="BUY" else -n
         positions[order["symbol"]] += signed
         cash -= signed*px*fx + D(fill["fee_eur"])
     for oid,n in qty.items():
         if n>D(requests[oid]["qty"]):
             errors.append("quantité exécutée supérieure à l’ordre")
+        if (fee_tolerance is not None and n==D(requests[oid]["qty"]) and requests[oid].get("expected_fee_eur") is not None
+                and abs(fees[oid]-D(requests[oid]["expected_fee_eur"]))>D(fee_tolerance)):
+            errors.append("écart de commission au-delà de la tolérance")
     differences = {s:str(positions[s]-D(observed["positions"].get(s,0)))
                    for s in set(positions)|set(observed["positions"]) if positions[s]!=D(observed["positions"].get(s,0))}
     delta = cash - D(observed["cash"])
     if differences or abs(delta)>D(tolerance):
         errors.append("écart de positions ou de trésorerie")
     return dict(status="suspendre" if errors else "rapproché",errors=errors, cash_delta=str(delta),
-                quantities=differences,fills=len(seen),remaining={i:str(D(o["qty"])-qty[i]) for i,o in requests.items()})
+                quantities=differences,fills=len(seen),fees_eur={i:str(v) for i,v in fees.items()},
+                remaining={i:str(D(o["qty"])-qty[i]) for i,o in requests.items()})
 
 
 def retirement(obs):

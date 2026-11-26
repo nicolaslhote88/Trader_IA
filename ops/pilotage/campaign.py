@@ -108,7 +108,7 @@ def score(db, contract, obs, cal, batches, latest, today, evidence_files=None):
         new["cost_evidence_at"]=dated["at"]
         for v in paused:
             prior = stored[max(stored)]["books"][v]
-            new["books"][v] = {m:dict(b,new_trades=[]) for m,b in prior.items()}
+            new["books"][v] = {m:dict(b,new_trades=[],intents=[]) for m,b in prior.items()}
         with db:
             db.execute("insert into days values (?,?,?,?)",(key,d,json.dumps(new),json.dumps(state)))
         stored[d] = mark(new)
@@ -171,6 +171,40 @@ def score(db, contract, obs, cal, batches, latest, today, evidence_files=None):
                 results=results, tickets=ticket, due=len(due), current_inputs=latest["at"])
 
 
+def shadow_after_review(db, contract, cal, batches, now):
+    """Continue the four shadow books after the sealed evaluation, without rewriting either test window."""
+    key=digest(contract)
+    db.execute("create table if not exists shadow(campaign text,day text,state text,intents text,primary key(campaign,day))")
+    out={"day":None,"tickets":{}}
+    if now.astimezone(PARIS).date().isoformat()<contract["end"]:
+        return out
+    last=db.execute("select day,state,intents from shadow where campaign=? order by day desc limit 1",(key,)).fetchone()
+    baseline=db.execute("select day,state from days where campaign=? order by day desc limit 1",(key,)).fetchone()
+    if not baseline:
+        return out
+    cfg,conv,_=policy()
+    cfg=dict(cfg,capital_eur=contract["capital"],cash_floor=1-contract["exposure"],max_sector_weight=contract["sector"])
+    state=json.loads(last[1] if last else baseline[1])
+    if last:
+        out={"day":last[0],"tickets":json.loads(last[2])}
+    calendar=sessions(cal)
+    audit=load(FEED/"audit.json")
+    stops={v for v, in db.execute("select variant from stops where campaign=?",(key,))}
+    for day in calendar:
+        if day<contract["end"] or (last and day<=last[0]) or day>now.astimezone(PARIS).date().isoformat():
+            continue
+        frame=inputs(day,batches.get(day,[]),cfg,audit)
+        if not frame or moment(frame[3])>now:
+            continue
+        vcfg=dict(cfg,variants=[v for v in cfg["variants"] if v not in stops])
+        result=run_day(state,day,frame,vcfg,conv,cal,calendar[calendar.index(day)-1])
+        tickets={v:r["normal"]["intents"] for v,r in result["books"].items()}
+        with db:
+            db.execute("insert into shadow values (?,?,?,?)",(key,day,json.dumps(state),json.dumps(tickets)))
+        out={"day":day,"tickets":tickets}
+    return out
+
+
 def main():
     from transition import pilot_gate, retirement
     guard = isolation()
@@ -214,7 +248,9 @@ def main():
                            "graph=coalesce(excluded.graph,runs.graph)",(row["id"],row["day"],row["status"],row["graph"]))
             db.execute("insert or ignore into captures values (?)",(p.name,))
     dated=[(datetime.strptime(p.name[:15],"%Y%m%dT%H%M%S").replace(tzinfo=timezone.utc),p) for p in sources]
-    campaign = score(db,contract,obs,load(FEED/"sessions.json"),batches,latest,now,dated)
+    cal=load(FEED/"sessions.json")
+    campaign = score(db,contract,obs,cal,batches,latest,now,dated)
+    shadow=shadow_after_review(db,contract,cal,batches,now)
     db.close()
     gate = pilot_gate(campaign,obs,now)
     gate["register"] = obs.get("pilot_record")
@@ -223,7 +259,7 @@ def main():
     exploratory = [dict(day=r["day"],variant=v["variant"],net=v.get("closing_net"))
                    for r in historical["reviews"] if r["day"] < contract["start"] for v in r["results"]]
     atomic(out/"report.json",dict(at=now.isoformat(),observed=obs["at"],mandate=contract,formal=campaign,
-                                  pilot=gate,retirement=inventory,exploratory=exploratory,
+                                  pilot=gate,shadow=shadow,retirement=inventory,exploratory=exploratory,
                                   blocked=obs["blocked"],network=guard,experiments_at=obs["trials_at"]))
     print("Séances formelles",campaign["sessions"],"pilote",gate["state"],"inventaire",len(inventory))
 

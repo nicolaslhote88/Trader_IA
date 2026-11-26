@@ -83,6 +83,7 @@ def run_day(state, day, frame, cfg, conv, cal, previous_session=None):
             key = variant + "/" + mode
             ledger = state.setdefault(key, book(cfg["capital_eur"]))
             trades_at_start = len(ledger["trades"])
+            intents = []
             if mode == "retard":
                 settle(ledger, cut)
                 # Issue today's instructions before the arrival quote and fills become available.
@@ -108,11 +109,16 @@ def run_day(state, day, frame, cfg, conv, cal, previous_session=None):
                     if mode == "cout_double":
                         scope.enter_context(patch.object(engine, "fees", double_fee))
                         scope.enter_context(patch.object(strategies, "fees", double_fee))
-                    strategies.review(ledger, variant, stress_before if mode == "cout_double" else before,
-                                      stress_after if mode == "cout_double" else after, cut, cfg, conv, cal)
+                    proposal = strategies.review(ledger, variant, stress_before if mode == "cout_double" else before,
+                                                 stress_after if mode == "cout_double" else after, cut, cfg, conv, cal)
+                    intents = [dict(symbol=row["symbol"],side="BUY",requested=row["decision"]["quantity"],
+                                    limit=row["decision"]["limit"],at=cut)
+                               for row in proposal["alternatives"] if row.get("decision")]
+                    intents.extend(dict(symbol=sale["symbol"],side="SELL",requested=sale["requested"],limit=None,at=cut)
+                                   for sale in proposal["sales"] if sale.get("requested"))
             out[variant][mode] = dict(cash=ledger["cash"] + sum(x["amount"] for x in ledger["unsettled"]),
                                       positions=dict(ledger["positions"]),
-                                      new_trades=ledger["trades"][trades_at_start:],
+                                      new_trades=ledger["trades"][trades_at_start:],intents=intents,
                                       metadata={s: {k: by_symbol.get(s, {}).get(k) for k in ("sector","country","currency","place")}
                                                 for s in set(ledger["positions"]) | {x["symbol"] for x in ledger["trades"][trades_at_start:]}})
     return dict(day=day, input=digest(origin), sources=origin, books=out)

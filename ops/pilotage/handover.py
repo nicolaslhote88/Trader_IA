@@ -43,10 +43,13 @@ def apply(db, action, document, report=None, evidence=None, now=None):
                 raise ValueError("Pilote fermé ou suspendu")
             gate=pilot_gate(report["formal"],evidence,now,details["mandate"],details["owners"],document["inflight"],document["risk"])
             day=now.date().isoformat()
-            if gate["blockers"] or report["formal"]["last_day"]!=day:
+            if gate["blockers"] or report["shadow"]["day"]!=day:
                 raise ValueError("Passation ou revue du jour indisponible")
             m=details["mandate"]
-            orders=order_preview(report["formal"]["tickets"][m["variant"]],m,details["owners"],document["account"])
+            tickets=report["shadow"]["tickets"][m["variant"]]
+            if any(not 0<=moment_age(now,t["at"])<=m["max_signal_age_s"] for t in tickets):
+                raise ValueError("Les instructions ont expiré")
+            orders=order_preview(tickets,m,details["owners"],document["account"])
             result={"day":day,"orders":orders,"source":report["formal"]["id"],"version":m["version"]}
             old=db.execute("select hash from sheets where day=?",(day,)).fetchone()
             if old and old[0]!=digest(result):
@@ -56,7 +59,7 @@ def apply(db, action, document, report=None, evidence=None, now=None):
             if state not in ("préparé","suspendu"):
                 raise ValueError("Aucun pilote attribué")
             result=reconcile(document["initial"],document["orders"],document["fills"],document["observed"],
-                             details["mandate"]["cash_tolerance"])
+                             details["mandate"]["cash_tolerance"],details["mandate"]["fee_tolerance"])
             key=document["observation"]
             old=db.execute("select digest from reviews where id=?",(key,)).fetchone()
             if old and old[0]!=digest(document):
