@@ -9637,7 +9637,11 @@ def load_ag1_v4_consensus_trace(db_path: str, db_sig: tuple[str, float, int]) ->
 # MAIN APP
 # ============================================================
 
-nav_group, page = render_sidebar_navigation()
+from app_modules import pilotage_pages
+nav_group, page = render_sidebar_navigation(IBKR_BROKER_URL)
+if page in pilotage_pages.PAGES:
+    pilotage_pages.render(page, IBKR_BROKER_URL)
+    st.stop()
 
 # Signatures fichiers DuckDB (invalidation cache basee sur mtime/size)
 ag1_db_sig = duckdb_file_signature(AG1_DUCKDB_PATH)
@@ -12375,24 +12379,8 @@ def _fx_enrich_rejection_details(df: pd.DataFrame) -> pd.DataFrame:
 # ============================================================
 
 if page == "Dashboard Trading":
-    st.title("Portefeuille actions")
-    view = st.radio("Vue du portefeuille", ["Compte IBKR", *ECONOMIC_VIEWS, *RESEARCH_VIEWS, strategy_trials.MENU, forward_campaign.MENU, "Décisions des modèles et registre historique"], horizontal=True, key="portfolio_read_view")
-    if view == forward_campaign.MENU:
-        forward_campaign.render()
-        st.stop()
-    if view == strategy_trials.MENU:
-        strategy_trials.render()
-        st.stop()
-    if view in RESEARCH_VIEWS:
-        render_research(view)
-        st.stop()
-    if view in ECONOMIC_VIEWS:
-        render_economic_monitor(view)
-        st.stop()
-    if view == "Compte IBKR":
-        render_verified_account(IBKR_BROKER_URL)
-        st.stop()
-    st.caption("Décisions des modèles et calculs historiques du registre AG1. Les montants rapprochés figurent dans la vue Compte IBKR.")
+    st.title("Décisions du jour")
+    st.caption("Décisions des modèles et registre historique AG1.")
     _render_fx_ibkr_session_status(_load_ibkr_currency_balances(IBKR_BROKER_URL))
 
     ag1_multi: dict[str, dict[str, object]] = {}
@@ -12412,10 +12400,9 @@ if page == "Dashboard Trading":
 
     ctrl_period, ctrl_mode, ctrl_kpi, ctrl_bonus, ctrl_refresh = st.columns([2.0, 1.8, 1.6, 1.4, 1.0], gap="large")
     with ctrl_period:
-        compare_period = st.radio(
+        compare_period = st.selectbox(
             "Periode",
             options=["7j", "30j", "90j", "All"],
-            horizontal=True,
             key="dashboard_compare_period",
             index=["7j", "30j", "90j", "All"].index(st.session_state.get("dashboard_compare_period", "30j"))
             if st.session_state.get("dashboard_compare_period", "30j") in ["7j", "30j", "90j", "All"] else 1,
@@ -14256,12 +14243,7 @@ if page == "Dashboard Trading":
 # ============================================================
 
 elif page == "System Health (Monitoring)":
-    st.title("État du système")
-    render_verified_account(IBKR_BROKER_URL, compact=True)
-    economic_health()
-    research_health()
-    strategy_trials.health()
-    forward_campaign.health()
+    st.title("Tradabilité")
     st.caption("Verdict opérationnel, couverture des données et tradabilité du portefeuille actions.")
     st.caption(
         "Vue opérationnelle : état du système, couverture durable de l'univers et pré-éligibilité des symboles "
@@ -18391,10 +18373,9 @@ elif page == "Dashboard Forex":
 
     ctrl_period, ctrl_mode, ctrl_kpi, ctrl_columns, ctrl_value_basis, ctrl_bonus, ctrl_refresh = st.columns([1.45, 1.3, 1.25, 1.25, 1.35, 1.05, 0.85], gap="large")
     with ctrl_period:
-        fx_compare_period = st.radio(
+        fx_compare_period = st.selectbox(
             "Periode",
             options=["7j", "30j", "90j", "All"],
-            horizontal=True,
             key="fx_dashboard_compare_period",
             index=["7j", "30j", "90j", "All"].index(st.session_state.get("fx_dashboard_compare_period", "30j"))
             if st.session_state.get("fx_dashboard_compare_period", "30j") in ["7j", "30j", "90j", "All"] else 1,

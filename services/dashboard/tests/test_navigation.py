@@ -18,12 +18,13 @@ class NavigationContractTests(unittest.TestCase):
             for config in NAV_SECTIONS.values()
             for _, page_id in config["pages"]
         ]
-        self.assertEqual(9, len(page_ids))
+        self.assertEqual(17, len(page_ids))
+        self.assertEqual("Cockpit", page_ids[0])
         self.assertEqual(len(page_ids), len(set(page_ids)))
 
     def test_business_labels_resolve_to_existing_page_ids(self):
-        self.assertEqual("System Health (Monitoring)", resolve_page("Pilotage global", "État du système"))
-        self.assertEqual("Dashboard Trading", resolve_page("Actions / ETF", "Portefeuille actions"))
+        self.assertEqual("System Health (Monitoring)", resolve_page("Santé du système", "Tradabilité"))
+        self.assertEqual("Dashboard Trading", resolve_page("Pilotage", "Décisions du jour"))
         self.assertEqual("Three Pillars Monitor", resolve_page("Forex", "Contexte & piliers"))
 
 

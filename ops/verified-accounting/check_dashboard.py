@@ -26,7 +26,10 @@ data = json.loads(REPORT.read_bytes())
 at = AppTest.from_file(str(app), default_timeout=120).run()
 assert not at.exception, [e.message for e in at.exception]
 assert not at.error,[e.value for e in at.error]
-assert at.radio(key="portfolio_read_view").value == "Compte IBKR"
+assert at.title[0].value == "Cockpit"
+at.button(key="nav_Mon compte").click().run()
+assert any(x.label=="Détails et preuves" for x in at.expander)
+assert not at.error and not at.exception
 metrics = {m.label:m.value for m in at.metric}
 assert metrics["Valeur du compte"] == euros(data["close"]["total"])
 assert metrics["Résultat FIFO des ventes"] != "indisponible"
@@ -38,7 +41,7 @@ assert any(len(t.value)==count and "Nominal corrigé (€)" in t.value.columns f
 assert any("Dernier consensus AG1" in str(x.value) for x in at.caption)
 print("Portefeuille, NAV, FIFO, activité et filtre des taux vérifiés", len(data["positions"]),count)
 print([x.value for x in at.warning if "direct" in x.value][:1])
-at.selectbox(key="dashboard_nav_section").select("Pilotage global").run()
+at.button(key="nav_Chaîne").click().run()
 assert not at.exception, [e.message for e in at.exception]
 assert any(h.value == "Rapprochement comptable IBKR" for h in at.subheader)
 print("Pilotage global et rapprochement vérifiés")

@@ -177,6 +177,7 @@ Code : `services/ibkr-broker/approval.py` + endpoints/guard `app.py`. Workflows 
   maintenance hebdomadaire et retrait des `CHECKPOINT` des nœuds AG2.
 
 ### Docs de référence
+- Dashboard du 27/11/2026 · [spécification](docs/specs/dashboard_refonte_pilotage_v1/README.md), brief local `docs/specs/dashboard_refonte_pilotage_v1/BRIEF_CODEX.md` et [recette de production avec retour arrière](docs/operations/20261127_dashboard_refonte_pilotage_deploy.md).
 - **🧾 État courant** : `docs/README.md` ·
   `docs/architecture/etat_des_lieux.md`. Audit historique complet :
   `docs/audits/20260702_audit_complet_projet.md`.
