@@ -15,7 +15,9 @@ def details(page, d, url):
             callback(*args, **kwargs)
         else:
             st.caption("Publication indisponible.")
-    with st.expander("Détails et preuves", expanded=False, key="proof_"+page):
+    key={"Mon compte":"Compte","Coûts":"Couts","Test 6 mois":"Test","Enseignements":"Enseignements",
+         "Univers et simulateur":"Univers","Pilote et retraits":"Pilote","Chaîne":"Sante"}[page]
+    with st.expander("Détails et preuves", expanded=False, key="proof_"+key):
         if page == "Mon compte":
             available("account", verified_account.render, url)
             available("economic", economic_monitor.render, "Rendements comparés")
