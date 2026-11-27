@@ -80,12 +80,22 @@ def render(d):
     tiles = [("Compte réel",signals["Compte réel"],"Mon compte"),
              ("Décision AG1 de 17 h 10",signals["Décision AG1 de 17 h 10"],"Dashboard Trading"),
              ("Chaîne de données",d["chain"],"Chaîne"),("Test de 6 mois",d["test"],"Test 6 mois")]
-    for col,(label,signal,page) in zip(st.columns(4),tiles):
-        with col:
-            status_tile(label, signal)
-            st.button("Ouvrir · "+label, key="tile_"+page,on_click=select_page,args=(page,))
     stamp, value = d["writes"]["snapshot"]
-    st.caption("Dernière valeur rapprochée du compte réel · "+fmt(value," €")+" · "+date_fr(stamp))
+    st.markdown("""<style>
+    [class*="st-key-cockpit_card_"]{position:relative;border-radius:8px}
+    [class*="st-key-cockpit_card_"]:hover,[class*="st-key-cockpit_card_"]:focus-within{outline:1px solid #f5c76b}
+    [class*="st-key-cockpit_card_"] [class*="st-key-tile_"]{position:absolute;inset:0;z-index:1;height:100%}
+    [class*="st-key-cockpit_card_"] .stButton,[class*="st-key-cockpit_card_"] button{width:100%;height:100%}
+    [class*="st-key-cockpit_card_"] button{opacity:0}
+    </style>""",unsafe_allow_html=True)
+    for i,(col,(label,signal,page)) in enumerate(zip(st.columns(4),tiles)):
+        with col.container(key=f"cockpit_card_{i}"):
+            if label=="Compte réel" and signal.state==RED:
+                paper="simulation" in signal.detail.lower()
+                signal=signal._replace(title="Gateway sur le compte de simulation" if paper else signal.title,
+                                       detail="Dernière valeur rapprochée · "+fmt(value," €"), at=stamp)
+            status_tile(label,signal)
+            st.button("Ouvrir · "+label,key="tile_"+page,on_click=select_page,args=(page,))
     curve, tasks = st.columns([1.65,1])
     p = d["economic"].get("performance",{})
     with curve:

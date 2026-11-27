@@ -48,6 +48,7 @@ def details(page, d, url):
 def render(page, url):
     if st.session_state.get("dashboard_nav_page", "Cockpit") != page:
         st.rerun(scope="app")
+    st.markdown("<style>[data-testid='stMainBlockContainer']{padding-top:3.25rem}</style>",unsafe_allow_html=True)
     d = context(url)
     if page == "Cockpit":
         cockpit.render(d)
