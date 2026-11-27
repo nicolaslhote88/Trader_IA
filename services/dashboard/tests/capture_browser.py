@@ -29,7 +29,7 @@ def main():
             plots=page.locator('[data-testid="stMain"] .js-plotly-plot:visible')
             expect(plots.first).to_be_visible(timeout=45000)
             proof=page.locator(f'.st-key-proof_{stem} details').first
-            summary=proof.locator("summary")
+            summary=proof.locator(":scope > summary")
             expect(summary).to_be_visible(timeout=45000)
             expect(proof).not_to_have_attribute("open","")
             summary.click()
