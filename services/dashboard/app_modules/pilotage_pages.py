@@ -3,8 +3,10 @@ from . import cockpit, economic_monitor, forward_campaign, research_sim, strateg
 from .pilotage_data import context
 
 PAGES = {"Cockpit", "Mon compte", "Coûts", "Test 6 mois", "Enseignements", "Univers et simulateur", "Pilote et retraits", "Chaîne"}
-from . import account_view, costs_view
-READERS = {"Mon compte":account_view.render, "Coûts":costs_view.render}
+from . import account_view, costs_view, chain_health, lab_learnings, lab_mandate, lab_pilot, lab_universe
+READERS = {"Mon compte":account_view.render, "Coûts":costs_view.render,
+           "Test 6 mois":lab_mandate.render, "Enseignements":lab_learnings.render,
+           "Univers et simulateur":lab_universe.render, "Pilote et retraits":lab_pilot.render, "Chaîne":chain_health.render}
 
 
 def details(page, d, url):

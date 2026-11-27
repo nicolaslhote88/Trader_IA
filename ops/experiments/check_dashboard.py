@@ -8,7 +8,8 @@ from app_modules.strategy_trials import MENU, VIEWS
 
 test = AppTest.from_file(str(app), default_timeout=150).run()
 assert not test.exception
-test.radio(key="portfolio_read_view").set_value(MENU).run()
+test.button(key="nav_Enseignements").click().run()
+assert any(x.label=="Détails et preuves" for x in test.expander)
 for tab in VIEWS:
     test.radio(key="experiment_view").set_value(tab).run()
     assert not test.exception, [x.message for x in test.exception]

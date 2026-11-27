@@ -20,7 +20,13 @@ def loaded():
 
 loaded()
 for view in VIEWS:
-    test.radio(key="portfolio_read_view").set_value(view).run()
+    if view == VIEWS[2]:
+        test.button(key="nav_Test 6 mois").click().run()
+        test.radio(key="mandate_detail").set_value(view).run()
+    else:
+        test.button(key="nav_Univers et simulateur").click().run()
+        test.radio(key="universe_detail").set_value(view).run()
+    assert any(x.label=="Détails et preuves" for x in test.expander)
     loaded()
     assert test.dataframe, view
     if view == VIEWS[0]:
@@ -31,7 +37,7 @@ for view in VIEWS:
         next(x for x in test.selectbox if x.label == "Population").set_value("Détenus").run()
         assert len(test.dataframe[0].value) == 8
     if view == VIEWS[1]:
-        assert " / " in test.metric[0].value
+        assert any(" / " in m.value for exp in test.expander if exp.label=="Détails et preuves" for m in exp.metric)
     if view == VIEWS[2] and not report["reviews"]:
         assert len(test.dataframe[0].value) == 4
     print("Vue vérifiée", view, flush=True)
