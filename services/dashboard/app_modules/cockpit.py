@@ -27,6 +27,19 @@ def returns_chart(p, basket=False):
         fig.add_scatter(x=[x for x,y in pts], y=[y for x,y in pts], name=label, mode="lines",
                         line=dict(color=color, dash="dot" if key == "matched" else "solid"),
                         hovertemplate="%{x} · %{y:.2f} %<extra>"+label+"</extra>")
+    if fig.data and basket:
+        endpoints = sorted(((trace.y[-1], trace) for trace in fig.data if trace.y[-1] is not None), key=lambda item:item[0])
+        prior = None
+        for value,trace in endpoints:
+            label_y = value if prior is None else max(value,prior+.6)
+            fig.add_annotation(x=trace.x[-1],y=label_y,text=trace.name,showarrow=False,xanchor="left",xshift=4,
+                               font=dict(color=trace.line.color,size=11))
+            prior=label_y
+        fig.update_layout(showlegend=False)
+        if endpoints:
+            from datetime import timedelta
+            start,end=timestamp(rows[0]["date"]),timestamp(rows[-1]["date"])
+            fig.update_xaxes(range=[start,end+timedelta(days=max(3,(end-start).days//4))])
     if fig.data:
         fig.update_yaxes(ticksuffix=" %")
         chart(fig)

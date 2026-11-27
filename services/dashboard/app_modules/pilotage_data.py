@@ -38,7 +38,7 @@ def evidence():
             with duckdb.connect(str(ROOT / (name + ".duckdb")), read_only=True) as db:
                 return db.execute(sql).fetchall()
         except duckdb.Error:
-            return []
+            return None
     def last(name, table, field):
         rows = query(name, f"select cast(max({field}) as varchar) from {table}")
         return rows[0][0] if rows else None
@@ -47,7 +47,7 @@ def evidence():
               where r.strategy_version='ag1_pf_v1_ibkr_reconcile' and p.total_value_eur is not null"""
     close = query("ag1_v4_consensus", "select cast(p.ts as varchar),p.total_value_eur " + book + " order by p.ts desc limit 1")
     captures = query("ag1_v4_consensus", "select distinct cast(p.ts as varchar) " + book + " and p.ts >= current_timestamp - interval '73 hours'")
-    return dict(snapshot=close[0] if close else (None, None), pf_times=[r[0] for r in captures],
+    return dict(snapshot=close[0] if close else (None, None), pf_times=[r[0] for r in captures] if captures is not None else None,
                 news=last("ag4_v3", "news_history", "updated_at"),
                 technical=last("ag2_v3", "technical_signals", "updated_at"),
                 fundamental=last("ag3_v2", "fundamentals_snapshot", "updated_at"))
@@ -69,6 +69,8 @@ def context(url):
     live = broker(url, a)
     account = account_signal(live, a.get("positions"), f.get("pilot", {}), f.get("observed"), now)
     snapshots = writes["snapshot"]
+    if account.state == "rouge":
+        account = account._replace(at=snapshots[0], detail=account.detail+" · contrôle du direct à "+str(live[0] or "date indisponible")[:16]+" UTC")
     run = a.get("activity", {}).get("strategy_v4_consensus")
     blocked = max(f.get("blocked", []), key=lambda v: v.get("at", ""), default=None)
     signals = {

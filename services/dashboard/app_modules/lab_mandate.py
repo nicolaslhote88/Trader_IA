@@ -28,9 +28,10 @@ def grid(results, mandate, today):
                            (row.get("max_exposure"),mandate.get("exposure"),"%"),(row.get("max_sector"),mandate.get("sector"),"%"),
                            (row.get("total_cost"),mandate.get("max_cost"),"€")]:
             cells.append((limit_signal(v,lim,bool(finished)), (pct(v) if unit=="%" else fmt(v," €"))+" · plafond "+(pct(lim) if unit=="%" else fmt(lim," €"))))
-        cells_html="".join(f'<td title="{escape(detail)}" style="text-align:center;color:{COLORS[color]}">●</td>' for color,detail in cells)
-        lines.append("<tr><th>"+escape(NAMES.get(row["variant"],row["variant"]))+"</th>"+cells_html+"</tr>")
-    st.markdown('<div style="overflow-x:auto"><table><thead><tr><th>Variante</th>'+''.join("<th>"+v+"</th>" for v in labels)+"</tr></thead><tbody>"+''.join(lines)+"</tbody></table></div>",unsafe_allow_html=True)
+        cells_html="".join(f'<span aria-label="{color} · {escape(detail)}" title="{escape(detail)}" style="text-align:center;color:{COLORS[color]}">●</span>' for color,detail in cells)
+        lines.append("<strong>"+escape(NAMES.get(row["variant"],row["variant"]))+"</strong>"+cells_html)
+    headers="<b>Variante</b>"+"".join("<small>"+v+"</small>" for v in labels)
+    st.markdown('<div style="overflow:auto"><div style="display:grid;grid-template-columns:1.6fr repeat(7,1fr);min-width:620px;align-items:center;gap:.55rem;padding:.8rem;background:#1e1e2e;border-radius:8px">'+headers+''.join(lines)+"</div></div>",unsafe_allow_html=True)
     st.caption("Vert · respecté. Orange · à moins de 20 % du plafond. Rouge · dépassé. Gris · période non mûre ou mesure indisponible. Les baisses portent sur la dernière fenêtre achevée et documentée.")
 
 
