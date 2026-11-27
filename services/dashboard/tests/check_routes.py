@@ -1,4 +1,5 @@
 """Recette AppTest des routes, utilisable en shadow et sur le montage de production."""
+import re
 import sys
 import time
 from pathlib import Path
@@ -12,7 +13,14 @@ from app_modules.pilotage_pages import PAGES
 
 def verify(ui, name):
     assert not ui.exception, (name,[e.message for e in ui.exception])
-    assert not ui.error, (name,[e.value for e in ui.error])
+    errors = [e.value for e in ui.error]
+    if name == "Three Pillars Monitor":
+        # Cette vue historique affiche les alertes de positionnement CFTC avec st.error.
+        alerts = [v for v in errors if re.fullmatch(r"[A-Z]{3}: z=-?\d+\.\d{2} \| net=-?[\d,]+(?:\.\d+)?", v)]
+        if alerts:
+            print("Alertes historiques de positionnement Forex", len(alerts), flush=True)
+        errors = [v for v in errors if v not in alerts]
+    assert not errors, (name, errors)
 
 
 if __name__ == "__main__":
