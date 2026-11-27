@@ -3,7 +3,8 @@ from . import cockpit, economic_monitor, forward_campaign, research_sim, strateg
 from .pilotage_data import context
 
 PAGES = {"Cockpit", "Mon compte", "Coûts", "Test 6 mois", "Enseignements", "Univers et simulateur", "Pilote et retraits", "Chaîne"}
-READERS = {}
+from . import account_view, costs_view
+READERS = {"Mon compte":account_view.render, "Coûts":costs_view.render}
 
 
 def details(page, d, url):
@@ -43,6 +44,8 @@ def details(page, d, url):
 
 @st.fragment(run_every="60s")
 def render(page, url):
+    if st.session_state.get("dashboard_nav_page", "Cockpit") != page:
+        st.rerun(scope="app")
     d = context(url)
     if page == "Cockpit":
         cockpit.render(d)
