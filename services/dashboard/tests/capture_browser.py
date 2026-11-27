@@ -42,6 +42,13 @@ def main():
             page.set_viewport_size({"width":1536,"height":height})
             main.evaluate("(el)=>el.scrollTo(0,0)")
             page.screenshot(path=str(args.output/(stem+".png")),animations="disabled")
+            if stem=="Cockpit":
+                page.get_by_role("button",name="Ouvrir · Compte réel",exact=True).click()
+                expect(page.get_by_role("heading",name="Mon compte",exact=True).first).to_be_visible(timeout=45000)
+                alarm=sidebar.get_by_role("link",name="Compte réel non connecté",exact=True)
+                if alarm.count():
+                    alarm.click()
+                    expect(page.get_by_role("heading",name="Cockpit",exact=True).first).to_be_visible(timeout=45000)
             page.close()
             print(stem,flush=True)
         browser.close()

@@ -21,5 +21,5 @@ with patch.object(source, "published", return_value={}),patch.object(source,"evi
     for page in sorted(PAGES):
         ui.button(key="nav_"+page).click().run()
         assert not ui.exception and not ui.error,(page,[v.message for v in ui.exception])
-    assert any(b.key=="broker_alert" for b in ui.button)
+    assert any("Compte réel non connecté</a>" in item.value for item in ui.sidebar.markdown)
 print("Huit écrans avec publications absentes et compte non confirmé",flush=True)

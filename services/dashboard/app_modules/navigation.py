@@ -30,11 +30,7 @@ def render_sidebar_navigation(url):
     @st.fragment(run_every="30s")
     def connection():
         if broker(url)[1] != "Compte réel connecté":
-            st.button("Compte réel non connecté", type="primary", key="broker_alert", width="stretch",
-                      on_click=select_page, args=(DEFAULT_PAGE,))
-            # Un clic depuis un fragment doit aussi rafraîchir le corps de page.
-            if st.session_state.get("broker_alert"):
-                st.rerun(scope="app")
+            st.markdown('<a href="?vue=Cockpit" target="_self" style="display:block;padding:.35rem .65rem;border:1px solid rgba(248,113,113,.38);border-radius:.5rem;background:rgba(239,68,68,.14);color:#ff7b85;text-align:center;text-decoration:none">Compte réel non connecté</a>', unsafe_allow_html=True)
 
     current = st.session_state.get("dashboard_nav_page", DEFAULT_PAGE)
     with st.sidebar:
