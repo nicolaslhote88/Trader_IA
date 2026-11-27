@@ -108,7 +108,7 @@ def render(d):
             st.caption("Aucune action identifiée sur les données disponibles.")
         st.metric("Résultat après dépenses IA documentées",fmt(p.get("after_documented")," €"))
         st.caption(f"Résultat du compte {fmt(p.get('gross'),' €')} · dépenses IA documentées {fmt(p.get('api_documented'),' €')} · au {date_fr(p.get('flow_end'))}.")
-    with st.expander("Détails et preuves"):
+    with st.expander("Détails et preuves",key="proof_Cockpit"):
         st.write("Le compte utilise la sonde IBKR. La valeur rapprochée provient du registre de portefeuille. Les comparaisons utilisent les publications économiques datées.")
         for label,signal,page in tiles:
             st.caption(label+" · "+signal.detail+" · "+date_fr(signal.at))

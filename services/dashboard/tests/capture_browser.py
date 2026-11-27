@@ -22,6 +22,7 @@ def main():
             sidebar=page.locator('[data-testid="stSidebar"]')
             sidebar.get_by_role("button",name=title,exact=True).click(timeout=90000)
             expect(page.get_by_role("heading",name=title,exact=True).first).to_be_visible(timeout=60000)
+            expect(page.get_by_role("button",name="Stop",exact=True)).not_to_be_visible(timeout=90000)
             evidence=page.get_by_text("Détails et preuves",exact=True).first
             expect(evidence).to_be_attached(timeout=60000)
             proof=evidence.locator("xpath=ancestor::details[1]")
