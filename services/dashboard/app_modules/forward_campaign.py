@@ -37,13 +37,14 @@ def health():
             st.warning("IBKR a sélectionné le compte de simulation.")
 
 
-def render():
+def render(view=None):
     data=read()
     if not data:
         return
     mandate,formal,pilot=data["mandate"],data["formal"],data["pilot"]
     st.subheader(MENU)
-    view=st.radio("Lot",["13 · Observation","14 · Pilote","15 · Composants"],horizontal=True,key="forward_lot")
+    if view is None:
+        view=st.radio("Lot",["13 · Observation","14 · Pilote","15 · Composants"],horizontal=True,key="forward_lot")
     st.caption(f"Collecte du {data['observed'][:16]} UTC")
     if view.startswith("13"):
         st.markdown(f"**{mandate['objective']}** · {mandate['capital']:,.0f} € fictifs".replace(","," "))
